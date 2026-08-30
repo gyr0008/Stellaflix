@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {
+      "fileName": "qing_haitang_resolve.js",
+      "repo": "gyr0008/stellaflix",
+      "ref": "main",
+      "path": "desktop/custom-source/bundled/qing_haitang_resolve.js",
+      "homepage": "https://github.com/kejichangqing/QingMusic",
+      "note": "更新轨道指向 stellaflix 自身仓库(脚本为项目手动维护的内置副本);上游信号监控 QingMusic release,改 qing 须同步 push 方能生效",
+      "upstream": {
+        "repo": "kejichangqing/QingMusic",
+        "kind": "github-release",
+        "basedOn": "v1.3.8",
+        "signalUrl": "https://api.github.com/repos/kejichangqing/QingMusic/releases/latest"
+      }
+    }
+  ]
+}

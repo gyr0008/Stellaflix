@@ -1,0 +1,477 @@
+/* Stellaflix 影视模块 — 灯塔模式样式 (Phase 1)
+   作用域前缀 .lighthouse-* / .lh-* ，避免与既有影视模块级联冲突。 */
+
+/* 配色对标 hearthere.live：近黑太空 + 品牌紫 + 在线青 + 暖象牙 + 待定琥珀 */
+.lighthouse-root {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* 近黑太空：中心微泛海军蓝，向外沉入纯黑（参考站 #0E0E13 / #16213E / #05060a） */
+  background:
+    radial-gradient(120% 120% at 50% 42%, #16213e 0%, #0e0e13 46%, #05060a 100%);
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --lh-brand: #c061ff;
+  --lh-brand-2: #a29bfe;
+  --lh-cyan: #5ce1e6;
+  --lh-ivory: #fff8f0;
+  --lh-text: #e8eefc;
+  --lh-amber: #f5b14e;
+}
+
+/* 大气辉光：地球边缘一圈柔和紫蓝晕，暗示球体存在（无地表时也成立） */
+.lighthouse-map-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.lighthouse-map-container::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: min(78vmin, 980px);
+  height: min(78vmin, 980px);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle,
+    rgba(120, 130, 220, 0.18) 0%,
+    rgba(120, 130, 220, 0.10) 55%,
+    rgba(120, 130, 220, 0) 72%);
+  z-index: 0;
+}
+.lighthouse-map { position: absolute; inset: 0; }
+.lighthouse-overlay { display: block; }
+
+/* 降级（无 MapLibre）：暗底 + 网格感 */
+.lighthouse-fallback {
+  background:
+    radial-gradient(1200px 800px at 50% 40%, #0d1426 0%, #06080f 70%),
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 48px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 48px);
+}
+.lighthouse-guard {
+  position: absolute;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  max-width: 520px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: rgba(20, 26, 40, 0.82);
+  border: 1px solid rgba(120, 160, 220, 0.25);
+  color: #cdd6e6;
+  font-size: 12px;
+  line-height: 1.5;
+  backdrop-filter: blur(8px);
+  z-index: 6;
+}
+
+/* 品牌浮层 */
+.lighthouse-brand {
+  position: absolute;
+  left: 22px;
+  top: 18px;
+  z-index: 5;
+  pointer-events: none;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+}
+.lighthouse-brand-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: #f3ecff;
+  text-shadow: 0 0 18px rgba(192, 97, 255, 0.55), 0 2px 12px rgba(0, 0, 0, 0.6);
+}
+.lighthouse-brand-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: rgba(200, 214, 240, 0.7);
+}
+
+/* 图例 */
+.lighthouse-legend {
+  position: absolute;
+  left: 22px;
+  bottom: 22px;
+  z-index: 5;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(12, 16, 28, 0.6);
+  border: 1px solid rgba(120, 160, 220, 0.18);
+  backdrop-filter: blur(8px);
+}
+.lh-legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cdd6e6; }
+.lh-legend-dot { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+
+/* 提示条 */
+.lighthouse-hint {
+  position: absolute;
+  right: 22px;
+  top: 18px;
+  z-index: 5;
+  pointer-events: none;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(12, 16, 28, 0.6);
+  border: 1px solid rgba(120, 160, 220, 0.18);
+  color: rgba(200, 214, 240, 0.75);
+  font-size: 11px;
+  backdrop-filter: blur(8px);
+}
+
+/* 信标浮动卡片 */
+.lh-card {
+  position: absolute;
+  z-index: 20;
+  width: 250px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(14, 18, 30, 0.92);
+  border: 1px solid rgba(140, 170, 230, 0.28);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(14px);
+  color: #e8eefc;
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+  transition: opacity 0.2s cubic-bezier(0.22,1,0.36,1), transform 0.2s cubic-bezier(0.22,1,0.36,1);
+}
+.lh-card--in { opacity: 1; transform: translateY(0) scale(1); }
+
+.lh-card-poster {
+  width: 100%;
+  height: 120px;
+  background: #0b0e16;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.lh-card-poster-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lh-card-poster--empty { background: linear-gradient(160deg, #1a2238, #0b0e16); }
+.lh-card-poster-empty-icon { font-size: 30px; opacity: 0.6; }
+
+.lh-card-body { padding: 10px 12px 12px; }
+.lh-card-status {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 210, 122, 0.16);
+  color: var(--lh-brand);
+  margin-bottom: 6px;
+}
+.lh-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #f3f7ff;
+}
+.lh-card-sub { font-size: 12px; color: rgba(200, 214, 240, 0.7); margin-top: 2px; }
+.lh-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(200, 214, 240, 0.8);
+}
+.lh-card-actions { margin-top: 10px; }
+.lh-card-join {
+  width: 100%;
+  padding: 8px 0;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--lh-brand-2), var(--lh-brand));
+  color: #1a1206;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.lh-card-join:disabled {
+  background: rgba(120, 140, 180, 0.22);
+  color: rgba(220, 230, 245, 0.5);
+  cursor: not-allowed;
+}
+.lh-card-close {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #e8eefc;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lh-card-close:hover { background: rgba(0, 0, 0, 0.7); }
+
+/* 「我的房间」面板 (Phase 3) */
+.lh-room-panel {
+  position: absolute;
+  right: 18px;
+  top: 64px;
+  z-index: 30;
+  width: 300px;
+  max-height: calc(100% - 96px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  background: rgba(14, 18, 30, 0.92);
+  border: 1px solid rgba(140, 170, 230, 0.28);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(16px);
+  color: #e8eefc;
+  padding: 14px 14px 12px;
+  opacity: 0;
+  transform: translateX(12px) scale(0.98);
+  transition: opacity 0.22s cubic-bezier(0.22,1,0.36,1), transform 0.22s cubic-bezier(0.22,1,0.36,1);
+  overflow: hidden;
+}
+.lh-room-panel--in { opacity: 1; transform: translateX(0) scale(1); }
+
+.lh-room-head { display: flex; align-items: center; justify-content: space-between; }
+.lh-room-title { font-size: 16px; font-weight: 700; color: #f3f7ff; letter-spacing: 1px; }
+.lh-room-close {
+  width: 24px; height: 24px; border: none; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4); color: #e8eefc; font-size: 16px; line-height: 1; cursor: pointer;
+}
+.lh-room-close:hover { background: rgba(0, 0, 0, 0.7); }
+
+.lh-room-code-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.lh-room-code-label { font-size: 12px; color: rgba(200, 214, 240, 0.65); }
+.lh-room-code {
+  font-size: 18px; font-weight: 700; letter-spacing: 3px; color: var(--lh-brand);
+  flex: 1; font-family: "SFMono-Regular", Consolas, monospace;
+  text-shadow: 0 0 12px rgba(192, 97, 255, 0.45);
+}
+.lh-room-copy {
+  padding: 4px 12px; border: 1px solid rgba(192, 97, 255, 0.5); border-radius: 8px;
+  background: rgba(192, 97, 255, 0.12); color: var(--lh-brand); font-size: 12px; cursor: pointer;
+}
+.lh-room-copy:hover { background: rgba(192, 97, 255, 0.22); }
+
+.lh-room-status { margin-top: 8px; font-size: 12px; color: rgba(200, 214, 240, 0.8); }
+.lh-room-count { margin-top: 6px; font-size: 13px; color: #cdd6e6; }
+.lh-room-count-num { font-weight: 700; color: #eaf1ff; font-size: 15px; }
+
+.lh-room-toggle {
+  margin-top: 12px; width: 100%; padding: 8px 0; border-radius: 10px; cursor: pointer;
+  border: 1px solid rgba(120, 140, 180, 0.35); background: rgba(120, 140, 180, 0.16); color: rgba(220, 230, 245, 0.85); font-size: 12px;
+}
+.lh-room-toggle.is-on { border-color: rgba(192, 97, 255, 0.55); background: rgba(192, 97, 255, 0.16); color: var(--lh-brand); }
+.lh-room-note { margin-top: 6px; font-size: 11px; line-height: 1.5; color: rgba(200, 214, 240, 0.55); }
+
+.lh-room-members { margin-top: 12px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.lh-room-member {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04); font-size: 12px;
+}
+.lh-room-member-name { flex: 1; color: #dbe4f5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lh-room-badge { font-size: 10px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.lh-room-badge--ok { background: rgba(80, 220, 160, 0.18); color: #6fe3b0; }
+.lh-room-badge--wait { background: rgba(245, 177, 78, 0.18); color: var(--lh-amber); }
+.lh-room-badge--no { background: rgba(255, 110, 110, 0.18); color: #ff8f8f; }
+.lh-room-approve, .lh-room-reject {
+  border: none; border-radius: 7px; padding: 3px 9px; font-size: 11px; cursor: pointer;
+}
+.lh-room-approve { background: linear-gradient(90deg, var(--lh-brand-2), var(--lh-brand)); color: #1a1206; font-weight: 600; }
+.lh-room-reject { background: rgba(255, 110, 110, 0.2); color: #ff8f8f; }
+.lh-room-empty { font-size: 12px; color: rgba(200, 214, 240, 0.5); padding: 10px 4px; text-align: center; }
+
+.lh-room-foot { margin-top: 10px; }
+.lh-room-leave {
+  width: 100%; padding: 9px 0; border: 1px solid rgba(255, 110, 110, 0.4); border-radius: 10px;
+  background: rgba(255, 110, 110, 0.12); color: #ff9f9f; font-size: 13px; cursor: pointer;
+}
+.lh-room-leave:hover { background: rgba(255, 110, 110, 0.22); }
+
+/* 加入操作条 (Phase 3) */
+.lh-room-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(14, 18, 30, 0.9);
+  border: 1px solid rgba(140, 170, 230, 0.28);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px);
+}
+.lh-room-bar-btn {
+  padding: 8px 16px; border: none; border-radius: 10px; cursor: pointer;
+  background: linear-gradient(90deg, var(--lh-brand-2), var(--lh-brand)); color: #1a1206; font-weight: 600; font-size: 13px;
+}
+.lh-room-bar-btn--ghost { background: rgba(120, 140, 180, 0.18); color: #dbe4f5; }
+.lh-room-bar-btn:hover { filter: brightness(1.06); }
+.lh-room-bar-input {
+  width: 120px; padding: 8px 10px; border-radius: 10px; font-size: 13px; letter-spacing: 2px;
+  text-transform: uppercase; background: rgba(255, 255, 255, 0.06); color: #eaf1ff;
+  border: 1px solid rgba(140, 170, 230, 0.3); outline: none;
+}
+.lh-room-bar-input::placeholder { letter-spacing: 0; text-transform: none; color: rgba(200, 214, 240, 0.45); }
+
+/* 轻提示 toast */
+.lighthouse-toast {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  transform: translate(-50%, -10px);
+  z-index: 40;
+  max-width: 70%;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(20, 26, 40, 0.92);
+  border: 1px solid rgba(140, 170, 230, 0.3);
+  color: #eaf1ff;
+  font-size: 12px;
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: none;
+}
+.lighthouse-toast--in { opacity: 1; transform: translate(-50%, 0); }
+
+/* 昵称输入行（Phase 4 #3） */
+.lh-room-nick-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.lh-room-nick-label { font-size: 12px; color: rgba(200, 214, 240, 0.65); flex-shrink: 0; }
+.lh-room-nick {
+  flex: 1; padding: 7px 10px; border-radius: 9px; font-size: 13px;
+  background: rgba(255, 255, 255, 0.06); color: #eaf1ff;
+  border: 1px solid rgba(140, 170, 230, 0.3); outline: none;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.lh-room-nick::placeholder { color: rgba(200, 214, 240, 0.45); }
+.lh-room-nick:focus { border-color: rgba(255, 210, 122, 0.5); background: rgba(255, 255, 255, 0.09); }
+
+/* 网络诊断按钮 —— 置于底部操作区内（Phase 4 #4） */
+.lh-room-diag {
+  flex: 1; padding: 9px 0; border: 1px solid rgba(120, 160, 220, 0.4); border-radius: 10px;
+  background: rgba(120, 160, 220, 0.14); color: #cfe0ff; font-size: 13px; cursor: pointer;
+}
+.lh-room-diag:hover { background: rgba(120, 160, 220, 0.24); }
+.lh-room-foot { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: 10px; }
+.lh-room-foot-row { display: flex; align-items: center; gap: 8px; }
+
+/* 聊天按钮 —— 置于底部操作区内（Phase 4 #7） */
+.lh-room-chat {
+  flex: 1; padding: 9px 0; border: 1px solid rgba(102, 224, 255, 0.4); border-radius: 10px;
+  background: rgba(102, 224, 255, 0.12); color: #9fe6ff; font-size: 13px; cursor: pointer;
+}
+.lh-room-chat:hover { background: rgba(102, 224, 255, 0.22); }
+
+/* 网络诊断面板（Phase 4 #4） */
+.lh-diag-panel {
+  position: absolute;
+  right: 18px;
+  bottom: 22px;
+  z-index: 35;
+  width: 280px;
+  border-radius: 14px;
+  background: rgba(14, 18, 30, 0.94);
+  border: 1px solid rgba(140, 170, 230, 0.3);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(16px);
+  color: #e8eefc;
+  padding: 12px 13px 13px;
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+  transition: opacity 0.22s cubic-bezier(0.22,1,0.36,1), transform 0.22s cubic-bezier(0.22,1,0.36,1);
+}
+.lh-diag-panel--in { opacity: 1; transform: translateY(0) scale(1); }
+
+.lh-diag-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.lh-diag-title { font-size: 15px; font-weight: 700; color: #f3f7ff; letter-spacing: 1px; }
+.lh-diag-close {
+  width: 22px; height: 22px; border: none; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4); color: #e8eefc; font-size: 15px; line-height: 1; cursor: pointer;
+}
+.lh-diag-close:hover { background: rgba(0, 0, 0, 0.7); }
+
+.lh-diag-row {
+  display: flex; align-items: flex-start; gap: 8px; padding: 5px 0;
+  font-size: 12px; border-top: 1px solid rgba(140, 170, 230, 0.12);
+}
+.lh-diag-row:first-of-type { border-top: none; }
+.lh-diag-k { flex-shrink: 0; width: 64px; color: rgba(200, 214, 240, 0.6); }
+.lh-diag-v { flex: 1; color: #dbe4f5; word-break: break-all; line-height: 1.4; }
+.lh-diag-v.ok { color: #6fe3b0; }
+.lh-diag-v.wait { color: var(--lh-amber); }
+.lh-diag-peer {
+  display: inline-block; margin: 0 4px 4px 0; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-family: "SFMono-Regular", Consolas, monospace;
+  background: rgba(120, 140, 180, 0.18); color: #cdd6e6;
+}
+.lh-diag-peer.ok { background: rgba(80, 220, 160, 0.18); color: #6fe3b0; }
+.lh-diag-peer.wait { background: rgba(245, 177, 78, 0.18); color: var(--lh-amber); }
+
+/* 房间聊天面板（Phase 4 #7） —— 底部左侧，避免与右下诊断面板 / 右上房间面板重叠 */
+.lh-chat-panel {
+  position: absolute;
+  left: 18px;
+  bottom: 22px;
+  z-index: 35;
+  width: 300px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: rgba(14, 18, 30, 0.94);
+  border: 1px solid rgba(140, 170, 230, 0.3);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(16px);
+  color: #e8eefc;
+  padding: 12px 13px 13px;
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+  transition: opacity 0.22s cubic-bezier(0.22,1,0.36,1), transform 0.22s cubic-bezier(0.22,1,0.36,1);
+}
+.lh-chat-panel--in { opacity: 1; transform: translateY(0) scale(1); }
+
+.lh-chat-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.lh-chat-title { font-size: 15px; font-weight: 700; color: #f3f7ff; letter-spacing: 1px; }
+.lh-chat-close {
+  width: 22px; height: 22px; border: none; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4); color: #e8eefc; font-size: 15px; line-height: 1; cursor: pointer;
+}
+.lh-chat-close:hover { background: rgba(0, 0, 0, 0.7); }
+
+.lh-chat-msgs {
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 5px;
+  max-height: 240px; padding: 2px 2px 4px; margin-bottom: 8px;
+}
+.lh-chat-msgs::-webkit-scrollbar { width: 6px; }
+.lh-chat-msgs::-webkit-scrollbar-thumb { background: rgba(140, 170, 230, 0.3); border-radius: 3px; }
+.lh-chat-msg { font-size: 12px; line-height: 1.45; word-break: break-word; }
+.lh-chat-name { color: #8fc7ff; margin-right: 4px; }
+.lh-chat-text { color: #dbe4f5; }
+
+.lh-chat-input-row { display: flex; align-items: center; gap: 8px; }
+.lh-chat-input {
+  flex: 1; padding: 7px 10px; border-radius: 9px; font-size: 13px;
+  background: rgba(255, 255, 255, 0.06); color: #eaf1ff;
+  border: 1px solid rgba(140, 170, 230, 0.3); outline: none;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.lh-chat-input::placeholder { color: rgba(200, 214, 240, 0.45); }
+.lh-chat-input:focus { border-color: rgba(102, 224, 255, 0.5); background: rgba(255, 255, 255, 0.09); }
+.lh-chat-send {
+  padding: 7px 14px; border: none; border-radius: 9px; cursor: pointer;
+  background: linear-gradient(90deg, #66e0ff, #4aa9ff); color: #06243a; font-weight: 600; font-size: 13px;
+}
+.lh-chat-send:hover { filter: brightness(1.06); }

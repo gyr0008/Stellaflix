@@ -1,0 +1,4247 @@
+/*
+ * Stellaflix 影视模块 — 播放器样式 (Step 3, 方案 B 全屏弹层)
+ */
+
+/* ===== T137 迭代11：最终修复（圆角 + 角落颜色匹配）=====
+ *
+ * 核心事实（经迭代8-10验证）：
+ *   1. html{clip-path:inset(0 round R)} 是 Electron 透明窗口视觉圆角的唯一可靠方式。
+ *      #desktop-window-shell 的 clip-path 只裁剪其内部内容，不影响窗口外形。
+ *   2. clip-path 会将元素自身背景也裁掉——裁切区像素回退到"无背景"(透明)。
+ *      故 html 背景必须不透明，且颜色需与当前页面底色一致。
+ *   3. backdrop-filter 会创建逃逸合成层（迭代8根因）——所有变体必须 neutral。
+ *
+ * 分层职责：
+ *   html          → clip-path 裁圆角 + 不透明兜底背景（角落颜色来源）
+ *   .sfv-browse   → 全窗口层，按页面类型设实色底（内容区域颜色来源）
+ *   变体容器      → 继承/覆盖底色，无需独立 border-radius（html 统一裁切） */
+html {
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 0 !important;
+  overflow: hidden !important;
+  isolation: isolate !important;
+  /* 默认深色——匹配音乐态首页 / 影视态暗色页（home/discover/search） */
+  background: #080a10 !important;
+  transform: none !important;
+}
+
+/* 浅色页（心动/追片/片单/历史/全屏浏览）——角落颜色匹配页面底色。
+   分类页（追片/历史）默认乳白 #faf8f5；玻璃颜色切换时由 JS 同步设置 html 背景。 */
+html:has(.sfv-browse--page),
+html:has(.sfv-browse--category),
+html:has(.sfv-browse--fullscreen) {
+  background: #faf8f5 !important;
+}
+
+/* ===== T137 L4+L5：影视态额外处理 ===== */
+body.video-space-active {
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  /* T140：不再给 body 自身加 clip-path。
+     ① html{clip-path:inset(0 round 34px)} 已裁剪 body 的全部内容（含 body 实色背景），
+        body 再加 clip-path 纯属冗余；
+     ② 该 clip-path 会把 player-controller.js 提升到 body 的 #bottom-bar（及其注入的
+        倍速/字幕/弹幕/画质/关闭 视频键）一并裁掉；且 #bottom-bar 在播放态带 backdrop-filter，
+        祖先 clip-path 会使其 backdrop-filter 采样异常 → 控制栏按钮整片不可见
+        （即「视频播放页底部控制栏按钮消失」）。
+     窗口圆角统一交由 html + 各 GPU 合成层自身 clip-path
+     （#canvas-container / .sfv-browse / #sfv-overlay）负责。 */
+}
+body.video-space-active > #custom-bg {
+  opacity: 0 !important;
+}
+
+/* 影视态播放器底部栏隐藏音乐态专属按钮（上一首/下一首/歌词），避免与视频控制语义冲突。
+   由 player-controller.js 的 body.video-player-active 触发。 */
+body.video-player-active #prev-btn,
+body.video-player-active #next-btn,
+body.video-player-active .lyrics-toggle-btn {
+  display: none !important;
+}
+
+/* 影视态下把 #track-detail-modal / 经 modal-video-reparent.js 提到 body 的 .modal-mask
+   提到 #sfv-overlay(2147483000) 之上，确保弹窗浮在视频画面上而非被视频层盖住。
+   .modal-mask 默认 z-index:50，reparent 到根上下文后仍需显式提升。 */
+body.video-space-active #track-detail-modal,
+body.video-player-active #track-detail-modal,
+body.video-space-active > .modal-mask,
+body.video-player-active > .modal-mask {
+  z-index: 2147483500;
+}
+
+/* 影视态豁免：index.html:980-981 的 body.immersive-mode .modal-mask{display:none!important}
+   会在用户主动进入沉浸模式时连视频详情弹窗一并屏蔽。影视态下「视频详情」仍应浮于视频之上正常弹出，
+   故在 video-space-active / video-player-active 且弹窗处于 .show（已打开）时，
+   用更高优先级 !important 覆盖沉浸式隐藏。音乐态不加此豁免，沉浸式隐藏 modal 行为保持不变。 */
+body.video-space-active.immersive-mode #track-detail-modal.show,
+body.video-player-active.immersive-mode #track-detail-modal.show,
+body.video-space-active.immersive-mode > .modal-mask.show,
+body.video-player-active.immersive-mode > .modal-mask.show {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* 影视态播放时 #bottom-bar 被提到 body 直接子元素，z-index 默认仅 6，
+   低于 #sfv-overlay(2147483000)。这会导致鼠标事件被视频层截走，
+   music.js 的 auto-hide 逻辑因接收不到 mouseenter 而持续 soft-hidden。
+   提升到视频层之上，让底部控制条可正常接收鼠标事件。 */
+body.video-player-active #bottom-bar,
+body.video-player-active #bottom-bar.visible {
+  z-index: 2147483200;
+}
+/* T143：影视态 home/搜索/浏览页保留 #canvas-container 透明星空渲染（AGENTS.md 守则：
+   粒子在影视态保持运行，仅视频真正播放时让位）。T139 曾在此隐藏画布防闪烁，
+   现 GPU 合成已稳定（GPU 开关 + 视频态透明清屏 + rolledCorners/thickFrame 处理），
+   隐藏会导致 home 页失去背后星空，故移除该隐藏规则。若个别 GPU 后端仍闪，
+   回退方案是给视频态 home 画布加一层极暗半透明兜底而非整体隐藏。 */
+
+/* ===== T137 L6（迭代8·根因修复）：移除 .sfv-browse 全窗口层的 backdrop-filter（所有变体）=====
+   根因：`.sfv-browse` 是 position:fixed;inset:0 的全窗口覆盖层，基础规则带
+   backdrop-filter:blur(26px)。backdrop-filter 把该层提升为独立 GPU 合成层，在
+   transparent 窗口上会逃逸 html / #desktop-window-shell 的 clip-path 裁切；且当
+   backdrop 无可采样内容（透明桌面）时 Chromium 渲染为白色 —— 即「影视态任意界面
+   左上角白角」的真因。
+   上版 L6 仅排除 --category/--page/--fullscreen 三个变体，漏掉默认 / --placeholder /
+   --browse，故白角仍在。现对所有变体无条件 neutral；暗玻璃改用半透明
+   background:rgba(8,10,16,.82) 近似（视觉仅损失模糊，不再有白角逃逸层）。 */
+.sfv-browse {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  /* T138：满铺 fixed 全窗口层在默认 GPU 合成下可能逃逸 html 的 clip-path 圆角裁剪，
+     导致窗口变矩形 + home 页(影视态3D墙)透明画布与窗口透明打架闪烁/黑屏。
+     在此层自身再裁一次圆角，确保无论合成路径如何都不会溢出圆角。 */
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 22px !important;
+  overflow: hidden !important;
+}
+
+/* ===== S4 共存：进入影视态时让 #canvas-container 的 1450ms 过渡瞬切 =====
+   消除双态切换的拖影；同时压过 render-deep-sleep / shape-workshop-mode 的
+   opacity / filter 规则（见 index.html:126 / :1296）。 */
+body.video-space-active #canvas-container {
+  transition: none !important;
+}
+
+/* ===== T134 影视态顶部导航栏（独立组件，挂 body，与 #search-area 完全解耦）=====
+   T96 → T132 → T134 演进：
+   T96   把 #sfv-nav 塞进 #search-box 复用其玻璃容器；
+   T132  抬 #search-area z-index 试图让 #search-box 浮于覆盖层之上；
+   T134  彻底解耦：#sfv-nav 直接挂 body（nav.js mount 到 document.body），自带完整玻璃
+         条样式；影视态隐藏 #search-area（其音乐态搜索输入/图标本就在影视态隐藏，nav
+         不再依赖它，#search-area 整体留空无存在意义）。
+   设计规范：border-radius:22px / blur(34px) / 暗色玻璃；选中态=主题色+底部2px下划线动画；
+   hover=提亮+微发光；不用胶囊/方块 Tab 样式。
+   关键：T134b  改回项目原生玻璃材质——background:var(--glass-bg)（112deg 暗渐变，
+   62–74% 不透明）+ border:var(--glass-border)（青边）+ box-shadow:var(--glass-shadow)，
+   与音乐态 #search-box 完全一致，恢复「原先的玻璃效果」；html.control-glass-svg-ok 下
+   叠加搜索框专属 SVG 玻璃滤镜 url(#stellaflix-search-box-glass-filter)，与 #search-box
+   同源，视觉才真一致（不要换成 stellaflix-control-glass-filter，那是大控件滤镜，
+   偏移/羽化参数针对小圆按钮，对 720px×58px 长条产生边缘走样）。glass-bg 为暗渐变，
+   电影/动漫等浅色页背景（#f2f4f7）上仍清晰可辨。 */
+/* 导航栏默认隐藏，影视态显示
+   玻璃基底：T134f 改为低不透明度暗渐变（22–30%）+ 减弱阴影——不再用 var(--glass-bg)，
+   因为该变量是 62–74% 暗色渐变，在音乐态纯黑背景下能呈现「透明玻璃」效果，但在影视
+   态星空/海报等亮底色上会读作「深色玻璃填充」。本规则只覆盖 #sfv-nav，不影响全局
+   --glass-bg（音乐态 #search-box 仍用原变量，保持纯黑背景下的暗玻璃视觉）。 */
+#sfv-nav {
+  display: none;
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, 58vw);
+  height: 58px;
+  margin: 0;
+  padding: 0 20px;
+  background: linear-gradient(112deg, rgba(60, 64, 68, 0.22), rgba(28, 32, 36, 0.26) 48%, rgba(12, 16, 20, 0.30));
+  border: 1px solid var(--glass-border);
+  border-radius: 22px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22), 0 0 28px rgba(0, 245, 212, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.10), inset 0 -24px 58px rgba(0, 0, 0, 0.10);
+  backdrop-filter: blur(34px) saturate(1.34);
+  -webkit-backdrop-filter: blur(34px) saturate(1.34);
+  align-items: center;
+  justify-content: space-evenly;
+  gap: 0;
+  z-index: 2147482100;
+  transition: transform .28s cubic-bezier(.16, 1, .3, 1), opacity .18s, visibility .18s;
+  pointer-events: auto;
+}
+/* 黄金版本 SVG 玻璃滤镜：与音乐态 #search-box 完全一致
+   （用专属搜索框滤镜 stellaflix-search-box-glass-filter，而非通用控件滤镜——
+   后者偏移/羽化参数针对小圆按钮优化，对 720px×58px 长条产生明显边缘走样）。
+   !important 与 #search-box 同优先级，规避自身 base 规则中的 blur 胜出。 */
+html.control-glass-svg-ok #sfv-nav {
+  backdrop-filter: url(#stellaflix-search-box-glass-filter) saturate(1) !important;
+  -webkit-backdrop-filter: url(#stellaflix-search-box-glass-filter) saturate(1) !important;
+}
+body.video-space-active #sfv-nav {
+  display: flex;
+}
+/* T134d：开屏动画期间隐藏视频态顶栏——避免 58px 玻璃条浮在 splash（#splash z=300）之上。
+   body.splash-active 在 splash/reveal/exiting 全程都在，splash 结束后移除 → 顶栏自动显现。
+   优先级与上方 body.video-space-active #sfv-nav 相同，靠源码顺序使其胜出。 */
+body.splash-active #sfv-nav {
+  display: none;
+}
+/* T134c：删除图钉按钮、触发条、--hidden/--pinned 类——顶栏改为静态常驻；
+   T134g：顶栏距顶 24px（对齐音乐态 .peek）、高 58px、与内容间隙 20px，
+   故 .sfv-browse--page .sfv-browse-body 的 padding-top=102px（24+58+20）承担让位。 */
+/* T134 影视态隐藏 #search-area：#search-area 内只剩空 #search-stack→#search-box
+   （搜索图标/输入已 hidden），无存在意义；整体隐藏避免视觉残留 + 彻底消除其
+   top:-76px / opacity:0 对 nav 可见性的潜在干扰。音乐态不受影响。 */
+body.video-space-active #search-area {
+  display: none;
+}
+/* 音乐态元素在影视态隐藏（与 #sfv-nav 解耦后仍需保证搜索图标/输入不显形） */
+body.video-space-active #search-icon,
+body.video-space-active #search-input {
+  display: none !important;
+}
+/* T134h：影视态顶栏与右上胶囊头像垂直中心对齐同基线（无高低错位）。
+   顶栏中心 = top(24) + 高(58)/2 = 53px；胶囊高 44px，中心对齐需 top = 53 - 22 = 31px。
+   作用域限定非桌面外壳（桌面外壳下 #top-right 由 desktop-shell 规则定位 top:58px，
+   且 #sfv-nav 未按外壳调整，强行覆盖会引入新错位）。音乐态不受影响。 */
+body.video-space-active:not(.desktop-shell) #top-right {
+  top: 31px;
+}
+/* [搜索修复 2026-08-05] 影视态下 .sfv-browse 覆盖层为全屏 fixed 且 z-index:2147482000，
+   会盖住 #top-right（默认 z-index:10），导致胶囊搜索 / 回到 Home / 登录按钮在
+   汇联·世界·电影·动漫分页「点不动、没反应」（首页 tab 因 goHome() 关闭覆盖层不受影响）。
+   抬升 #top-right 到覆盖层之上；仍低于顶栏 #sfv-nav(2147482100)，遵守 z-index 铁律 < 2147482099。 */
+body.video-space-active #top-right {
+  z-index: 2147482090;
+}
+/* T157→重审：影视态任意浏览分页（.sfv-browse 覆盖层激活，body.sfv-browse-active）
+   期间，搜索入口已统一收敛至右上角账号胶囊（#top-right > #sfv-capsule-search-btn），
+   且 #sfv-nav 内不承载搜索图标。为保证汇联·世界·电影·动漫等分页仍能发起搜索，
+   此处必须保留 #top-right 可见；其 z-index(2147482090) 高于浏览覆盖层(2147482000)
+   可正常交互，视觉上胶囊与导航栏分处顶栏左右两侧，不再发生『穿透误触』。
+   ——此前（老 T157）会隐藏 #top-right 的逻辑已删除，避免唯一搜索入口丢失。 */
+/* T134i：桌面外壳模式下影视顶栏下移到 top:34px，与音乐态搜索栏
+   (body.desktop-shell #search-area.peek{top:34px}, index.html:138) 顶边对齐，
+   消除「影视比音乐高 10px」的错位。高度保持 58px 不变（两者本就等高），
+   仅下移位置。普通模式顶栏仍 top:24px（已与音乐态 24px 一致）。
+   作用域限定 .desktop-shell，普通窗口不受影响。 */
+/* T155-rev：影视态顶栏恢复与音乐态顶部搜索栏(#search-box) Final-glass-scope 完全一致的
+   透明玻璃容器（此前 T155 误把整块玻璃透明化 → 用户反馈"透明玻璃容器消失"）。音乐态
+   #search-box 最终玻璃：background:rgba(0,0,0,.10) + border-color:transparent +
+   box-shadow:var(--saved-panel-glass-shadow) + backdrop-filter:var(--saved-panel-glass-filter)
+   (blur(12px) saturate(1.8) brightness(1.16))；SVG 态由上方 html.control-glass-svg-ok #sfv-nav
+   叠 url(#stellaflix-search-box-glass-filter)。此处复用同组变量，确保影视态与音乐态顶栏
+   视觉同源——用户要求"和顶部搜索栏效果一致"。border-radius:22px/高58px/padding:0 20px
+   已由 #sfv-nav 基础规则提供，与 #search-box 同源；不复制 #search-box 的 position:relative
+   （会破坏 #sfv-nav 的 fixed 定位）。 */
+body.video-space-active #sfv-nav {
+  background: rgba(0, 0, 0, .10) !important;
+  border-color: transparent !important;
+  box-shadow: var(--saved-panel-glass-shadow) !important;
+  backdrop-filter: var(--saved-panel-glass-filter) !important;
+  -webkit-backdrop-filter: var(--saved-panel-glass-filter) !important;
+}
+body.video-space-active #sfv-nav .sfv-nav-item {
+  color: rgba(255, 255, 255, .72);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+}
+body.video-space-active #sfv-nav .sfv-nav-item:hover {
+  color: rgba(255, 255, 255, .92);
+}
+body.video-space-active #sfv-nav .sfv-nav-item.active {
+  color: rgb(var(--fc-accent-rgb, 245, 197, 66));
+}
+/* T157→移除：影视顶栏内不再承载搜索按钮（DOM 与连线已从 nav.js 内删除），
+   搜索入口统一收敛至右上角账号胶囊（#top-right > #sfv-capsule-search-btn），
+   无需 #sfv-nav 内 .sfv-nav-search-btn 样式。 */
+/* T134i：桌面外壳模式下影视顶栏下移到 top:34px，与音乐态搜索栏顶边对齐。
+   去玻璃样式已在上面的 T155 统一处理，这里只负责位置。 */
+body.video-space-active.desktop-shell #sfv-nav {
+  top: 34px;
+}
+/* T134i：桌面外壳页模式下内容让位同步 +10px（34+58+20=112），
+   保持与音乐态一致的 20px 顶栏-内容间隙。普通模式仍是 102px。 */
+body.video-space-active.desktop-shell .sfv-browse--page .sfv-browse-body {
+  padding-top: 112px;
+}
+/* 导航项：纯文字 + 底部下划线，不用圆角胶囊 */
+.sfv-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  flex: 1;
+  padding: 0 4px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.50);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: color .25s ease, text-shadow .25s ease;
+  white-space: nowrap;
+}
+.sfv-nav-item:hover {
+  color: rgba(255, 255, 255, 0.88);
+  text-shadow: 0 0 12px rgba(var(--fc-accent-rgb, 245,197,66), .20);
+}
+.sfv-nav-item.active {
+  color: rgb(var(--fc-accent-rgb, 245,197,66));
+  font-weight: 600;
+}
+/* 选中态底部 2px 下划线 — 位移动画 */
+.sfv-nav-item::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  width: 0;
+  height: 2px;
+  background: rgb(var(--fc-accent-rgb, 245,197,66));
+  border-radius: 1px;
+  transition: width .28s cubic-bezier(.16,1,.3,1), left .28s cubic-bezier(.16,1,.3,1);
+  box-shadow: 0 0 8px rgba(var(--fc-accent-rgb, 245,197,66), .35);
+}
+.sfv-nav-item.active::after {
+  width: calc(100% - 36px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+/* T134c：图钉按钮与固定态描边样式已删除（顶栏改为静态常驻，无 toggle 控件） */
+
+/* ===== T136 影视导航栏自动隐藏开关（导航栏右侧外部小箭头按钮）=====
+   样式与交互对齐右上角账号胶囊的 user-capsule-hide-btn。
+   按钮作为 #sfv-nav 的子节点但定位到栏外右侧，因此既在视觉上与导航栏分离，
+   又能随导航栏整体联动：隐藏时一起滑出，悬停时一起滑回。 */
+.sfv-nav-hide-btn {
+  position: absolute;
+  right: -28px;
+  top: 50%;
+  width: 18px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  background: rgba(255, 255, 255, .035);
+  color: rgba(255, 255, 255, .34);
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+  transform: translateY(-50%) translateX(6px) scale(.92);
+  transition: opacity .18s, transform .18s, background .18s, color .18s, border-color .18s;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+#sfv-nav:hover .sfv-nav-hide-btn,
+.sfv-nav-hide-btn.on {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0) scale(1);
+}
+.sfv-nav-hide-btn:hover,
+.sfv-nav-hide-btn.on {
+  border-color: rgba(var(--fc-accent-rgb), .34);
+  background: rgba(var(--fc-accent-rgb), .10);
+  color: #fff;
+}
+/* 自动隐藏：导航栏整体上滑隐藏；鼠标进入顶部中心探测区时滑回 */
+body.sfv-nav-auto-hide #sfv-nav {
+  transform: translate(-50%, calc(-100% - 20px));
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform .28s cubic-bezier(.16, 1, .3, 1), opacity .18s, visibility 0s linear .18s;
+}
+body.sfv-nav-auto-hide.sfv-nav-peek #sfv-nav {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: transform .28s cubic-bezier(.16, 1, .3, 1), opacity .16s, visibility 0s;
+}
+
+/* ===== T96 影视态胶囊搜索按钮（位于 #top-right 内）=====
+   成员顺序：[隐藏钮][搜索][Home][头像]
+   搜索按钮归入 user-capsule-auto-hide 隐藏/滑入
+   ⚠️ 音乐态铁律：搜索按钮绝对不可见，只有影视态才显示 */
+.sfv-capsule-search-btn {
+  display: none !important; /* 音乐态：强制隐藏 */
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+body.video-space-active .sfv-capsule-search-btn {
+  display: flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  align-items: center;
+  justify-content: center;
+}
+/* 影视态也隐藏音乐搜索相关的 mode-tabs */
+body.video-space-active #search-mode-tabs {
+  display: none !important;
+}
+/* 红笔圈：影视态隐藏上传按钮区域 */
+body.video-space-active #upload-actions {
+  display: none !important;
+}
+/* 影视态隐藏音乐态「歌单/队列」面板：display:none 不占位、不可交互；音乐态保持原样 */
+body.video-space-active #playlist-panel {
+  display: none !important;
+}
+
+/*
+ * T103 FIX: Stellaflix 原生沉浸模式(immersive-mode)会把 #top-right 设为
+ *   opacity:0 !important; visibility:hidden !important; pointer-events:none !important;
+ * (index.html L861)，导致影视态下搜索按钮/导航按钮虽然 DOM 存在且 JS 绑定正常，
+ * 但视觉不可见+点击穿透。影视态必须保留 #top-right 可见（搜索/导航/Home 入口）。
+ */
+body.video-space-active.immersive-mode #top-right,
+body.video-space-active.immersive-mode #top-right .icon-btn {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* ===== T108 影视态全页搜索（Kazumi 风格）=====
+   全屏覆盖层：顶部导航 + 居中搜索栏 + 历史下拉 + 内联结果网格
+   点击胶囊搜索按钮进入，返回/关闭/Escape 退出 */
+
+/* ---- 容器：全屏覆盖，默认隐藏 ---- */
+#sfv-search-page {
+  display: none;
+  /* T124 修正：去掉 T122 误加的 border-radius: 24px + overflow: hidden（导致 image#1/#2 bug） */
+}
+body.video-space-active #sfv-search-page {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483100; /* 高于 sfv-overlay(2147483000) */
+  background: var(--sfv-cat-bg, #faf8f5); /* 统一乳白色底；支持 page-bg-diy 玻璃容器底色/图片切换 */
+  color: #1a1a1a;
+  /* T141-rev：html 级 clip-path 已移除（tile memory 优化），此满铺不透明页需自身再裁圆角，
+     否则窗口四角出现直角白边。最大化/全屏由下方规则释放。 */
+  clip-path: inset(0 round 34px);
+  -webkit-clip-path: inset(0 round 34px);
+  transform: translateY(100%); /* T109e：从底部滑入 */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  /* T117：close 动画从 0.35s 缩短到 0.18s，让用户点击 ← 立即看到反馈 */
+  transition: transform .18s cubic-bezier(.16,1,.3,1), opacity .18s ease, visibility 0s linear .18s;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+body.video-space-active #sfv-search-page::-webkit-scrollbar { display: none; }
+body.video-space-active #sfv-search-page.sfv-search-open {
+  transform: translateY(0) !important; /* T109e：从底部滑入归位 */
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  transition: transform .25s cubic-bezier(.16,1,.3,1), opacity .22s ease, visibility 0s linear 0s;
+}
+/* T141-rev：最大化/全屏时窗口为矩形，释放 #sfv-search-page 圆角避免内容缺口 */
+body.desktop-shell.desktop-maximized #sfv-search-page,
+html:fullscreen body.video-space-active #sfv-search-page {
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+}
+
+/* ---- T115：顶部 AppBar（Kazumi AppBar 风格：transparent + ← + 标题 + ×） ---- */
+.sfv-search-appbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;                  /* Kazumi AppBar 默认 toolbarHeight 56dp */
+  padding: 0 8px;                /* 跟 fromLTRB(8,0,8,8) 第一个 8 对齐 */
+  background: transparent;        /* Kazumi AppBar.transparent 透明以让底层页面底色透过 */
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(0,0,0,.06);  /* 极细视觉分割 */
+  position: relative;
+  z-index: 2;                    /* 高于搜索栏避免被 .sfv-search-bar 圆角边遮挡 */
+}
+/* 左：返回按钮（←）—— T121 hover 强化：移除 transition + 强化多状态反馈 */
+.sfv-search-appbar-back {
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #1a1a1a;
+  /* T121：移除 transition（避免方向不同导致动画中断） */
+  padding: 0;
+  flex-shrink: 0;
+  pointer-events: auto;
+  position: relative;
+}
+/* T121：用 ::before 伪元素扩大可点击 hit area（仍 44x44 视觉，hit 60x60），提升鼠标进入响应灵敏度 */
+.sfv-search-appbar-back::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 28px;
+  pointer-events: auto;
+}
+.sfv-search-appbar-back:hover,
+.sfv-search-appbar-back:focus-visible {
+  background: rgba(0,0,0,.10);
+  /* T122：用 box-shadow 替代 outline（box-shadow 精确受 border-radius 控制，所有方向一致） */
+  box-shadow: 0 0 0 1.5px rgba(0,0,0,.18);
+}
+.sfv-search-appbar-back:active { background: rgba(0,0,0,.16); box-shadow: 0 0 0 1.5px rgba(0,0,0,.28); }
+/* 中：标题（Kazumi Text("搜索")）—— T116 改为左对齐紧贴 ← 后 */
+.sfv-search-appbar-title {
+  flex: 1;
+  text-align: left;
+  padding-left: 12px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1a1a;
+  letter-spacing: .3px;
+  user-select: none;
+  pointer-events: none;
+}
+/* 右：关闭按钮（×，关闭软件）—— T121 同 hover 强化 */
+.sfv-search-appbar-close {
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #1a1a1a;
+  padding: 0;
+  flex-shrink: 0;
+  pointer-events: auto;
+  position: relative;
+}
+.sfv-search-appbar-close::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 28px;
+  pointer-events: auto;
+}
+.sfv-search-appbar-close:hover,
+.sfv-search-appbar-close:focus-visible {
+  background: rgba(0,0,0,.10);
+  /* T122：box-shadow 替代 outline */
+  box-shadow: 0 0 0 1.5px rgba(0,0,0,.18);
+}
+.sfv-search-appbar-close:active { background: rgba(0,0,0,.16); box-shadow: 0 0 0 1.5px rgba(0,0,0,.28); }
+
+/* ---- T113: 严格对齐 Kazumi SearchAnchor.bar 风格 ---- */
+/* Kazumi 实际未显式声明搜索栏 padding/margin/圆角（全部走 Material 3 默认），
+   但 fromLTRB(8, 0, 8, 8) 是显式的容器外间距；搜索栏/历史面板走 M3 Expressive 默认：
+   - 搜索栏：~ 56dp 高 / pill 形（圆角 = 高/2）/ surfaceContainerHigh 背景（≈ #ECE6F1）
+   - 历史面板：surface 背景（≈ #faf8f5）/ 圆角 ~ 28dp
+   - 间距：搜索栏与历史面板之间 8dp（fromLTRB 第 4 个值）
+   - 字号：15-16px / line-height 24px / 颜色 onSurface
+   1:1 移植到 Stellaflix 暗金玻璃语言（米白底 + 玻璃灰 + 暗金描边） */
+
+.sfv-search-page {
+  /* 容器层：保证 area + history + result 三段垂直堆叠、全屏铺满、底色一气。
+     使用 page-bg-diy 注入的 --sfv-cat-bg 变量，默认乳白实色兜底，避免影视态下
+     body 透明导致底层 #canvas-container / 音乐可视化画布透出，形成多层玻璃割裂。 */
+  background: var(--sfv-cat-bg, #faf8f5);
+}
+.sfv-search-bar-area {
+  /* T119：外层容器负责 fromLTRB(8,0,8,8) 左右间距；内部 .sfv-search-bar-area-inner 限宽 760 居中 */
+  padding: 0 8px 0;
+  background: transparent;
+  flex-shrink: 0;
+  display: block;
+  z-index: 2;
+}
+/* T119：核心限宽容器（搜索栏 + 历史面板共用）—— 两层 max-width 760 + 居中完全对齐 */
+.sfv-search-bar-area-inner {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  position: relative;             /* 让 history-drop 用 absolute 锚定这个容器 */
+}
+.sfv-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 14px;
+  /* T125：默认 4 角圆 pill（无选中状态——image#1 目标） */
+  border-radius: 26px;
+  /* T143：玻璃白底，透出 page-bg-diy 背景色/图片 */
+  background: rgba(255,255,255,.55);
+  border: 1.5px solid rgba(255,255,255,.35);
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  transition: background .25s, border-radius .25s, border-color .25s;
+  position: relative;
+  z-index: 3;
+}
+/* T125：focus 后（JS 加 .sfv-search-bar-focus）—— 底部变方（与历史面板顶部平接形成连续胶囊，image#4 目标） */
+.sfv-search-bar.sfv-search-bar-focus {
+  border-radius: 26px 26px 0 0;
+  border-bottom: 1px solid rgba(0,0,0,.06);
+}
+.sfv-search-bar:focus-within {
+  background: rgba(255,255,255,.78);
+  border-color: rgba(0,0,0,.12);
+}
+
+/* 左侧图标区（🔍 / ← 切换，对齐 Kazumi viewLeading） */
+.sfv-search-bar-leading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.sfv-search-bar-icon {
+  color: #000;
+  pointer-events: none;
+  display: block;
+}
+.sfv-search-bar input {
+  flex: 1;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: #1a1a1a;
+  font-family: inherit;
+  font-size: 15px;               /* Kazumi ListTile title 默认 15-16px */
+  line-height: 1.5;              /* = 22.5px，匹配 48dp 搜索栏垂直居中 */
+  outline: none;
+  letter-spacing: .25px;
+  min-width: 0;                  /* flex item shrink 防 input 内文字截断 */
+}
+.sfv-search-bar input::placeholder { color: #b3b3b3; }
+
+/* 右侧操作区（对齐 Kazumi barTrailing：图片搜索图标 + 关闭按钮） */
+.sfv-search-bar-trailing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sfv-search-bar-act {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #555;
+  transition: background .2s, color .2s;
+  padding: 0;
+}
+.sfv-search-bar-act:hover { background: rgba(0,0,0,.06); color: #000; }
+/* 关闭按钮：弱化（Kazumi 没有此按钮，但 navbar 已带 ← 返回，所以这里只给视觉装饰） */
+.sfv-search-close { color: #b3b3b3; }
+.sfv-search-close:hover { color: #000; }
+
+/* T166：搜索栏右侧「X」清空按钮（默认隐藏，输入有内容时显示） */
+.sfv-search-bar-clear {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: 14px;
+  display: none;                 /* 默认隐藏：输入为空时不显示 */
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #999;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+.sfv-search-bar-clear.is-visible { display: flex; }
+.sfv-search-bar-clear:hover { background: rgba(0,0,0,.06); color: #000; }
+.sfv-search-bar-clear:active { background: rgba(0,0,0,.12); color: #000; }
+
+/* ---- T127：历史记录面板（固定高度 400px，内部滚动） ---- */
+.sfv-search-history-drop {
+  /* T124：默认隐藏。点击搜索栏 focus 时 JS 添加 .sfv-history-visible 触发 slide-down 动画 */
+  display: none;
+  /* T121：改 position:absolute 覆盖式布局（之前 static 流式会把 result-area 挤下去）；
+     top:48px 紧贴 48dp 搜索栏底部；left/right:0 继承父容器 760px 限宽（与搜索栏完美对齐同宽） */
+  position: absolute;
+  top: 48px;
+  left: 0;
+  right: 0;
+  width: auto;
+  margin: 0;
+  /* T143：玻璃白底，与搜索栏一体透出 page-bg-diy 背景 */
+  background: rgba(255,255,255,.72);
+  border-radius: 0 0 26px 26px;
+  box-shadow: 0 6px 16px rgba(0,0,0,.08);
+  /* T127：固定高度 400px（用户要求）—— 内容超出滚动 */
+  height: 400px;
+  overflow-y: auto;
+  /* T143-fix-2：按用户要求删除搜索栏历史面板右侧滚动条，保留滚动能力 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior: contain;
+  z-index: 4;
+  animation: sfvDropIn .22s ease-out;
+}
+@keyframes sfvDropIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.sfv-search-history-drop.sfv-history-visible { display: block; }
+
+/* T143-fix-2：隐藏 WebKit 滚动条 */
+.sfv-search-history-drop::-webkit-scrollbar { display: none; }
+
+/* T127：空状态填充 400px（与面板高度一致） */
+.sfv-search-empty-hint {
+  min-height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  text-align: center;
+  color: #b3b3b3;
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: .3px;
+}
+
+/* 历史列表项（T128：用户要求"上下间距 50px" → height 50px + 文字纯黑 #000） */
+.sfv-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 20px;              /* 横向 = 20px（Kazumi ListTile contentPadding ≈ 16dp 多 4px 让呼吸更大） */
+  height: 50px;                  /* T128：用户要求 50px（之前 100px） */
+  border: none;
+  background: transparent;
+  color: #000;                   /* T128：纯黑色（之前 #1a1a1a） */
+  font-size: 15px;
+  line-height: 1.5;
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s;
+}
+.sfv-history-item:hover,
+.sfv-history-item:focus-visible {
+  /* T117：选中/hover 显示暗色区域（无分隔线） */
+  background: rgba(0,0,0,.07);
+}
+.sfv-history-item:active { background: rgba(0,0,0,.12); }
+
+/* 删除按钮（对齐 Kazumi trailing IconButton；T128 尺寸跟随 50px 行高 + 纯黑 #000） */
+.sfv-history-item-del {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #000;                   /* T128：纯黑（之前 #999） */
+  font-size: 14px;
+  line-height: 1;
+  transition: background .15s, color .15s;
+}.sfv-history-item-del:hover { background: rgba(0,0,0,.06); color: #000; }
+
+/* ---- 搜索结果区域 ---- */
+.sfv-search-result-area {
+  flex: 1;
+  padding: 12px 16px 32px;
+  min-height: 0;
+}
+/* T166 + T170 搜索页卡片网格：
+   - 卡片宽 450px，高按 16:9 自适应 = 253.125px；间距 19px。
+   - 窗口 ≤ 1920px：每行居中 3 张，容器宽 = 3×450 + 2×19 = 1388px；
+   - 窗口 > 1920px：每行居中 5 张，容器宽 = 5×450 + 4×19 = 2326px。
+   用 CSS Grid + justify-content: center 保证最后一行不足 N 张时也居中，
+   消除 flex-wrap 左对齐在 3/5 卡切换时出现的中间大空白。 */
+.sfv-search-result-area .sfv-grid {
+  display: grid;
+  gap: 19px;
+  justify-content: center;
+  grid-template-columns: repeat(3, 450px);
+  max-width: 1388px; /* 3 * 450 + 2 * 19 */
+  margin: 0 auto;
+  height: auto;
+  overflow: visible;
+}
+@media (min-width: 1921px) {
+  .sfv-search-result-area .sfv-grid {
+    grid-template-columns: repeat(5, 450px);
+    max-width: 2326px; /* 5 * 450 + 4 * 19 */
+  }
+}
+.sfv-search-result-area .sfv-card {
+  width: 450px;
+  aspect-ratio: 16 / 9; /* 高度 = 450 * 9/16 = 253.125px，自适应 */
+  position: relative;
+  background: #1a1f28; /* 占位底色（追片页卡片同款） */
+  border: 1px solid rgba(0,0,0,.08);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 6px 18px rgba(0,0,0,.12);
+  transition: box-shadow .25s ease;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+}
+.sfv-search-result-area .sfv-card:hover {
+  transform: none; /* 禁用 scale（追片页同款），防圆角被相邻卡片裁切 */
+  box-shadow: 0 10px 26px rgba(0,0,0,.18);
+}
+/* 封面：绝对撑满卡片（16:9 横卡） */
+.sfv-search-result-area .sfv-card-cover {
+  position: absolute;
+  inset: 0;
+  background: #1a1f28;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sfv-search-result-area .sfv-card-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* hover 浮层（对齐追片页 .sfv-plex-card__cap：渐变 scrim + 底部滑入） */
+.sfv-search-result-area .sfv-card__cap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  padding: 24px 12px 10px;
+  background: linear-gradient(to top, rgba(0,0,0,.82) 0%, rgba(0,0,0,.42) 48%, rgba(0,0,0,0) 100%);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .25s ease, transform .25s ease;
+  pointer-events: none;
+}
+.sfv-search-result-area .sfv-card:hover .sfv-card__cap {
+  opacity: 1;
+  transform: translateY(0);
+}
+.sfv-search-result-area .sfv-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  text-shadow: 0 1px 4px rgba(0,0,0,.75);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sfv-search-result-area .sfv-card-sub {
+  padding: 3px 0 0;
+  font-size: 11.5px;
+  color: rgba(255,255,255,.82);
+  line-height: 1.3;
+  text-shadow: 0 1px 3px rgba(0,0,0,.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* T166b：电影评分徽章（海报右上角常驻）—— 半透明黑底 + TMDB 金字，
+   替代原 hover 浮层左下的 `★ 8.5`。不使用 backdrop-filter：#sfv-search-page
+   有 clip-path:inset(0 round 34px) 祖先，player.css T137/T165 铁律要求此类
+   祖先内子元素禁用 backdrop-filter。玻璃质感由深色底 + text-shadow 承担。 */
+.sfv-search-result-area .sfv-card-vote {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  padding: 3px 8px;
+  background: rgba(0,0,0,.62);
+  color: #f5c542;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  border-radius: 8px;
+  text-shadow: 0 1px 2px rgba(0,0,0,.6);
+  pointer-events: none;
+}
+/* 防御：enrichTmdb 异步补全可能往 .sfv-card-sub prepend .sfv-tmdb-vote，
+   sub 内的 vote 视觉隐藏（与右上角徽章不重复显示）。 */
+.sfv-search-result-area .sfv-card-sub .sfv-tmdb-vote { display: none; }
+/* 搜索状态提示 */
+.sfv-search-status {
+  text-align: center;
+  padding: 48px 16px;
+  color: #aaa;
+  font-size: 14px;
+}
+.sfv-search-status .sfv-status-icon { font-size: 36px; margin-bottom: 12px; opacity: .35; }
+
+/* ===== 全屏覆盖层（方案 B）=====
+   极高 z-index 盖在所有既有层之上（包括 #canvas-container z:1、idle-guide z:2、
+   #empty-home z:4、fx-panel 等），使粒子在视觉上让位。 */
+#sfv-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: #000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  color: #fff;
+  /* T139：全屏 fixed 层统一再裁圆角，防止合成层逃逸 html clip-path。 */
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 22px !important;
+}
+#sfv-overlay.sfv-show { display: flex; }
+
+/* 视频本体：默认「留黑边完整显示」(object-fit:contain)；
+   后续若需「填满裁切」可在 Step 4 提供切换并改为 cover。 */
+#sfv-overlay video.sfv-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+/* ===== 控制条 ===== */
+#sfv-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 16px 20px 22px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0));
+  transition: opacity 0.35s ease;
+}
+/* 沉浸态：控件自动隐藏 */
+#sfv-overlay.sfv-idle #sfv-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ===== 阶段3：播放器侧 线路(Road)/选集(Episode) 切换（对齐 Kazumi 视频页）===== */
+/* 悬浮于视频之上、控制条之下；嵌入态(#bottom-bar 被 player.css 隐藏)不影响本层（独立挂载） */
+.sfv-road-ep {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483050; /* 高于 #sfv-controls 之上区域，低于弹幕输入等顶层 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 920px);
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(34px) saturate(1.34);
+  -webkit-backdrop-filter: blur(34px) saturate(1.34);
+  color: #fff;
+}
+/* 沉浸态同样自动隐藏，避免遮挡画面 */
+#sfv-overlay.sfv-idle .sfv-road-ep {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+.sfv-road-ep-road {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sfv-road-ep-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+  letter-spacing: 0.04em;
+}
+.sfv-road-ep-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 180px;
+  height: 34px;
+  padding: 0 30px 0 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.10) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>") no-repeat right 10px center;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+.sfv-road-ep-select option {
+  color: #111;
+}
+.sfv-road-ep-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.sfv-road-ep-chip {
+  flex: 0 0 auto;
+  min-width: 44px;
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+.sfv-road-ep-chip:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+/* 当前集：青色高亮（对齐 FX 品牌青，禁用品牌金） */
+.sfv-road-ep-chip.is-current {
+  background: rgba(0, 245, 212, 0.18);
+  border-color: rgba(0, 245, 212, 0.6);
+  color: #6ff7e6;
+  font-weight: 600;
+}
+
+.sfv-btn {
+  flex: 0 0 auto;
+  min-width: 38px;
+  height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 15px;
+  line-height: 38px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease;
+}
+.sfv-btn:hover { background: rgba(255, 255, 255, 0.22); }
+.sfv-btn-close { background: rgba(255, 70, 90, 0.28); }
+.sfv-btn-close:hover { background: rgba(255, 70, 90, 0.45); }
+
+.sfv-progress {
+  position: relative;
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+}
+.sfv-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ff5367, #7ad7c2);
+}
+
+.sfv-time {
+  flex: 0 0 auto;
+  min-width: 92px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.82);
+  text-align: center;
+}
+
+/* ===================================================================
+   影视态首页（复用 #empty-home 既有 DOM，仅补充影视专属元素样式）
+   注意：不覆写 .home-card / .home-tile 的基础布局，避免污染音乐态。
+   =================================================================== */
+
+/* 片库为空时的提示（占满整条 home-tile-row 的 5 列网格） */
+.sfv-rail-empty {
+  grid-column: 1 / -1;
+  padding: 18px 16px;
+  border: 1px dashed rgba(244, 210, 138, 0.32);
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* 影视海报格：在音乐态 .home-tile 基础上补封面占位与进度条 */
+/* 注意：必须用 background-image 而非 background 简写，否则会重置 background-size:cover，
+   导致内联 style 写入的 background-image:url(...) 按原尺寸渲染（TMDB 原图 800x1200+），
+   塞进 92px 高的封面容器里几乎不可见 —— 这是"接着看海报空白"的根因。 */
+.sfv-tile-cover {
+  position: relative;
+  overflow: hidden;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-image:
+    radial-gradient(120% 90% at 20% 0%, rgba(244, 210, 138, 0.16), transparent 60%),
+    linear-gradient(160deg, #26262c, #131317);
+}
+/* 22:4x：接着看海报用 <img>（替代 background-image 简写），object-fit 自适应 92px 容器 */
+.sfv-tile-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
+.sfv-tile-mark {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: rgba(20, 18, 12, 0.92);
+  background: rgba(244, 210, 138, 0.88);
+}
+/* 观看进度：贴底细条 */
+.sfv-tile-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #f4d28a, #ff5367);
+  transition: width 0.3s ease;
+}
+
+/* ===== 接着看 5 卡区（对齐音乐态 renderHomeTiles 的 home-tile 结构）=====
+   复用 .home-tile / .home-tile-cover / .home-tile-title / .home-tile-sub 基础布局，
+   仅补充影视态特有的进度条和空位占位。 */
+.sfv-continue-tile {
+  cursor: pointer;
+}
+.sfv-continue-tile:hover .home-tile-cover {
+  transform: scale(1.03);
+  transition: transform .25s ease;
+}
+.sfv-continue-empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ===== URL 输入条（Electron 无 window.prompt，故自建）===== */
+.sfv-urlbar {
+  position: fixed;
+  left: 50%;
+  top: 22%;
+  transform: translateX(-50%);
+  z-index: 2147483100;
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(18, 18, 22, 0.94);
+  border: 1px solid rgba(244, 210, 138, 0.28);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+}
+.sfv-urlbar-input {
+  width: min(62vw, 520px);
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+}
+.sfv-urlbar-input:focus { border-color: rgba(244, 210, 138, 0.6); }
+.sfv-urlbar-btn {
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sfv-urlbar-btn:hover { background: rgba(244, 210, 138, 0.28); }
+
+/* ===== 轻提示 ===== */
+.sfv-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  z-index: 2147483200;
+  max-width: 68vw;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(18, 18, 22, 0.92);
+  border: 1px solid rgba(244, 210, 138, 0.26);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  animation: sfv-toast-in 0.22s ease;
+}
+@keyframes sfv-toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ==========================================================================
+   Stellaflix 影视模块 — 视觉控制台「系统」tab 内「CMS10 片源 / 规则」折叠面板样式
+   （历史：本块原服务于「片源」独立分页；2026-08-30 该独立 tab 折叠进系统 tab，
+   顶部六个 .sfv-fx-tab/.sfv-fx-page/6 列 grid 覆写已随独立分页移除。）
+   ========================================================================== */
+
+/* 合规提示 —— 已按用户要求隐藏 */
+.sfv-src-notice { display: none !important; }
+
+/* 分区标题 —— 白色系（对齐其他 tab 的 .fx-section-label 视觉层级）*/
+.sfv-section-label {
+  display: flex; align-items: center; gap: 8px;
+  margin: 18px 0 9px;
+  font-size: 10px; color: rgba(255, 255, 255, .68);
+  letter-spacing: 1.2px; text-transform: uppercase;
+  font-weight: 700;
+}
+.sfv-src-notice + .sfv-section-label { margin-top: 14px; }
+.sfv-section-label::after {
+  content: ''; height: 1px; flex: 1;
+  background: linear-gradient(90deg, rgba(255, 255, 255, .14), transparent);
+}
+.sfv-section-label:first-child { margin-top: 0; }
+
+/* ---- 片源表单：深色面板（移除白光玻璃，纯深色实底 + 中性细描边）---- */
+.sfv-src-form {
+  display: flex; flex-direction: column; gap: 9px; margin-bottom: 14px;
+  padding: 9px 10px; border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  background: rgba(0, 0, 0, .22);
+}
+.sfv-input-row { display: flex; align-items: center; gap: 8px; }
+.sfv-input-row label {
+  flex: 0 0 auto; width: 56px;
+  font: 500 10px/1 var(--font-sans);
+  letter-spacing: 0.5px;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+/* 输入框 —— 深色面板（移除白光玻璃，纯深色实底 + 中性细描边）*/
+.sfv-src-name,
+.sfv-src-api {
+  flex: 1 1 auto; min-width: 0;
+  width: 100%; height: 30px; padding: 0 12px;
+  border-radius: 12px;
+  font: 400 11px/30px var(--font-sans); color: #fff;
+  background: rgba(0, 0, 0, .30);
+  border: 1px solid rgba(255, 255, 255, .10);
+  outline: none;
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+}
+.sfv-src-name:focus,
+.sfv-src-api:focus {
+  background: rgba(0, 0, 0, .42);
+  border-color: rgba(255, 255, 255, .24);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .08);
+}
+.sfv-form-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* 主按钮（添加片源）——深色面板按钮 */
+.sfv-btn-primary {
+  flex: 0 0 auto; height: 30px; padding: 0 13px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(0, 0, 0, .30);
+  color: #fff;
+  font: 700 11px/28px var(--font-sans);
+  cursor: pointer; white-space: nowrap;
+  letter-spacing: .3px;
+  transition: background 0.18s, border-color 0.18s, color 0.18s, transform 0.12s;
+}
+.sfv-btn-primary span { margin-right: 2px; }
+.sfv-btn-primary:hover {
+  background: rgba(255, 255, 255, .08);
+  border-color: rgba(255, 255, 255, .30);
+  color: #fff;
+}
+.sfv-btn-primary:active { transform: translateY(1px); }
+
+/* 次按钮（导入规则文件）——深色面板按钮 */
+.sfv-btn-secondary {
+  flex: 0 0 auto; height: 30px; padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, .10);
+  background: rgba(0, 0, 0, .30);
+  color: rgba(255, 255, 255, .78);
+  font: 600 11px/28px var(--font-sans);
+  cursor: pointer; white-space: nowrap;
+  letter-spacing: .3px;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+.sfv-btn-secondary span { margin-right: 3px; }
+.sfv-btn-secondary:hover {
+  background: rgba(255, 255, 255, .07);
+  color: #fff;
+  border-color: rgba(255, 255, 255, .22);
+}
+
+.sfv-src-hint { font-size: 11px; color: rgba(140, 220, 170, 0.9); }
+.sfv-src-hint.bad,
+.sfv-rule-hint.bad { color: rgba(255, 150, 140, 0.92); }
+.sfv-rule-hint { font-size: 11px; color: rgba(140, 220, 170, 0.9); }
+
+/* 已添加列表 / 已导入规则 —— 卡片对齐 .fx-slider / .fx-toggle 玻璃语言 */
+.sfv-src-list,
+.sfv-rules-list { display: flex; flex-direction: column; gap: 7px; }
+/* 空态占位 —— 白光玻璃容器（3 层，对齐 .fx-slider）*/
+.sfv-src-empty {
+  padding: 9px 10px; border-radius: 12px;
+  font-size: 11px; text-align: center;
+  color: rgba(255, 255, 255, 0.42);
+  background: var(--saved-button-glass-bg, rgba(0, 0, 0, .10));
+  border: 1px solid transparent;
+  backdrop-filter: var(--saved-button-glass-filter, blur(12px) saturate(1.8) brightness(1.16));
+  -webkit-backdrop-filter: var(--saved-button-glass-filter, blur(12px) saturate(1.8) brightness(1.16));
+  box-shadow: var(--saved-button-glass-shadow, inset 0 0 2px 1px rgba(255, 255, 255, .34), inset 0 0 10px 4px rgba(255, 255, 255, .13), 0 10px 30px rgba(0, 0, 0, .18));
+}
+/* 片源/规则项卡片 —— 白光玻璃卡片（3 层，对齐 .fx-slider）*/
+.sfv-src-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 10px; border-radius: 12px;
+  background: var(--saved-button-glass-bg, rgba(0, 0, 0, .10));
+  border: 1px solid transparent;
+  backdrop-filter: var(--saved-button-glass-filter, blur(12px) saturate(1.8) brightness(1.16));
+  -webkit-backdrop-filter: var(--saved-button-glass-filter, blur(12px) saturate(1.8) brightness(1.16));
+  box-shadow: var(--saved-button-glass-shadow, inset 0 0 2px 1px rgba(255, 255, 255, .34), inset 0 0 10px 4px rgba(255, 255, 255, .13), 0 10px 30px rgba(0, 0, 0, .18));
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+.sfv-src-item:hover {
+  border-color: transparent;
+  box-shadow: var(--saved-button-glass-hover-shadow, inset 0 0 2px 1px rgba(255, 255, 255, .42), inset 0 0 12px 5px rgba(255, 255, 255, .17), 0 12px 34px rgba(0, 0, 0, .22), 0 0 18px rgba(255, 255, 255, .06));
+}
+.sfv-src-item-main { flex: 1 1 auto; min-width: 0; }
+.sfv-src-item-name {
+  font: 400 11.5px/1.35 var(--font-sans);
+  color: rgba(255, 255, 255, 0.72);
+  letter-spacing: .2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sfv-src-item-api {
+  font: 400 9.5px/1.45 var(--font-mono, monospace);
+  color: rgba(255, 255, 255, 0.28);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sfv-src-item-state { font-size: 10.5px; line-height: 1.35; color: rgba(255, 255, 255, 0.40); font-variant-numeric: tabular-nums; }
+.sfv-src-item-state:empty { display: none; }
+.sfv-src-item-state.ok  { color: rgba(140, 220, 170, 0.92); }
+.sfv-src-item-state.bad { color: rgba(255, 150, 140, 0.92); }
+.sfv-src-item-ops { flex: 0 0 auto; display: flex; gap: 5px; }
+
+/* 状态圆点 —— 三态：灰=未启用 / 绿=功能正常 / 红=功能故障 */
+.sfv-src-dot {
+  flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+  background: rgba(255, 255, 255, .16);
+  transition: background 0.35s ease, box-shadow 0.35s ease;
+}
+.sfv-src-dot.status-ok {
+  background: rgba(100, 230, 160, .92);
+  box-shadow: 0 0 7px rgba(100, 230, 160, .55), 0 0 18px rgba(100, 230, 160, .18);
+}
+.sfv-src-dot.status-bad {
+  background: rgba(255, 110, 105, .92);
+  box-shadow: 0 0 7px rgba(255, 110, 105, .55), 0 0 18px rgba(255, 110, 105, .18);
+}
+.sfv-rule-warn { color: rgba(255, 150, 140, .9); }
+
+/* 规则说明 —— 已按用户要求隐藏 */
+.sfv-rules-notice { display: none !important; }
+/* 规则导入表单 —— 深色面板容器（与 .sfv-src-form 对称）*/
+.sfv-rules-form {
+  margin-bottom: 14px;
+  padding: 9px 10px; border-radius: 12px;
+  background: rgba(0, 0, 0, .22);
+  border: 1px solid rgba(255, 255, 255, .08);
+}
+/* .sfv-rule-item 复用 .sfv-src-item 卡片布局（玻璃），无需独立样式 */
+
+/* ================================================================
+ * 在线浏览层（聚合搜索 / 详情剧集 / 四类列表） — Step 4
+ * 玻璃拟态，沿用 --fc-accent-rgb；仅显式 .sfv-show 时显示，默认隐藏，
+ * 不污染音乐态 DOM（创建在 body 下，且默认 display:none）。
+ * z-index 低于播放器弹层（2147483000），播放时先关闭本层。
+ * ================================================================ */
+.sfv-browse {
+  position: fixed; inset: 0;
+  z-index: 2147482000;
+  display: none;
+  flex-direction: column;
+  padding: 18px 22px 22px;
+  background: #080a10; /* T137迭代9：不透明实色——填满窗口矩形，防止四角透出桌面 */
+  /* T142：移除 backdrop-filter。背景已是不透明实色，blur 无任何视觉效果，
+     却会为每个 browse 实例创建大型 GPU 合成层，显著增加 tile memory 占用。 */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  color: rgba(255, 255, 255, 0.92);
+  font: 13px/1.5 var(--font-sans, system-ui, sans-serif);
+  --sfv-page-bg: #f2f4f7; /* T129：覆盖层自身也持有页面底色，供 --page 实色铺底（避免星空透出） */
+  /* T137迭代10：不设 border-radius —— 圆角交由 #desktop-window-shell 的 clip-path:34px 统一裁切 */
+  overflow: hidden;
+}
+.sfv-browse.sfv-show { display: flex; animation: sfv-browse-in .28s cubic-bezier(.16,1,.3,1); }
+/* 统一覆盖层进入：从底部整页上滑入（与搜索页 translateY(100%)→0 一致）；
+   覆盖详情/base/全屏/page 等所有 #sfv-browse 视图，使标准浏览序列进出场语言统一。 */
+@keyframes sfv-browse-in { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+/* 统一覆盖层退出：向下滑出（与进入上滑入镜像）；由 closeOverlayAnimated 加 --closing 触发 */
+.sfv-browse.sfv-browse--closing { display: flex; animation: sfv-overlay-out .25s cubic-bezier(.16,1,.3,1) forwards; pointer-events: none; }
+@keyframes sfv-overlay-out { from { transform: translateY(0); opacity: 1; } to { transform: translateY(100%); opacity: 0; } }
+
+.sfv-browse-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.sfv-browse-back {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 10px; width: 34px; height: 34px; font-size: 16px; cursor: pointer;
+}
+.sfv-browse-back:hover { background: rgba(255,255,255,.12); }
+.sfv-browse-title { font-size: 17px; font-weight: 800; letter-spacing: .3px; flex: 1 1 auto; }
+.sfv-browse-acts { display: flex; gap: 8px; }
+.sfv-browse-act {
+  background: rgba(var(--fc-accent-rgb), .14); border: 1px solid rgba(var(--fc-accent-rgb), .36);
+  color: #fff; border-radius: 10px; height: 32px; padding: 0 12px; font-size: 12px; cursor: pointer;
+}
+.sfv-browse-act:hover { background: rgba(var(--fc-accent-rgb), .26); }
+
+.sfv-browse-search { display: flex; gap: 8px; margin-bottom: 10px; }
+.sfv-browse-search-input {
+  flex: 1 1 auto; height: 38px; padding: 0 14px; border-radius: 12px;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; font-size: 14px; outline: none;
+}
+.sfv-browse-search-input:focus { border-color: rgba(var(--fc-accent-rgb), .5); }
+.sfv-browse-search-btn {
+  height: 38px; padding: 0 18px; border-radius: 12px; border: none; cursor: pointer;
+  background: rgba(var(--fc-accent-rgb), .9); color: #04121a; font-weight: 800; font-size: 13px;
+}
+
+.sfv-browse-note {
+  font-size: 12px; color: rgba(255,255,255,.55); margin: 4px 2px 10px;
+  padding: 8px 12px; border-radius: 10px; background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.07);
+}
+.sfv-browse-sub { font-size: 12px; color: rgba(255,255,255,.5); margin: 6px 2px; }
+
+.sfv-browse-body {
+  flex: 1 1 auto; overflow-y: auto; padding-right: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  /* ===== 网格 DIY 变量（默认值 = KVideo）===== */
+  --sfv-page-bg: #f2f4f7;
+  --sfv-card-bg: rgba(255,255,255,0.95);
+  --sfv-card-border: rgba(0,0,0,0.06);
+  --sfv-card-radius: 24px;
+  --sfv-card-shadow-color: rgba(0,0,0,0.05);
+  --sfv-card-hover-border: rgba(0,86,179,0.5);
+  --sfv-card-padding: 24px;
+  --sfv-card-title: #1c1c22;
+  --sfv-card-sub: rgba(28,28,34,0.62);
+  --sfv-gap: 24px;
+  --sfv-poster-ratio: 2 / 3;
+  background-color: transparent !important;  /* 方案 D：内容区透明，透出首页星云 */
+}
+.sfv-browse-body::-webkit-scrollbar { display: none; }
+.sfv-browse-body::-webkit-scrollbar-thumb { display: none; }
+
+/* ===== 占位页（#8：电影/动漫 先占位，待后续改造）===== */
+/* 占位页不需要浏览层自带的搜索栏与「本地/地址/片源」操作按钮 */
+.sfv-browse--placeholder .sfv-browse-search,
+.sfv-browse--placeholder .sfv-browse-acts { display: none; }
+.sfv-browse--browse .sfv-browse-search,
+.sfv-browse--browse .sfv-browse-acts { display: none; }
+
+/* ===== Phase B：分类页（心动/追片/片单/历史）改用「搜索页」同款浅色透明 AppBar 排版 =====
+   视觉目标：与 #sfv-search-page 对齐 —— 统一乳白底(#faf8f5)、透明 AppBar(返回+标题)、
+   从底部向上滑入；去掉原深色玻璃标题栏与暗金边框。仅作用于 legacy 分类视图，
+   搜索/详情/规则视图仍为暗金玻璃。搜索页代码(.sfv-search-* / #sfv-search-page)零改动。 */
+.sfv-browse.sfv-browse--category {
+  background: var(--sfv-cat-bg, #faf8f5); /* 与搜索页统一乳白底；JS 可切换玻璃容器底色 */
+  color: #1a1a1a;
+  backdrop-filter: none;          /* 实色底无需毛玻璃；玻璃质感由 .sfv-page-bg-layer 负责 */
+  -webkit-backdrop-filter: none;
+  /* T137迭代10：不设 border-radius —— 圆角交由 #desktop-window-shell 统一裁切 */
+  overflow: hidden;               /* 裁切内部内容，使四角（尤其顶部两角）贴合主窗口圆角 */
+}
+/* 透明 AppBar：去掉深色标题栏背景，仅保留返回键 + 标题，与搜索页 AppBar 一致 */
+.sfv-browse--category .sfv-browse-head {
+  background: transparent;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(0,0,0,.06);  /* 极细分割，对齐搜索页 AppBar */
+}
+.sfv-browse--category .sfv-browse-title { color: #1a1a1a; font-size: 18px; }
+.sfv-browse--category .sfv-browse-back {
+  background: transparent; border: none; color: #1a1a1a; border-radius: 22px;
+}
+.sfv-browse--category .sfv-browse-back:hover,
+.sfv-browse--category .sfv-browse-back:focus-visible { background: rgba(0,0,0,.10); }
+/* 分类页右上角关闭按钮：默认隐藏，仅在 --category 下显示；样式与搜索页 × 对齐 */
+.sfv-browse-close { display: none; }
+.sfv-browse--category .sfv-browse-close {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; margin-left: auto;
+  background: transparent; border: none; border-radius: 22px;
+  color: #1a1a1a; font-size: 22px; line-height: 1; cursor: pointer;
+}
+.sfv-browse--category .sfv-browse-close:hover,
+.sfv-browse--category .sfv-browse-close:focus-visible { background: rgba(0,0,0,.10); }
+/* 空态/提示信息也改为浅色，统一底色 */
+.sfv-browse--category .sfv-browse-note {
+  background: rgba(0,0,0,.04); border-color: rgba(0,0,0,.07); color: rgba(28,28,34,.62);
+}
+/* 内容区透出 #faf8f5 统一底色（卡片仍为白底浮起）；
+   padding-right:0 —— 基础 .sfv-browse-body 的 4px 为滚动条预留，但本页滚动条已隐藏
+   （scrollbar-width:none），4px 纯冗余。回收后 1920 窗口可用宽 = 1920 − 22×2（.sfv-browse
+   左右 padding）− 0 = 1876px，恰好容纳 5 张卡片（5×360 + 4×19 = 1876）；若不回收可用宽
+   仅 1872px，第 5 张放不下只能排 4 张。 */
+.sfv-browse--category .sfv-browse-body { background-color: transparent; padding-right: 0; }
+/* 从底部向上滑入（与搜索页 transform: translateY(100%)→0 一致）；
+   覆盖基础 .sfv-browse.sfv-show 的 sfv-browse-in 淡入动画。 */
+.sfv-browse.sfv-browse--category.sfv-show {
+  animation: sfv-cat-in .32s cubic-bezier(.16,1,.3,1) !important;
+}
+@keyframes sfv-cat-in {
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+/* T128：平级 tab 页（SPA 内容区切换）隐藏覆盖层自带的「返回+标题」头；
+   顶部固定 #sfv-nav 即导航，tab 之间无返回语义，不得出现返回箭头。 */
+.sfv-browse--page .sfv-browse-head { display: none; }
+/* T129：SPA 平级 tab 页（电影/动漫/汇联/世界）须 flush 铺满视口，
+   不得是半透明玻璃悬浮面板 —— 否则星空背景会从面板四周/上方透出。
+   根容器=视口、实色铺满、22px圆角(与主窗口一致)/零内边距；
+   overflow:hidden 裁切内部内容贴合圆角，实色底保证角落不透出星空。 */
+.sfv-browse.sfv-browse--page {
+  padding: 0;
+  margin: 0;
+  max-width: none;
+  width: 100%;
+  background: transparent !important;  /* 方案 D：电影/动漫页复用首页星空，覆盖层透明让 WebGL 画布透出 */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  /* T137迭代10：不设 border-radius —— 圆角交由 #desktop-window-shell 统一裁切 */
+  overflow: hidden;
+  /* T150 修复（P0）：电影/动漫/汇联/世界 分页覆盖层永久透明且铺满视口，
+     若不关闭 pointer-events，这层 z-index:2147482000 的透明挡板会拦截其下一切
+     hover/点击（FX 面板 z18、后台 WebGL 画布 z1），唯独 #sfv-nav(2147482100)/
+     #top-right(2147482090) 因在其之上才可用 —— 即用户反馈的"除顶栏外全死"。
+     这些分页的宿主 host 均为空（3D 走后台共享画布）或仅非交互占位文字，
+     故整层 click-through 安全；交互交还给 FX 面板与 window 捕获阶段的 3D 监听。 */
+  pointer-events: none;
+}
+/* T151-fix：page 模式覆盖层永久透明以透出星空/3D 画布，但影视态首页 #empty-home
+   会叠在星空之上并被透出来，导致历史/电影/动漫/汇联/世界页与首页卡片/接着看混叠。
+   进入 page 模式时隐藏 #empty-home，保留星空背景；覆盖层关闭后自动恢复。 */
+body:has(#sfv-browse.sfv-browse--page.sfv-show) #empty-home {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* T153：历史页是唯一需要实色背景的 DOM router 页（其它 page 页为 3D 星空/画布）。
+   覆盖 .sfv-browse--page 的透明背景，使用 --sfv-cat-bg（page-bg-diy.js 设置默认 #faf8f5
+   或用户自定义色/图），并恢复 pointer-events 保证卡片/按钮可交互。 */
+.sfv-browse.sfv-browse--page.sfv-history-page {
+  background: var(--sfv-cat-bg, #faf8f5) !important;
+  pointer-events: auto !important;
+}
+/* T132(路径①)：内容区 flush 铺满 .sfv-browse（左右内缩清零，底色铺满全宽，消除"窗口缩进"感）；
+   顶部 58px 给固定 #search-box 让位（内容不被玻璃栏遮），底部 22px 留白。
+   对齐 stellaflix-app 参考：内容层 padding 顶部给固定导航让位、左右 0。 */
+.sfv-browse--page .sfv-browse-body {
+  padding: 102px 0 22px;  /* T134g：24px 距顶 + 58px 栏高 + 20px 间隙（与音乐态搜索栏对齐） */
+}
+/* 沉浸态详情页：全局顶栏已隐藏，body 顶部 padding 必须清零，否则 header 被整体下推
+   （普通模式 102px / 桌面外壳模式 112px），导致首屏左下角操作按钮被推到可视区外。
+   用 !important 覆盖 .sfv-browse--page（102px）与 desktop-shell（112px）两种让位规则。
+   注意：详情页打开时 overlay 处于 sfv-browse--view（非 --page），故选择器不限定 --page。 */
+body.sfv-plex-immersive .sfv-browse-body {
+  padding-top: 0 !important;
+}
+/* 网格已固定 1216 宽（见 .sfv-grid 定义）；状态条/页脚与之对齐限宽并居中 */
+.sfv-browse--page .sfv-browse-status,
+.sfv-browse--page .sfv-browse-foot {
+  max-width: 1216px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.sfv-placeholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; min-height: 62vh; padding: 40px 24px; text-align: center;
+  color: #1c1c22;
+}
+.sfv-placeholder-icon { font-size: 58px; line-height: 1; filter: drop-shadow(0 6px 16px rgba(0,0,0,.12)); }
+.sfv-placeholder-title { font-size: 26px; font-weight: 700; letter-spacing: .5px; color: #1c1c22; }
+.sfv-placeholder-sub { font-size: 14px; line-height: 1.7; color: rgba(28,28,34,.6); max-width: 440px; }
+
+/* ===== 汇联页（边下边播 + 边播边删） ===== */
+.huilian-wrap { max-width: 920px; margin: 0 auto; padding: 48px 28px 28px; box-sizing: border-box; }
+.huilian-title { font-size: 26px; font-weight: 700; letter-spacing: .5px; color: #1c1c22; margin-bottom: 18px; }
+.huilian-input-row { display: flex; gap: 10px; align-items: stretch; }
+.huilian-input {
+  flex: 1; min-width: 0;
+  padding: 11px 14px; font-size: 14px; line-height: 1.4;
+  border: 1px solid rgba(0,0,0,.12); border-radius: 10px;
+  background: rgba(255,255,255,.85); color: #1c1c22;
+  outline: none; transition: border-color .15s, box-shadow .15s;
+}
+.huilian-input:focus { border-color: rgba(var(--fc-accent-rgb), .7); box-shadow: 0 0 0 3px rgba(var(--fc-accent-rgb), .15); }
+.huilian-btn {
+  padding: 0 18px; font-size: 14px; font-weight: 600; border: 0; border-radius: 10px;
+  cursor: pointer; color: #fff; background: rgba(var(--fc-accent-rgb), .92);
+  white-space: nowrap; transition: background .15s, transform .05s;
+}
+.huilian-btn:hover { background: rgba(var(--fc-accent-rgb), 1); }
+.huilian-btn:active { transform: translateY(1px); }
+.huilian-btn-clear { background: rgba(0,0,0,.45); }
+.huilian-btn-clear:hover { background: rgba(0,0,0,.6); }
+.huilian-heatmap-wrap {
+  margin-top: 18px; border-radius: 8px; overflow: hidden;
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06);
+}
+.huilian-heatmap { display: block; width: 100%; height: 28px; }
+.huilian-status { margin-top: 12px; font-size: 12.5px; color: rgba(28,28,34,.6); line-height: 1.6; min-height: 20px; }
+
+/* --- 汇联页 v2 完整 UI（对齐 huilian-page.js 完整 DOM） --- */
+.huilian-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.huilian-title { font-size: 26px; font-weight: 700; letter-spacing: .5px; color: #1c1c22; margin: 0; }
+.huilian-provider-badge { font-size: 12px; color: rgba(28,28,34,.55); padding: 4px 10px; border: 1px solid rgba(0,0,0,.08); border-radius: 999px; background: rgba(255,255,255,.6); white-space: nowrap; }
+.huilian-input-row { display: flex; gap: 10px; align-items: stretch; margin-bottom: 14px; }
+.huilian-input { flex: 1; min-width: 0; padding: 11px 14px; font-size: 14px; line-height: 1.4; border: 1px solid rgba(0,0,0,.12); border-radius: 10px; background: rgba(255,255,255,.85); color: #1c1c22; outline: none; transition: border-color .15s, box-shadow .15s; }
+.huilian-input:focus { border-color: rgba(var(--fc-accent-rgb, 60,120,220), .7); box-shadow: 0 0 0 3px rgba(var(--fc-accent-rgb, 60,120,220), .15); }
+.huilian-btn { padding: 0 18px; font-size: 14px; font-weight: 600; border: 0; border-radius: 10px; cursor: pointer; color: #fff; background: rgba(var(--fc-accent-rgb, 60,120,220), .92); white-space: nowrap; transition: background .15s, transform .05s; }
+.huilian-btn:hover { background: rgba(var(--fc-accent-rgb, 60,120,220), 1); }
+.huilian-btn:active { transform: translateY(1px); }
+.huilian-btn-clear { background: rgba(0,0,0,.45); }
+.huilian-btn-clear:hover { background: rgba(0,0,0,.6); }
+.huilian-stage { position: relative; width: 100%; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16/9; margin-bottom: 12px; }
+.huilian-video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.huilian-progress-row { padding: 6px 0; }
+.huilian-seekbar { position: relative; height: 8px; border-radius: 4px; background: rgba(255,255,255,.08); cursor: pointer; overflow: hidden; }
+.huilian-seekbar:hover { background: rgba(255,255,255,.14); }
+.huilian-heatmap-wrap { margin-top: 10px; border-radius: 8px; overflow: hidden; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
+.huilian-heatmap { display: block; width: 100%; height: 28px; }
+.huilian-status-row { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-size: 12.5px; color: rgba(28,28,34,.6); }
+.huilian-status { color: rgba(28,28,34,.75); }
+.huilian-metas { color: rgba(28,28,34,.5); font-variant-numeric: tabular-nums; }
+.huilian-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 18px; }
+.huilian-card { padding: 14px 16px; border-radius: 10px; background: rgba(255,255,255,.6); border: 1px solid rgba(0,0,0,.06); cursor: pointer; transition: transform .08s, box-shadow .15s; }
+.huilian-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+.huilian-card-title { font-size: 14px; font-weight: 600; color: #1c1c22; margin-bottom: 6px; }
+.huilian-card-body { font-size: 12.5px; color: rgba(28,28,34,.6); line-height: 1.6; white-space: pre-wrap; }
+
+/* --- 汇联页 v3（mpv 方案，对齐 page-discover.js） --- */
+.huilian-tabbar { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.huilian-tab {
+  padding: 7px 16px; font-size: 13px; font-weight: 500; border-radius: 999px;
+  background: rgba(0,0,0,.04); color: rgba(28,28,34,.65); cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.huilian-tab:hover { background: rgba(0,0,0,.08); }
+.huilian-tab.active { background: rgba(var(--fc-accent-rgb, 60,120,220), .92); color: #fff; }
+.huilian-config-area { margin-bottom: 14px; }
+.huilian-config-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.huilian-input-wrap { flex: 1; min-width: 160px; display: flex; flex-direction: column; gap: 4px; }
+.huilian-input-label { font-size: 11.5px; color: rgba(28,28,34,.55); font-weight: 500; }
+.huilian-input {
+  padding: 9px 12px; font-size: 13px; line-height: 1.4;
+  border: 1px solid rgba(0,0,0,.12); border-radius: 8px;
+  background: rgba(255,255,255,.85); color: #1c1c22; outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.huilian-input:focus { border-color: rgba(var(--fc-accent-rgb, 60,120,220), .7); box-shadow: 0 0 0 3px rgba(var(--fc-accent-rgb, 60,120,220), .15); }
+.huilian-btn {
+  padding: 9px 18px; font-size: 13px; font-weight: 600; border: 0; border-radius: 8px;
+  cursor: pointer; color: #fff; background: rgba(var(--fc-accent-rgb, 60,120,220), .92);
+  white-space: nowrap; transition: background .15s, transform .05s; height: 38px;
+}
+.huilian-btn:hover { background: rgba(var(--fc-accent-rgb, 60,120,220), 1); }
+.huilian-btn:active { transform: translateY(1px); }
+.huilian-btn-play { background: rgba(var(--fc-accent-rgb, 60,120,220), .92); }
+.huilian-btn-clear { background: rgba(0,0,0,.45); }
+.huilian-btn-clear:hover { background: rgba(0,0,0,.6); }
+.huilian-list-area { margin-bottom: 12px; min-height: 80px; }
+.huilian-empty { padding: 30px; text-align: center; color: rgba(28,28,34,.45); font-size: 13px; background: rgba(0,0,0,.02); border-radius: 10px; }
+.huilian-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.huilian-card {
+  padding: 14px; border-radius: 10px; background: rgba(255,255,255,.65);
+  border: 1px solid rgba(0,0,0,.06); cursor: pointer; transition: transform .08s, box-shadow .15s;
+}
+.huilian-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+.huilian-card-title { font-size: 14px; font-weight: 600; color: #1c1c22; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.huilian-card-meta { font-size: 12px; color: rgba(28,28,34,.5); }
+.huilian-player-area { margin-bottom: 10px; min-height: 40px; }
+.huilian-status { padding: 10px 14px; font-size: 12.5px; color: rgba(28,28,34,.65); background: rgba(0,0,0,.03); border-radius: 8px; line-height: 1.6; }
+
+/* 固定态画布：网格栏统一固定 1216×1158，5 列 × 3 排（共 15 张），超高内容在网格内滚动。
+   已彻底移除响应式断点（原 2→6 列 media query）与间距可调。 */
+.sfv-grid {
+  display: grid;
+  width: 1216px;
+  height: 1158px;
+  max-width: none;
+  margin: 0 auto;
+  gap: 24px;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  overflow: auto;
+}
+.sfv-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--sfv-card-bg, rgba(255,255,255,0.04));
+  border: 1px solid var(--sfv-card-border, rgba(255,255,255,0.09));
+  border-radius: var(--sfv-card-radius, 14px);
+  padding: var(--sfv-card-padding, 0);
+  overflow: hidden; cursor: pointer; text-align: left;
+  color: inherit;
+  box-shadow: 0 10px 30px var(--sfv-card-shadow-color, rgba(0,0,0,0.30));
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.sfv-card:hover { transform: translateY(-3px); border-color: var(--sfv-card-hover-border, rgba(var(--fc-accent-rgb), .5)); }
+.sfv-card-cover {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  aspect-ratio: auto;
+  height: auto;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  background: linear-gradient(135deg, rgba(var(--fc-accent-rgb),.18), rgba(255,255,255,.04));
+  font-size: 34px;
+}
+.sfv-card-img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .35s ease; }
+.sfv-card-img.loaded { opacity: 1; }
+
+/* 骨架屏：图片加载前显示玻璃质感微光动画（匹配暗金玻璃风格） */
+.sfv-card-cover::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(
+    110deg,
+    rgba(var(--fc-accent-rgb), .06) 0%,
+    rgba(255,255,255,.08) 40%,
+    rgba(var(--fc-accent-rgb), .10) 60%,
+    rgba(255,255,255,.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: sfv-shimmer 1.6s ease-in-out infinite;
+  z-index: 0;
+  pointer-events: none;
+}
+/* 图片加载完成后隐藏骨架（由 JS 添加 .loaded 时 ::before 被 img 遮挡，无需额外处理） */
+@keyframes sfv-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.sfv-card-name {
+  font-size: 12.5px; font-weight: 700; padding: 8px 10px 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--sfv-card-title, #fff);
+}
+.sfv-card-sub { font-size: 11px; color: var(--sfv-card-sub, rgba(255,255,255,.5)); padding: 0 10px 10px; }
+
+/* ===== 电影/动漫 浏览网格（TMDB 热门，KVideo 浅色风格） ===== */
+/* 基础 .sfv-card 在 .sfv-browse-body 内已通过 --sfv-* 变量呈浅色（白卡+深字+24px圆角），此处仅补评分徽章与浏览态 */
+.sfv-card-rating {
+  position: absolute; top: 8px; right: 8px;
+  background: rgba(0,0,0,.80); color: #ffd54a;
+  font-size: 11px; font-weight: 700; line-height: 1;
+  padding: 3px 8px; border-radius: 9999px; z-index: 2; pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,.25);
+}
+.sfv-browse-status { text-align: center; color: #6e6e73; font-size: 12px; padding: 16px 0 4px; }
+.sfv-browse-status--click { cursor: pointer; color: rgba(var(--fc-accent-rgb), .9); }
+.sfv-browse-foot {
+  display: none; /* 用户要求隐藏 TMDB 署名条（2026-08-06） */
+  text-align: center; color: rgba(255,255,255,.6); font-size: 10.5px; line-height: 1.5;
+  padding: 10px 16px 22px;
+  background: rgba(8,10,16,.55);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-radius: 12px;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+
+/* ===== 网格 DIY 面板（lyrics tab 共存折叠分区，全部复用 .fx-* 类） ===== */
+.sfv-diy-pane { display: none; }
+.sfv-diy-pane.active { display: block; }
+.sfv-grid-diy-note {
+  font-size: 10.5px; color: rgba(255,255,255,.42); line-height: 1.6;
+  margin: 8px 0 10px; padding: 9px 11px; border-radius: 10px;
+  background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.045);
+}
+/* 原 .lyric-color-picker 为 pointer-events:none（配合原生 color-lab 弹层），
+   在 DIY 面板内恢复原生取色器的点击能力，供用户直接调色 */
+.sfv-diy-pane .lyric-color-picker { pointer-events: auto; }
+
+
+/* ===== 追片（互斥单值观看状态，与 Kazumi 一致） ===== */
+/* 顶部 5 状态分区 tab 栏（浅色 body 上，深字 + 青色强调） */
+.sfv-track-tabs { position: relative; display: flex; gap: 0; flex-wrap: nowrap; padding: 12px 0 0; border-bottom: 1px solid rgba(0,0,0,.08); margin-bottom: 14px; }
+.sfv-track-tab {
+  position: relative; display: flex; align-items: center; justify-content: center; gap: 6px;
+  flex: 1 1 0; min-width: 0;
+  background: transparent; border: 0; cursor: pointer;
+  color: rgba(28,28,34,.7); font-size: 14px; font-weight: 600;
+  padding: 12px 4px; border-radius: 0; transition: background .15s ease, color .15s ease;
+}
+.sfv-track-tab:hover { background: rgba(0,0,0,.05); color: #1c1c22; }
+.sfv-track-tab--active { color: #000; font-weight: 700; background: transparent; }
+.sfv-track-tab--active:hover { background: transparent; color: #000; }
+/* 液体游走下划线：宽度始终与文字等长，切换时先拉伸到两模块中心间距再缩到目标文字长度 */
+.sfv-track-indicator {
+  position: absolute; bottom: 0; left: 0;
+  height: 2px; background: #000;
+  pointer-events: none; will-change: left, width;
+}
+.sfv-track-count {
+  font-size: 11px; font-weight: 700; line-height: 1; min-width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 5px; border-radius: 999px;
+  background: rgba(0,0,0,.10); color: rgba(28,28,34,.7);
+}
+.sfv-track-tab--active .sfv-track-count { background: rgba(0,0,0,.15); color: rgba(28,28,34,.85); }
+
+/* 卡片状态切换按钮（右下角，叠在海报上） */
+.sfv-card-fav {
+  position: absolute; right: 8px; bottom: 8px; z-index: 3;
+  height: 26px; min-width: 26px; padding: 0 9px; border-radius: 999px;
+  border: 0; cursor: pointer; font-size: 12px; font-weight: 700; line-height: 1;
+  background: rgba(0,0,0,.62); color: #fff;
+  box-shadow: 0 4px 12px rgba(0,0,0,.35); backdrop-filter: blur(4px);
+  transition: background .15s ease, transform .15s ease;
+}
+.sfv-card-fav:hover { transform: scale(1.06); }
+.sfv-card-fav.on { background: rgb(var(--fc-accent-rgb)); color: #04121a; }
+
+/* ===== 追片页响应式网格 =====
+   卡片固定 360px × 202.5px（16:9），不随窗口缩放；相邻间距固定 19px。
+   容器最大宽度限制为 5 张卡片 + 4 个间距 = 1876px，并水平居中。
+   窗口足够宽时，最左/最右卡片贴边，多余空间均分为左右自适应间距；
+   窗口变窄到放不下 5 张时，flex-wrap 自动换行，新行卡片从左侧第一个位置开始排列。
+   圆角由 .sfv-plex-card 的 border-radius:14px + overflow:hidden 保证完整可见；
+   hover scale 禁用，避免放大后侵入邻居/边距导致圆角被裁。 */
+.sfv-track-view {
+  max-width: 1876px; /* 5 * 360 + 4 * 19 */
+  margin: 0 auto;
+  padding: 16px 0 32px;
+}
+.sfv-track-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 19px;
+}
+.sfv-track-grid .sfv-track-card.sfv-plex-card {
+  flex: 0 0 auto;
+  width: 360px;
+  height: 202.5px;
+  box-sizing: border-box;
+  border-color: rgba(0,0,0,.08);
+  box-shadow: 0 6px 18px rgba(0,0,0,.12);
+  z-index: 1;
+}
+/* hover 反馈：外层容器保持原尺寸 + 原圆角裁切不动（防止子像素缝导致圆角消失），
+   阴影加深 + z-index 提升；真实放大由内部 .sfv-track-card-cover / img 承担，过裁切 1px 吞抗锯齿边。 */
+.sfv-track-grid .sfv-track-card.sfv-plex-card:hover {
+  transform: none;
+  z-index: 10;
+  box-shadow: 0 14px 34px rgba(0,0,0,.22);
+}
+/* 追片页封面容器：绝对撑满卡片，hover 时独立放大 1.05 倍；
+   inset -1px 过裁切保证缩放后边缘无圆角缝隙；
+   过渡时长与容器 transition 一致，保持视觉节奏。 */
+.sfv-track-grid .sfv-track-card .sfv-track-card-cover {
+  position: absolute;
+  inset: -1px;
+  background: #1a1f28;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .25s ease;
+  will-change: transform;
+  border-radius: inherit; /* 继承卡片 14px 圆角，保证封面裁切与卡片轮廓精确对齐 */
+}
+.sfv-track-grid .sfv-track-card:hover .sfv-track-card-cover {
+  transform: scale(1.05);
+}
+/* 封面图：撑满 + block 消基线缝；再 inset 1px 过裁切吞抗锯齿边 */
+.sfv-track-grid .sfv-track-card .sfv-track-card-img {
+  position: absolute;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  max-width: none;
+  object-fit: cover;
+  display: block;
+  background: #1a1f28;
+}
+/* 追片页状态按钮：默认隐藏，hover 浮现在海报右下角。
+   玻璃 CSS 1:1 对照视频播放器底部控制栏 heart-btn（.sfv-hall-dock-btn + .sfv-hall-follow）：
+   40px 圆胶囊、rgba(255,255,255,0.06) 玻璃底、1px rgba(255,255,255,0.14) 边框、
+   hover 背景变亮、active scale(0.94)；激活态仅图标青色发光，不改背景。 */
+.sfv-track-card-fav {
+  position: absolute; right: 8px; bottom: 8px; z-index: 3;
+  width: 40px; height: 40px; padding: 0; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.06); color: #fff;
+  opacity: 0; transform: scale(0.94);
+  transition: background .16s ease, border-color .16s ease, transform .12s ease, opacity .2s ease;
+}
+.sfv-track-card-fav .sfv-track-icon { display: inline-flex; }
+.sfv-track-card-fav .sfv-track-icon svg { width: 18px; height: 18px; display: block; }
+.sfv-plex-card:hover .sfv-track-card-fav,
+.sfv-plex-card:focus-visible .sfv-track-card-fav { opacity: 1; transform: scale(1); }
+.sfv-track-card-fav:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.22); }
+.sfv-track-card-fav:active { transform: scale(0.94); }
+.sfv-track-card-fav.on {
+  color: rgba(210,244,241,0.90);
+  text-shadow: 0 0 12px rgba(0,245,212,0.16);
+}
+.sfv-track-card-fav.on .sfv-track-icon svg {
+  filter: drop-shadow(0 0 12px rgba(0,245,212,0.16));
+}
+
+/* 卡片状态小菜单（弹出 5 状态 + 清除）
+   T138：脱离卡片 overflow:hidden 裁切，改为挂到 body 的 fixed 浮层（z-index 高于覆盖层 2147482000），
+   向下展开；由 JS 按按钮视口坐标定位，并在滚动/缩放时重定位。 */
+.sfv-track-menu {
+  position: fixed; z-index: 2147483000;
+  display: none; flex-direction: column; gap: 2px; min-width: 116px;
+  padding: 6px; border-radius: 12px;
+  background: #fff; border: 1px solid rgba(0,0,0,.10);
+  box-shadow: 0 12px 32px rgba(0,0,0,.28);
+}
+.sfv-track-menu.show { display: flex; }
+.sfv-track-menu-opt {
+  background: transparent; border: 0; cursor: pointer; text-align: left;
+  color: #1c1c22; font-size: 13px; font-weight: 600;
+  padding: 8px 10px; border-radius: 8px;
+}
+.sfv-track-menu-opt:hover { background: rgba(0,0,0,.05); }
+.sfv-track-menu-opt.on { background: rgba(var(--fc-accent-rgb), .16); color: rgb(var(--fc-accent-rgb)); }
+.sfv-track-menu-clear { color: #c0392b; }
+.sfv-track-menu-clear:hover { background: rgba(192,57,43,.08); }
+
+/* 详情页追片状态选择器（浅色 body，深字 + 青色强调） */
+.sfv-track-status { align-items: center; }
+.sfv-track-status-label { font-size: 12px; color: rgba(28,28,34,.55); font-weight: 600; }
+.sfv-track-status-opts { display: flex; gap: 8px; flex-wrap: wrap; }
+.sfv-track-status-opt {
+  background: rgba(0,0,0,.05); border: 1px solid rgba(0,0,0,.12);
+  color: #1c1c22; border-radius: 10px; height: 32px; padding: 0 14px; font-size: 12px; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.sfv-track-status-opt:hover { border-color: rgba(var(--fc-accent-rgb), .5); }
+.sfv-track-status-opt.on { background: rgb(var(--fc-accent-rgb)); color: #04121a; border-color: transparent; font-weight: 800; }
+
+/* 详情页「加入我的片单」按钮 */
+.sfv-tmdb-attrib {
+  margin-top: 14px; font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.4);
+  max-width: 540px; letter-spacing: .2px;
+}
+
+/* TMDB 统一评分（卡片副标题内） */
+.sfv-tmdb-vote {
+  color: #f5c542; font-weight: 700; font-size: 11px; letter-spacing: .3px;
+}
+/* TMDB 年份补全（详情页标题旁） */
+
+.sfv-ep-group { margin-bottom: 16px; }
+.sfv-ep-from { font-size: 13px; font-weight: 700; color: rgba(255,255,255,.78); margin-bottom: 8px; }
+.sfv-ep-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.sfv-ep {
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+  color: #fff; border-radius: 9px; height: 34px; font-size: 12px; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px;
+}
+.sfv-ep:hover { background: rgba(var(--fc-accent-rgb), .26); }
+.sfv-ep-done { border-color: rgba(var(--fc-accent-rgb), .5); color: rgba(var(--fc-accent-rgb), 1); }
+
+/* 浏览层内的网络地址输入条（复用 .sfv-urlbar 基础样式） */
+.sfv-browse-urlbar { margin: 10px 2px; }
+.sfv-src-item-ops .fx-mini-btn { padding: 0 7px; height: 22px; font-size: 9.5px; line-height: 1; border-radius: 7px; }
+
+/* 影视态首页「返回音乐」按钮 —— 用户已批准清理，T112 起恢复可见 */
+.sfv-back-to-music {
+  /* 默认显示，位置/样式由 home.js ensureBackBtn() 与下方追加的 glass 回退规则控制 */
+}
+
+/* ===== B-3 UI 打磨：note 三色状态 / 加载 spinner / 封面破图兜底 ===== */
+
+/* 三色 note：info(默认灰) / warn(琥珀) / error(红) */
+.sfv-browse-note--warn {
+  color: #ffd28a;
+  background: rgba(255, 176, 64, 0.10);
+  border-color: rgba(255, 176, 64, 0.28);
+}
+.sfv-browse-note--error {
+  color: #ff9a9a;
+  background: rgba(255, 92, 92, 0.10);
+  border-color: rgba(255, 92, 92, 0.30);
+}
+
+/* 搜索进行中：按钮禁用态 + 输入禁用态 */
+.sfv-browse-search-input:disabled {
+  opacity: 0.6; cursor: default;
+}
+.sfv-browse-search-btn:disabled {
+  opacity: 0.65; cursor: default; filter: saturate(0.7);
+}
+
+/* ===== Phase 2: Kazumi 规则管理面板 + 结果标记 ===== */
+
+/* 影视态搜索结果：Kazumi 来源卡片加一道标识，区别于 CMS10 */
+.sfv-card--kazumi {
+  outline: 1px solid rgba(120, 180, 255, 0.45);
+}
+.sfv-card--kazumi .sfv-card-sub::after {
+  content: ' · 规则';
+  color: #8fb8ff;
+}
+
+/* 规则导入区 */
+.sfv-rules-import {
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+.sfv-rules-import-title {
+  font-size: 13px; font-weight: 600; color: rgba(255, 255, 255, 0.82);
+  margin-bottom: 8px;
+}
+.sfv-rules-textarea {
+  width: 100%; min-height: 120px; resize: vertical;
+  box-sizing: border-box; padding: 10px 12px;
+  font-family: 'SFMono-Regular', Consolas, 'Courier New', monospace;
+  font-size: 12px; line-height: 1.5; color: #e8e8e8;
+  background: rgba(0, 0, 0, 0.30); color: #e8e8e8;
+  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px;
+  outline: none;
+}
+.sfv-rules-textarea:focus { border-color: rgba(120, 180, 255, 0.55); }
+.sfv-rules-import-row {
+  display: flex; gap: 10px; align-items: center; margin-top: 10px;
+}
+
+/* 通用规则按钮 */
+.sfv-rules-btn {
+  padding: 7px 14px; font-size: 12.5px; font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 8px;
+  cursor: pointer; transition: background .15s, border-color .15s;
+}
+.sfv-rules-btn:hover { background: rgba(255, 255, 255, 0.15); }
+.sfv-rules-btn.on {
+  color: #9affc0; border-color: rgba(120, 230, 160, 0.45);
+  background: rgba(120, 230, 160, 0.12);
+}
+.sfv-rules-btn--danger {
+  color: #ff9a9a; border-color: rgba(255, 120, 120, 0.40);
+  background: rgba(255, 120, 120, 0.08);
+}
+.sfv-rules-btn--danger:hover { background: rgba(255, 120, 120, 0.18); }
+
+/* 规则列表 */
+.sfv-rules-list { display: flex; flex-direction: column; gap: 10px; }
+.sfv-rules-item {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 10px;
+}
+.sfv-rules-item-info { min-width: 0; flex: 1; }
+.sfv-rules-item-name {
+  font-size: 13.5px; font-weight: 600; color: rgba(255, 255, 255, 0.90);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sfv-rules-item-meta {
+  font-size: 11.5px; color: rgba(255, 255, 255, 0.50);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sfv-rules-item-acts { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* 居中 spinner 加载块（详情加载） */
+.sfv-loading {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 56px 0; color: rgba(255, 255, 255, 0.6);
+}
+.sfv-spinner {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 3px solid rgba(var(--fc-accent-rgb), 0.22);
+  border-top-color: rgba(var(--fc-accent-rgb), 0.95);
+  animation: sfv-spin 0.8s linear infinite;
+}
+.sfv-loading-text { font-size: 13px; letter-spacing: .3px; }
+@keyframes sfv-spin { to { transform: rotate(360deg); } }
+
+/* 封面图片加载失败时：隐藏坏图，用 ::after 显示占位 emoji（保留 img 节点） */
+.sfv-cover--broken::after,
+.sfv-detail-cover--broken::after {
+  content: '🎬';
+  font-size: 34px;
+}
+
+/* ===== 第三方解析器 iframe 嵌入播放 =====
+   用于 agedm.io 等「播放页本身是解析器 iframe、真实流由解析器客户端解密」的站点。
+   我们整页嵌入解析器 URL（其无 X-Frame-Options），由它自渲染播放器。 */
+#sfv-overlay iframe.sfv-embed {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #000;
+  display: block;
+}
+/* 嵌入态专用关闭按钮（嵌入时控制条已隐藏） */
+#sfv-overlay .sfv-embed-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2147483300;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+  transition: background .18s ease;
+}
+#sfv-overlay .sfv-embed-close:hover { background: rgba(0, 0, 0, 0.8); }
+
+
+/* ---------- 选集弹层（替换原字幕按钮） ---------- */
+/* 玻璃材质对齐「搜索框玻璃」：var(--glass-bg) / var(--glass-border) / var(--glass-shadow) + blur(34px) saturate(1.34)。
+   宽 400px，高度随屏幕全高自适应（top:0 / bottom:0 双锚定，内部列表滚动）。 */
+.sfv-episode-panel {
+  position: absolute;
+  top: 0;
+  right: 18px;
+  bottom: 0;
+  width: 400px;
+  overflow-y: auto;
+  z-index: 2147483400;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(34px) saturate(1.34);
+  -webkit-backdrop-filter: blur(34px) saturate(1.34);
+  color: #eaeaea;
+  font-size: 13px;
+}
+.sfv-episode-panel::-webkit-scrollbar { width: 0 !important; height: 0 !important; }
+.sfv-episode-panel { scrollbar-width: none; -ms-overflow-style: none; }
+html.control-glass-svg-ok .sfv-episode-panel {
+  backdrop-filter: url(#stellaflix-search-box-glass-filter) saturate(1);
+  -webkit-backdrop-filter: url(#stellaflix-search-box-glass-filter) saturate(1);
+}
+.sfv-ep-head { font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+.sfv-ep-list { display: flex; flex-direction: column; gap: 6px; }
+.sfv-ep-item {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 10px; border: none; border-radius: 8px;
+  background: rgba(255,255,255,.06); color: #d8d8d8;
+  font-size: 13px; cursor: pointer; transition: background .15s, color .15s;
+}
+.sfv-ep-item:hover { background: rgba(255,255,255,.12); color: #fff; }
+.sfv-ep-item.is-current { background: #4a708b; color: #fff; font-weight: 600; }
+
+/* ---------- 弹幕层 ---------- */
+/* 覆盖整个播放区，穿透点击，置于视频之上、字幕/控制条之下 */
+#sfv-overlay .sfv-danmaku-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2147483050;
+}
+/* 单条弹幕基础样式（位置/颜色/字号/描边等由 engine.js 内联设置，这里只定基础） */
+#sfv-overlay .sfv-danmaku {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2147483060;
+  color: #fff;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  will-change: transform;
+}
+
+/* ---------- 弹幕设置面板 ---------- */
+.sfv-danmaku-panel {
+  position: absolute;
+  right: 18px;
+  top: 64px;
+  width: 320px;
+  max-height: 78vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 2147483400;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--glass-bg);
+  color: #eaeaea;
+  font-size: 13px;
+  box-shadow: var(--glass-shadow);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(34px) saturate(1.34);
+  -webkit-backdrop-filter: blur(34px) saturate(1.34);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.sfv-danmaku-panel::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+}
+html.control-glass-svg-ok .sfv-danmaku-panel {
+  backdrop-filter: url(#stellaflix-search-box-glass-filter) saturate(1) !important;
+  -webkit-backdrop-filter: url(#stellaflix-search-box-glass-filter) saturate(1) !important;
+}
+.sfv-dm-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.sfv-dm-title { font-size: 15px; font-weight: 700; }
+.sfv-dm-close { background: none; border: none; color: #ccc; font-size: 20px; cursor: pointer; line-height: 1; }
+.sfv-dm-close:hover { color: #fff; }
+.sfv-dm-row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+.sfv-dm-label { flex: 0 0 92px; color: #9e9e9e; }
+.sfv-dm-slider { flex: 1; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: rgba(255,255,255,.15); outline: none; }
+.sfv-dm-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #4a708b; cursor: pointer; border: none; }
+.sfv-dm-slider::-moz-range-thumb { width: 14px; height: 14px; border: none; border-radius: 50%; background: #4a708b; cursor: pointer; }
+.sfv-dm-slider::-moz-range-track { background: rgba(255,255,255,.15); height: 4px; border-radius: 2px; }
+.sfv-dm-val { flex: 0 0 52px; text-align: right; color: #8fb0c8; font-variant-numeric: tabular-nums; }
+.sfv-dm-toggle { background: #3a3f4b; border: none; color: #bbb; border-radius: 6px; padding: 3px 12px; cursor: pointer; }
+.sfv-dm-toggle.on { background: #4a708b; color: #fff; }
+.sfv-dm-toggle.on:hover { background: #5a809b; }
+.sfv-dm-text { flex: 1; background: #1c1f26; border: 1px solid #353a45; border-radius: 6px; color: #eee; padding: 5px 8px; font-size: 12px; }
+.sfv-dm-sep { margin: 12px 0 4px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); color: #7a9db3; font-size: 12px; font-weight: 600; }
+.sfv-dm-load { margin-top: 8px; width: 100%; background: #4a708b; border: none; color: #fff; border-radius: 6px; padding: 8px; cursor: pointer; font-size: 13px; }
+.sfv-dm-load:hover { background: #5a809b; }
+.sfv-dm-status { margin-top: 6px; font-size: 12px; color: #ffd479; min-height: 16px; }
+.sfv-dm-section { } /* 容器，用于整体显隐 */
+
+/* ==================================================================
+ * T106 影视态控制条改造（⚠️ 仅影响 video-space-active，不动音乐态）
+ *
+ * 铁律：所有规则必须以 body.video-space-active 为前缀。
+ * 绝不写无前缀的 #bottom-bar / #controls / .ctrl-btn 规则。
+ * ================================================================== */
+
+/* 1. 隐藏音乐专属按钮：全沉浸式切换、臻音(音质)、EQ均衡器、当前队列、上一首、下一首 */
+body.video-space-active #immersive-btn,
+body.video-space-active #quality-btn,
+body.video-space-active #quality-control,
+body.video-space-active #equalizer-control,
+body.video-space-active #mini-queue-btn,
+body.video-space-active #next-btn,
+body.video-space-active #prev-btn {
+  display: none !important;
+}
+
+/* 2. 隐藏控制条里的 divider（避免隐藏按钮后留空隙） */
+body.video-space-active .control-divider {
+  display: none !important;
+}
+
+/* 3. 影影视态控制条：保留播放/暂停、上下曲、进度条、时间、音量、全屏
+      这些是视频播放器的核心控件，在 video-space-active 下始终显示 */
+body.video-space-active #bottom-bar {
+  /* 继承 Stellaflix 原有定位和样式，只做减法（隐藏），不做加法 */
+}
+
+/* ============================================================
+ * T140 影视态底部控制器 → 视频播放器唯一控制器
+ * - 非播放态（video-space-active 但无 video-player-active）：#bottom-bar 全网隐藏
+ * - 播放态（body.video-player-active）：#bottom-bar 浮于视频之上成为唯一控制器，
+ *   隐藏覆盖层自带 #sfv-controls，移除歌词键，空闲淡出。
+ * 仅影响 video-space-active，不触碰音乐态。
+ * ============================================================ */
+
+/* 非播放态：影视态浏览/首页/发现/收藏/动漫/电影等页隐藏底部控制器 */
+body.video-space-active:not(.video-player-active) #bottom-bar {
+  display: none !important;
+}
+
+/* 影视态下隐藏音乐态「播放器控制台」展开横线（#bottom-handle），
+   避免与视频播放器底部控制器视觉冲突 */
+body.video-space-active #bottom-handle {
+  display: none !important;
+}
+
+/* 1c. 双态隔离：影视态强制隐藏音乐专属浮层，避免泄漏到影视界面。
+   - #mini-queue-popover：音乐迷你队列弹层（position:fixed 浮动），影视态无音乐队列，必须隐藏。
+   - .lyric-timing-control：音乐歌词计时控件（位于 #bottom-bar 内），影视态无音乐歌词，必须隐藏。
+   按用户决策不使用过渡动画，隐藏为瞬时硬切。 */
+body.video-space-active #mini-queue-popover,
+body.video-space-active .lyric-timing-control {
+  display: none !important;
+}
+
+/* 播放态：浮于视频之上（高于 #sfv-overlay 2147483000，低于字幕条 2147483310） */
+body.video-player-active #bottom-bar {
+  z-index: 2147483100 !important;
+  display: flex !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateX(-50%) translateY(0) scale(1) !important;
+  background: rgba(0,0,0,.10);
+  backdrop-filter: blur(12px) saturate(1.8) brightness(1.16);
+  -webkit-backdrop-filter: blur(12px) saturate(1.8) brightness(1.16);
+}
+
+/* 播放态隐藏覆盖层自带控制条（避免双控制条并存） */
+body.video-player-active #sfv-controls {
+  display: none !important;
+}
+
+/* 播放态移除音乐专属的歌词键 */
+body.video-player-active .lyrics-toggle-btn {
+  display: none !important;
+}
+
+/* 播放态：中和音乐态 .soft-hidden 的影响，确保底部条仅由 video-player-idle 驱动隐藏 */
+body.video-player-active #bottom-bar.soft-hidden {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateX(-50%) translateY(0) scale(1) !important;
+}
+
+/* 空闲淡出（复用覆盖层 wireIdle 切换的 body.video-player-idle） */
+body.video-player-idle #bottom-bar {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateX(-50%) translateY(88px) scale(.972) !important;
+}
+
+/* 注入的视频键玻璃按钮（复用 #bottom-bar .ctrl-btn 的 hover/active 视觉，保持统一） */
+.sfv-vbtn { color: rgba(255,255,255,.70); white-space: nowrap; }
+#sfv-ctrl-close { color: rgba(255,255,255,.70); }
+#sfv-ctrl-close:hover { color: #ff7a90; }
+
+/* 全屏激活态：底部控制条的全屏键高亮反馈（仅影视态播放器） */
+body.video-player-active.sfv-fullscreen .fullscreen-toggle-btn {
+  color: #fff;
+  background: rgba(255,255,255,.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--fc-accent-rgb),.30);
+}
+
+/* ============================================================
+   T120：影视态左侧海报独立化 CSS
+   - .sfv-poster-default：默认封面（B3 = 暗色玻璃 + 🎬 emoji 96px + 文字 20px）
+   - .sfv-poster-movie：真实影视海报（来自历史/TMDB/本地）
+   - .home-poster-frame / .home-poster-reflection：影视态隐藏（避免与玻璃/实景冲突），
+     玻璃质感改由 .sfv-poster-* 自身参数提供（对齐音乐态 .home-poster-frame）
+   ============================================================ */
+
+/* 默认封面：居中布局容器。玻璃质感改由显示的 .home-poster-frame 子元素提供
+   （结构与音乐态一致，避免 media 的 filter:drop-shadow 二次处理 box-shadow 导致边缘发暗） */
+.home-poster-media.sfv-poster-default {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.home-poster-media.sfv-poster-default .sfv-poster-default-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
+}
+.home-poster-media.sfv-poster-default .sfv-poster-default-emoji {
+  font-size: 96px;
+  line-height: 1;
+  filter: drop-shadow(0 6px 22px rgba(0,0,0,.55));
+  opacity: .92;
+}
+.home-poster-media.sfv-poster-default .sfv-poster-default-text {
+  font-size: 20px;
+  font-weight: 680;
+  color: rgba(255,255,255,.78);
+  letter-spacing: .14em;
+  text-shadow: 0 2px 10px rgba(0,0,0,.45);
+}
+/* 影视态真实海报（has-image）高光层用纯渐变，与音乐态 .home-poster-frame::before 一致。
+   注：无图默认封面时，index.html:352（.home-poster-media:not(.has-image) .home-poster-frame::before，
+   特异性 (0,3,1)）高于本规则（(0,2,2)），故默认封面仍沿用音乐态条纹纹理——与音乐态一致，符合预期。 */
+body.video-space-active .home-poster-frame::before {
+  background: linear-gradient(145deg, rgba(255,255,255,.16), transparent 34%, rgba(0,0,0,.22) 100%);
+}
+body.video-space-active .home-poster-media::after {
+  content: none;
+}
+
+/* 真实影视海报：定位容器。图片由显示的 .home-poster-frame 提供（共享 --home-poster-image），
+   玻璃质感由 frame 提供，避免 media filter:drop-shadow 二次处理 box-shadow */
+.home-poster-media.sfv-poster-movie {
+  position: relative;
+}
+
+/* 影视态 chip 微调：'从 TMDB 选' 按钮对齐 Stellaflix chip 体系 */
+.home-poster-actions [data-sfv-action="tmdb-poster"] {
+  /* 与原生 chip 风格一致（class 已含 home-chip home-poster-chip） */
+}
+
+/* ============================================================
+   片单浏览页（Step 5 片单功能）— 全屏覆盖层模式
+   视觉目标：对标心动页截图 —— 全视口覆盖、浅色实底、
+   自带顶部返回栏(← 标题 ×)、内容区内部滚动、锁定底层滚动。
+   ============================================================ */
+
+/* ---- 全屏覆盖层根容器 ---- */
+.sfv-browse--fullscreen {
+  position: fixed;
+  inset: 0;
+  top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+  width: 100vw; height: 100vh;
+  padding: 0; margin: 0;
+  /* 与追片/历史 category 页统一乳白底：用 --sfv-cat-bg 承接 page-bg-diy 的玻璃容器底色（含用户自定义色/图），
+     消除顶部 head 白条与整页底色割裂（原 #f5f5f7 与 category 的 #faf8f5 不一致 + 纯白 head 横条形成的可见接缝）。 */
+  background: var(--sfv-cat-bg, #faf8f5);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  /* T142：此浅色满铺层必须自身裁圆角，否则在透明窗口上四角会露出矩形白边。 */
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 22px !important;
+  overflow: hidden;
+  z-index: 2147482000;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 全屏模式：顶部导航栏（← 片单   ×，浅色主题，对标心动页） */
+.sfv-browse--fullscreen .sfv-browse-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 16px;
+  margin-bottom: 0;
+  /* 与追片/历史 category 页统一：head 透明，透出 --sfv-cat-bg 乳白底，顶部不再有纯白横条接缝 */
+  background: transparent;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+}
+/* 全屏页顶部返回/标题/关闭按钮：与追片/历史 category 页完全对齐（透明底、22px 圆形 hover、黑字、字重 800） */
+.sfv-browse--fullscreen .sfv-browse-back {
+  background: transparent;
+  border: none;
+  color: #1a1a1a;
+  width: 40px; height: 40px;
+  font-size: 20px;
+  border-radius: 22px;
+  display: flex; align-items: center; justify-content: center;
+}
+.sfv-browse--fullscreen .sfv-browse-back:hover,
+.sfv-browse--fullscreen .sfv-browse-back:focus-visible { background: rgba(0,0,0,.10); }
+.sfv-browse--fullscreen .sfv-browse-title {
+  color: #1a1a1a;
+  font-size: 18px;          /* 与追片页一致；字重继承基础 .sfv-browse-title 的 800 */
+}
+.sfv-browse--fullscreen .sfv-browse-acts { display: none; } /* 全屏页不需要本地/地址/片源按钮 */
+.sfv-browse--fullscreen .sfv-browse-close {
+  display: flex;
+  align-items: center; justify-content: center;
+  width: 40px; height: 40px;
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  border-radius: 22px;
+  color: #1a1a1a;           /* 由 #999 改黑，消除灰白/阴影残留感 */
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sfv-browse--fullscreen .sfv-browse-close:hover,
+.sfv-browse--fullscreen .sfv-browse-close:focus-visible { background: rgba(0,0,0,.10); }
+
+/* 全屏模式：隐藏搜索栏和提示条（仅内容区可见） */
+.sfv-browse--fullscreen .sfv-browse-search,
+.sfv-browse--fullscreen .sfv-browse-note { display: none !important; }
+
+/* 全屏模式：内容区占满剩余空间，内部独立滚动 */
+.sfv-browse--fullscreen .sfv-browse-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  -webkit-overflow-scrolling: touch; /* 移动端惯性滚动 */
+}
+
+/* ---- 片单子 Tab + 卡片网格（全屏模式下渲染进 bodyEl 内部）----
+   子 Tab 现复用追片页 .sfv-track-tabs / .sfv-track-tab / .sfv-track-indicator 样式，
+   背景透明、与页面底色一体，并保留液体下划线流体动画。 */
+
+/* 片单页内容视图：tab 下方容纳多个分类横向 rail 区块 */
+.sfv-collections-view {
+  padding: 16px 0 32px;
+}
+
+/* 片单页分类区块：左上角标题 + 下方「类似影片」横向 rail */
+.sfv-collection-section {
+  margin-bottom: 28px;
+}
+.sfv-collection-section:last-child {
+  margin-bottom: 0;
+}
+.sfv-collection-section__head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 16px;
+  margin-bottom: 12px;
+}
+.sfv-collection-section__title {
+  margin: 0;
+  font-size: 18px; font-weight: 800;
+  color: #1a1a1a;
+  line-height: 1.3;
+}
+.sfv-collection-section__action {
+  margin-left: auto;
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(0,0,0,.12);
+  background: transparent;
+  color: #555;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.sfv-collection-section__action:hover {
+  background: rgba(0,0,0,.06);
+}
+.sfv-collection-section__loading,
+.sfv-collection-section__empty {
+  padding: 24px 16px;
+  color: #777;
+  font-size: 14px;
+}
+.sfv-collection-section__empty {
+  text-align: center;
+}
+.sfv-collection-section__hint-btn {
+  margin-top: 10px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  border: 0;
+  background: rgba(var(--fc-accent-rgb), .9);
+  color: #000;
+  font-size: 13px; font-weight: 700;
+  cursor: pointer;
+}
+
+/* 我的片单 · 管理视图 */
+.sfv-mine-manage-list {
+  padding: 0 16px;
+}
+.sfv-mine-folder-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(0,0,0,.03);
+  margin-bottom: 10px;
+}
+.sfv-mine-folder-name {
+  font-size: 15px; font-weight: 700; color: #1a1a1a;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sfv-mine-folder-count {
+  font-size: 13px; color: #999; flex: 0 0 auto;
+}
+.sfv-mine-folder-acts {
+  margin-left: auto; flex: 0 0 auto;
+  display: flex; gap: 8px;
+}
+.sfv-mine-folder-btn {
+  padding: 6px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(0,0,0,.12);
+  background: transparent;
+  color: #555;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.sfv-mine-folder-btn:hover { background: rgba(0,0,0,.06); }
+.sfv-mine-folder-btn--danger {
+  border-color: rgba(217,72,72,.4);
+  color: #d94848;
+}
+.sfv-mine-folder-btn--danger:hover { background: rgba(217,72,72,.1); }
+
+/* 片单夹 section 标题行内联操作按钮（重命名/删除，右对齐） */
+.sfv-mine-folder-acts-inline {
+  margin-left: auto; flex: 0 0 auto;
+  display: flex; gap: 8px;
+}
+
+/* 「我的片单」底部：居中新建按钮 */
+.sfv-collections-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 20px;
+  margin-top: 8px;
+}
+.sfv-collections-footer__add {
+  width: 150px; height: 40px;
+  border-radius: 20px;
+  /* 搜索框玻璃质感：复用 --glass-* 变量 */
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(34px) saturate(1.34);
+  -webkit-backdrop-filter: blur(34px) saturate(1.34);
+  color: #fff;
+  font-size: 14px; font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.sfv-collections-footer__add:hover {
+  border-color: rgba(255,255,255,.35);
+  box-shadow: var(--glass-shadow), 0 4px 16px rgba(0,0,0,.25);
+}
+
+/* 片单页（浅色背景）对详情页 rail 组件的本地化覆盖 */
+.sfv-collections-view .sfv-plex-rail__arrow {
+  color: #1a1a1a;
+}
+.sfv-collections-view .sfv-plex-rail__arrow svg {
+  filter: drop-shadow(0 1px 3px rgba(255,255,255,.6));
+}
+.sfv-collections-view .sfv-plex-card {
+  width: 360px;
+  box-sizing: border-box; /* 让 360px 包含 1px border，避免 offsetWidth 变成 362 */
+  border-color: rgba(0,0,0,.08);
+  box-shadow: 0 6px 18px rgba(0,0,0,.12);
+}
+.sfv-collections-view .sfv-plex-card:hover {
+  box-shadow: 0 14px 34px rgba(0,0,0,.22);
+}
+/* 片单页 rail 容器：每排只完整显示 5 张 360px 卡片（含 4 个 19px gap），
+   右侧超出用「padding-right 小间隙 + clip 可见区域」管理，不再对 rail-wrap 加
+   overflow:hidden —— 这样首/尾卡片 hover 放大 1.05 时不会被 wrap 的裁切边界
+   切掉圆角/阴影。需要第 6 张不露缝隙时由 rail 本身 scrollbar + rail 的
+   overflow-x:auto 承担横向裁切。 */
+.sfv-collections-view .sfv-plex-rail-wrap {
+  max-width: 1876px;
+  margin: 0 auto;
+  overflow: visible;
+  padding: 12px 4px 4px; /* 上下/左右各留 4~12px 呼吸位，放大卡片阴影+圆角不全被裁 */
+}
+.sfv-collections-view .sfv-plex-rail { width: 100%; }
+
+/* 具体片单二级视图：左上角片单名 + 下方「类似影片」横向 rail */
+.sfv-collection-items-view { padding: 0 16px; }
+.sfv-collection-items-head {
+  font-size: 20px; font-weight: 800; color: #1a1a1a;
+  letter-spacing: .02em; padding: 18px 0 10px;
+}
+
+/* ===== 来源失效标记面板（openDetailFromMeta / loadDetail 自动修复失败后的兜底 UI）=====
+   自包含暗色玻璃卡片：在详情页（亮/暗 body 均可）保证可读；保留原始信息 + 手动打开/重试。 */
+.sfv-expired-panel {
+  max-width: 520px;
+  margin: 8vh auto 0;
+  padding: 28px 26px;
+  border-radius: 18px;
+  background: rgba(18, 20, 26, 0.92);
+  border: 1px solid rgba(255, 92, 92, 0.32);
+  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #fff;
+  text-align: center;
+}
+.sfv-expired-title {
+  font-size: 20px; font-weight: 800; letter-spacing: .4px;
+  color: #ff9a9a; margin-bottom: 8px;
+}
+.sfv-expired-sub {
+  font-size: 13px; line-height: 1.65; color: rgba(255, 255, 255, 0.66);
+  margin-bottom: 18px;
+}
+.sfv-expired-info {
+  text-align: left;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 4px 14px;
+  margin-bottom: 20px;
+}
+.sfv-expired-row {
+  display: flex; gap: 10px; padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12.5px; line-height: 1.5;
+}
+.sfv-expired-row:last-child { border-bottom: none; }
+.sfv-expired-k { flex: 0 0 84px; color: rgba(255, 255, 255, 0.5); }
+.sfv-expired-v { flex: 1 1 auto; color: rgba(255, 255, 255, 0.9); word-break: break-all; }
+.sfv-expired-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.sfv-expired-btn {
+  height: 38px; padding: 0 18px; border-radius: 10px; cursor: pointer;
+  font-size: 13px; font-weight: 700; border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08); color: #fff;
+  transition: background .16s ease, border-color .16s ease, transform .12s ease;
+}
+.sfv-expired-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.sfv-expired-btn:active { transform: translateY(1px); }
+.sfv-expired-btn--primary {
+  background: linear-gradient(135deg, rgba(244, 210, 138, 0.96), rgba(244, 210, 138, 0.70));
+  color: #1a1305; border-color: rgba(244, 210, 138, 0.4);
+}
+.sfv-expired-btn--primary:hover { filter: brightness(1.08); background: linear-gradient(135deg, rgba(244, 210, 138, 0.96), rgba(244, 210, 138, 0.70)); }
+
+
+/* 新建片单夹弹窗 */
+.sfv-folder-dialog-mask {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,.5);
+  display: flex; align-items: center; justify-content: center;
+  /* T142：全屏遮罩层裁圆角，避免透明窗口四角露出矩形暗边。 */
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 22px !important;
+}
+.sfv-folder-dialog {
+  background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 18px;
+  padding: 24px; width: 320px; max-width: 86vw; color: #fff;
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(34px) saturate(1.34); -webkit-backdrop-filter: blur(34px) saturate(1.34);
+}
+.sfv-folder-dialog h3 { margin: 0 0 16px; font-size: 16px; color: #fff; }
+.sfv-folder-dialog input {
+  width: 100%; height: 40px; padding: 0 12px; border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.20); background: rgba(255,255,255,.10);
+  color: #fff; font-size: 14px; outline: none;
+  box-sizing: border-box; margin-bottom: 16px;
+}
+.sfv-folder-dialog input::placeholder { color: rgba(255,255,255,.45); }
+.sfv-folder-dialog input:focus { border-color: rgba(var(--fc-accent-rgb), .7); }
+.sfv-folder-dialog-btns { display: flex; gap: 10px; justify-content: flex-end; }
+.sfv-folder-dialog-btns button {
+  padding: 9px 18px; border-radius: 10px; border: none; cursor: pointer; font-size: 13px;
+}
+.sfv-folder-btn-cancel { background: rgba(255,255,255,.12); color: #fff; }
+.sfv-folder-btn-ok { background: rgba(var(--fc-accent-rgb), .92); color: #04121a; font-weight: 600; }
+
+/* 加入我的片单：选择片单夹弹窗 */
+.sfv-pick-dialog-mask {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,.5);
+  display: flex; align-items: center; justify-content: center;
+  /* T142：全屏遮罩层裁圆角，避免透明窗口四角露出矩形暗边。 */
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 22px !important;
+}
+.sfv-pick-dialog {
+  background: #fff; border-radius: 16px; padding: 20px;
+  width: 340px; max-width: 88vw; max-height: 70vh; overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,.3);
+}
+.sfv-pick-dialog h3 { margin: 0 0 14px; font-size: 16px; color: #1a1a1a; }
+.sfv-pick-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 12px; border-radius: 10px; cursor: pointer;
+  transition: background .15s;
+}
+.sfv-pick-item:hover { background: rgba(0,0,0,.05); }
+.sfv-pick-item-name { font-size: 14px; color: #1a1a1a; }
+.sfv-pick-item-count { font-size: 12px; color: #888; }
+.sfv-pick-item.add-new {
+  border: 1px dashed rgba(var(--fc-accent-rgb), .5);
+  justify-content: center; color: rgba(var(--fc-accent-rgb), .85); font-weight: 500;
+  margin-top: 8px;
+}
+
+/* ====================================================================
+ * T134 电影页面筛选器组件 (.sfv-mfilter)
+ * 三层结构：L1分类tab / L2排序+筛选按钮 / L3筛选面板
+ * 仅在 .sfv-browse-body（浅色页面背景）内渲染
+ * ==================================================================== */
+
+/* ---- 根容器（独立自包含组件，自适应父级网格栏宽度）----
+   与下方 .sfv-grid 共享相同的 max-width + 居中约束，确保视觉对齐。
+   width:100% 让它在窄屏自动收缩，max-width 限制超宽屏不散开。 */
+.sfv-mfilter {
+  width: 100%;
+  max-width: 1400px;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 0 20px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+/* ====================================================================
+ * L1 分类 tab（电影 / 纪录片）
+ * 下划线式，与 Netflix/YouTube 分类 tab 风格一致
+ * 视觉上与下方排序/筛选明确分离（不同语义层级）
+ * ==================================================================== */
+.sfv-mfilter-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 14px 0 0;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(0,0,0,.07);
+}
+.sfv-mfilter-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sfv-card-sub, #888);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .25s ease;
+  flex-shrink: 0;
+}
+.sfv-mfilter-tab:hover {
+  color: var(--sfv-card-title, #1a1a1a);
+}
+.sfv-mfilter-tab.active {
+  color: var(--sfv-card-title, #1a1a1a);
+  font-weight: 600;
+}
+/* 选中态下划线 — 位移动画（与导航栏 .sfv-nav-item::after 风格一致但更粗）*/
+.sfv-mfilter-tab::after {
+  content: '';
+  position: absolute;
+  bottom: -1px; /* 坐在 border-bottom 上 */
+  left: 50%;
+  width: 0;
+  height: 2.5px;
+  background: rgb(var(--fc-accent-rgb, 245,197,66));
+  border-radius: 1.5px;
+  transition: width .28s cubic-bezier(.16,1,.3,1), left .28s cubic-bezier(.16,1,.3,1);
+  box-shadow: 0 1px 6px rgba(var(--fc-accent-rgb, 245,197,66), .30);
+}
+.sfv-mfilter-tab.active::after {
+  width: calc(100% - 36px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* ====================================================================
+ * L2 排序 + 筛选入口栏（折叠态默认展示）
+ * space-between 布局：左侧排序胶囊组 + 右侧筛选按钮
+ * min-width:0 防 flex 子项溢出；flex-shrink:0 保证筛选按钮始终可见
+ * ==================================================================== */
+.sfv-mfilter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 8px;
+  gap: 12px;
+  min-width: 0;           /* 防止 flex 子项撑破容器 */
+}
+.sfv-mfilter-sorts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;          /* 允许收缩 */
+  overflow-x: hidden;     /* 超出隐藏（极端窄屏保护） */
+}
+
+/* 排序胶囊按钮 */
+.sfv-mfilter-sort-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid rgba(0,0,0,.10);
+  border-radius: 15px;
+  background: transparent;
+  color: var(--sfv-card-sub, #666);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .2s ease;
+  flex-shrink: 0;
+}
+.sfv-mfilter-sort-pill:hover {
+  border-color: rgba(var(--fc-accent-rgb), .35);
+  color: var(--sfv-card-title, #1a1a1a);
+  background: rgba(var(--fc-accent-rgb), .06);
+}
+.sfv-mfilter-sort-pill.active {
+  border-color: rgb(var(--fc-accent-rgb, 245,197,66));
+  color: #fff;
+  background: rgb(var(--fc-accent-rgb, 245,197,66));
+  box-shadow: 0 2px 8px rgba(var(--fc-accent-rgb, 245,197,66), .25);
+}
+
+/* 筛选切换按钮 */
+.sfv-mfilter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid rgba(0,0,0,.10);
+  border-radius: 15px;
+  background: transparent;
+  color: var(--sfv-card-sub, #666);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .2s ease;
+  flex-shrink: 0;
+}
+.sfv-mfilter-toggle:hover {
+  border-color: rgba(var(--fc-accent-rgb), .35);
+  color: var(--sfv-card-title, #1a1a1a);
+}
+.sfv-mfilter-toggle[aria-expanded="true"] {
+  border-color: rgb(var(--fc-accent-rgb, 245,197,66));
+  color: rgb(var(--fc-accent-rgb, 245,197,66));
+}
+
+/* ====================================================================
+ * L3 筛选展开面板（默认隐藏）
+ * ==================================================================== */
+.sfv-mfilter-panel {
+  display: none;
+  flex-direction: column;
+  padding: 4px 0 14px;
+  animation: sfvMFilterPanelIn .22s ease-out;
+}
+.sfv-mfilter-panel--open {
+  display: flex;
+}
+@keyframes sfvMFilterPanelIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- 筛选行：标签 + 横滑容器 ---- */
+.sfv-mfilter-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 0 4px;
+  gap: 12px;
+  line-height: 1;
+}
+.sfv-mfilter-label {
+  flex-shrink: 0;
+  width: 36px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sfv-card-title, #1a1a1a);
+  padding-top: 5px;
+  opacity: .75;
+}
+.sfv-mfilter-tags {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
+  padding: 2px 2px 8px; /* 给滚动条留空间 */
+  ms-overflow-style: none; /* IE/Edge */
+}
+.sfv-mfilter-tags::-webkit-scrollbar { display: none; }
+
+/* ---- 筛选标签按钮 ---- */
+.sfv-mfilter-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 13px;
+  border: 1px solid rgba(0,0,0,.11);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--sfv-card-sub, #555);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .18s ease;
+  flex-shrink: 0;
+  user-select: none;
+}
+.sfv-mfilter-tag:hover {
+  border-color: rgba(0,0,0,.22);
+  color: var(--sfv-card-title, #1a1a1a);
+  background: rgba(0,0,0,.03);
+}
+.sfv-mfilter-tag.active {
+  border-color: rgb(var(--fc-accent-rgb, 245,197,66));
+  color: rgb(var(--fc-accent-rgb, 245,197,66));
+  background: rgba(var(--fc-accent-rgb, 245,197,66), .10);
+  font-weight: 600;
+}
+/* 选中项 hover：纯黑加粗，覆盖所有透亮效果 */
+.sfv-mfilter-tag.active:hover {
+  border-color: #000000;
+  color: #000000;
+  background: transparent;
+  font-weight: bold;
+}
+/* "全部"特殊态：无选中筛选项时高亮 */
+.sfv-mfilter-tag:first-child { /* "全部"总是第一个 */
+  border-style: dashed;
+  border-color: rgba(0,0,0,.08);
+}
+.sfv-mfilter-tag:first-child.active {
+  border-style: solid;
+  border-color: rgba(var(--fc-accent-rgb), .3);
+  color: var(--sfv-card-sub, #888);
+  background: transparent;
+  font-weight: 400;
+}
+
+/* 特殊标签变体 */
+.sfv-mfilter-tag--has-drop,
+.sfv-mfilter-tag--more {
+  position: relative;
+}
+.sfv-mfilter-tag--more {
+  color: rgb(var(--fc-accent-rgb, 245,197,66));
+  border-color: rgba(var(--fc-accent-rgb, 245,197,66), .30);
+  font-weight: 600;
+}
+.sfv-mfilter-tag--more:hover {
+  background: rgba(var(--fc-accent-rgb, 245,197,66), .08);
+}
+
+/* ---- "更早"年份下拉浮层 ---- */
+.sfv-mfilter-dropdown {
+  position: relative;
+  display: none;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,.09);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.12);
+  padding: 6px;
+  z-index: 10;
+  margin-top: 4px;
+}
+.sfv-mfilter-drop-item {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sfv-card-title, #1a1a1a);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+.sfv-mfilter-drop-item:hover {
+  background: rgba(var(--fc-accent-rgb, 245,197,66), .08);
+  color: rgb(var(--fc-accent-rgb, 245,197,66));
+}
+
+/* ---- "+更多"类型弹层 ---- */
+.sfv-mfilter-more-popup {
+  display: none;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,.09);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgba(0,0,0,.14);
+  padding: 10px;
+  z-index: 20;
+  margin-top: 6px;
+  /* 弹性网格布局 */
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sfv-mfilter-more-popup .sfv-mfilter-tag {
+  font-size: 12px;
+  height: 26px;
+  padding: 0 10px;
+}
+
+/* ---- 分割线 ---- */
+.sfv-mfilter-hr {
+  height: 1px;
+  background: rgba(0,0,0,.06);
+  margin: 6px 0 10px;
+}
+
+/* ---- 底部操作栏 ---- */
+.sfv-mfilter-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 40px 0;
+}
+.sfv-mfilter-footer-count {
+  font-size: 12.5px;
+  color: var(--sfv-card-sub, #888);
+  font-weight: 500;
+}
+.sfv-mfilter-footer-clear,
+.sfv-mfilter-footer-collapse {
+  border: none;
+  background: transparent;
+  color: rgb(var(--fc-accent-rgb, 245,197,66));
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 8px;
+  transition: background .15s;
+  white-space: nowrap;
+}
+.sfv-mfilter-footer-clear:hover,
+.sfv-mfilter-footer-collapse:hover {
+  background: rgba(var(--fc-accent-rgb, 245,197,66), .08);
+}
+
+/* ====================================================================
+ * 移动端适配 (< 640px)
+ * ==================================================================== */
+@media (max-width: 639px) {
+  .sfv-mfilter {
+    padding: 0 12px;
+  }
+  .sfv-mfilter-tabs {
+    padding-top: 10px;
+    gap: 0;
+  }
+  .sfv-mfilter-tab {
+    height: 34px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+  .sfv-mfilter-bar {
+    padding: 10px 0 6px;
+    gap: 8px;
+  }
+  .sfv-mfilter-sort-pill {
+    height: 28px;
+    padding: 0 11px;
+    font-size: 12px;
+  }
+  .sfv-mfilter-toggle {
+    height: 28px;
+    padding: 0 9px;
+    font-size: 12px;
+  }
+  .sfv-mfilter-label {
+    width: 32px;
+    font-size: 12px;
+  }
+  .sfv-mfilter-tag {
+    height: 26px;
+    padding: 0 11px;
+    font-size: 12px;
+  }
+  .sfv-mfilter-footer {
+    padding: 4px 8px 0;
+    gap: 8px;
+  }
+  .sfv-mfilter-more-popup {
+    grid-template-columns: repeat(2, auto);
+  }
+
+/* ===== T135 回到顶部悬浮按钮（仅电影 / 动漫分页）=====
+   单一共享圆钮挂 document.body，位置固定内容区右下角；电影/动漫两页
+   位置/样式/交互完全一致。显示由 JS 控制（video-space-active + 浏览层
+   打开 + 当前页为 movie/anime + 滚动超阈值）。 */
+.sfv-backtotop {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2147482080;            /* 高于内容覆盖层(2147482000)，低于顶栏(2147482099) */
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  color: rgb(var(--fc-accent-rgb, 0, 245, 212));
+  background: rgba(10, 14, 22, 0.72);
+  border: 1px solid rgba(var(--fc-accent-rgb, 0, 245, 212), 0.45);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.34),
+    0 0 0 1px rgba(var(--fc-accent-rgb, 0, 245, 212), 0.10),
+    0 0 18px rgba(var(--fc-accent-rgb, 0, 245, 212), 0.18);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(16px) scale(0.9);
+  transition:
+    opacity .26s ease,
+    transform .26s cubic-bezier(.16, 1, .3, 1),
+    visibility 0s linear .26s,
+    background .2s ease,
+    box-shadow .2s ease,
+    border-color .2s ease;
+  pointer-events: none;
+}
+.sfv-backtotop svg { display: block; transition: transform .2s ease; }
+.sfv-backtotop:hover {
+  background: rgba(0, 245, 212, 0.16);
+  border-color: rgba(var(--fc-accent-rgb, 0, 245, 212), 0.9);
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, 0.38),
+    0 0 0 1px rgba(var(--fc-accent-rgb, 0, 245, 212), 0.22),
+    0 0 26px rgba(var(--fc-accent-rgb, 0, 245, 212), 0.32);
+}
+.sfv-backtotop:hover svg { transform: translateY(-2px); }
+.sfv-backtotop:active { transform: translateY(2px) scale(0.94); }
+.sfv-backtotop:focus-visible {
+  outline: none;
+  border-color: rgba(var(--fc-accent-rgb, 0, 245, 212), 0.9);
+  box-shadow: 0 0 0 3px rgba(var(--fc-accent-rgb, 0, 245, 212), 0.28);
+}
+.sfv-backtotop.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+  transition:
+    opacity .26s ease,
+    transform .26s cubic-bezier(.16, 1, .3, 1),
+    visibility 0s,
+    background .2s ease,
+    box-shadow .2s ease,
+    border-color .2s ease;
+}
+/* 双态隔离：非影视态绝不显形，绝不污染音乐态 DOM 视觉 */
+body:not(.video-space-active) .sfv-backtotop { display: none !important; }
+} /* 关闭上方 @media (max-width: 639px)；Plex 详情页样式须为全局作用域，不可落入移动端媒体查询 */
+
+
+/* ===== Plex 风详情页（detail.js · 电影 / 动漫 / 纪录片 共享）=====
+   视觉契约（2026-08-06 重设计，推翻原 sfv-detail-immersive）：
+   整页海报铺满视口(fixed) + 仅底部 50% 暗渐变压底；玻璃容器统一
+   rgba(255,255,255,.10)+blur(16px)saturate(150%)+1px/.18+br16；
+   左上圆形返回 + 右上 Plex 胶囊(-□×)；白色标题(甲:优先海报扣,回退文字)；
+   药丸操作组(播放/追片6态/加入片单/下载)；HEADER 元数据只读4字段；
+   演员直径70+相似/剧照卡；8px TMDB 署名。仅影视态可见(双态隔离)。 */
+
+/* 沉浸态：隐藏全局顶栏(含原 -□× 与搜索/DIY/logo)，由详情页自绘控件接管 */
+body.sfv-plex-immersive #sfv-nav { display: none !important; }
+
+.sfv-detail-plex { position: relative; min-height: 100%; color: #fff; z-index: 1; }
+.sfv-detail-plex * { box-sizing: border-box; }
+
+.sfv-plex-bg {
+  position: fixed; inset: 0; z-index: 0;
+  background-size: cover; background-position: center top;
+  background-color: #0b0e13;
+  /* T142：详情页满铺背景层自身裁圆角，防止在透明窗口四角逃逸成直角。 */
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 22px !important;
+}
+/* 背景遮罩：参考图二效果——底部强渐变 + 径向暗角。
+   人物脸部（约左上 28%/22% 处）保持高亮通透；底部与边缘压暗，
+   保证标题/简介/按钮/下方卡片可读，同时不糊掉海报主体细节。 */
+.sfv-plex-bg::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background:
+    /* 上层：底部强渐变，比原来更暗、延伸更高 */
+    linear-gradient(to top, rgba(0,0,0,.92) 0%, rgba(0,0,0,.62) 15%, rgba(0,0,0,.28) 35%, transparent 55%),
+    /* 下层：径向暗角，中心对齐人物脸部、边缘压暗 */
+    radial-gradient(circle at 26% 30%, transparent 0%, rgba(0,0,0,.18) 42%, rgba(0,0,0,.44) 100%);
+}
+.sfv-plex-content { position: relative; z-index: 2; }
+
+/* 用户要求 2026-08-06 18:55 — 返回钮图标改为 Plex chevron-left，缩小 5px，距上/左各 50px */
+.sfv-plex-back {
+  position: fixed; top: 50px; left: 50px; z-index: 5;
+  width: 50px; height: 50px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; color: #fff;
+  /* 参照 100856：浅色珍珠白玻璃，无厚重阴影 */
+  background: rgba(255,255,255,.18);
+  border: 1px solid rgba(255,255,255,.28);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  box-shadow: 0 2px 8px rgba(0,0,0,.18);
+  transition: background .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+.sfv-plex-back svg { display: block; }
+.sfv-plex-back:hover {
+  background: rgba(255,255,255,.28);
+  /* 散光：白色光晕扩散 + 放大 2px (50→52) */
+  box-shadow: 0 0 18px rgba(255,255,255,.6), 0 2px 8px rgba(0,0,0,.18);
+  transform: scale(1.04);
+}
+.sfv-plex-back:active { transform: scale(.94); }
+
+.sfv-plex-win {
+  position: fixed; top: 40px; right: 40px; z-index: 5;
+  display: inline-flex; align-items: center;
+  /* 尺寸：内容高50、按钮38×30+上下各10留白；按钮38宽×3；距上/右各40px */
+  height: 50px; border-radius: 999px; overflow: hidden;
+  /* 差异③：底色从 .14 浅蓝紫 → .06 接近透明白雾，让海报背景透出(REF 感) */
+  background: rgba(255,255,255,.06);
+  /* 用户要求 2026-08-06 19:18 — 边框与内容完全一致(同 .06 毛玻璃材质) */
+  border: 7px solid rgba(255,255,255,.06);
+  color: #0d121a;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 2px 10px rgba(0,0,0,.16);
+}
+.sfv-plex-win button {
+  width: 38px; height: 30px; border: 0; margin: 0; padding: 0;
+  background: transparent; color: inherit; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 15px;
+  transition: background .15s ease;
+}
+.sfv-plex-win button svg { transition: transform .15s ease; transform-origin: center; }
+/* 用户要求 2026-08-06 19:13 — hover 不加方形背景，改成字符(svg)放大 1px 感 */
+.sfv-plex-win button:hover { background: transparent; }
+.sfv-plex-win button:hover svg { transform: scale(1.06); }
+.sfv-plex-win button:active { background: rgba(13,18,26,.18); }
+
+/* 用户要求 2026-08-18：首屏只保留标题/简介/操作按钮，整体贴在屏幕左下角；
+   演员/幕后/类似等副信息位于下方，需向下滚动才看到。
+   header 用 flex-end 把信息块整体压到左下角，不再靠 520px padding-top 硬推。
+   2026-08-18：取消 max-width，让全屏/大屏下内容区与窗口边缘保持固定 50px 边距，
+   避免两侧出现大片空白；同时与窗口化时的左右间隔保持一致。
+   2026-08-18-2：actions 改为 absolute 固定在 header 左下角，彻底避免长简介/高分屏
+   把按钮推出首屏。 */
+.sfv-plex-header {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-start;
+  min-height: 100vh;
+  padding: 0 50px 40px;
+  margin: 0 auto;
+  box-sizing: border-box;
+  /* 不可设 overflow:hidden：否则被 transform 平移的艺术 logo 平移出 header 边界时被裁掉 → 动画"消失" */
+}
+/* 信息区：仅本区带 transform 过渡，展开简介时平滑上移；marginBottom 由 JS 即时补偿，
+   使下方按钮区不被简介撑高下推（按钮区纹丝不动）。
+   限制最大高度并在底部给 actions 留 90px 空间。
+   注意：本区不可设 overflow:hidden，否则会裁剪被 transform 平移的艺术 logo
+   （logo 在 titleWrap 内，平移出 info 边界时被裁掉 → 动画"消失"）。
+   简介的裁剪改由 .sfv-plex-overview 自身的 overflow:hidden + max-height 负责。 */
+.sfv-plex-info {
+  width: 100%;
+  max-width: 760px;
+  max-height: calc(100vh - 40px - 90px);
+  padding-bottom: 90px;
+  box-sizing: border-box;
+  transition: transform .3s ease;
+}
+.sfv-plex-sections { padding: 10px 50px 80px; margin: 0 auto; }
+
+.sfv-plex-title { margin: 0; position: relative; display: flex; align-items: flex-end; gap: 16px; }
+.sfv-plex-title-text {
+  font-size: 64px; line-height: 1.04; font-weight: 800; color: #fff;
+  letter-spacing: .01em; text-shadow: 0 2px 18px rgba(0,0,0,.55); margin: 0;
+}
+.sfv-plex-poster-title {
+  width: 150px; height: 96px; border-radius: 10px; overflow: hidden; flex: 0 0 auto;
+  box-shadow: 0 10px 30px rgba(0,0,0,.45); background: #11151c;
+}
+.sfv-plex-poster-title img { width: 100%; height: 100%; object-fit: cover; object-position: center 78%; display: block; }
+
+/* TMDB 标题 logo（透明 PNG）—— 2026-08-06 A 方案接入
+   替代"整张竖版人物海报"作为主标题。透明背景, 自然宽高比,
+   最大 480×140 显示, 弱阴影让 logo 浮在海报渐变上。 */
+.sfv-plex-logo-title {
+  display: inline-flex; align-items: flex-end; flex: 0 1 auto;
+  max-width: 480px; max-height: 140px;
+  filter: drop-shadow(0 4px 16px rgba(0,0,0,.55));
+}
+.sfv-plex-logo-title img {
+  display: block; max-width: 480px; max-height: 140px; width: auto; height: auto;
+  object-fit: contain; background: transparent;
+}
+
+.sfv-plex-subtitle {
+  margin: 10px 0 0; font-size: 19px; font-weight: 600; color: #fff;
+  text-transform: uppercase; letter-spacing: .16em; text-shadow: 0 1px 10px rgba(0,0,0,.5);
+}
+
+.sfv-plex-meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0 12px;
+  margin-top: 16px; font-size: 14px; color: rgba(255,255,255,.86);
+}
+/* 方形堆叠版（1.39:1）THE/MOVIE/DB 三行+双椭圆（TMDB 官方 blue_square_2，2026-08-07 替换）：
+   viewBox 185.04x133.4 → CSS height 18px → 字号清晰可辨（CSS 高度 18px，2026-08-07 由 22→20→18）。
+   与评分（16px）以 5px 紧贴成组、无竖线；与之后年份/片长/类型由 meta flex gap 12px 隔开（年份+片长间无竖线，片长↔类型仍保留 |）。
+   drop-shadow 让 logo 在浅色背景上也有清晰边缘（2026-08-07 加：几何尺寸不变，靠阴影对抗图-底感知错觉）。
+   2026-08-07 12:12 用户拍板：logo 单独 border-radius（只软化四角，不带玻璃药丸容器，与 meta 行同档无外壳设计一致）。
+   12:25 精度回调：3px → 2px（更含蓄，25×18px 图上 ≈ 11% 高度圆角）。 */
+.sfv-plex-meta img.sfv-plex-tmdb-logo { height: 18px; width: auto; max-width: 30px; opacity: .95; filter: drop-shadow(0 1px 2px rgba(0,0,0,.55)); border-radius: 2px; }
+/* logo + 评分 紧凑组（2026-08-07 用户拍板：与 年份/时长/类型 同档无容器设计）：
+   12 段 meta 试用药丸玻璃外壳 → 用户反馈「应该和 年份·时长·类型 一样是无玻璃药丸容器的普通元素」；
+   改为纯 inline-flex 自适应宽度，align-items 居中，gap 5px 与 meta flex gap 12px 区分；
+   切割感靠 .sfv-plex-tmdb-logo 的 drop-shadow 在任何背景前兜底（与官方 blue_square_2 设计语言一致：纯 logo，不自带外壳）。 */
+.sfv-plex-meta .sfv-plex-logo-rating {
+  display: inline-flex; align-items: center; gap: 5px;
+  vertical-align: middle;
+}
+.sfv-plex-meta .sfv-plex-rating { font-weight: 700; color: #fff; font-size: 16px; }
+/* 年份/片长/类型 字号 16px / rgba(.86) / 400（默认），与"右边"参考一致，保留评分 700+#fff 的层级强调（2026-08-07 回退 B 方案） */
+.sfv-plex-meta .sfv-plex-meta-cell { font-size: 16px; color: rgba(255,255,255,.86); }
+.sfv-plex-meta .sfv-plex-sep { width: 1px; height: 14px; background: rgba(255,255,255,.25); display: inline-block; }
+.sfv-plex-meta .sfv-plex-genres { color: rgba(255,255,255,.86); }
+
+.sfv-plex-actions {
+  position: absolute;
+  left: 50px;
+  bottom: 40px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+.sfv-plex-pill {
+  height: 44px; border-radius: 999px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 0 26px; font-size: 14px; font-weight: 700; color: #fff;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.20);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  box-shadow: 0 6px 18px rgba(0,0,0,.28);
+  transition: background .18s ease, transform .18s ease; position: relative;
+}
+.sfv-plex-pill:hover { background: rgba(255,255,255,.22); }
+.sfv-plex-pill:active { transform: scale(.96); }
+.sfv-plex-pill svg { width: 20px; height: 20px; display: block; }
+.sfv-plex-pill--play {
+  height: 48px; padding: 0 24px; font-size: 15px; font-weight: 800;
+  background: rgba(255,255,255,.92); color: #0b0e13; border-color: rgba(255,255,255,.55);
+  box-shadow: 0 8px 24px rgba(0,0,0,.22);
+}
+.sfv-plex-pill--play:hover { background: #fff; }
+.sfv-plex-pill--play svg { width: 24px; height: 24px; }
+
+.sfv-coll-popover {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 30;
+  box-sizing: border-box;
+  padding: 8px; border-radius: 14px;
+  /* 收藏面板材质/玻璃效果：与播放器底部控制栏「画质」面板（.sfv-sr-popover）一致 */
+  background: var(--saved-panel-glass-bg);
+  border: 0;
+  box-shadow: var(--saved-panel-glass-shadow);
+  backdrop-filter: var(--saved-panel-glass-filter);
+  -webkit-backdrop-filter: var(--saved-panel-glass-filter);
+  display: none;
+}
+/* svg-ok 玻璃模式下与画质面板保持一致（blur(12px)→svg 滤镜） */
+html.control-glass-svg-ok .sfv-coll-popover { backdrop-filter: var(--saved-panel-glass-svg-filter); -webkit-backdrop-filter: var(--saved-panel-glass-svg-filter); }
+.sfv-coll-popover.open { display: block; }
+.sfv-plex-track-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 9px 12px; border: 0; background: transparent; color: #fff;
+  font-size: 13.5px; font-weight: 600; border-radius: 9px; cursor: pointer; text-align: left;
+}
+.sfv-plex-track-item:hover { background: rgba(255,255,255,.10); }
+.sfv-plex-track-item.active { color: #01b4e4; }
+.sfv-plex-track-item svg { width: 18px; height: 18px; flex: 0 0 auto; display: block; }
+.sfv-plex-track-item .lbl { flex: 1 1 auto; }
+
+/* ---- ＋收藏 面板（用户自建片单夹分类列表）---- */
+.sfv-coll-popover { min-width: 220px; }
+.sfv-coll-head { padding: 9px 12px 6px; font-size: 12px; font-weight: 700; color: rgba(255,255,255,.6); letter-spacing: .3px; }
+.sfv-coll-list { max-height: 240px; overflow-y: auto; }
+.sfv-coll-list .sfv-plex-track-item .cnt { margin-left: auto; padding-left: 8px; font-size: 11px; color: rgba(255,255,255,.4); }
+.sfv-coll-empty { padding: 14px 12px; font-size: 12.5px; line-height: 1.5; color: rgba(255,255,255,.5); text-align: center; }
+.sfv-coll-create {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  margin-top: 4px; padding: 10px 12px;
+  border: 0; border-top: 1px solid rgba(255,255,255,.12);
+  background: transparent; color: rgb(0,245,212);
+  font-size: 13px; font-weight: 700; border-radius: 0 0 9px 9px; cursor: pointer; text-align: left;
+}
+.sfv-coll-create:hover { background: rgba(0,245,212,.10); }
+/* 触发器：已收藏态（状态及时更新）*/
+.sfv-plex-pill.collected {
+  color: rgb(0,245,212); border-color: rgba(0,245,212,.5);
+  background: rgba(0,245,212,.14);
+}
+
+.sfv-plex-overview {
+  max-width: 760px; margin-top: 26px;
+  font-size: 15px; line-height: 1.62; color: rgba(255,255,255,.92);
+  text-shadow: 0 1px 8px rgba(0,0,0,.4);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  max-height: calc(15px * 1.62 * 3); /* 保底：即使 -webkit-line-clamp 失效也不超过 3 行 */
+}
+.sfv-plex-overview.expanded { -webkit-line-clamp: unset; max-height: none; }
+.sfv-plex-expand {
+  margin-top: 10px; height: 32px; padding: 0 14px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 700; color: #fff; cursor: pointer;
+  background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.18);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+}
+.sfv-plex-expand:hover { background: rgba(255,255,255,.20); }
+
+.sfv-plex-section {
+  font-size: 12px; font-weight: 200; letter-spacing: .03em; margin: 24px 0 14px;
+  color: rgba(210, 218, 226, .55);
+}
+/* 用户 2026-08-17 拍板：仅放大「主演 → 幕后剧照」的上下间距；2026-08-18 随首屏紧凑化同步降至 55px */
+.sfv-plex-sec--backdrops .sfv-plex-section { margin-top: 55px; }
+
+/* 选集网格：在详情页 sections 顶部插入，适配电影/剧集多线路 */
+.sfv-plex-episodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 10px; }
+.sfv-plex-episode {
+  min-height: 40px; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.16);
+  color: #fff; font-size: 13px; font-weight: 600; line-height: 1.25;
+  transition: background .15s ease, transform .15s ease, border-color .15s ease;
+}
+.sfv-plex-episode:hover { background: rgba(255,255,255,.22); border-color: rgba(255,255,255,.28); transform: translateY(-1px); }
+.sfv-plex-episode:active { transform: scale(.96); }
+
+.sfv-plex-rail { display: flex; gap: 19px; overflow-x: auto; padding: 10px 8px 18px; scrollbar-width: none;
+  /* 首/尾卡片放大 1.05 倍时向外延伸 ~14~18px，预留 padding 防 rail 的 overflow-x 裁掉圆角+阴影 */
+}
+.sfv-plex-rail::-webkit-scrollbar { display: none; }
+
+/* 横向轮播包裹层 + 左右箭头（类似影片 / 幕后剧照）。
+   图标按钮独立显示，无渐变/遮罩/边缘变暗；hover 仅控制透明度，不遮挡卡片圆角。 */
+.sfv-plex-rail-wrap { position: relative; }
+.sfv-plex-rail__arrow {
+  position: absolute; top: 0; bottom: 8px; width: 40px; z-index: 4;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; padding: 0; margin: 0; cursor: pointer; color: #fff;
+  opacity: 0; transition: opacity .2s ease;
+  background: transparent; /* 不与任何遮罩或背景变暗层共存 */
+}
+.sfv-plex-rail-wrap:hover .sfv-plex-rail__arrow { opacity: 1; }
+.sfv-plex-rail__arrow--left { left: 0; }
+.sfv-plex-rail__arrow--right { right: 0; }
+.sfv-plex-rail__arrow.is-hidden { opacity: 0 !important; pointer-events: none; }
+.sfv-plex-rail__arrow svg { display: block; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+
+.sfv-plex-actor { flex: 0 0 auto; width: 85px; text-align: center; }
+.sfv-plex-actor-img {
+  width: 85px; height: 85px; border-radius: 50%; object-fit: cover; display: block;
+  background: #1a1f28; border: 1px solid rgba(255,255,255,.18); transition: transform .25s ease;
+}
+/* 演员直径 75→85（+10）；hover 放大维持精确 +8px（直径 85→93，scale=93/85≈1.094）。
+   原 scale(1.1) 仅 +7px。统一用 scale() 让整个圆圈按钮（border+bg+letterbox内嵌海报，等于 .sf-plex-actor-img）作为整体放大 —— 海报作为 img 的 object-fit: cover 内容随父一起 scale，不是分层独立 zoom。 */
+.sfv-plex-actor:hover .sfv-plex-actor-img { transform: scale(1.094); }
+.sfv-plex-actor-name { font-size: 12px; color: rgba(255,255,255,.8); margin-top: 7px; line-height: 1.25; }
+
+.sfv-plex-card {
+  flex: 0 0 auto; width: 280px; border-radius: 14px; overflow: hidden; position: relative;
+  background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 8px 22px rgba(0,0,0,.3); transition: box-shadow .25s ease, z-index 0s linear;
+  aspect-ratio: 16 / 9; /* 父容器自身撑高：img 改为 absolute 出文档流后，父容器必须自己有尺寸，否则卡片高度塌缩成线 */
+  z-index: 1;
+  isolation: isolate;
+  /* 强制独立合成层：hover 时放大内容不会触发外层圆角裁切的子像素缝 */
+  backface-visibility: hidden;
+}
+.sfv-plex-card--poster { aspect-ratio: 2 / 3; }
+/* 外层容器不再整体 scale；改为内部 .sfv-plex-card-img 独立放大，保持 14px 圆角裁切稳定。
+   hover 时阴影加深 + z-index 提升让放大卡片浮在邻居之上。 */
+.sfv-plex-card:hover {
+  z-index: 10;
+  box-shadow: 0 14px 34px rgba(0,0,0,.28);
+}
+/* 封面图：过裁切 1px 吞抗锯齿边；hover 放大 1.05 倍，.sfv-plex-card--poster(2:3) 用 1.04 防长轴溢色更明显。
+   block 消基线缝，aspect-ratio 维持原比例不变。 */
+.sfv-plex-card-img {
+  position: absolute;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  max-width: none;
+  object-fit: cover;
+  display: block;
+  background: #1a1f28;
+  transition: transform .25s ease;
+  will-change: transform;
+  border-radius: inherit;
+  aspect-ratio: 16 / 9;
+}
+.sfv-plex-card:hover .sfv-plex-card-img { transform: scale(1.05); }
+.sfv-plex-card--poster .sfv-plex-card-img { aspect-ratio: 2 / 3; }
+.sfv-plex-card--poster:hover .sfv-plex-card-img { transform: scale(1.04); }
+/* 片单/详情无封面占位：保持同尺寸、居中胶片图标，避免纯黑卡片 */
+.sfv-plex-card-img--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  color: rgba(255,255,255,.25);
+  background: linear-gradient(135deg, #1a1f28 0%, #252b36 100%);
+}
+/* 类似影片 hover 左下角淡入展示 original_title：渐变 scrim 保证可读，absolute 不挤压布局 */
+.sfv-plex-card__cap {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 24px 12px 10px;
+  font-size: 13px; font-weight: 600; line-height: 1.3; color: #fff; text-align: left;
+  letter-spacing: .01em;
+  background: linear-gradient(to top, rgba(0,0,0,.82) 0%, rgba(0,0,0,.42) 48%, rgba(0,0,0,0) 100%);
+  text-shadow: 0 1px 4px rgba(0,0,0,.75);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .25s ease, transform .25s ease;
+  pointer-events: none;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sfv-plex-card:hover .sfv-plex-card__cap { opacity: 1; transform: translateY(0); }
+/* 类似影片 hover 展示 title logo（透明 PNG）时的容器/图片尺寸约束 */
+.sfv-plex-card__cap:empty { display: none; }
+.sfv-plex-card__cap--logo {
+  display: block; -webkit-line-clamp: initial; -webkit-box-orient: initial;
+  padding-bottom: 12px;
+}
+/* 我的片单卡片 hover 删除按钮：右上角圆形 X，默认隐藏 */
+.sfv-plex-card__del {
+  position: absolute;
+  top: 8px; right: 8px;
+  z-index: 20;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,.55);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(.9);
+  transition: opacity .2s ease, transform .2s ease, background .2s ease;
+  pointer-events: auto;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.sfv-plex-card:hover .sfv-plex-card__del {
+  opacity: 1;
+  transform: scale(1);
+}
+.sfv-plex-card__del:hover {
+  background: rgba(220,38,38,.85);
+  transform: scale(1.08);
+}
+.sfv-plex-card__del:active {
+  transform: scale(.94);
+}
+.sfv-plex-card__del svg {
+  display: block;
+  pointer-events: none;
+}
+.sfv-plex-card__logo {
+  max-height: 34px; max-width: 68%; width: auto; height: auto;
+  object-fit: contain; object-position: left bottom; display: block;
+  filter: drop-shadow(0 1px 4px rgba(0,0,0,.75));
+}
+
+.sfv-plex-attrib {
+  font-size: 8px; line-height: 1.5; color: rgba(255,255,255,.25);
+  text-align: center; padding: 36px 20px 28px; letter-spacing: .02em;
+}
+
+/* TMDB 设置入口（详情页署名区下方）—— 消硬编码默认 key 风险 */
+.sfv-plex-tmdb-settings {
+  display: block; margin: 0 auto 6px; padding: 4px 12px;
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; color: rgba(255,255,255,.62);
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18);
+  border-radius: 999px; cursor: pointer; transition: background .15s ease, color .15s ease;
+}
+.sfv-plex-tmdb-settings:hover { background: rgba(255,255,255,.16); color: #fff; }
+
+/* TMDB API Key 设置弹窗（z-index 铁律：< 2147482099，低于顶栏 #sfv-nav 2147482100） */
+.sfv-tmdb-settings-overlay {
+  position: fixed; inset: 0; z-index: 2147482085;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.55); backdrop-filter: blur(4px);
+  /* T142：全屏遮罩层裁圆角，避免透明窗口四角露出矩形黑边。 */
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 22px !important;
+}
+.sfv-tmdb-settings-card {
+  width: min(440px, 92vw); padding: 22px 22px 18px;
+  background: rgba(20,24,32,.96); border: 1px solid rgba(255,255,255,.16);
+  border-radius: 16px; box-shadow: 0 24px 80px rgba(0,0,0,.6); color: #fff;
+  font-family: inherit;
+}
+.sfv-tmdb-settings-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+.sfv-tmdb-settings-desc { font-size: 13px; line-height: 1.6; color: rgba(255,255,255,.72); margin-bottom: 14px; }
+.sfv-tmdb-settings-warn {
+  font-size: 12.5px; line-height: 1.55; color: #ffd28a;
+  background: rgba(255, 176, 64, 0.10); border: 1px solid rgba(255, 176, 64, 0.42);
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 14px;
+}
+.sfv-tmdb-settings-warn b { color: #ffb74d; font-weight: 700; }
+.sfv-tmdb-settings-input {
+  width: 100%; box-sizing: border-box; padding: 10px 12px; margin-bottom: 6px;
+  font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #fff; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.22);
+  border-radius: 10px; outline: none;
+}
+.sfv-tmdb-settings-input:focus { border-color: rgba(0,245,212,.6); }
+.sfv-tmdb-settings-err { font-size: 12px; color: #ff6b81; min-height: 16px; margin-bottom: 6px; }
+.sfv-tmdb-settings-btns { display: flex; gap: 10px; margin-top: 6px; }
+.sfv-tmdb-settings-btn {
+  flex: 1; height: 38px; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 700;
+  color: rgba(255,255,255,.86); background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.18);
+  transition: background .15s ease;
+}
+.sfv-tmdb-settings-btn:hover { background: rgba(255,255,255,.18); }
+.sfv-tmdb-settings-btn.primary {
+  color: #04121a; background: rgba(0,245,212,.92); border-color: transparent;
+}
+.sfv-tmdb-settings-btn.primary:hover { background: rgba(0,245,212,1); }
+.sfv-tmdb-settings-note { font-size: 10px; line-height: 1.5; color: rgba(255,255,255,.4); margin-top: 12px; }
+
+body:not(.video-space-active) .sfv-detail-plex { display: none !important; }
+
+/* 窄窗/移动端：收紧顶部留白与标题字号，避免内容被推到屏幕外 */
+@media (max-width: 639px) {
+  .sfv-plex-header { padding: 230px 20px 0; }
+  .sfv-plex-title-text { font-size: 40px; }
+  .sfv-plex-poster-title { width: 104px; height: 68px; }
+  .sfv-plex-logo-title { max-width: 280px; max-height: 90px; }
+  .sfv-plex-logo-title img { max-width: 280px; max-height: 90px; }
+  .sfv-plex-subtitle { font-size: 15px; letter-spacing: .12em; }
+  .sfv-plex-section, .sfv-plex-rail { padding-left: 20px; padding-right: 20px; }
+  .sfv-plex-actions { gap: 16px; }
+  .sfv-plex-pill { height: 40px; padding: 0 14px; font-size: 13px; }
+}
+
+
+
+/* 方案 D（2026-08-05）：DOM 网格外壳已删除，电影/动漫分页仅保留底部 TMDB 署名；
+   海报墙由 browse3d 在共享 WebGL 画布渲染，覆盖层永久透明透出首页星空。
+   原 .sfv-3d-on 隐藏规则失效（无 .sfv-grid/.sfv-browse-status 可隐藏），移除。 */
+
+/* 方案 D（2026-08-05）：电影/动漫覆盖层现已 '永久透明'（见 .sfv-browse--page
+   的 background: transparent !important），无需 :has(.sfv-3d-on) 作用域。
+   移除旧 scoped 透明规则与说明。分类页（--category）与首页父项目不受影响。 */
+
+/* （媒体查询已于上方正确闭合；此处不再需要孤立闭合括号） */
+
+/* ===== 2026-08-06：电影/动漫静态玻璃卡占位 ===== */
+/* 复用首页 .home-card 玻璃质感；内部为空，无功能。居中、有合理尺寸，浮于星空之上。 */
+.sfv-browse--page .sfv-static-glass {
+  position: relative;
+  width: min(92vw, 1180px);
+  max-width: 1180px;
+  margin: 0 auto;
+  min-height: 460px;
+  display: block;
+  pointer-events: none;          /* 无功能：杜绝误触/选中 */
+  user-select: none;
+}
+
+/* [#11] 影视态「视频详情」面板 — HLS 画质档位列表 */
+.sfv-level-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.sfv-level-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 70px auto;
+  gap: 8px; align-items: center;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .04);
+  font-size: 12px;
+}
+.sfv-level-row .sfv-level-h { color: rgba(255, 255, 255, .92); font-weight: 700; }
+.sfv-level-row .sfv-level-c {
+  color: rgba(255, 255, 255, .55);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sfv-level-row .sfv-level-b { color: rgba(0, 245, 212, .85); text-align: right; }
+.sfv-level-row .sfv-level-mark { color: rgba(0, 245, 212, .95); font-weight: 700; text-align: right; white-space: nowrap; }
+
+
+
+/* ===== 画质增强（SR：WebGL2 实时超分）===== */
+/* 画布承载增强帧，插在 overlay 首位（弹幕/字幕/控制条之上层不受影响）；
+   SR 未启用时 display:none，视频原样直出。 */
+#sfv-overlay .sfv-sr-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: none;
+  background: #000;
+}
+/* SR 输出接管画面时隐藏原生 video（保留解码与音频，不移除节点） */
+#sfv-overlay video.sfv-video.sfv-sr-source-hidden {
+  opacity: 0;
+}
+/* 档位弹出菜单（玻璃拟态，与音乐态 quality-popover 同语言） */
+.sfv-sr-popover {
+  position: fixed;
+  z-index: 2147483200;
+  width: 264px;
+  padding: 8px;
+  border-radius: 14px;
+  /* 材质/玻璃统一对齐「视频详情」面板实际生效的 saved glass 变量系统 */
+  background: var(--saved-panel-glass-bg);
+  border: 0;
+  box-shadow: var(--saved-panel-glass-shadow);
+  backdrop-filter: var(--saved-panel-glass-filter);
+  -webkit-backdrop-filter: var(--saved-panel-glass-filter);
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .18s ease, transform .18s ease;
+  pointer-events: none;
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+}
+/* svg-ok 玻璃模式下与 .track-detail-modal 保持一致（blur(22px) saturate(1.16)） */
+html.control-glass-svg-ok .sfv-sr-popover {
+  backdrop-filter: blur(22px) saturate(1.16);
+  -webkit-backdrop-filter: blur(22px) saturate(1.16);
+}
+.sfv-sr-popover.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.sfv-sr-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(233, 240, 248, .88);
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+  font-family: inherit;
+}
+.sfv-sr-item:hover { background: rgba(122, 168, 222, .14); }
+.sfv-sr-item.active { background: rgba(90, 209, 255, .16); color: #cdeeff; }
+.sfv-sr-item.active .sfv-sr-item-name::after { content: ' ✓'; color: #5ad1ff; }
+.sfv-sr-item:disabled { opacity: .38; cursor: not-allowed; }
+.sfv-sr-item-name { font-size: 13px; font-weight: 600; letter-spacing: .2px; }
+.sfv-sr-item-desc { font-size: 11px; color: rgba(170, 184, 200, .72); }
+.sfv-sr-toggle { flex-direction: row; align-items: center; justify-content: space-between; }
+.sfv-sr-check { font-size: 12px; color: rgba(170, 184, 200, .85); }
+.sfv-sr-stats {
+  margin-top: 2px;
+  padding: 7px 10px 5px;
+  border-top: 1px solid rgba(157, 184, 207, .16);
+  font-size: 11px;
+  color: rgba(150, 165, 182, .8);
+  font-variant-numeric: tabular-nums;
+}
+.sfv-sr-reason {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  color: #ffb45e;
+  border-top: 1px solid rgba(157, 184, 207, .16);
+}
+/* 轻提示 toast */
+.sfv-sr-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%) translateY(8px);
+  z-index: 2147483300;
+  padding: 9px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(157, 184, 207, .24);
+  background: rgba(10, 11, 14, .82);
+  backdrop-filter: blur(24px) saturate(1.25);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, .4);
+  color: rgba(233, 240, 248, .92);
+  font-size: 12.5px;
+  letter-spacing: .3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease, transform .22s ease;
+}
+.sfv-sr-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ============================================================
+ * T141 影视态播放态底部栏补全 + 圆角逃逸兜底
+ * ============================================================ */
+
+/* 影视态播放中，音乐沉浸模式不得隐藏控制条左侧按钮/模式/音量等。
+   以 video-player-active 限定，只影响影视播放态，不破坏音乐沉浸模式。 */
+body.video-player-active .control-cluster.actions,
+body.video-player-active .control-cluster.transport,
+body.video-player-active .control-cluster.modes,
+body.video-player-active .control-track,
+body.video-player-active #heart-btn,
+body.video-player-active #collect-btn,
+body.video-player-active #track-detail-btn,
+body.video-player-active #play-mode-btn,
+body.video-player-active #volume-control,
+body.video-player-active #controls-hide-btn,
+body.video-player-active .fullscreen-toggle-btn {
+  display: flex !important;
+}
+/* #prev-btn/#next-btn/.lyrics-toggle-btn 已在上方 body.video-player-active 规则中隐藏，
+   避免在音乐态控制条中露出无意义的上一首/下一首/歌词按钮。 */
+body.video-player-active .control-cluster.transport { justify-content: center !important; }
+body.video-player-active .control-cluster.modes { justify-content: flex-end !important; }
+
+/* 影视态播放时 #bottom-bar 被 player-controller.js 提升为 body 直接子元素，
+   可能逃逸 #desktop-window-shell 的 clip-path；对其自身再裁一次圆角，
+   防止 backdrop-filter 在透明窗口四角产生白色直角逃逸。 */
+body.desktop-shell.video-player-active #bottom-bar {
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+}
+
+/* ============================================================
+ * T142：桌面外壳最大化/全屏时释放所有影视态满铺层的圆角裁剪。
+ * 窗口本身已填满矩形屏幕，继续 round-22px 会在四角切出透明/桌面背景缺口。
+ * ============================================================ */
+body.desktop-shell.desktop-maximized .sfv-browse,
+body.desktop-shell.desktop-fullscreen .sfv-browse,
+html:fullscreen body.desktop-shell .sfv-browse,
+body.desktop-shell.desktop-maximized .sfv-browse--fullscreen,
+body.desktop-shell.desktop-fullscreen .sfv-browse--fullscreen,
+html:fullscreen body.desktop-shell .sfv-browse--fullscreen,
+body.desktop-shell.desktop-maximized #sfv-overlay,
+body.desktop-shell.desktop-fullscreen #sfv-overlay,
+html:fullscreen body.desktop-shell #sfv-overlay,
+body.desktop-shell.desktop-maximized #sfv-search-page,
+body.desktop-shell.desktop-fullscreen #sfv-search-page,
+html:fullscreen body.desktop-shell #sfv-search-page,
+body.desktop-shell.desktop-maximized #bottom-bar,
+body.desktop-shell.desktop-fullscreen #bottom-bar,
+html:fullscreen body.desktop-shell #bottom-bar,
+body.desktop-shell.desktop-maximized .sfv-plex-bg,
+body.desktop-shell.desktop-fullscreen .sfv-plex-bg,
+html:fullscreen body.desktop-shell .sfv-plex-bg,
+body.desktop-shell.desktop-maximized .sfv-tmdb-settings-overlay,
+body.desktop-shell.desktop-fullscreen .sfv-tmdb-settings-overlay,
+html:fullscreen body.desktop-shell .sfv-tmdb-settings-overlay,
+body.desktop-shell.desktop-maximized .sfv-folder-dialog-mask,
+body.desktop-shell.desktop-fullscreen .sfv-folder-dialog-mask,
+html:fullscreen body.desktop-shell .sfv-folder-dialog-mask,
+body.desktop-shell.desktop-maximized .sfv-pick-dialog-mask,
+body.desktop-shell.desktop-fullscreen .sfv-pick-dialog-mask,
+html:fullscreen body.desktop-shell .sfv-pick-dialog-mask {
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+  border-radius: 0 !important;
+}
+
+/* #bottom-bar 是悬浮控制条而非满铺层，T142 的去圆角对它属于误伤。
+   在全屏/最大化时仍应保持圆角胶囊形态，否则会出现截图中的矩形控制条。 */
+body.desktop-shell.desktop-maximized #bottom-bar,
+body.desktop-shell.desktop-fullscreen #bottom-bar,
+html:fullscreen body.desktop-shell #bottom-bar {
+  clip-path: inset(0 round 34px) !important;
+  -webkit-clip-path: inset(0 round 34px) !important;
+  border-radius: 50px !important;
+}
+
+/* ===== 追片/片单/历史 三页背景：统一首页卡片玻璃容器质感 ===== */
+/* 分类页（追片/历史）玻璃容器底色由 --sfv-cat-bg 控制；默认乳白 #faf8f5。 */
+.sfv-page-bg-layer {
+  /* T143-fix：背景层沉到最底（z-index:-1），避免压平内容层级导致历史下拉被结果区遮挡。
+     父级 #sfv-search-page / .sfv-browse 均为 stacking context（position+高 z-index），
+     负 z-index 子元素被限定在父上下文内、不会逃逸到祖先之后，安全可见。 */
+  position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none;
+  background: var(--sfv-glass-tint, var(--saved-panel-glass-bg));
+  backdrop-filter: var(--saved-panel-glass-filter);
+  -webkit-backdrop-filter: var(--saved-panel-glass-filter);
+  box-shadow: var(--saved-panel-glass-shadow);
+}
+html.control-glass-svg-ok .sfv-page-bg-layer {
+  backdrop-filter: var(--saved-panel-glass-svg-filter);
+  -webkit-backdrop-filter: var(--saved-panel-glass-svg-filter);
+}
+.sfv-page-bg-layer > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* T143-fix：撤掉「强制所有直接子元素 z-index:1」的扁平化规则。
+   背景层已沉到 z-index:-1，内容（搜索栏 z2 / 结果区 auto / 历史下拉 z4 等）自然位于其上方，
+   且各自保留原有层级——恢复历史下拉浮于结果区之上的行为，修复 T143 后搜索栏下拉不可点。 */
+.sfv-browse.sfv-page-bg-diy > *:not(.sfv-page-bg-layer) { position: relative; }
+#sfv-search-page.sfv-page-bg-diy > *:not(.sfv-page-bg-layer) { position: relative; }
+
+.sfv-bg-diy-fab {
+  position: fixed; right: 22px; bottom: 22px; width: 52px; height: 52px;
+  display: none; align-items: center; justify-content: center;
+  border-radius: 50%; cursor: pointer; z-index: 2147483600;
+  background: rgba(18, 20, 28, .72); border: 1px solid rgba(255, 255, 255, .16);
+  color: #fff; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  transition: transform .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.sfv-bg-diy-fab:hover { transform: scale(1.06); background: rgba(28, 30, 40, .85); box-shadow: 0 10px 30px rgba(0, 0, 0, .55); }
+.sfv-bg-diy-fab:active { transform: scale(.96); }
+
+.sfv-bg-diy-mask {
+  position: fixed; inset: 0; z-index: 2147483700; display: none;
+  align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .55); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+}
+.sfv-bg-diy-mask.show { display: flex; }
+.sfv-bg-diy-dialog {
+  width: 440px; max-width: 92vw; max-height: 86vh; overflow-y: auto;
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  border-radius: 18px; color: #fff; box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(34px) saturate(1.34); -webkit-backdrop-filter: blur(34px) saturate(1.34);
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.sfv-bg-diy-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px; border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+.sfv-bg-diy-head span { font-size: 16px; font-weight: 800; }
+.sfv-bg-diy-close { background: transparent; border: none; color: #ccc; font-size: 22px; cursor: pointer; line-height: 1; }
+.sfv-bg-diy-close:hover { color: #fff; }
+.sfv-bg-diy-body { padding: 8px 18px 18px; }
+.sfv-bg-diy-sec { padding: 14px 0; }
+.sfv-bg-diy-sec h4 { margin: 0 0 10px; font-size: 13px; font-weight: 700; color: rgba(255, 255, 255, .9); }
+.sfv-bg-diy-actions { display: flex; gap: 8px; margin-top: 10px; }
+.sfv-bg-diy-btn {
+  height: 32px; padding: 0 14px; border-radius: 9px; border: 1px solid rgba(255, 255, 255, .18);
+  background: rgba(255, 255, 255, .06); color: #fff; cursor: pointer; font-size: 12px;
+}
+.sfv-bg-diy-btn:hover { background: rgba(255, 255, 255, .12); }
+.sfv-bg-diy-file { color: #ddd; font-size: 12px; }
+.sfv-bg-diy-status { margin-top: 8px; font-size: 11px; color: rgba(255, 255, 255, .5); min-height: 14px; }
+.sfv-bg-diy-status.active { color: rgb(var(--fc-accent-rgb, 245, 197, 66)); }
+
+/* 预设背景色色板（仅追片/历史页；片单页隐藏） */
+.sfv-bg-diy-swatches { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.sfv-bg-diy-swatch {
+  width: 38px; height: 38px; padding: 0; border-radius: 10px; cursor: pointer;
+  border: 2px solid rgba(0, 0, 0, .12); box-shadow: 0 2px 6px rgba(0, 0, 0, .18);
+  transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+.sfv-bg-diy-swatch:hover { transform: scale(1.08); }
+.sfv-bg-diy-swatch.on {
+  border-color: rgb(var(--fc-accent-rgb, 245, 197, 66));
+  box-shadow: 0 0 0 2px rgb(var(--fc-accent-rgb, 245, 197, 66)), 0 2px 6px rgba(0, 0, 0, .18);
+}
+
+/* 玻璃底色切换态：保留毛玻璃滤镜与内发光阴影，仅改变玻璃容器底色 */
+.sfv-page-bg-layer.sfv-page-bg--tint {
+  background: var(--sfv-glass-tint, var(--saved-panel-glass-bg));
+  backdrop-filter: var(--saved-panel-glass-filter);
+  -webkit-backdrop-filter: var(--saved-panel-glass-filter);
+  box-shadow: var(--saved-panel-glass-shadow);
+}
+/* T165：搜索页玻璃层去 backdrop-filter —— 修复「多层玻璃重叠 / 画面割裂」。
+   根因：#sfv-search-page 自身带 clip-path: inset(0 round 34px)；
+   直接子元素 .sfv-page-bg-layer 的 backdrop-filter 在 clip-path 祖先下采样异常
+   （player.css L47-48 明确记录此根因：backdrop-filter 在 clip-path 祖先内采样崩，
+   原现象为 #bottom-bar 整片不可见；本次在玻璃背景层上则呈现为 y≈568 处的水平暗带，
+   已用 PIL 像素采样复核：亮度由 237 跌至 216 的水平梯度，与 viewport 上下色相一致）。
+   宿主底色 --sfv-cat-bg 为实色（无图），backdrop-filter 对其无任何可见贡献；
+   按既有 "T137 / T142 实色底无需毛玻璃" 铁律中性化，仅保留 tint 底色与 box-shadow 内发光，
+   以满足"背景一体化"且零视觉回归。 */
+#sfv-search-page > .sfv-page-bg-layer {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ============================================================
+ * 影视态「收藏到片单」弹窗（player-collect.js）
+ * ============================================================ */
+.sfv-collect-modal-mask .modal.sfv-collect-modal {
+  width: min(460px, 92vw);
+  max-width: min(460px, 92vw);
+  padding: 24px;
+  text-align: left;
+}
+.sfv-collect-modal h2 {
+  text-align: center;
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 700;
+}
+.sfv-collect-current {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, .06);
+  border-radius: 12px;
+}
+.sfv-collect-cover {
+  width: 48px;
+  height: 72px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .08) center / cover no-repeat;
+}
+.sfv-collect-meta { min-width: 0; }
+.sfv-collect-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sfv-collect-sub {
+  font-size: 12px;
+  opacity: .7;
+  margin-top: 4px;
+}
+.sfv-collect-new {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.sfv-collect-new-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  background: rgba(0, 0, 0, .26);
+  color: #fff;
+  font-size: 14px;
+}
+.sfv-collect-new-input:focus {
+  outline: none;
+  border-color: rgba(0, 245, 212, .65);
+}
+.sfv-collect-create-btn { white-space: nowrap; }
+.sfv-collect-list {
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+.sfv-collect-empty {
+  padding: 24px;
+  text-align: center;
+  opacity: .6;
+  font-size: 14px;
+}
+.sfv-collect-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.sfv-collect-item:hover { background: rgba(255, 255, 255, .08); }
+.sfv-collect-checkbox {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: rgb(0, 245, 212);
+  cursor: pointer;
+}
+.sfv-collect-item-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sfv-collect-item-count {
+  font-size: 12px;
+  opacity: .6;
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .sfv-collect-modal-mask .modal.sfv-collect-modal {
+    width: 94vw;
+    padding: 18px;
+  }
+  .sfv-collect-list { max-height: 42vh; }
+  .sfv-collect-new { flex-direction: column; }
+  .sfv-collect-create-btn { width: 100%; }
+}
+
+@media (max-width: 380px) {
+  .sfv-collect-modal h2 { font-size: 16px; }
+  .sfv-collect-cover { width: 40px; height: 60px; }
+}
+

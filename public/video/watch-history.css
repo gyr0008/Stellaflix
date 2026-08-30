@@ -1,0 +1,271 @@
+/* ============================================================================
+ * Stellaflix 影视模块 — 观看历史页样式 (watch-history.css)
+ *
+ * 设计契约：
+ *   - 浅色影视语境（对齐片单页 .sfv-browse--fullscreen 的乳白实底），卡片沿用片单页
+ *     .sfv-plex-card 的浅色玻璃语言（圆角 14px / 黑 8% 边框 / 0 6px 18px rgba(0,0,0,.12)
+ *     阴影 / hover 轻微放大）。
+ *   - 控件强调色 slate（#64748b / #475569），与品牌金(#f4d28a)互斥，符合影视模块铁律。
+ *   - 文字采用深色（#1a1a1a / 次级半透明黑），与片单页浅色基调一致。
+ *   - 滚动容器为 .sfv-browse-body（overflow-y:auto）；本页无顶部标题条，仅保留竖向日期分组。
+ *     日期分组标题为普通块级（非 sticky），不自带半透明乳白遮罩，以透明浮层形式叠在一体化
+ *     背景（sfv-history-page 乳白实底 + page-bg-diy 层）之上，对齐片单页的浅色一体化视觉。
+ *   - 单文件、零业务逻辑（DOM/class 由 watch-history.js 生成）。
+ * ==========================================================================*/
+
+/* ---------- 页面根 ---------- */
+.sfv-wh-page {
+  --wh-slate: #64748b;       /* slate-500：进度条 / 控件描边 */
+  --wh-slate-deep: #475569;  /* slate-700：选中态底色 */
+  --wh-slate-soft: rgba(100, 116, 139, .26);
+  --wh-slate-soft-2: rgba(148, 163, 184, .55);
+  --wh-text: rgba(26, 26, 26, .92);
+  --wh-text-dim: rgba(28, 28, 34, .62);
+  --wh-text-faint: rgba(28, 28, 34, .45);
+  /* T151 修复：.sfv-browse--page 覆盖层因 3D 页需要 pointer-events:none；历史页是 DOM 页，
+     必须恢复 auto，否则卡片/箭头/移除等全部无法点击。T153：历史页经 sfv-history-page
+     类获得乳白实底（对齐片单页），不再透出星空。 */
+  pointer-events: auto;
+  min-height: 100%;
+}
+
+/* ---------- 分组容器 ---------- */
+.sfv-wh-groups {
+  padding: 6px 0 48px;
+}
+.sfv-wh-day {
+  margin: 0 0 28px;
+}
+.sfv-wh-day__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  /* 视觉对齐片单页 .sfv-collection-section__head：透明浮层，不自带乳白面板 */
+  /* T166：与下方 rail 网格同宽居中（max-width:1876px），标题与卡片左缘对齐 */
+  max-width: 1876px;
+  margin: 0 auto;
+  padding: 4px 0 6px;
+}
+.sfv-wh-day__label {
+  /* 对齐片单页 .sfv-collection-section__title（18px/800/#1a1a1a） */
+  font-size: 18px;
+  font-weight: 800;
+  color: #1a1a1a;
+  letter-spacing: .3px;
+}
+.sfv-wh-day__count {
+  font-size: 12px;
+  color: var(--wh-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 同日卡片网格（T166：追片页排列逻辑复制到历史页）----------
+   原实现为「横向滚动 rail」（overflow-x:auto + 左右箭头），现改为与追片页
+   .sfv-track-grid 同构的自动换行网格：
+   - 卡片固定 360×202.5px，相邻间距 19px（原 18px）；
+   - 容器 max-width 1876px（5×360+4×19）+ margin auto → 满行 5 张时两侧
+     自适应间距均分；放不下第 6 张时自动换行、新行从左侧第一个位置开始；
+   - 无横向滚动 → 左右箭头整体隐藏（JS updateArrows 的 is-hidden 兜底同样生效，
+     scrollWidth===clientWidth 时两箭头均隐藏）。 */
+.sfv-wh-rail-wrap {
+  position: relative;
+  padding: 6px 0 4px;
+}
+.sfv-wh-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 19px;
+  overflow-x: visible;
+  max-width: 1876px;
+  margin: 0 auto;
+  padding: 8px 0 12px;
+}
+.sfv-wh-rail::-webkit-scrollbar { display: none; }
+
+.sfv-wh-rail__arrow {
+  position: absolute;
+  top: 8px;
+  bottom: 12px;
+  width: 46px;
+  z-index: 6;
+  display: none;              /* T166：网格无横向滚动，箭头无意义 */
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  color: #1a1a1a;
+  opacity: 0;
+  transition: opacity .2s ease;
+  background: transparent;
+}
+.sfv-wh-rail-wrap:hover .sfv-wh-rail__arrow { opacity: 1; }
+.sfv-wh-rail__arrow--left { left: 0; background: linear-gradient(to right, rgba(250, 248, 245, .95), rgba(250, 248, 245, 0)); }
+.sfv-wh-rail__arrow--right { right: 0; background: linear-gradient(to left, rgba(250, 248, 245, .95), rgba(250, 248, 245, 0)); }
+.sfv-wh-rail__arrow.is-hidden { opacity: 0 !important; pointer-events: none; }
+.sfv-wh-rail__arrow svg { display: block; filter: drop-shadow(0 1px 3px rgba(255, 255, 255, .6)); }
+
+/* ---------- 单条记录卡片（海报式 360×202.5px，与追片页卡片同尺寸） ---------- */
+.sfv-wh-card {
+  flex: 0 0 auto;
+  width: 360px;
+  height: 202.5px;   /* T166：显式固定高度（thumb aspect-ratio 16/9 本已 202.5，显式化防歧义） */
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+  /* 信息区移入海报内部后，卡片本体即海报；背景与占位色一致避免闪白边 */
+  background: #1a1f28;
+  border: 1px solid rgba(0, 0, 0, .08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .12);
+  transition: transform .25s ease, border-color .2s ease, box-shadow .25s ease;
+  cursor: pointer;
+}
+.sfv-wh-card:hover {
+  transform: none;   /* T166：禁用 scale 放大（追片页同款），防止侵入 19px 间距导致圆角被相邻卡片裁切 */
+  border-color: rgba(0, 0, 0, .16);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .2);
+}
+
+.sfv-wh-card__thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #1a1f28;
+  overflow: hidden;
+  /* 信息浮层使用 absolute 定位，以 thumb 为包含块 */
+}
+.sfv-wh-card__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* 极细进度条（3px，slate），仅未看完显示 */
+.sfv-wh-card__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, .12);
+}
+.sfv-wh-card__progress-fill {
+  height: 100%;
+  background: var(--wh-slate);
+  box-shadow: 0 0 6px rgba(100, 116, 139, .55);
+}
+/* hover 浮现移除按钮（半透明黑底），默认隐藏；z-index 须高于底部信息浮层。
+   注意：不使用 backdrop-filter:blur，否则 12px 白字会被毛玻璃模糊，出现截图中
+   "移除" 二字发虚的问题。纯半透明黑底已足够可读。 */
+.sfv-wh-card__remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  border: 0;
+  border-radius: 8px;
+  padding: 5px 11px;
+  /* 去掉 blur 后略加深底色，保持对比度 */
+  background: rgba(0, 0, 0, .62);
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity .2s ease, transform .2s ease, background .18s ease;
+}
+.sfv-wh-card:hover .sfv-wh-card__remove { opacity: 1; transform: translateY(0); }
+.sfv-wh-card__remove:hover { background: rgba(200, 40, 40, .82); }
+
+/* 文字信息区：默认隐藏，hover 卡片时从海报内部底部滑入，对齐片单页 .sfv-plex-card__cap */
+.sfv-wh-card__info {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  padding: 28px 12px 12px;
+  /* 底部渐变 scrim 保证文字可读，pointer-events:none 避免阻挡卡片点击 */
+  background: linear-gradient(to top, rgba(0, 0, 0, .82) 0%, rgba(0, 0, 0, .48) 55%, rgba(0, 0, 0, 0) 100%);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .25s ease, transform .25s ease;
+}
+.sfv-wh-card:hover .sfv-wh-card__info {
+  opacity: 1;
+  transform: translateY(0);
+}
+.sfv-wh-card__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sfv-wh-card__sub {
+  font-size: 12px;
+  color: rgba(255, 255, 255, .82);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 3px;
+}
+.sfv-wh-card__status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .86);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7);
+  font-variant-numeric: tabular-nums;
+}
+.sfv-wh-card__status--done { color: #9be7b4; }
+.sfv-wh-card__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 7px rgba(34, 197, 94, .65);
+  flex: 0 0 auto;
+}
+.sfv-wh-card__status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- 空状态 ---------- */
+.sfv-wh-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 60vh;
+  padding: 40px 24px;
+  text-align: center;
+}
+.sfv-wh-empty__icon {
+  font-size: 52px;
+  line-height: 1;
+  filter: drop-shadow(0 6px 16px rgba(0, 0, 0, .3));
+  opacity: .9;
+}
+.sfv-wh-empty__title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a1a1a;
+  letter-spacing: .4px;
+}
+.sfv-wh-empty__sub {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--wh-text-dim);
+  max-width: 420px;
+}
+

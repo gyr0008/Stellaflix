@@ -1,0 +1,174 @@
+{
+  "name": "stellaflix",
+  "productName": "Stellaflix",
+  "version": "2.1.0",
+  "description": "Windows 沉浸式音乐播放器，融合桌面模式、歌词舞台、粒子视觉和 3D 歌单架。",
+  "author": "Stellaflix",
+  "license": "GPL-3.0-only",
+  "main": "desktop/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win nsis",
+    "build:win:dir": "electron-builder --win dir",
+    "build:win:internal-beta": "electron-builder --config electron-builder.internal-beta.json --win nsis --publish never"
+  },
+  "build": {
+    "appId": "com.stellaflix.desktop",
+    "productName": "Stellaflix",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "afterPack": "build/after-pack.js",
+    "toolsets": {
+      "winCodeSign": "1.1.0"
+    },
+    "files": [
+      "desktop/**/*",
+      "public/**/*",
+      "build/**/*",
+      "cuefield/**/*",
+      "server.js",
+      "*-api.js",
+      "qishui-auth-v6.js",
+      "qishui-qr-login.js",
+      "qishui-auth-v6/**/*",
+      "qishui-audio-decryptor/**/*",
+      "dj-analyzer.js",
+      "LICENSE",
+      "NOTICE.md",
+      "docs/THIRD_PARTY_PORTS.md",
+      "package.json",
+      "!desktop/wallpaper-preload.js",
+      "!public/wallpaper.html",
+      "!public/index.*.html",
+      "public/index.html"
+    ],
+    "asar": false,
+    "win": {
+      "executableName": "Stellaflix",
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Stellaflix",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "include": "build/installer.nsh",
+      "artifactName": "Stellaflix-${version}-Setup.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "gyr0008",
+        "repo": "Stellaflix"
+      }
+    ]
+  },
+  "stellaflix": {
+    "update": {
+      "provider": "github",
+      "owner": "gyr0008",
+      "repo": "Stellaflix",
+      "preview": false,
+      "preferMirrors": true,
+      "mirrors": [
+        "https://gh.llkk.cc/",
+        "https://ghfast.top/",
+        "https://gh-proxy.com/"
+      ]
+    }
+  },
+  "dependencies": {
+    "gsap": "^3.15.0",
+    "mpg123-decoder": "^1.0.3",
+    "music-metadata": "11.14.0",
+    "NeteaseCloudMusicApi": "^4.32.0",
+    "qrcode": "^1.5.4"
+  },
+  "stellaflixVideo": {
+    "mpv": {
+      "dllName": "mpv-1.dll",
+      "dllPath": "_up_/ffmpeg/mpv-1.dll",
+      "ffmpegPath": "_up_/ffmpeg/ffmpeg.exe",
+      "ffprobePath": "_up_/ffmpeg/ffprobe.exe",
+      "enableLogging": true,
+      "logLevel": "info"
+    },
+    "decoder": {
+      "preferredEngine": "mpv",
+      "fallbackEngine": "ffmpeg",
+      "maxDecodeWidth": 3840,
+      "maxDecodeHeight": 2160,
+      "enableHwDecoding": true,
+      "hwDecodingBackend": "auto"
+    },
+    "qbt": {
+      "enabled": true,
+      "exePath": "_up_/resources/qbittorrent/qbittorrent.exe",
+      "port": 8080,
+      "username": "admin",
+      "password": "adminadmin",
+      "defaultSavePath": "__appData__/Artist",
+      "maxActiveDownloads": 3,
+      "applyRateLimit": false,
+      "globalRateLimit": 0
+    },
+    "mediaLibrary": {
+      "rootDir": "__appData__/StellaMedia",
+      "cacheDir": "__appData__/StellaMedia/cache",
+      "supportedFormats": [
+        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m3u8", "mpd"
+      ],
+      "maxCacheSize": 10737418240,
+      "autoCleanCache": true
+    },
+    "network": {
+      "userAgent": "Stellaflix/2.1.0 Video",
+      "timeout": 30000,
+      "maxRetries": 3,
+      "enableProxy": false,
+      "proxyUrl": ""
+    },
+    "display": {
+      "defaultAspectRatio": "16:9",
+      "enableSubtitle": true,
+      "defaultSubtitleLang": "chi",
+      "defaultAudioLang": "chi",
+      "enableVisualizer": false
+    },
+    "protocols": {
+      "emby": { "enabled": true },
+      "jellyfin": { "enabled": true },
+      "alist": { "enabled": true },
+      "webdav": { "enabled": true }
+    }
+  },
+  "overrides": {
+    "axios": "1.18.1",
+    "body-parser": "1.20.6",
+    "music-metadata": "11.14.0"
+  },
+  "devDependencies": {
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
+    "rcedit": "^5.0.2"
+  }
+}

@@ -1,0 +1,200 @@
+/* Stellaflix — Bangumi 周表 Widget 样式 (Wave 1)
+   玻璃质感对齐 player.css；z-index < 2147482099（顶栏 #sfv-nav 为 2147482100）。 */
+
+.sfv-bgm {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 4px 2px 0;
+}
+
+/* 工具条 */
+.sfv-bgm-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px 12px;
+}
+.sfv-bgm-sorts, .sfv-bgm-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.sfv-bgm-chip {
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: rgba(255, 255, 255, .06);
+  color: rgba(255, 255, 255, .82);
+  border-radius: 14px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.sfv-bgm-chip:hover { background: rgba(255, 255, 255, .12); }
+.sfv-bgm-chip.active {
+  background: rgba(0, 245, 212, .16);
+  border-color: rgba(0, 245, 212, .55);
+  color: #d6fff8;
+}
+.sfv-bgm-refresh { margin-left: auto; }
+
+/* 7 列网格 */
+.sfv-bgm-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 10px;
+  padding: 0 10px 14px;
+  overflow: auto;
+}
+.sfv-bgm-day {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: rgba(255, 255, 255, .035);
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 14px;
+  padding: 8px 6px;
+}
+.sfv-bgm-day.is-today {
+  border-color: rgba(0, 245, 212, .4);
+  background: rgba(0, 245, 212, .05);
+}
+.sfv-bgm-day-head {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, .9);
+  padding: 4px 0 8px;
+  letter-spacing: 1px;
+}
+.sfv-bgm-day.is-today .sfv-bgm-day-head { color: #7df5e6; }
+.sfv-bgm-day-empty { text-align: center; color: rgba(255, 255, 255, .3); padding: 16px 0; }
+.sfv-bgm-day-list { display: flex; flex-direction: column; gap: 8px; }
+
+/* 卡片 */
+.sfv-bgm-card {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid rgba(255, 255, 255, .07);
+  cursor: pointer;
+  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
+}
+.sfv-bgm-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(0, 245, 212, .4);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+}
+.sfv-bgm-poster {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  display: block;
+  background: rgba(255, 255, 255, .06);
+}
+.sfv-bgm-info { padding: 6px 7px 8px; }
+.sfv-bgm-title {
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, .92);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sfv-bgm-meta { margin-top: 3px; }
+.sfv-bgm-rate { font-size: 11px; color: #ffd479; }
+
+/* 追番角标 */
+.sfv-bgm-badge {
+  position: absolute;
+  top: 6px; left: 6px;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, .5);
+  color: rgba(255, 255, 255, .8);
+  border: 1px solid rgba(255, 255, 255, .16);
+  backdrop-filter: blur(4px);
+}
+.sfv-bgm-badge.on { color: #fff; }
+.sfv-bgm-badge svg { width: 12px; height: 12px; vertical-align: -2px; margin-right: 3px; }
+.sfv-bgm-badge.st-watching { background: rgba(33, 150, 243, .82); }
+.sfv-bgm-badge.st-planToWatch { background: rgba(255, 179, 71, .85); color: #2a1c00; }
+.sfv-bgm-badge.st-onHold { background: rgba(140, 140, 140, .82); }
+.sfv-bgm-badge.st-watched { background: rgba(76, 217, 130, .85); color: #06210f; }
+.sfv-bgm-badge.st-abandoned { background: rgba(244, 67, 89, .85); }
+
+/* 弹层 */
+.sfv-bgm-pop {
+  z-index: 2147482000;
+  width: 260px;
+  background: rgba(22, 26, 34, .96);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .5);
+  backdrop-filter: blur(18px) saturate(150%);
+  padding: 12px;
+  color: rgba(255, 255, 255, .92);
+}
+.sfv-bgm-pop-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  line-height: 1.4;
+  max-height: 2.8em;
+  overflow: hidden;
+}
+.sfv-bgm-pop-track { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.sfv-bgm-pop-state {
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: rgba(255, 255, 255, .06);
+  color: rgba(255, 255, 255, .85);
+  border-radius: 12px;
+  padding: 5px 11px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sfv-bgm-pop-state:hover { background: rgba(255, 255, 255, .14); }
+.sfv-bgm-pop-state svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.sfv-bgm-pop-state .lbl { flex: 1 1 auto; text-align: left; }
+.sfv-bgm-pop-state.active { background: rgba(0, 245, 212, .18); border-color: rgba(0, 245, 212, .5); color: #d6fff8; }
+.sfv-bgm-pop-state.st-watching.active { background: rgba(33, 150, 243, .8); border-color: rgba(33,150,243,.9); }
+.sfv-bgm-pop-state.st-planToWatch.active { background: rgba(255, 179, 71, .9); color: #2a1c00; }
+.sfv-bgm-pop-state.st-watched.active { background: rgba(76, 217, 130, .85); color: #06210f; }
+.sfv-bgm-pop-state.st-abandoned.active { background: rgba(244, 67, 89, .85); }
+.sfv-bgm-pop-add {
+  width: 100%;
+  border: 1px dashed rgba(0, 245, 212, .5);
+  background: rgba(0, 245, 212, .08);
+  color: #c8fff6;
+  border-radius: 10px;
+  padding: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.sfv-bgm-pop-add:hover { background: rgba(0, 245, 212, .16); }
+.sfv-bgm-pop-hint { font-size: 12px; color: rgba(255, 255, 255, .6); margin-bottom: 8px; }
+.sfv-bgm-pop-folder {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(255, 255, 255, .05);
+  color: rgba(255, 255, 255, .9);
+  border-radius: 9px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.sfv-bgm-pop-folder:hover { background: rgba(255, 255, 255, .12); }
+.sfv-bgm-pop-create { border-style: dashed; color: #c8fff6; }
+
+@media (max-width: 1100px) {
+  .sfv-bgm-grid { grid-template-columns: repeat(4, 1fr); }
+}
+@media (max-width: 720px) {
+  .sfv-bgm-grid { grid-template-columns: repeat(2, 1fr); }
+}
