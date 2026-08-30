@@ -52,7 +52,117 @@ function currentUpdatePageUrl(preferredIndex) {
   return '';
 }
 
+// ============================================================
+// electron-updater 自动下载 / 静默安装。
+// 开发环境、未配置仓库、网络失败时一律降级到外部下载页（网盘 / GitHub）。
+// ============================================================
+function initAutoUpdateBridge() {
+  var bridge = window.desktopWindow;
+  var au = updatePreviewState.autoUpdate;
+  au.supported = !!(
+    bridge
+    && typeof bridge.updateCheck === 'function'
+    && typeof bridge.updateDownload === 'function'
+    && typeof bridge.updateInstall === 'function'
+    && typeof bridge.onUpdateEvent === 'function'
+  );
+  if (!au.supported) {
+    au.phase = 'unsupported';
+    return;
+  }
+  bridge.onUpdateEvent(function (payload) {
+    handleAutoUpdateEvent(payload || {});
+  });
+}
+
+function handleAutoUpdateEvent(payload) {
+  var au = updatePreviewState.autoUpdate;
+  var type = payload.type || '';
+  // 进度事件高频触发，只更新进度条，避免重建整个面板 DOM。
+  if (type === 'progress') {
+    au.phase = 'downloading';
+    au.percent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+    au.transferred = Number(payload.transferred) || 0;
+    au.total = Number(payload.total) || 0;
+    updateUpdatePreviewProgress(au.percent);
+    syncUpdatePreviewStateClass();
+    return;
+  }
+  if (type === 'checking') au.phase = 'checking';
+  else if (type === 'available') {
+    au.phase = 'available';
+    au.usable = true;
+    au.feedLabel = payload.feedLabel || '';
+  } else if (type === 'not-available') au.phase = 'idle';
+  else if (type === 'downloaded') {
+    au.phase = 'downloaded';
+    au.percent = 100;
+    updateUpdatePreviewProgress(100);
+  } else if (type === 'error') {
+    au.phase = 'error';
+    au.usable = false;
+    au.errorReason = payload.message || 'AUTO_UPDATE_FAILED';
+  }
+  syncUpdatePreviewStateClass();
+}
+
+async function requestAutoUpdateDownload() {
+  var bridge = window.desktopWindow;
+  var au = updatePreviewState.autoUpdate;
+  try {
+    au.phase = 'checking';
+    syncUpdatePreviewStateClass();
+    var checked = await bridge.updateCheck();
+    if (!checked || checked.ok !== true) {
+      au.phase = 'error';
+      au.usable = false;
+      au.errorReason = (checked && checked.error) || 'UPDATE_CHECK_FAILED';
+      return false;
+    }
+    au.usable = true;
+    var started = await bridge.updateDownload();
+    if (!started || started.ok !== true) {
+      au.phase = 'error';
+      au.errorReason = (started && started.error) || 'UPDATE_DOWNLOAD_FAILED';
+      return false;
+    }
+    au.phase = 'downloading';
+    return true;
+  } catch (e) {
+    au.phase = 'error';
+    au.errorReason = (e && e.message) || 'AUTO_UPDATE_FAILED';
+    return false;
+  } finally {
+    syncUpdatePreviewStateClass();
+  }
+}
+
+async function installAutoUpdate() {
+  var bridge = window.desktopWindow;
+  var au = updatePreviewState.autoUpdate;
+  au.phase = 'installing';
+  syncUpdatePreviewStateClass();
+  try {
+    var result = await bridge.updateInstall();
+    if (!result || result.ok !== true) {
+      au.phase = 'error';
+      au.errorReason = (result && result.error) || 'UPDATE_INSTALL_FAILED';
+      syncUpdatePreviewStateClass();
+      showToast('无法启动安装，请改用网盘下载');
+      return false;
+    }
+    return true;
+  } catch (e) {
+    au.phase = 'error';
+    au.errorReason = (e && e.message) || 'UPDATE_INSTALL_FAILED';
+    syncUpdatePreviewStateClass();
+    showToast('无法启动安装，请改用网盘下载');
+    return false;
+  }
+}
+
 function initUpdatePreview() {
+  initAutoUpdateBridge();
   renderUpdatePreviewPanel();
   setUpdatePreviewVisible(false);
   checkLatestUpdate();
@@ -212,9 +322,10 @@ function syncUpdatePreviewStateClass() {
   var downloadPages = currentUpdateDownloadPages();
   var selectedPage = downloadPages[Number(updatePreviewState.selectedDownloadPageIndex || 0)] || downloadPages[0] || null;
   var updateUrl = currentUpdatePageUrl();
+  var au = updatePreviewState.autoUpdate;
   if (entry) {
-    entry.classList.toggle('downloading', isOpening);
-    entry.classList.toggle('ready', isOpened);
+    entry.classList.toggle('downloading', isOpening || au.phase === 'downloading');
+    entry.classList.toggle('ready', isOpened || au.phase === 'downloaded');
   }
   if (modal) {
     modal.classList.toggle('ready', isOpened);
@@ -222,7 +333,11 @@ function syncUpdatePreviewStateClass() {
   }
   var label = document.getElementById('update-btn-label');
   if (label) {
-    if (isOpening) label.textContent = '正在打开下载页';
+    if (au.phase === 'checking') label.textContent = '正在检查更新';
+    else if (au.phase === 'downloading') label.textContent = '正在下载 ' + Math.round(au.percent) + '%';
+    else if (au.phase === 'downloaded') label.textContent = '立即安装并重启';
+    else if (au.phase === 'installing') label.textContent = '正在启动安装';
+    else if (isOpening) label.textContent = '正在打开下载页';
     else if (isOpened) label.textContent = '下载页已打开';
     else if (isError) label.textContent = '重试打开';
     else if (!updatePreviewState.updateAvailable) label.textContent = '当前已是最新';
@@ -232,7 +347,10 @@ function syncUpdatePreviewStateClass() {
   }
   var btn = document.getElementById('update-primary-btn');
   if (btn) {
-    btn.disabled = isOpening || !updatePreviewState.updateAvailable || !updateUrl;
+    var autoBusy = au.phase === 'checking' || au.phase === 'downloading' || au.phase === 'installing';
+    if (au.phase === 'downloaded') btn.disabled = false;
+    else if (autoBusy || isOpening) btn.disabled = true;
+    else btn.disabled = !updatePreviewState.updateAvailable || !updateUrl;
   }
   var sourceButtons = document.querySelectorAll('#update-download-sources .update-download-source');
   Array.prototype.forEach.call(sourceButtons, function (sourceButton) {
@@ -242,7 +360,12 @@ function syncUpdatePreviewStateClass() {
   });
   var foot = document.getElementById('update-footnote');
   if (foot) {
-    if (isOpening) foot.textContent = '正在调用系统浏览器。';
+    if (au.phase === 'checking') foot.textContent = '正在检查更新…';
+    else if (au.phase === 'downloading') foot.textContent = '正在后台下载安装包，完成后可一键安装。';
+    else if (au.phase === 'downloaded') foot.textContent = '安装包已就绪，点击安装后应用将自动重启完成更新。';
+    else if (au.phase === 'installing') foot.textContent = '正在启动安装程序，应用即将重启…';
+    else if (au.phase === 'error') foot.textContent = '自动更新不可用（' + (au.errorReason || '未知原因') + '），已改为打开下载页。';
+    else if (isOpening) foot.textContent = '正在调用系统浏览器。';
     else if (isError) foot.textContent = '无法打开下载页：' + (updatePreviewState.errorReason || '请稍后重试');
     else if (!updatePreviewState.updateAvailable) foot.textContent = '当前版本已是最新。';
     else if (downloadPages.length > 1) foot.textContent = '可选择任一网盘线路；软件不会在本地下载或应用补丁。';
@@ -251,12 +374,14 @@ function syncUpdatePreviewStateClass() {
   }
 }
 
-function updateUpdatePreviewProgress() {
-  updatePreviewState.progress = 0;
+function updateUpdatePreviewProgress(percent) {
+  var pct = Math.max(0, Math.min(100, Number(percent) || 0));
+  updatePreviewState.progress = pct;
   var fill = document.getElementById('update-btn-fill');
-  if (fill) fill.style.width = '0%';
+  if (fill) fill.style.width = pct + '%';
   var ring = document.getElementById('update-progress-ring');
-  if (ring) ring.style.strokeDashoffset = '55.29';
+  // 55.29 = 2πr（r=8.8），进度环按百分比反向收拢
+  if (ring) ring.style.strokeDashoffset = String(55.29 - (55.29 * pct) / 100);
 }
 
 function openUpdatePanel() {
@@ -325,6 +450,20 @@ async function startUpdatePreviewDownload(preferredIndex) {
   if (!updatePreviewState.updateAvailable) {
     showToast('当前版本已是最新');
     return;
+  }
+  var au = updatePreviewState.autoUpdate;
+  // 用户明确点了某条网盘线路时，尊重其选择，直接走外链。
+  var explicitPage = Number.isInteger(preferredIndex);
+  if (!explicitPage) {
+    if (au.phase === 'downloaded') {
+      installAutoUpdate();
+      return;
+    }
+    // 自动更新可用且此前未失败 → 交给 electron-updater；失败则落到下面的外链降级。
+    if (au.supported && au.phase !== 'error') {
+      var started = await requestAutoUpdateDownload();
+      if (started) return;
+    }
   }
   if (Number.isInteger(preferredIndex)) {
     updatePreviewState.selectedDownloadPageIndex = preferredIndex;

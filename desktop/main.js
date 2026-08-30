@@ -28,6 +28,7 @@ const {
   exchangeSpotifyOAuthCode,
   clearSpotifyToken,
 } = require('../spotify-api');
+const { autoUpdater } = require('electron-updater');
 
 registerWallpaperEngineScheme(protocol);
 registerLocalMusicScheme(protocol);
@@ -4589,6 +4590,147 @@ ipcMain.handle('stellaflix-open-update-page', async (event, value) => {
   }
 });
 
+// ============================================================
+// electron-updater 集成：自动下载 + 静默安装。
+// 失败（未打包 / 网络 / 未配置 / 校验失败）时前端降级到网盘或 GitHub 外部下载页。
+// feed 策略：GitHub 直连优先，error 时依次回退 package.json 里配置的国内镜像。
+// ============================================================
+const UPDATE_OWNER = (APP_METADATA.update && APP_METADATA.update.owner) || '';
+const UPDATE_REPO = (APP_METADATA.update && APP_METADATA.update.repo) || '';
+const UPDATE_MIRRORS = (APP_METADATA.update && Array.isArray(APP_METADATA.update.mirrors))
+  ? APP_METADATA.update.mirrors
+  : [];
+
+let updaterFeeds = [];
+let updaterFeedIndex = 0;
+let updaterState = 'idle';
+
+function buildUpdaterFeeds() {
+  const feeds = [];
+  if (!UPDATE_OWNER || !UPDATE_REPO) return feeds;
+  feeds.push({
+    label: 'GitHub 直连',
+    options: { provider: 'github', owner: UPDATE_OWNER, repo: UPDATE_REPO },
+  });
+  const base = 'https://github.com/' + UPDATE_OWNER + '/' + UPDATE_REPO + '/releases/latest/download';
+  UPDATE_MIRRORS.forEach((mirror, index) => {
+    const trimmed = String(mirror || '').trim().replace(/\/+$/, '');
+    if (!trimmed) return;
+    feeds.push({
+      label: '国内加速 ' + (index + 1),
+      options: { provider: 'generic', url: trimmed + '/' + base },
+    });
+  });
+  return feeds;
+}
+
+function postUpdateEvent(payload) {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
+    mainWindow.webContents.send('stellaflix-update-event', payload || {});
+  } catch (_) { /* 渲染进程不可用时静默丢弃 */ }
+}
+
+function initAutoUpdater() {
+  updaterFeeds = buildUpdaterFeeds();
+  if (!app.isPackaged) {
+    console.log('[AutoUpdate] 开发环境跳过 electron-updater，降级到外部下载页');
+    return;
+  }
+  if (!updaterFeeds.length) {
+    console.warn('[AutoUpdate] 未配置更新仓库，降级到外部下载页');
+    return;
+  }
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowDowngrade = false;
+  autoUpdater.logger = {
+    info: message => console.log('[AutoUpdate]', message),
+    warn: message => console.warn('[AutoUpdate]', message),
+    error: message => console.error('[AutoUpdate]', message),
+  };
+  autoUpdater.on('checking-for-update', () => postUpdateEvent({ type: 'checking' }));
+  autoUpdater.on('update-available', info => {
+    updaterState = 'available';
+    postUpdateEvent({
+      type: 'available',
+      version: (info && info.version) || '',
+      feedLabel: (updaterFeeds[updaterFeedIndex] && updaterFeeds[updaterFeedIndex].label) || '',
+    });
+  });
+  autoUpdater.on('update-not-available', info => {
+    updaterState = 'not-available';
+    postUpdateEvent({ type: 'not-available', version: (info && info.version) || '' });
+  });
+  autoUpdater.on('download-progress', progress => {
+    updaterState = 'downloading';
+    postUpdateEvent({
+      type: 'progress',
+      percent: (progress && progress.percent) || 0,
+      transferred: (progress && progress.transferred) || 0,
+      total: (progress && progress.total) || 0,
+    });
+  });
+  autoUpdater.on('update-downloaded', info => {
+    updaterState = 'downloaded';
+    postUpdateEvent({ type: 'downloaded', version: (info && info.version) || '' });
+  });
+  autoUpdater.on('error', error => {
+    const message = String((error && error.message) || error || '');
+    if (updaterFeedIndex < updaterFeeds.length - 1) {
+      updaterFeedIndex += 1;
+      console.warn('[AutoUpdate] 切换线路 →', updaterFeeds[updaterFeedIndex].label, message);
+      try {
+        autoUpdater.setFeedURL(updaterFeeds[updaterFeedIndex].options);
+        autoUpdater.checkForUpdates();
+        return;
+      } catch (_) { /* 落到下面统一报错 */ }
+    }
+    updaterState = 'error';
+    postUpdateEvent({ type: 'error', message, fallback: true });
+  });
+}
+
+ipcMain.handle('stellaflix-update-check', async event => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  if (!app.isPackaged) return { ok: false, error: 'UPDATE_DISABLED_IN_DEV', fallback: true };
+  if (!updaterFeeds.length) return { ok: false, error: 'UPDATE_NOT_CONFIGURED', fallback: true };
+  updaterFeedIndex = 0;
+  try {
+    autoUpdater.setFeedURL(updaterFeeds[0].options);
+    const result = await autoUpdater.checkForUpdates();
+    return { ok: true, version: (result && result.updateInfo && result.updateInfo.version) || '' };
+  } catch (error) {
+    return { ok: false, error: (error && error.message) || 'UPDATE_CHECK_FAILED', fallback: true };
+  }
+});
+
+ipcMain.handle('stellaflix-update-download', async event => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  if (!app.isPackaged) return { ok: false, error: 'UPDATE_DISABLED_IN_DEV', fallback: true };
+  // 不前置校验 updaterState：electron-updater 会在 checkForUpdates() resolve 之前派发
+  // update-available，此处再判状态会与事件时序形成竞态。直接下载，交由它自己报错。
+  try {
+    await autoUpdater.downloadUpdate();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: (error && error.message) || 'UPDATE_DOWNLOAD_FAILED', fallback: true };
+  }
+});
+
+ipcMain.handle('stellaflix-update-install', async event => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  if (!app.isPackaged) return { ok: false, error: 'UPDATE_DISABLED_IN_DEV' };
+  if (updaterState !== 'downloaded') return { ok: false, error: 'UPDATE_NOT_DOWNLOADED' };
+  // isSilent=true 静默安装；isForceRunAfter=true 装完自动启动新版。
+  // 必须延后到本轮 IPC 应答之后，否则渲染进程收不到返回结果。
+  setImmediate(() => {
+    try { autoUpdater.quitAndInstall(true, true); }
+    catch (error) { console.error('[AutoUpdate] quitAndInstall 失败:', error && error.message || error); }
+  });
+  return { ok: true };
+});
+
 ipcMain.handle('stellaflix-restart-app', async () => {
   try {
     app.relaunch();
@@ -5749,6 +5891,7 @@ if (!gotSingleInstanceLock) {
       mpvController.setConfig(videoConfig.get());
       downloadManager.setConfig(videoConfig.get());
       initVideoIpc();
+      initAutoUpdater();
       downloadManager.cleanOrphans();
       console.log('[StellaflixVideo] 影视态初始化完成（mainWindow 待 createWindow 后绑定）');
     } catch (error) {

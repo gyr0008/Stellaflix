@@ -74,5 +74,16 @@ var updatePreviewState = {
   notes: [
     '修复多行歌词与 3D 歌单架的显示层级',
     '优化更新入口与安装包获取流程'
-  ]
+  ],
+  // electron-updater 自动下载/安装状态。不可用时降级到 downloadPages 外链。
+  autoUpdate: {
+    supported: false,
+    usable: false,
+    phase: 'idle',
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    feedLabel: '',
+    errorReason: ''
+  }
 };

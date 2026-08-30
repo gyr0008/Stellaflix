@@ -74,6 +74,15 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   openSpotifyMusicLogin: () => ipcRenderer.invoke('spotify-music-open-login'),
   clearSpotifyMusicLogin: () => ipcRenderer.invoke('spotify-music-clear-login'),
   openUpdatePage: (url) => ipcRenderer.invoke('stellaflix-open-update-page', String(url || '')),
+  updateCheck: () => ipcRenderer.invoke('stellaflix-update-check'),
+  updateDownload: () => ipcRenderer.invoke('stellaflix-update-download'),
+  updateInstall: () => ipcRenderer.invoke('stellaflix-update-install'),
+  onUpdateEvent: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('stellaflix-update-event', listener);
+    return () => ipcRenderer.removeListener('stellaflix-update-event', listener);
+  },
   restartApp: () => ipcRenderer.invoke('stellaflix-restart-app'),
   configureGlobalHotkeys: (bindings) => ipcRenderer.invoke('stellaflix-hotkeys-configure-global', bindings || []),
   copyText: (text) => {

@@ -97,6 +97,7 @@
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "gsap": "^3.15.0",
     "mpg123-decoder": "^1.0.3",
     "music-metadata": "11.14.0",
@@ -135,7 +136,16 @@
       "rootDir": "__appData__/StellaMedia",
       "cacheDir": "__appData__/StellaMedia/cache",
       "supportedFormats": [
-        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m3u8", "mpd"
+        "mp4",
+        "mkv",
+        "avi",
+        "mov",
+        "wmv",
+        "flv",
+        "webm",
+        "ts",
+        "m3u8",
+        "mpd"
       ],
       "maxCacheSize": 10737418240,
       "autoCleanCache": true
@@ -155,10 +165,18 @@
       "enableVisualizer": false
     },
     "protocols": {
-      "emby": { "enabled": true },
-      "jellyfin": { "enabled": true },
-      "alist": { "enabled": true },
-      "webdav": { "enabled": true }
+      "emby": {
+        "enabled": true
+      },
+      "jellyfin": {
+        "enabled": true
+      },
+      "alist": {
+        "enabled": true
+      },
+      "webdav": {
+        "enabled": true
+      }
     }
   },
   "overrides": {
