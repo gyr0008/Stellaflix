@@ -174,6 +174,8 @@ var mainFrameGates = {
 window.__stellaflixMainFrameGates = mainFrameGates;
 var mainLoopBackgroundTimer = 0;
 var mainLoopAnimationRequested = false;
+var thumbCoverEl = null;
+var thumbCoverScale = '';
 function mainLoopDeepBackgroundSleeping() {
   return typeof isDeepBackgroundMode === 'function'
     && isDeepBackgroundMode()
@@ -294,6 +296,14 @@ function targetMainDesktopOverlayFps(now) {
   return 6;
 }
 function animate() {
+  // ==== Fix: uniforms 未就绪（pointer-cover 初始化失败导致 uniforms 对象从未赋值，仅 hoisted
+  // 的 var 声明为空）时立即 return，避免每帧 1000+ TypeError 刷屏把整个界面卡死。
+  // uniforms.uTime 是驱动整个 scene shader 时间的核心 uniform；没有它不如直接跳帧。
+  if (typeof uniforms === 'undefined' || !uniforms || typeof uniforms.uTime === 'undefined' || !uniforms.uTime) {
+    mainLoopAnimationRequested = false;
+    scheduleNextMainLoopFrame();
+    return;
+  }
   mainLoopAnimationRequested = false;
   scheduleNextMainLoopFrame();
   var perfProbe = window.__stellaflixPerf;
@@ -564,7 +574,7 @@ function animate() {
   uniforms.uVinylSpin.value = (uniforms.uVinylSpin.value + dt * vinylSpinSpeed) % (Math.PI * 2);
 
   var visualUniformPerfStart = performance.now();
-  updateParticlePointerFrame();
+  if (typeof updateParticlePointerFrame === 'function') updateParticlePointerFrame();
   uniforms.uBass.value = bass;
   uniforms.uMid.value = mid;
   uniforms.uTreble.value = treble;
@@ -674,8 +684,14 @@ function animate() {
   // 缩略图脉动
   if (currentIdx >= 0) {
     var s = 1 + bass * 0.08;
-    var thumbCoverEl = document.getElementById('thumb-cover');
-    if (thumbCoverEl) thumbCoverEl.style.transform = 'scale(' + s + ')';
+    if (!thumbCoverEl) thumbCoverEl = document.getElementById('thumb-cover');
+    if (thumbCoverEl) {
+      var nextThumbScale = 'scale(' + s + ')';
+      if (thumbCoverScale !== nextThumbScale) {
+        thumbCoverEl.style.transform = nextThumbScale;
+        thumbCoverScale = nextThumbScale;
+      }
+    }
   }
 
   var rendererPerfStart = performance.now();

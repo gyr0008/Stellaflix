@@ -1,8 +1,8 @@
 /*!
- * @name 青听·海棠解析源
- * @description 基于 QingMusic(kejichangqing)客户端解析后端 musicserver.haitangw.cc 适配的洛雪音源。上游为青听作者私人服务,可能限流或关停;仅供个人学习使用,禁止批量下载。
+ * @name 青听音乐
+ * @description 基于GitHub青听音乐项目
  * @version 1.0.0
- * @author Stellaflix(适配;后端与音源线路来自 QingMusic 项目)
+ * @author GitHub 青听音乐
  */
 const DEV_ENABLE = false
 // API_URL 可配置：优先使用运行时注入的 globalThis.lx.config.backendUrl（由「第三方音源管理器」的后端地址输入框提供）；

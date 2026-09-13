@@ -5,61 +5,79 @@
 //  - 试听检测 (freeTrialInfo) + 全 quality 探测
 //  - 所有受保护 API 都会带上已登录用户的 cookie
 // ====================================================================
-const {
-  search,
-  cloudsearch,
-  song_detail,
-  song_url,
-  song_url_v1,
-  login_qr_key,
-  login_qr_create,
-  login_qr_check,
-  login_status,
-  vip_info,
-  vip_info_v2,
-  logout,
-  user_account,
-  user_playlist,
-  comment_music,
-  album,
-  artist_detail,
-  artist_top_song,
-  artist_songs,
-  like: like_song,
-  likelist,
-  song_like_check,
-  album_sub,
-  album_sublist,
-  playlist_subscribe,
-  comment,
-  comment_like,
-  scrobble,
-  listen_data_total,
-  playlist_tracks,
-  playlist_track_add,
-  playlist_create,
-  playlist_detail,
-  playlist_track_all,
-  personalized,
-  recommend_resource,
-  recommend_songs,
-  dj_detail,
-  dj_program,
-  dj_hot,
-  dj_sublist,
-  user_audio,
-  dj_paygift,
-  record_recent_voice,
-  sati_resource_sub_list,
-  lyric,
-  lyric_new,
-} = require('NeteaseCloudMusicApi');
+// NeteaseCloudMusicApi (~8.7MB) is lazy-bound so cold start only pays for the
+// package when the first Netease route actually runs, not at server module load.
+let _neteaseCloudMusicApi = null;
+function neteaseApiFn(name) {
+  return function lazyNeteaseApi(...args) {
+    if (!_neteaseCloudMusicApi) _neteaseCloudMusicApi = require('NeteaseCloudMusicApi');
+    const fn = _neteaseCloudMusicApi[name];
+    if (typeof fn !== 'function') throw new Error('NeteaseCloudMusicApi missing export: ' + name);
+    return fn(...args);
+  };
+}
+const search = neteaseApiFn('search');
+const cloudsearch = neteaseApiFn('cloudsearch');
+const song_detail = neteaseApiFn('song_detail');
+const song_url = neteaseApiFn('song_url');
+const song_url_v1 = neteaseApiFn('song_url_v1');
+const login_qr_key = neteaseApiFn('login_qr_key');
+const login_qr_create = neteaseApiFn('login_qr_create');
+const login_qr_check = neteaseApiFn('login_qr_check');
+const login_status = neteaseApiFn('login_status');
+const vip_info = neteaseApiFn('vip_info');
+const vip_info_v2 = neteaseApiFn('vip_info_v2');
+const logout = neteaseApiFn('logout');
+const user_account = neteaseApiFn('user_account');
+const user_playlist = neteaseApiFn('user_playlist');
+const comment_music = neteaseApiFn('comment_music');
+const album = neteaseApiFn('album');
+const artist_detail = neteaseApiFn('artist_detail');
+const artist_top_song = neteaseApiFn('artist_top_song');
+const artist_songs = neteaseApiFn('artist_songs');
+const like_song = neteaseApiFn('like');
+const likelist = neteaseApiFn('likelist');
+const song_like_check = neteaseApiFn('song_like_check');
+const album_sub = neteaseApiFn('album_sub');
+const album_sublist = neteaseApiFn('album_sublist');
+const playlist_subscribe = neteaseApiFn('playlist_subscribe');
+const comment = neteaseApiFn('comment');
+const comment_like = neteaseApiFn('comment_like');
+const scrobble = neteaseApiFn('scrobble');
+const listen_data_total = neteaseApiFn('listen_data_total');
+const playlist_tracks = neteaseApiFn('playlist_tracks');
+const playlist_track_add = neteaseApiFn('playlist_track_add');
+const playlist_create = neteaseApiFn('playlist_create');
+const playlist_detail = neteaseApiFn('playlist_detail');
+const playlist_track_all = neteaseApiFn('playlist_track_all');
+const personalized = neteaseApiFn('personalized');
+const recommend_resource = neteaseApiFn('recommend_resource');
+const recommend_songs = neteaseApiFn('recommend_songs');
+const dj_detail = neteaseApiFn('dj_detail');
+const dj_program = neteaseApiFn('dj_program');
+const dj_hot = neteaseApiFn('dj_hot');
+const dj_sublist = neteaseApiFn('dj_sublist');
+const user_audio = neteaseApiFn('user_audio');
+const dj_paygift = neteaseApiFn('dj_paygift');
+const record_recent_voice = neteaseApiFn('record_recent_voice');
+const sati_resource_sub_list = neteaseApiFn('sati_resource_sub_list');
+const lyric = neteaseApiFn('lyric');
+const lyric_new = neteaseApiFn('lyric_new');
 const http = require('http');
 const https = require('https');
 const fs   = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
+const { spawn } = require('child_process');
+
+// ffmpeg-static：懒加载（postinstall 在某些受限网络下可能下载失败二进制）；
+// 缺失时 /api/agent/speech/transcribe 返回明确错误而不崩溃。
+let ffmpegStaticPath = null;
+try { ffmpegStaticPath = require('ffmpeg-static'); } catch (_) { ffmpegStaticPath = null; }
+let ffmpegBinaryReady = !!(ffmpegStaticPath && fs.existsSync(ffmpegStaticPath));
 const tls = require('tls');
+const { once } = require('events');
 const { fileURLToPath } = require('url');
 const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer');
 const { TrackDecryptor } = require('./qishui-audio-decryptor/track-decryptor');
@@ -134,6 +152,20 @@ const {
 } = require('./cuefield/feedback-log');
 const { planCuefieldTransitionFromCache } = require('./cuefield/stellaflix-bridge');
 const agentApi = require('./agent-api');
+const { setupGlobalProxy } = require('./desktop/global-proxy');
+
+// 全局出口代理：若本机运行着 Clash / V2Ray 等代理并在环境变量中暴露
+// HTTP_PROXY / HTTPS_PROXY，则 server 侧所有出站 fetch 自动经其转发（详见 desktop/global-proxy.js）。
+(function initGlobalProxy() {
+  try {
+    const r = setupGlobalProxy(process.env);
+    if (r.enabled) {
+      console.log('[Proxy] 全局出口代理已启用 -> ' + r.proxy + ' (agent=' + r.kind + ')');
+    } else if (r.error) {
+      console.warn('[Proxy] 全局代理初始化失败：' + r.error);
+    }
+  } catch (e) { /* 代理失败不影响主流程 */ }
+})();
 
 // 第三方音源 bridge：由 Electron 主进程在 app ready 之后注入；纯 node 启动则保持 null
 let customSourceBridge = null;
@@ -150,11 +182,15 @@ const CUEFIELD_FEEDBACK_FILE = process.env.CUEFIELD_FEEDBACK_FILE || path.join(_
 const LISTEN_SYNC_JOURNAL_FILE = process.env.STELLAFLIX_LISTEN_SYNC_FILE || path.join(__dirname, 'data', 'listen-sync-journal.json');
 const LISTEN_SYNC_JOURNAL_LIMIT = 600;
 const APP_PACKAGE = readPackageInfo();
-const APP_VERSION = process.env.STELLAFLIX_VERSION || APP_PACKAGE.version || '2.1.0';
+const APP_VERSION = process.env.STELLAFLIX_VERSION || APP_PACKAGE.version || '0.1.0';
 const UPDATE_CONFIG = readUpdateConfig(APP_PACKAGE);
 const qishuiAudioDecryptor = new TrackDecryptor();
 const qishuiAudioDecryptCache = new Map();
-const QISHUI_AUDIO_DECRYPT_CACHE_MAX_BYTES = 96 * 1024 * 1024;
+// 48MB keeps a couple of recent tracks without letting long DJ sets pin ~100MB.
+const QISHUI_AUDIO_DECRYPT_CACHE_MAX_BYTES = 48 * 1024 * 1024;
+const QISHUI_AUDIO_DECRYPT_SKIP_CACHE_BYTES = 16 * 1024 * 1024;
+const QISHUI_AUDIO_DECRYPT_MAX_SOURCE_BYTES = 64 * 1024 * 1024;
+const qishuiAudioDecryptInflight = new Map();
 let qishuiAudioDecryptCacheBytes = 0;
 const UPDATE_FALLBACK_NOTES = [
   '修复多行歌词与 3D 歌单架的显示层级',
@@ -787,7 +823,7 @@ function compactBeatMapCachePayload(body) {
       provider: String(body.provider || '').slice(0, 32),
       title: String(body.title || '').slice(0, 160),
       artist: String(body.artist || '').slice(0, 160),
-      mode: String(body.mode || 'mr').slice(0, 32),
+      mode: String(body.mode || 'sf').slice(0, 32),
     },
     map,
   };
@@ -1046,6 +1082,50 @@ function readRequestBody(req) {
       }
     });
     req.on('error', () => resolve({}));
+  });
+}
+// 收二进制请求体（如语音转写上传的音频 blob），按 Buffer 拼接，上限 20MB 防止 OOM
+function readRawBody(req, maxBytes = 20 * 1024 * 1024) {
+  return new Promise(resolve => {
+    const chunks = [];
+    let total = 0;
+    let aborted = false;
+    req.on('data', chunk => {
+      if (aborted) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.length;
+      if (total > maxBytes) { aborted = true; try { req.destroy(); } catch (_) {} resolve(null); return; }
+      chunks.push(buf);
+    });
+    req.on('end', () => { if (!aborted) resolve(Buffer.concat(chunks)); });
+    req.on('error', () => { if (!aborted) resolve(null); });
+  });
+}
+// 通用子进程封装：捕获 stdout/stderr(utf8)、超时强杀。返回 {code, stdout, stderr}；不抛异常。
+function runProcess(cmd, args, timeoutMs) {
+  return new Promise(resolve => {
+    let proc;
+    try { proc = spawn(cmd, args, { windowsHide: true }); }
+    catch (err) { resolve({ code: -1, stdout: '', stderr: String(err && err.message || err) }); return; }
+    const outChunks = [];
+    const errChunks = [];
+    let killed = false;
+    const timer = setTimeout(() => { killed = true; try { proc.kill(); } catch (_) {} }, timeoutMs);
+    proc.stdout.on('data', d => outChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d)));
+    proc.stderr.on('data', d => errChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d)));
+    proc.on('error', e => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout: Buffer.concat(outChunks).toString('utf8'),
+        stderr: Buffer.concat(errChunks).toString('utf8') + '\n' + String(e && e.message || e) });
+    });
+    proc.on('close', code => {
+      clearTimeout(timer);
+      resolve({
+        code: killed ? -1 : (code == null ? -1 : code),
+        stdout: Buffer.concat(outChunks).toString('utf8'),
+        stderr: Buffer.concat(errChunks).toString('utf8'),
+      });
+    });
   });
 }
 function normalizeApiCode(payload) {
@@ -1440,6 +1520,48 @@ const NETEASE_SOURCE_MATCH_POSITIVE_TTL_MS = 12 * 60 * 60 * 1000;
 const NETEASE_SOURCE_MATCH_NEGATIVE_TTL_MS = 5 * 60 * 1000;
 const NETEASE_SOURCE_MATCH_MAX_CANDIDATES = 4;
 const neteaseSourceMatchCache = new Map();
+const neteaseSourceMatchInflight = new Map();
+
+// Lightweight TTL + inflight cache for hot playback-address resolution.
+function createPlaybackTtlCache(maxEntries, defaultTtlMs) {
+  const store = new Map();
+  const inflight = new Map();
+  return {
+    get(key) {
+      const hit = store.get(key);
+      if (!hit) return null;
+      if (Date.now() - hit.at > hit.ttl) {
+        store.delete(key);
+        return null;
+      }
+      return hit.value;
+    },
+    set(key, value, ttlMs) {
+      store.set(key, { at: Date.now(), ttl: ttlMs || defaultTtlMs, value });
+      while (store.size > maxEntries) store.delete(store.keys().next().value);
+    },
+    async wrap(key, ttlMs, fn) {
+      const cached = this.get(key);
+      if (cached !== null && cached !== undefined) return cached;
+      if (inflight.has(key)) return inflight.get(key);
+      const promise = (async () => {
+        try {
+          const value = await fn();
+          const resolvedTtl = typeof ttlMs === 'function' ? ttlMs(value) : ttlMs;
+          if (value && value.playable && value.url) this.set(key, value, resolvedTtl);
+          return value;
+        } finally {
+          if (inflight.get(key) === promise) inflight.delete(key);
+        }
+      })();
+      inflight.set(key, promise);
+      return promise;
+    },
+  };
+}
+
+const neteaseSongUrlCache = createPlaybackTtlCache(256, 3 * 60 * 1000);
+const qqSongUrlCache = createPlaybackTtlCache(256, 60 * 1000);
 
 function neteaseSourceMatchText(value) {
   return String(value || '').normalize('NFKC').toLowerCase()
@@ -1458,25 +1580,31 @@ function neteaseSourceMatchArtists(song) {
     name: neteaseSourceMatchText(artist && artist.name || ''),
   })).filter(artist => artist.id || artist.name);
 }
+// 版本 token 规则提升为共享常量：网易云同曲匹配与聚合解析（跨平台元数据匹配）共用同一套
+// Live/翻唱/Remix/伴奏等版本区分规则，避免两处规则漂移。
+const SOURCE_MATCH_VERSION_RULES = [
+  ['live', /\blive\b|现场|演唱会/],
+  ['cover', /\bcover\b|翻唱/],
+  ['remix', /\bremix\b|\b(?:pop |radio |club |digital dog )?mix\b|mix版/],
+  ['remaster', /\bremaster(?:ed)?\b|重制/],
+  ['rerecord', /\bre[ -]?record(?:ed|ing)?\b|重录/],
+  ['named-version', /taylor['’]?s version|\bversion\b|\bver\.?\b|版本/],
+  ['edit', /\bradio edit\b|\bedit\b|剪辑版/],
+  ['alternate-cut', /\bstripped\b|\bmono\b|\bstereo\b|\bcommentary\b/],
+  ['instrumental', /\binstrumental\b|伴奏|\bkaraoke\b/],
+  ['acoustic', /\bacoustic\b|不插电/],
+  ['speed', /\bnightcore\b|\bsped up\b|\bslowed(?: and reverb)?\b|加速|慢速|变速/],
+  ['dj', /\bdj\b|dj版/],
+  ['demo', /\bdemo\b|试听版/],
+];
+function sourceMatchVersionTokensFromText(text) {
+  const normalized = String(text || '').toLowerCase();
+  return SOURCE_MATCH_VERSION_RULES.filter(rule => rule[1].test(normalized)).map(rule => rule[0]);
+}
 function neteaseSourceMatchVersionTokens(song) {
   const aliases = song && (song.alia || song.alias) || [];
-  const text = String((song && song.name || '') + ' ' + (Array.isArray(aliases) ? aliases.join(' ') : aliases || '')).toLowerCase();
-  const rules = [
-    ['live', /\blive\b|现场|演唱会/],
-    ['cover', /\bcover\b|翻唱/],
-    ['remix', /\bremix\b|\b(?:pop |radio |club |digital dog )?mix\b|mix版/],
-    ['remaster', /\bremaster(?:ed)?\b|重制/],
-    ['rerecord', /\bre[ -]?record(?:ed|ing)?\b|重录/],
-    ['named-version', /taylor['’]?s version|\bversion\b|\bver\.?\b|版本/],
-    ['edit', /\bradio edit\b|\bedit\b|剪辑版/],
-    ['alternate-cut', /\bstripped\b|\bmono\b|\bstereo\b|\bcommentary\b/],
-    ['instrumental', /\binstrumental\b|伴奏|\bkaraoke\b/],
-    ['acoustic', /\bacoustic\b|不插电/],
-    ['speed', /\bnightcore\b|\bsped up\b|\bslowed(?: and reverb)?\b|加速|慢速|变速/],
-    ['dj', /\bdj\b|dj版/],
-    ['demo', /\bdemo\b|试听版/],
-  ];
-  return rules.filter(rule => rule[1].test(text)).map(rule => rule[0]);
+  const text = String((song && song.name || '') + ' ' + (Array.isArray(aliases) ? aliases.join(' ') : aliases || ''));
+  return sourceMatchVersionTokensFromText(text);
 }
 function neteaseSourceMatchMediaProfiles(song) {
   const profiles = [];
@@ -1617,6 +1745,22 @@ function mergeNeteaseSourceMatchSong(detailSong, searchSong, hints) {
 }
 async function findNeteaseSameTrackCandidates(id, hints, lookupDeadline) {
   hints = hints || {};
+  const sourceId = String(id || '').trim();
+  const title = String(hints.name || hints.title || '').trim();
+  const artist = String(hints.artist || '').trim();
+  if (!sourceId || !title || !artist) return [];
+  const cacheKey = neteaseSourceMatchCacheKey(sourceId, hints);
+  const cached = readNeteaseSourceMatchCache(cacheKey);
+  if (cached) return cached;
+  if (neteaseSourceMatchInflight.has(cacheKey)) return neteaseSourceMatchInflight.get(cacheKey);
+  const promise = findNeteaseSameTrackCandidatesInner(id, hints, lookupDeadline).finally(() => {
+    if (neteaseSourceMatchInflight.get(cacheKey) === promise) neteaseSourceMatchInflight.delete(cacheKey);
+  });
+  neteaseSourceMatchInflight.set(cacheKey, promise);
+  return promise;
+}
+async function findNeteaseSameTrackCandidatesInner(id, hints, lookupDeadline) {
+  hints = hints || {};
   const deadline = Number(lookupDeadline) > 0 ? Number(lookupDeadline) : Date.now() + NETEASE_SOURCE_MATCH_LOOKUP_BUDGET_MS;
   const sourceId = String(id || '').trim();
   const title = String(hints.name || hints.title || '').trim();
@@ -1696,6 +1840,130 @@ async function findNeteaseSameTrackCandidates(id, hints, lookupDeadline) {
   return candidates;
 }
 
+// ==================== 聚合解析：跨平台元数据匹配 ====================
+// 目标：打破"歌曲绑定原平台"的限制。汽水/酷狗/QQ/Spotify 等平台导入的歌单条目
+// 只作为元数据（歌名/歌手/专辑/时长/版本），在 wy(网易)/tx(QQ)/kg(酷狗) 三个搜索引擎里
+// 找到同曲的真实平台版本（带该平台有效 rid），交给第三方音源（青听音乐等）解析。
+// 匹配硬性条件：规范化标题相等 + 版本 token 一致 + 歌手有交集 + 时长容差内；
+// 打分排序：歌手集合一致 > 专辑一致 > 时长接近 > 热度。
+const AGGREGATE_MATCH_POSITIVE_TTL_MS = 30 * 60 * 1000;
+const AGGREGATE_MATCH_NEGATIVE_TTL_MS = 3 * 60 * 1000;
+const AGGREGATE_MATCH_MAX_CANDIDATES = 5;
+const AGGREGATE_MATCH_SEARCH_LIMIT = 8;
+const AGGREGATE_MATCH_DURATION_TOLERANCE_MS = 3000;
+const aggregateMatchCache = new Map();
+
+function aggregateSongMeta(song) {
+  song = song || {};
+  const albumRaw = song.album;
+  const albumName = typeof albumRaw === 'object' && albumRaw
+    ? String(albumRaw.name || albumRaw.title || '')
+    : String(albumRaw || song.albumName || '');
+  let artistNames = [];
+  if (Array.isArray(song.artists)) {
+    artistNames = song.artists.map(a => String(a && a.name || a || '').trim()).filter(Boolean);
+  }
+  const artistText = String(song.artist || song.singer || '');
+  if (!artistNames.length && artistText) {
+    artistText.split(/\s*\/\s*|\s*,\s*|、|&| feat\.? | ft\.? /i).forEach(name => {
+      if (name && name.trim()) artistNames.push(name.trim());
+    });
+  }
+  return {
+    title: String(song.name || song.title || '').trim(),
+    artistNames,
+    albumName: albumName.trim(),
+    durationMs: neteaseSourceMatchDurationMs(song.duration || song.dt || song.interval),
+  };
+}
+
+function aggregateCandidateScore(source, candidate) {
+  if (!source.title || !candidate.title) return -1;
+  // 硬性条件 1：规范化标题相等（括号内容已剥离，版本差异由 token 把关）
+  if (neteaseSourceMatchText(source.title) !== neteaseSourceMatchText(candidate.title)) return -1;
+  // 硬性条件 2：版本 token 一致（Live/翻唱/伴奏/Remix 等多版本区分）
+  const sourceTokens = sourceMatchVersionTokensFromText(source.title);
+  const candidateTokens = sourceMatchVersionTokensFromText(candidate.title);
+  if (sourceTokens.join('|') !== candidateTokens.join('|')) return -1;
+  // 硬性条件 3：歌手至少一人交集（同名歌曲准确定位）
+  const sourceArtists = source.artistNames.map(neteaseSourceMatchText).filter(Boolean);
+  const candidateArtists = candidate.artistNames.map(neteaseSourceMatchText).filter(Boolean);
+  if (!sourceArtists.length || !candidateArtists.length) return -1;
+  if (!sourceArtists.some(name => candidateArtists.indexOf(name) >= 0)) return -1;
+  // 硬性条件 4：时长容差（双方都带时长才校验，缺失不惩罚）
+  const durationDiff = source.durationMs && candidate.durationMs
+    ? Math.abs(source.durationMs - candidate.durationMs) : 0;
+  if (source.durationMs && candidate.durationMs && durationDiff > AGGREGATE_MATCH_DURATION_TOLERANCE_MS) return -1;
+  let score = 100;
+  const sourceSet = [...new Set(sourceArtists)].sort().join(',');
+  const candidateSet = [...new Set(candidateArtists)].sort().join(',');
+  if (sourceSet && sourceSet === candidateSet) score += 40;
+  else if (sourceArtists.every(name => candidateArtists.indexOf(name) >= 0)) score += 22;
+  if (source.albumName && candidate.albumName
+    && neteaseSourceMatchText(source.albumName) === neteaseSourceMatchText(candidate.albumName)) score += 30;
+  if (source.durationMs && candidate.durationMs) score += Math.max(0, 30 - durationDiff / 100);
+  score += Math.min(15, Number(candidate.song && candidate.song.popularity || 0) / 10 || 0);
+  return score;
+}
+
+function aggregateMatchCacheKey(meta) {
+  return [
+    neteaseSourceMatchText(meta.title),
+    meta.artistNames.map(neteaseSourceMatchText).filter(Boolean).sort().join(','),
+  ].join('|');
+}
+function readAggregateMatchCache(key) {
+  const entry = aggregateMatchCache.get(key);
+  if (!entry) return null;
+  const ttl = entry.candidates.length ? AGGREGATE_MATCH_POSITIVE_TTL_MS : AGGREGATE_MATCH_NEGATIVE_TTL_MS;
+  if (Date.now() - entry.at > ttl) {
+    aggregateMatchCache.delete(key);
+    return null;
+  }
+  return entry.candidates;
+}
+function writeAggregateMatchCache(key, candidates) {
+  aggregateMatchCache.set(key, { at: Date.now(), candidates: candidates || [] });
+  while (aggregateMatchCache.size > 256) aggregateMatchCache.delete(aggregateMatchCache.keys().next().value);
+}
+
+async function aggregateSearchCandidates(meta) {
+  const cacheKey = aggregateMatchCacheKey(meta);
+  const cached = readAggregateMatchCache(cacheKey);
+  if (cached) return cached;
+  const query = [meta.title, meta.artistNames[0] || ''].filter(Boolean).join(' ').trim();
+  if (!query) return [];
+  const searches = [
+    { source: 'wy', promise: handleSearch(query, AGGREGATE_MATCH_SEARCH_LIMIT, 0) },
+    { source: 'tx', promise: handleQQSearch(query, AGGREGATE_MATCH_SEARCH_LIMIT, 0) },
+    { source: 'kg', promise: handleKugouSearch(query, AGGREGATE_MATCH_SEARCH_LIMIT, kugouCookie, 0) },
+  ];
+  const settled = await Promise.allSettled(searches.map(item => item.promise));
+  const ranked = [];
+  settled.forEach((outcome, index) => {
+    if (outcome.status !== 'fulfilled' || !Array.isArray(outcome.value)) return;
+    outcome.value.forEach(song => {
+      const score = aggregateCandidateScore(meta, aggregateSongMeta(song));
+      if (score < 0) return;
+      ranked.push({ song, source: searches[index].source, score });
+    });
+  });
+  ranked.sort((a, b) => b.score - a.score);
+  // 同一线路只保留同曲最高分条目，避免同一版本重复占用候选位
+  const seen = new Set();
+  const candidates = [];
+  for (const item of ranked) {
+    const key = item.source + '|' + neteaseSourceMatchText(item.song && item.song.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(item);
+    if (candidates.length >= AGGREGATE_MATCH_MAX_CANDIDATES) break;
+  }
+  writeAggregateMatchCache(cacheKey, candidates);
+  console.log('[AggregateMatch]', query, '→ candidates:', candidates.map(c => c.source + '#' + c.score).join(', ') || '(none)');
+  return candidates;
+}
+
 async function handleNeteaseAlbumDetail(id, limit) {
   const albumId = String(id || '').trim();
   const num = Math.max(10, Math.min(120, parseInt(limit || '80', 10) || 80));
@@ -1733,7 +2001,22 @@ function mapDailyRecommendationSongs(raw) {
     .filter(song => song && song.id && song.name);
 }
 
+// Homepage pulls three Netease recommend APIs; cache briefly per cookie fingerprint.
+const DISCOVER_HOME_CACHE_TTL_MS = 3 * 60 * 1000;
+let discoverHomeCache = { key: '', at: 0, payload: null };
+
+function discoverHomeCacheKey() {
+  const cookie = String(userCookie || '').slice(0, 64);
+  return cookie;
+}
+
 async function handleDiscoverHome() {
+  const cacheKey = discoverHomeCacheKey();
+  if (discoverHomeCache.key === cacheKey
+    && discoverHomeCache.payload
+    && Date.now() - discoverHomeCache.at < DISCOVER_HOME_CACHE_TTL_MS) {
+    return discoverHomeCache.payload;
+  }
   const info = await getLoginInfo();
   const loggedIn = !!(info && info.loggedIn);
   if (!loggedIn) {
@@ -1779,7 +2062,7 @@ async function handleDiscoverHome() {
     dailySongs = mapDailyRecommendationSongs(raw);
   }
 
-  return {
+  const payload = {
     loggedIn,
     user: loggedIn ? { userId: info.userId, nickname: info.nickname || '', avatar: info.avatar || '' } : null,
     dailySongs,
@@ -1789,6 +2072,8 @@ async function handleDiscoverHome() {
     podcasts: [],
     updatedAt: Date.now(),
   };
+  discoverHomeCache = { key: cacheKey, at: Date.now(), payload };
+  return payload;
 }
 
 const QQ_MUSICU_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
@@ -1800,18 +2085,41 @@ const QQ_HEADERS = {
 const QQ_VIP_INFO_CACHE_TTL_MS = 2 * 60 * 1000;
 const qqVipInfoCache = new Map();
 
+const REQUEST_TEXT_MAX_BYTES = 4 * 1024 * 1024;
+const sharedHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8 });
+const sharedHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8 });
+
 function requestText(targetUrl, opts, body) {
   opts = opts || {};
   return new Promise((resolve, reject) => {
     const u = new URL(targetUrl);
     const lib = u.protocol === 'https:' ? https : http;
+    const maxBytes = Math.max(64 * 1024, Number(opts.maxBytes) || REQUEST_TEXT_MAX_BYTES);
     const req = lib.request(u, {
       method: opts.method || 'GET',
       headers: opts.headers || {},
+      agent: u.protocol === 'https:' ? sharedHttpsAgent : sharedHttpAgent,
     }, response => {
       const chunks = [];
-      response.on('data', chunk => chunks.push(chunk));
+      let received = 0;
+      let settled = false;
+      const fail = (err) => {
+        if (settled) return;
+        settled = true;
+        try { response.destroy(); } catch (_) {}
+        reject(err);
+      };
+      response.on('data', chunk => {
+        received += chunk.length;
+        if (received > maxBytes) {
+          fail(Object.assign(new Error('Response too large'), { statusCode: response.statusCode, code: 'RESPONSE_TOO_LARGE' }));
+          return;
+        }
+        chunks.push(chunk);
+      });
       response.on('end', () => {
+        if (settled) return;
+        settled = true;
         const text = Buffer.concat(chunks).toString('utf8');
         if (response.statusCode >= 400) {
           const err = new Error('HTTP ' + response.statusCode);
@@ -1822,6 +2130,7 @@ function requestText(targetUrl, opts, body) {
         }
         resolve(text);
       });
+      response.on('error', fail);
     });
     req.setTimeout(opts.timeoutMs || 10000, () => req.destroy(new Error('Request timeout')));
     req.on('error', reject);
@@ -2889,14 +3198,31 @@ function qishuiAudioCacheKey(cleanUrl, auth) {
 
 function rememberQishuiDecryptedAudio(key, payload) {
   if (!payload || !Buffer.isBuffer(payload.buffer)) return;
+  // Oversized tracks stay playable but are not pinned in the process heap.
+  if (payload.buffer.length > QISHUI_AUDIO_DECRYPT_SKIP_CACHE_BYTES) return;
+  const existing = qishuiAudioDecryptCache.get(key);
+  if (existing && existing.buffer) {
+    qishuiAudioDecryptCacheBytes -= existing.buffer.length;
+    qishuiAudioDecryptCache.delete(key);
+  }
   qishuiAudioDecryptCache.set(key, Object.assign({ at: Date.now() }, payload));
   qishuiAudioDecryptCacheBytes += payload.buffer.length;
   while (qishuiAudioDecryptCacheBytes > QISHUI_AUDIO_DECRYPT_CACHE_MAX_BYTES && qishuiAudioDecryptCache.size > 1) {
-    const oldest = [...qishuiAudioDecryptCache.entries()].sort((a, b) => (a[1].at || 0) - (b[1].at || 0))[0];
-    if (!oldest) break;
-    qishuiAudioDecryptCache.delete(oldest[0]);
-    qishuiAudioDecryptCacheBytes -= oldest[1].buffer.length;
+    let oldestKey = null;
+    let oldestAt = Infinity;
+    for (const [k, v] of qishuiAudioDecryptCache) {
+      const at = Number(v && v.at) || 0;
+      if (at < oldestAt) {
+        oldestAt = at;
+        oldestKey = k;
+      }
+    }
+    if (!oldestKey) break;
+    const oldest = qishuiAudioDecryptCache.get(oldestKey);
+    qishuiAudioDecryptCache.delete(oldestKey);
+    if (oldest && oldest.buffer) qishuiAudioDecryptCacheBytes -= oldest.buffer.length;
   }
+  if (qishuiAudioDecryptCacheBytes < 0) qishuiAudioDecryptCacheBytes = 0;
 }
 
 async function getQishuiDecryptedAudio(audioUrl) {
@@ -2908,17 +3234,49 @@ async function getQishuiDecryptedAudio(audioUrl) {
     cached.at = Date.now();
     return cached;
   }
-  const up = await fetch(parsed.cleanUrl, { headers: audioProxyHeadersFor(parsed.cleanUrl, '') });
-  if (!up.ok) throw new Error('Qishui encrypted audio fetch failed: HTTP ' + up.status);
-  const encryptedBuffer = Buffer.from(await up.arrayBuffer());
-  const result = qishuiAudioDecryptor.decrypt({ encryptedBuffer, spadeA: parsed.auth });
-  const payload = {
-    buffer: result.buffer,
-    contentType: result.extension === '.flac' ? 'audio/flac' : 'audio/mp4',
-    extension: result.extension,
-  };
-  rememberQishuiDecryptedAudio(key, payload);
-  return payload;
+  if (qishuiAudioDecryptInflight.has(key)) return qishuiAudioDecryptInflight.get(key);
+
+  const work = (async () => {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20000);
+      let up;
+      try {
+        up = await fetch(parsed.cleanUrl, {
+          headers: audioProxyHeadersFor(parsed.cleanUrl, ''),
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!up.ok) throw new Error('Qishui encrypted audio fetch failed: HTTP ' + up.status);
+      const declared = Number(up.headers.get('content-length') || 0);
+      if (declared > QISHUI_AUDIO_DECRYPT_MAX_SOURCE_BYTES) {
+        throw new Error('Qishui encrypted audio too large: ' + declared + ' bytes');
+      }
+      const encryptedBuffer = Buffer.from(await up.arrayBuffer());
+      if (encryptedBuffer.length > QISHUI_AUDIO_DECRYPT_MAX_SOURCE_BYTES) {
+        throw new Error('Qishui encrypted audio too large: ' + encryptedBuffer.length + ' bytes');
+      }
+      const result = qishuiAudioDecryptor.decrypt({ encryptedBuffer, spadeA: parsed.auth });
+      // Drop the ciphertext as soon as plaintext is ready when they are distinct buffers.
+      if (result.buffer !== encryptedBuffer) {
+        encryptedBuffer.fill?.(0);
+      }
+      const payload = {
+        buffer: result.buffer,
+        contentType: result.extension === '.flac' ? 'audio/flac' : 'audio/mp4',
+        extension: result.extension,
+      };
+      rememberQishuiDecryptedAudio(key, payload);
+      return payload;
+    } finally {
+      if (qishuiAudioDecryptInflight.get(key) === work) qishuiAudioDecryptInflight.delete(key);
+    }
+  })();
+
+  qishuiAudioDecryptInflight.set(key, work);
+  return work;
 }
 
 function sendAudioBuffer(res, buffer, contentType, range) {
@@ -3659,6 +4017,20 @@ async function probeQQAudioUrl(audioUrl, timeoutMs) {
 async function handleQQSongUrl(mid, mediaMid, qualityPreference, playbackHints) {
   const songmid = String(mid || '').trim();
   if (!songmid) return { provider: 'qq', url: '', error: 'MISSING_MID', message: 'Missing QQ song mid' };
+  const cookieObj = qqCookieObject();
+  const uin = qqCookieUin(cookieObj) || '0';
+  const playbackKey = qqCookiePlaybackKey(cookieObj);
+  const qualityKey = String(qualityPreference && typeof qualityPreference === 'object'
+    ? JSON.stringify(qualityPreference)
+    : (qualityPreference || 'auto'));
+  const cacheKey = songmid + '|' + String(mediaMid || '') + '|' + qualityKey + '|' + uin + '|' + String(playbackKey || '').slice(0, 32);
+  return qqSongUrlCache.wrap(cacheKey, 60 * 1000, () =>
+    handleQQSongUrlInner(mid, mediaMid, qualityPreference, playbackHints));
+}
+
+async function handleQQSongUrlInner(mid, mediaMid, qualityPreference, playbackHints) {
+  const songmid = String(mid || '').trim();
+  if (!songmid) return { provider: 'qq', url: '', error: 'MISSING_MID', message: 'Missing QQ song mid' };
   const guid = String(10000000 + Math.floor(Math.random() * 90000000));
   const cookieObj = qqCookieObject();
   const uin = qqCookieUin(cookieObj) || '0';
@@ -4080,6 +4452,17 @@ async function fetchMyPodcastItems(key, info, limit, offset) {
 //   返回 { url, trial, level, br }
 //   trial=true 表示这是试听片段 (freeTrialInfo 非空)
 async function resolveNeteaseDirectSongUrl(id, loginInfo, qualityPreference) {
+  const songId = String(id || '').trim();
+  if (!songId) return resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference);
+  const qualityKey = String(qualityPreference && typeof qualityPreference === 'object'
+    ? JSON.stringify(qualityPreference)
+    : (qualityPreference || 'auto'));
+  const cookieKey = String(userCookie || '').slice(0, 64);
+  const cacheKey = songId + '|' + qualityKey + '|' + cookieKey;
+  return neteaseSongUrlCache.wrap(cacheKey, 3 * 60 * 1000, () =>
+    resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference));
+}
+async function resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference) {
   console.log('[SongUrl] id:', id, 'logged-in:', !!userCookie);
   const resolveDeadline = Date.now() + NETEASE_DIRECT_RESOLVE_BUDGET_MS;
   const requestedQuality = normalizeQualityPreference(qualityPreference);
@@ -4713,7 +5096,8 @@ const server = http.createServer(async (req, res) => {
         const ticket = customSourceBridge.issue(result.url);
         sendJSON(res, {
           ...result,
-          url: '/api/custom-source/audio?ticket=' + encodeURIComponent(ticket),
+          // 绝对地址（同 resolve-aggregate）：避免 /api/audio 二次代理时 Node fetch 解析相对路径 502
+          url: 'http://127.0.0.1:' + PORT + '/api/custom-source/audio?ticket=' + encodeURIComponent(ticket),
         });
         return;
       }
@@ -4721,6 +5105,69 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.warn('[CustomSourceResolve]', err.message || err);
       sendJSON(res, { attempted: true, url: '', reason: 'resolve_failed', error: err.message || 'CUSTOM_SOURCE_FAILED' }, 502);
+    }
+    return;
+  }
+
+  // 聚合解析：打破平台绑定。接收歌曲元数据 → 跨平台搜索匹配真实版本（wy/tx/kg）→
+  // 交给主进程按音质降序逐候选热切换解析 → 返回 ticket 化播放地址。
+  if (pn === '/api/custom-source/resolve-aggregate') {
+    if (req.method !== 'POST') {
+      sendJSON(res, { error: 'METHOD_NOT_ALLOWED' }, 405);
+      return;
+    }
+    const declaredLength = Number(req.headers['content-length']) || 0;
+    if (declaredLength > 256 * 1024) {
+      sendJSON(res, { error: 'REQUEST_TOO_LARGE' }, 413);
+      return;
+    }
+    try {
+      const body = await readRequestBody(req);
+      if (Buffer.byteLength(JSON.stringify(body || {})) > 256 * 1024) {
+        sendJSON(res, { error: 'REQUEST_TOO_LARGE' }, 413);
+        return;
+      }
+      if (!customSourceBridge || typeof customSourceBridge.resolveAggregate !== 'function') {
+        sendJSON(res, { attempted: false, reason: 'inactive' });
+        return;
+      }
+      const song = body && body.song && typeof body.song === 'object' ? body.song : {};
+      const quality = String(body && body.quality || 'hires');
+      const meta = aggregateSongMeta(song);
+      if (!meta.title) {
+        sendJSON(res, { attempted: false, reason: 'missing_metadata' });
+        return;
+      }
+      const controller = new AbortController();
+      req.once('aborted', () => controller.abort(new Error('CLIENT_ABORTED')));
+      const candidates = await aggregateSearchCandidates(meta);
+      if (!candidates.length) {
+        sendJSON(res, { attempted: true, url: '', reason: 'aggregate_no_match' });
+        return;
+      }
+      const result = await customSourceBridge.resolveAggregate({
+        candidates: candidates.map(item => ({ song: item.song, source: item.source, score: item.score })),
+        quality,
+        signal: controller.signal,
+      });
+      if (result && result.url) {
+        if (typeof customSourceBridge.issue !== 'function') throw new Error('CUSTOM_SOURCE_AUDIO_PROXY_UNAVAILABLE');
+        const ticket = customSourceBridge.issue(result.url);
+        sendJSON(res, {
+          ...result,
+          // 必须返回绝对地址：playQueueAt 会把它包进 /api/audio?url=<fetch 目标>，
+          // Node fetch 无法解析相对路径会 502（对齐 main.js IPC 路径的绝对化行为）
+          url: 'http://127.0.0.1:' + PORT + '/api/custom-source/audio?ticket=' + encodeURIComponent(ticket),
+          matchedTitle: meta.title,
+          matchedArtist: meta.artistNames.join('、'),
+          candidateCount: candidates.length,
+        });
+        return;
+      }
+      sendJSON(res, result && typeof result === 'object' ? result : { attempted: true, url: '', reason: 'resolve_failed' });
+    } catch (err) {
+      console.warn('[CustomSourceAggregate]', err.message || err);
+      sendJSON(res, { attempted: true, url: '', reason: 'resolve_failed', error: err.message || 'AGGREGATE_RESOLVE_FAILED' }, 502);
     }
     return;
   }
@@ -5001,6 +5448,35 @@ const server = http.createServer(async (req, res) => {
       const songs = await handleSearch(kw, limit, offset);
       sendJSON(res, { songs, offset, limit, nextOffset: offset + songs.length, hasMore: songs.length >= limit });
     } catch (err) { console.error('[Search]', err); sendJSON(res, { error: err.message, songs: [] }, 500); }
+    return;
+  }
+
+  // ---------- AI 助手音乐搜索桥 (LX 兼容契约) ----------
+  // agent-music-tools.js 自 LX-Music 移植, 调用 /api/lx-source/search 与 /api/lx-source/status。
+  // Stellaflix 无 LX 后端, 这里桥接到真实搜索引擎 (/api/search -> handleSearch), 并返回 LX 形状响应,
+  // 同时 /api/lx-source/status 返回内置音源就绪态, 让 AI 助手音乐搜索可用且不 404。
+  if (pn === '/api/lx-source/search') {
+    try {
+      const q = url.searchParams.get('q') || url.searchParams.get('keywords') || '';
+      const limit = Math.max(1, Math.min(50, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
+      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
+      if (!q) { sendJSON(res, { ok: true, songs: [], failures: [] }); return; }
+      const songs = await handleSearch(q, limit, offset);
+      sendJSON(res, { ok: true, songs: songs, failures: [], source: 'netease', note: 'proxied via /api/search' });
+    } catch (err) {
+      console.error('[LxSourceSearch]', err);
+      sendJSON(res, { ok: false, songs: [], failures: [{ source: 'netease', reason: err.message || 'SEARCH_FAILED' }] }, 500);
+    }
+    return;
+  }
+  if (pn === '/api/lx-source/status') {
+    sendJSON(res, {
+      ok: true,
+      name: 'Stellaflix',
+      version: APP_VERSION,
+      installed: [{ name: 'netease', enabled: true, note: 'built-in cloudsearch' }],
+      enabledCount: 1
+    });
     return;
   }
 
@@ -6659,7 +7135,25 @@ const server = http.createServer(async (req, res) => {
         res.end('Invalid cover url');
         return;
       }
-      const resp = await fetch(coverUrl, { headers: { 'User-Agent': UA, 'Referer': 'https://music.163.com/' } });
+      // 带 connect timeout + 重试：避免 CDN 单节点抖动时无限挂起
+      const COVER_TIMEOUT_MS = 8000;
+      let resp;
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), COVER_TIMEOUT_MS);
+        try {
+          resp = await fetch(coverUrl, {
+            headers: { 'User-Agent': UA, 'Referer': 'https://music.163.com/' },
+            signal: ctrl.signal
+          });
+        } finally { clearTimeout(timer); }
+      } catch (fetchErr) {
+        // 连接类错误（UND_ERR_CONNECT_TIMEOUT / ECONNREFUSED / ETIMEDOUT）包装为 502
+        console.error('[Cover] fetch failed:', fetchErr.message, coverUrl);
+        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+        res.end('Cover fetch failed: ' + fetchErr.message);
+        return;
+      }
       const ct  = resp.headers.get('content-type') || 'image/jpeg';
       const cl  = resp.headers.get('content-length');
       const hdr = {
@@ -6670,10 +7164,41 @@ const server = http.createServer(async (req, res) => {
       };
       if (cl) hdr['Content-Length'] = cl;
       res.writeHead(resp.status, hdr);
+      if (!resp.body) { res.end(); return; }
       const reader = resp.body.getReader();
-      while (true) { const c = await reader.read(); if (c.done) break; res.write(c.value); }
-      res.end();
-    } catch (err) { console.error('[Cover]', err); res.writeHead(500); res.end(); }
+      let coverClientClosed = false;
+      const closeCoverReader = () => {
+        coverClientClosed = true;
+        try { Promise.resolve(reader.cancel()).catch(() => {}); } catch (_) {}
+      };
+      res.once('close', closeCoverReader);
+      try {
+        while (!coverClientClosed) {
+          const c = await reader.read();
+          if (c.done) break;
+          if (!res.write(c.value)) await once(res, 'drain');
+        }
+      } finally {
+        res.removeListener('close', closeCoverReader);
+        if (coverClientClosed) {
+          try { await reader.cancel(); } catch (_) {}
+        }
+      }
+      if (!coverClientClosed) res.end();
+    } catch (err) { console.error('[Cover]', err); if (!res.headersSent) { res.writeHead(500); res.end(); } else { try { res.destroy(); } catch (_) {} } }
+    return;
+  }
+
+  // ---------- [临时诊断] 渲染进程探针落盘（排查播放卡死，渲染冻结时主进程仍可写盘） ----------
+  if (pn === '/api/diag-log') {
+    if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+    try {
+      const body = await readRequestBody(req);
+      const line = JSON.stringify({ at: new Date().toISOString(), body: body }) + '\n';
+      require('fs').appendFileSync(require('path').join(__dirname, 'outputs', 'sfv-diag-renderer.log'), line);
+    } catch (e) { /* 诊断路由永不报错 */ }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('{"ok":true}');
     return;
   }
 
@@ -6706,7 +7231,27 @@ const server = http.createServer(async (req, res) => {
       ['x-auth', 'x-appid', 'x-signature', 'x-timestamp', 'x-appsecret', 'cookie'].forEach(function (k) {
         if (req.headers[k]) headers[k] = req.headers[k];
       });
-      const up = await fetch(target, { headers });
+      // 出站 fetch：m3u8 分片/列表统一设 connect 超时为 12s，避免 CDN 节点不可达时无限挂起
+      const PROXY_TIMEOUT_MS = 12000;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), PROXY_TIMEOUT_MS);
+      let up;
+      try {
+        up = await fetch(target, { headers, signal: ctrl.signal });
+      } catch (fetchErr) {
+        clearTimeout(timer);
+        console.error('[Proxy] fetch failed:', fetchErr.message, target);
+        try { res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); } catch (e) {}
+        res.end('Proxy upstream connect failed: ' + fetchErr.message);
+        return;
+      }
+      clearTimeout(timer);
+      // ==== Fix: 通道问题诊断 —— 非 2xx 上游响应记录明显日志，方便用户快速定位
+      // CDN 防盗链 403、源站 5xx、SSRF 私网拦截（isPrivateHost）导致上游失败都会
+      // 在这里暴露出来，避免黑盒地表现为播放器黑屏。
+      if (!up.ok || up.status < 200 || up.status >= 400) {
+        console.warn('[Proxy-ERR] upstream status=' + up.status + ' url=' + target);
+      }
       // HLS 资源自适应 MIME 覆盖：部分 CDN 将分片伪装为 .png/.jpg 等非视频扩展名，
       // 原样透传其 Content-Type 会导致 hls.js 拒绝解码（预期 video/* 或 application/octet-stream）。
       var ct = up.headers.get('content-type') || 'application/octet-stream';
@@ -6726,15 +7271,105 @@ const server = http.createServer(async (req, res) => {
         'Access-Control-Allow-Origin': '*',
         'Accept-Ranges': 'bytes',
       };
-      const cl = up.headers.get('content-length'); if (cl) out['Content-Length'] = cl;
+      // 关键修复：undici fetch 会按上游 content-encoding 自动解压 body，但 headers 里的
+      // content-length 仍是「压缩态」字节数。若原样转发，客户端（hls.js XHR）会按旧长度
+      // 提前截断 body —— m3u8 清单被截短（142 分钟影片只显示 5 分钟）、缺 #EXT-X-ENDLIST
+      // 被误判为直播流而无限轮询。故仅当上游未压缩时才透传 content-length；
+      // 压缩响应不携带 content-length，Node 自动降级为 Transfer-Encoding: chunked。
+      const upstreamEncoded = !!up.headers.get('content-encoding');
+      const cl = up.headers.get('content-length'); if (cl && !upstreamEncoded) out['Content-Length'] = cl;
       const cr = up.headers.get('content-range'); if (cr) out['Content-Range'] = cr;
       res.writeHead(up.status, out);
       if (upstreamIsImage) console.log('[Proxy-IMG]', up.status, ct, target);
-      const reader = up.body.getReader();
       if (!up.body) { res.end(); return; }
-      while (true) { const c = await reader.read(); if (c.done) break; res.write(Buffer.from(c.value)); }
+      const reader = up.body.getReader();
+      // 客户端中止传播：渲染端（hls.js 切档/退出播放/XHR abort）断开连接后，
+      // 立即取消上游读取，避免无人消费的分片继续在主进程内存中堆积（OOM 隐患）。
+      var clientGone = false;
+      req.on('close', function () {
+        clientGone = true;
+        try { reader.cancel().catch(function () {}); } catch (e) {}
+      });
+      while (true) {
+        if (clientGone) break;
+        const c = await reader.read();
+        if (c.done) break;
+        // 背压：socket 缓冲区满时等待 drain，避免渲染端消费慢时数据在主进程无界堆积。
+        if (!res.write(Buffer.from(c.value))) await once(res, 'drain');
+      }
       res.end();
-    } catch (err) { console.error('[Proxy]', err); res.writeHead(502); res.end(); }
+    } catch (err) { console.error('[Proxy]', err); try { res.writeHead(502); } catch (e) {} res.end(); }
+    return;
+  }
+
+  // ---------- Bangumi 搜索代理（仅 POST，供「每周新番」季度切换使用） ----------
+  // 与通用 /api/proxy 不同：/api/proxy 是 GET-only（server 侧 fetch 不带 method/body），
+  // 无法承载 Bangumi 的 POST 搜索。本路由采用「硬编码目标 + 字段白名单」而非通用透传，
+  // 避免把 /api/proxy 改造成 method+body 透传后扩大攻击面。
+  //   - 目标域固定：api.bgm.tv
+  //   - 目标路径固定：/v0/search/subjects
+  //   - limit 上限 20、offset 上限 200、keyword 截断 200 字符、payload 总量上限 4KB
+  //   - 复用 isPrivateHost 做纵深防御（域已固定，理论上不可达，但保留拦截）
+  if (pn === '/api/bangumi/search') {
+    try {
+      if (req.method !== 'POST') { res.writeHead(405); res.end('Method Not Allowed'); return; }
+
+      const body = await readRequestBody(req) || {};
+      const qLimit = body.limit != null ? body.limit : url.searchParams.get('limit');
+      const qOffset = body.offset != null ? body.offset : url.searchParams.get('offset');
+
+      const limit = Math.min(20, Math.max(1, parseInt(qLimit, 10) || 20));
+      const offset = Math.min(200, Math.max(0, parseInt(qOffset, 10) || 0));
+
+      const payload = {
+        keyword: (typeof body.keyword === 'string' ? body.keyword : '').slice(0, 200),
+        sort: (typeof body.sort === 'string' ? body.sort : 'rank').slice(0, 32),
+        filter: (body.filter && typeof body.filter === 'object' && !Array.isArray(body.filter)) ? body.filter : {},
+      };
+      const rawPayload = JSON.stringify(payload);
+      if (rawPayload.length > 4096) { res.writeHead(413); res.end('Payload Too Large'); return; }
+
+      // 优先 Kazumi 镜像 api.kazumi.fyi（国内可直连，无需代理）；官方 api.bgm.tv 需代理，作最后兜底。
+      const candidates = [
+        { url: 'https://api.kazumi.fyi/v0/search/subjects', label: 'api.kazumi.fyi' },
+        { url: 'https://api.bgm.tv/v0/search/subjects', label: 'api.bgm.tv' },
+      ];
+      let up = null;
+      let lastErr = null;
+      for (let ci = 0; ci < candidates.length; ci++) {
+        try {
+          const cu = new URL(candidates[ci].url);
+          cu.searchParams.set('limit', String(limit));
+          cu.searchParams.set('offset', String(offset));
+          if (isPrivateHost(cu.hostname)) { lastErr = 'Forbidden host ' + cu.hostname; continue; }
+          const r = await fetchWithTimeout(cu.toString(), {
+            method: 'POST',
+            headers: {
+              'User-Agent': 'Predidit/Kazumi/2.2.6 (Android) (https://github.com/Predidit/Kazumi)',
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: rawPayload,
+          }, 12000);
+          if (r.ok) { up = r; break; }
+          lastErr = '上游 ' + candidates[ci].label + ' 返回 ' + r.status;
+          console.warn('[BangumiSearch] ' + lastErr + '，尝试下一源');
+        } catch (e) {
+          lastErr = (e && e.message) || String(e);
+          console.warn('[BangumiSearch] 源 ' + candidates[ci].label + ' 失败：' + lastErr);
+        }
+      }
+      if (!up) {
+        console.error('[BangumiSearch] 全部源失败：', lastErr);
+        res.writeHead(502); res.end(); return;
+      }
+      const text = await up.text();
+      res.writeHead(up.status, {
+        'Content-Type': up.headers.get('content-type') || 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(text);
+    } catch (err) { console.error('[BangumiSearch]', err); res.writeHead(502); res.end(); }
     return;
   }
 
@@ -6774,7 +7409,7 @@ const server = http.createServer(async (req, res) => {
         while (!clientClosed) {
           const c = await readStreamChunkWithTimeout(reader, 12000);
           if (c.done) break;
-          res.write(c.value);
+          if (!res.write(c.value)) await once(res, 'drain');
         }
       } finally {
         res.removeListener('close', closeReader);
@@ -6840,23 +7475,86 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ---------- AI 助手语音 (暂不可用，需 Whisper/Windows Speech 环境) ----------
+  // ---------- AI 助手语音：前端 MediaRecorder 录 webm/opus → ffmpeg 转 16k 单声道 PCM WAV → PowerShell + SAPI 转写 ----------
   if (pn === '/api/agent/speech/capabilities') {
     sendJSON(res, {
       ok: true,
       whisperAvailable: false,
+      // windowsSpeechAvailable 仅代表"服务端麦克风直采"链路；当前未启用，
+      // 前端走 MediaRecorder + /transcribe（上传音频由服务端转写）。
       windowsSpeechAvailable: false,
     });
     return;
   }
 
   if (pn === '/api/agent/speech/recognize') {
+    // 服务端麦克风直采链路未实现；当前前端能力下不会触发此端点。
     sendJSON(res, { ok: false, error: 'SPEECH_NOT_AVAILABLE', message: '当前环境未配置语音识别。' });
     return;
   }
 
   if (pn === '/api/agent/speech/transcribe') {
-    sendJSON(res, { ok: false, error: 'SPEECH_NOT_AVAILABLE', message: '当前环境未配置语音识别。' });
+    if (req.method !== 'POST') {
+      sendJSON(res, { ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
+      return;
+    }
+    if (!ffmpegBinaryReady) {
+      sendJSON(res, { ok: false, error: 'FFMPEG_BINARY_MISSING',
+        message: '未检测到 ffmpeg 二进制，请先在项目根目录执行 npm install ffmpeg-static（需联网下载 ~70MB 的 Windows 预编译包）。' });
+      return;
+    }
+    const rawBody = await readRawBody(req, 20 * 1024 * 1024);
+    if (rawBody == null) {
+      sendJSON(res, { ok: false, error: 'PAYLOAD_TOO_LARGE', message: '音频超过 20MB 上限。' }, 413);
+      return;
+    }
+    if (!rawBody.length) {
+      sendJSON(res, { ok: false, error: 'EMPTY_AUDIO', message: '未收到音频数据。' });
+      return;
+    }
+    const ps1Path = path.join(__dirname, 'desktop', 'speech', 'sapi-transcribe.ps1');
+    if (!fs.existsSync(ps1Path)) {
+      sendJSON(res, { ok: false, error: 'SAPI_SCRIPT_MISSING', message: 'SAPI 转写脚本缺失：' + ps1Path });
+      return;
+    }
+    const tmpId = crypto.randomBytes(8).toString('hex');
+    const tmpDir = os.tmpdir();
+    const inPath  = path.join(tmpDir, `speech-in-${tmpId}.webm`);
+    const outPath = path.join(tmpDir, `speech-out-${tmpId}.wav`);
+    const safeUnlink = (p) => { try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {} };
+    try {
+      fs.writeFileSync(inPath, rawBody);
+      // 1) ffmpeg: webm/opus → 16kHz 单声道 PCM s16le WAV（SAPI 标准输入格式）
+      const ffResult = await runProcess(ffmpegStaticPath,
+        ['-y', '-hide_banner', '-loglevel', 'error', '-i', inPath,
+         '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', outPath], 30000);
+      if (ffResult.code !== 0) {
+        sendJSON(res, { ok: false, error: 'FFMPEG_CONVERT_FAILED',
+          message: 'ffmpeg 转码失败：' + ((ffResult.stderr || '').replace(/\r?\n/g, ' ').trim().slice(0, 500) || `exit ${ffResult.code}`) });
+        return;
+      }
+      if (!fs.existsSync(outPath)) {
+        sendJSON(res, { ok: false, error: 'FFMPEG_NO_OUTPUT', message: 'ffmpeg 未产出 WAV。' });
+        return;
+      }
+      // 2) PowerShell + SAPI：单次识别 → stdout 文本
+      const psResult = await runProcess('powershell.exe',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1Path, outPath], 45000);
+      if (psResult.code !== 0) {
+        sendJSON(res, { ok: false, error: 'SAPI_FAILED',
+          message: '语音识别失败：' + ((psResult.stderr || '').replace(/\r?\n/g, ' ').trim().slice(0, 500) || `exit ${psResult.code}`) });
+        return;
+      }
+      const text = (psResult.stdout || '').replace(/^\uFEFF/, '').trim();
+      sendJSON(res, { ok: true, text, language: 'auto' });
+    } catch (err) {
+      console.warn('[SpeechTranscribe] failed:', err && err.message || err);
+      sendJSON(res, { ok: false, error: 'SPEECH_TRANSCRIBE_FAILED',
+        message: '语音识别处理异常：' + (err && err.message || String(err)) }, 500);
+    } finally {
+      safeUnlink(inPath);
+      safeUnlink(outPath);
+    }
     return;
   }
 

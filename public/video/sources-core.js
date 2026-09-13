@@ -272,6 +272,42 @@
     return max;
   }
 
+  // ---------------------------------------------------------------- 默认集选择（主片）
+
+  // 非正片关键词：命中即降权。CMS10 不提供单集时长，只能按集名关键词判别——
+  // 实测某源对电影返回「预告片#HD中字」，直接播 episodes[0] 会起播 2:48 的预告片，
+  // 表现为「电影总时长只有几分钟」。故必须跳过预告/片花/花絮类集。
+  var NON_MAIN_EPISODE_RE = /(预告|片花|花絮|特典|彩蛋|抢先|幕后|特辑|先行|先导|trailer|teaser|preview)/i;
+  // 明确正片关键词：命中且不含非正片词 → 优先起播。
+  // HD/BD 加字母边界，避免误命中 hidden/advanced 等英文单词（中文场景如「HD中字」仍命中）。
+  var MAIN_EPISODE_RE = /(正片|完整版|高清|超清|中字|国语|原声|中英|(^|[^a-z])hd([^a-z]|$)|(^|[^a-z])bd([^a-z]|$))/i;
+
+  /**
+   * 挑选默认起播集（主片），供详情页/回退路径替代「无脑播 episodes[0]」。
+   *
+   * 策略（CMS 无时长信息，仅依据集名关键词）：
+   *   1) 首选：明确标记为「正片/高清/中字…」且不含预告类关键词的集（保持原顺序）；
+   *   2) 次选：第一个不属于预告/片花/花絮类的集；
+   *   3) 兜底：返回第一集（保持旧行为，普通剧集不受影响）。
+   *
+   * @param {Array<{name:string,url:string,index:number}>} episodes
+   * @returns {Object|null}
+   */
+  function pickMainEpisode(episodes) {
+    if (!episodes || !episodes.length) return null;
+    if (episodes.length === 1) return episodes[0];
+    var i, n;
+    for (i = 0; i < episodes.length; i++) {
+      n = String((episodes[i] && episodes[i].name) || '');
+      if (MAIN_EPISODE_RE.test(n) && !NON_MAIN_EPISODE_RE.test(n)) return episodes[i];
+    }
+    for (i = 0; i < episodes.length; i++) {
+      n = String((episodes[i] && episodes[i].name) || '');
+      if (!NON_MAIN_EPISODE_RE.test(n)) return episodes[i];
+    }
+    return episodes[0];
+  }
+
   /**
    * 把 CMS10 的一条 vod 记录归一化为内部结构。
    */
@@ -352,6 +388,7 @@
     buildDetailUrlWithApi: buildDetailUrlWithApi,
     // 解析
     parsePlayUrl: parsePlayUrl,
+    pickMainEpisode: pickMainEpisode,
     countEpisodes: countEpisodes,
     normalizeVod: normalizeVod,
     extractList: extractList,

@@ -8,7 +8,7 @@ const { redactSecrets } = require('./redact');
 
 const inflate = promisify(zlib.inflate);
 const deflate = promisify(zlib.deflate);
-const RUNTIME_ARGUMENT = '--mineradio-lx-runtime-id=';
+const RUNTIME_ARGUMENT = '--stellaflix-lx-runtime-id=';
 const INIT_TIMEOUT = 10_000;
 const ACTION_TIMEOUT = 20_000;
 const MAX_ZLIB_INPUT_BYTES = 2 * 1024 * 1024;
@@ -115,18 +115,18 @@ function installHost(ipcMain) {
     host.handles.add(channel);
   };
 
-  sync('mineradio-lx-bootstrap', runtime => ({ currentScriptInfo: { ...runtime.currentScriptInfo }, config: runtime.config || {} }));
-  sync('mineradio-lx-crypto', (_runtime, payload) => runCrypto(payload));
-  handle('mineradio-lx-zlib', (_runtime, payload) => runZlib(payload));
-  handle('mineradio-lx-http', async (runtime, payload) => {
+  sync('stellaflix-lx-bootstrap', runtime => ({ currentScriptInfo: { ...runtime.currentScriptInfo }, config: runtime.config || {} }));
+  sync('stellaflix-lx-crypto', (_runtime, payload) => runCrypto(payload));
+  handle('stellaflix-lx-zlib', (_runtime, payload) => runZlib(payload));
+  handle('stellaflix-lx-http', async (runtime, payload) => {
     try { return await runtime.handleHttp(payload); }
     catch (error) { return errorResult(error); }
   });
-  handle('mineradio-lx-inited', (runtime, payload) => runtime.handleInited(payload.data));
-  handle('mineradio-lx-update-alert', (runtime, payload) => runtime.handleUpdateAlert(payload.data));
-  receive('mineradio-lx-http-cancel', (runtime, payload) => runtime.cancelHttp(payload.requestId));
-  receive('mineradio-lx-response', (runtime, payload) => runtime.handleActionResponse(payload));
-  receive('mineradio-lx-init-error', (runtime, payload) => runtime.failInit(payload.error, true));
+  handle('stellaflix-lx-inited', (runtime, payload) => runtime.handleInited(payload.data));
+  handle('stellaflix-lx-update-alert', (runtime, payload) => runtime.handleUpdateAlert(payload.data));
+  receive('stellaflix-lx-http-cancel', (runtime, payload) => runtime.cancelHttp(payload.requestId));
+  receive('stellaflix-lx-response', (runtime, payload) => runtime.handleActionResponse(payload));
+  receive('stellaflix-lx-init-error', (runtime, payload) => runtime.failInit(payload.error, true));
   hosts.set(ipcMain, host);
   return host;
 }
@@ -197,7 +197,7 @@ class LxSourceRuntime {
           sandbox: true,
           devTools: false,
           webviewTag: false,
-          partition: `mineradio-lx-${this.runtimeId}`,
+          partition: `stellaflix-lx-${this.runtimeId}`,
           images: false,
           webgl: false,
           spellcheck: false,
@@ -219,7 +219,7 @@ class LxSourceRuntime {
       contents.on('devtools-opened', () => contents.closeDevTools?.());
       contents.once('did-finish-load', () => {
         if (!this.stopped && this.window && !this.window.isDestroyed()) {
-          contents.send('mineradio-lx-script', { runtimeId: this.runtimeId, script: this.script });
+          contents.send('stellaflix-lx-script', { runtimeId: this.runtimeId, script: this.script });
         }
       });
       this.window.once('closed', () => { if (!this.stopped) this.stop(); });
@@ -292,7 +292,7 @@ class LxSourceRuntime {
         if (signal.aborted) { abort(); return; }
         signal.addEventListener('abort', abort, { once: true });
       }
-      this.window.webContents.send('mineradio-lx-request', { requestKey, data });
+      this.window.webContents.send('stellaflix-lx-request', { requestKey, data });
     });
   }
 

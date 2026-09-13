@@ -1,6 +1,6 @@
 'use strict';
 
-(function installMineradioAgentMusicTools() {
+(function installStellaflixAgentMusicTools() {
   var DEFAULT_SOURCES = ['tx', 'wy', 'kw', 'kg', 'mg'];
   var SOURCE_ALIASES = {
     qq: 'tx', tx: 'tx',
@@ -237,7 +237,7 @@
       appState = {
         playbackSpeed: typeof playbackTuning !== 'undefined' ? Number(playbackTuning.speed) || 1 : 1,
         playbackPitch: typeof playbackTuning !== 'undefined' ? Number(playbackTuning.pitch) || 0 : 0,
-        fullscreen: typeof isMineradioFullscreenActive === 'function' ? !!isMineradioFullscreenActive() : !!document.fullscreenElement,
+        fullscreen: typeof isStellaflixFullscreenActive === 'function' ? !!isStellaflixFullscreenActive() : !!document.fullscreenElement,
         immersive: typeof immersiveMode !== 'undefined' && !!immersiveMode,
         windowLyrics: typeof fx !== 'undefined' && !!fx.particleLyrics,
         diyMode: typeof diyPlayerMode !== 'undefined' && !!diyPlayerMode,
@@ -349,7 +349,7 @@
         { timeoutMs: Math.max(8000, Number(options.timeoutMs) || 24000) }
       );
       var rawSongs = result && Array.isArray(result.songs) ? result.songs : [];
-      var songs = rawSongs.map(function (song, index) {
+      var scored = rawSongs.map(function (song, index) {
         return {
           song: prepareSearchSong(song, index, query),
           score: scoreSong(song, { query: query, title: title, artist: artist }, index),
@@ -357,7 +357,125 @@
         };
       }).sort(function (a, b) {
         return b.score - a.score || a.index - b.index;
-      }).slice(0, resultLimit).map(function (entry) {
+      });
+
+      // 严格歌手过滤：当用户同时指定歌手和曲目名时，丢弃歌手不符的候选，避免
+      // "播放周杰伦的《东风破》"被错播同名曲（如刘芳版）。无任何结果时进入第二阶段
+      // fallback：用 title-only 重新查询（覆盖官方 netease cloudsearch 默认返回 cover/
+      // instrumental 优先的情况），再对该更宽候选池应用严格歌手过滤；仍无结果才返
+      // 回明确 NO_MATCH，让上层能告知用户"未找到歌手 X 的《Y》"而不是静默播放错误版本。
+      var resultFailures = result && Array.isArray(result.failures) ? result.failures : [];
+      if (artist && title) {
+        var wantedArtistNorm = normalizeText(artist);
+        var wantedTitleNorm = normalizeText(title);
+        // 通用曲名严格匹配检查：剔除撞名歌手的无关作品（如"周杰伦♚"的《我爱你》通过歌手过
+        // 滤但曲名不是用户要的《东风破》）。要求 normalize 后的曲名完全相等、互相包含。
+        var titleMatches = function (song) {
+          var songTitle = (song && (song.name || song.title)) || '';
+          var normSongTitle = normalizeText(songTitle);
+          return !!normSongTitle && (normSongTitle === wantedTitleNorm ||
+            normSongTitle.indexOf(wantedTitleNorm) >= 0 ||
+            wantedTitleNorm.indexOf(normSongTitle) >= 0);
+        };
+        scored = scored.filter(function (entry) {
+          var songArtist = (entry.song && (entry.song.singer || entry.song.artist || entry.song.author)) || '';
+          return normalizeText(songArtist).indexOf(wantedArtistNorm) >= 0;
+        });
+        scored = scored.filter(function (entry) { return titleMatches(entry.song); });
+        if (!scored.length) {
+          // 第二阶段 fallback：仅用 title 查询（绕开 "周杰伦 七里香" 这种组合查询让 cloudsearch
+          // 返回 cover/instrumental 而非正版的偏向），拿到候选池后再用同样规则过滤。
+          try {
+            var fallbackResult = await apiJson(
+              '/api/lx-source/search?q=' + encodeURIComponent(title) +
+              '&limit=' + fetchLimit +
+              '&sources=' + encodeURIComponent(sources.join(',')) +
+              '&t=' + Date.now(),
+              { timeoutMs: Math.max(8000, Number(options.timeoutMs) || 24000) }
+            );
+            if (fallbackResult && Array.isArray(fallbackResult.failures)) {
+              resultFailures = fallbackResult.failures;
+            }
+            var fallbackSongs = fallbackResult && Array.isArray(fallbackResult.songs) ? fallbackResult.songs : [];
+            if (fallbackSongs.length) {
+              var rescored = fallbackSongs.map(function (song, index) {
+                return {
+                  song: prepareSearchSong(song, index, title),
+                  score: scoreSong(song, { query: title, title: title, artist: artist }, index),
+                  index: index
+                };
+              }).sort(function (a, b) {
+                return b.score - a.score || a.index - b.index;
+              });
+              rescored = rescored.filter(function (entry) {
+                var songArtist = (entry.song && (entry.song.singer || entry.song.artist || entry.song.author)) || '';
+                return normalizeText(songArtist).indexOf(wantedArtistNorm) >= 0;
+              });
+              rescored = rescored.filter(function (entry) { return titleMatches(entry.song); });
+              if (rescored.length) scored = rescored;
+            }
+          } catch (fallbackErr) {
+            // 第二阶段查询失败时，继续走原 NO_MATCH 路径，不向用户抛技术错。
+            if (!Array.isArray(resultFailures)) resultFailures = [];
+          }
+          // 第三阶段 fallback：跨平台（QQ/酷狗）搜索。netease cloudsearch 因版权常无热门
+          // 歌手（周杰伦/陈奕迅等）的原版，但 QQ/酷狗 有正版。并行搜两个平台，按相同严格
+          // 歌手过滤筛候选，任一非空则替换 scored；任一失败或都空仍走 NO_MATCH。
+          if (!scored.length) {
+            try {
+              var crossTimeBudget = Math.max(8000, Number(options.timeoutMs) || 18000);
+              var crossResults = await Promise.all([
+                apiJson('/api/qq/search?keywords=' + encodeURIComponent(title) +
+                  '&limit=' + fetchLimit + '&t=' + Date.now(),
+                  { timeoutMs: crossTimeBudget })
+                  .then(function (r) { return r; }).catch(function () { return null; }),
+                apiJson('/api/kugou/search?keywords=' + encodeURIComponent(title) +
+                  '&limit=' + fetchLimit + '&t=' + Date.now(),
+                  { timeoutMs: crossTimeBudget })
+                  .then(function (r) { return r; }).catch(function () { return null; })
+              ]);
+              var crossSongs = [];
+              crossResults.forEach(function (r) {
+                if (r && Array.isArray(r.songs)) crossSongs = crossSongs.concat(r.songs);
+              });
+              if (crossSongs.length) {
+                var crossScored = crossSongs.map(function (song, index) {
+                  return {
+                    song: prepareSearchSong(song, index, title),
+                    score: scoreSong(song, { query: title, title: title, artist: artist }, index),
+                    index: index
+                  };
+                }).sort(function (a, b) {
+                  return b.score - a.score || a.index - b.index;
+                });
+                crossScored = crossScored.filter(function (entry) {
+                  var songArtist = (entry.song && (entry.song.singer || entry.song.artist || entry.song.author)) || '';
+                  return normalizeText(songArtist).indexOf(wantedArtistNorm) >= 0;
+                });
+                crossScored = crossScored.filter(function (entry) { return titleMatches(entry.song); });
+                if (crossScored.length) scored = crossScored;
+              }
+            } catch (crossErr) {
+              // 第三阶段查询失败时，继续走原 NO_MATCH 路径，不向用户抛技术错。
+            }
+          }
+        }
+        if (!scored.length) {
+          lastSearch = { query: query, songs: [], at: Date.now() };
+          return {
+            ok: false,
+            query: query,
+            songs: [],
+            failures: resultFailures,
+            error: 'NO_MATCH',
+            message: '未找到歌手「' + artist + '」的《' + title + '》',
+            authMode: 'qingting-source',
+            requiresLogin: false
+          };
+        }
+      }
+
+      var songs = scored.slice(0, resultLimit).map(function (entry) {
         entry.song.agentMatchScore = Math.round(entry.score);
         return entry.song;
       });
@@ -370,7 +488,7 @@
         failures: result && Array.isArray(result.failures) ? result.failures : [],
         error: songs.length ? '' : 'NO_RESULTS',
         message: songs.length ? ('找到 ' + songs.length + ' 个候选结果') : '没有找到匹配歌曲',
-        authMode: 'imported-lx-source',
+        authMode: 'qingting-source',
         requiresLogin: false
       };
     } catch (error) {
@@ -407,7 +525,7 @@
         version: info.version || '',
         installedCount: installed.length,
         enabledCount: enabled.length,
-        authMode: 'imported-lx-source',
+        authMode: 'qingting-source',
         requiresLogin: false
       };
     } catch (error) {
@@ -445,13 +563,19 @@
         Number(playableSong.lxSongIndex),
         playableSong
       );
-      if (!played) return toolError('PLAYBACK_FAILED', '现有播放器未能开始播放这首歌曲');
+      if (!played || !played.ok) {
+        var reason = played && played.reason ? String(played.reason) : 'UNKNOWN';
+        var detail = played && played.error ? String(played.error) : (played && played.resolveResult && played.resolveResult.error ? String(played.resolveResult.error) : '');
+        return toolError('PLAYBACK_FAILED', '现有播放器未能开始播放这首歌曲（' + reason + (detail ? '：' + detail : '') + '）');
+      }
+      var sourceName = played && played.source ? '（' + played.source + '）' : '';
       return {
         ok: true,
-        message: '正在播放：' + String(playableSong.name || playableSong.title || '未知歌曲'),
+        message: '正在播放：' + String(playableSong.name || playableSong.title || '未知歌曲') + sourceName,
         song: playableSong,
         source: sourceState,
-        authMode: 'imported-lx-source',
+        playback: played,
+        authMode: 'qingting-source',
         requiresLogin: false
       };
     } catch (error) {
@@ -797,7 +921,7 @@
     return { ok: true };
   }
 
-  async function openMineradioInterface(input) {
+  async function openStellaflixInterface(input) {
     var options = asOptions(input);
     var section = String(options.section || options.page || '').trim().toLowerCase();
     var labels = {
@@ -899,11 +1023,11 @@
     }
   }
 
-  async function controlMineradioApp(input) {
+  async function controlStellaflixApp(input) {
     var options = asOptions(input);
     var operation = String(options.operation || options.action || 'set').trim().toLowerCase();
     var target = String(options.target || options.control || '').trim().toLowerCase();
-    if (operation === 'open') return openMineradioInterface({ section: target });
+    if (operation === 'open') return openStellaflixInterface({ section: target });
     var labels = {
       playback_speed: '播放倍速', playback_pitch: '播放音调', playback_tuning: '倍速与音调',
       playback_mode: '播放模式', fullscreen: '全屏', immersive: '全沉浸式', window_lyrics: '窗口内歌词',
@@ -911,7 +1035,7 @@
       interface_motion: '软件界面动画', visual_console_auto_hide: '视觉控制台自动隐藏', wallpaper_mirror: '壁纸镜像',
       queue_shuffle: '随机打乱队列', queue_clear: '清空播放队列', backing_track: '当前歌曲伴奏',
       app_memory_trim: '压缩播放器内存', system_memory_trim: '释放系统内存', visual_settings_reset: '重置视觉设置',
-      window_minimize: '最小化窗口', window_close: '关闭 Mineradio'
+      window_minimize: '最小化窗口', window_close: '关闭 Stellaflix'
     };
     if (!labels[target]) return toolError('APP_CONTROL_INVALID', '不支持这个软件控制目标');
     function desiredEnabled(current) {
@@ -948,7 +1072,7 @@
       if (target === 'playback_mode') return setPlayMode({ mode: String(options.value || options.mode || '').toLowerCase() });
       if (target === 'fullscreen') {
         if (typeof toggleFullscreen !== 'function') return toolError('APP_CONTROL_NOT_READY', '全屏控制尚未初始化');
-        current = typeof isMineradioFullscreenActive === 'function' ? !!isMineradioFullscreenActive() : !!document.fullscreenElement;
+        current = typeof isStellaflixFullscreenActive === 'function' ? !!isStellaflixFullscreenActive() : !!document.fullscreenElement;
         desired = desiredEnabled(current);
         if (current !== desired) await Promise.resolve(toggleFullscreen());
       } else if (target === 'immersive') {
@@ -1020,12 +1144,12 @@
       } else if (target === 'window_minimize') {
         if (!window.desktopWindow || typeof window.desktopWindow.minimize !== 'function') return toolError('APP_CONTROL_NOT_READY', '窗口最小化功能尚未初始化');
         await Promise.resolve(window.desktopWindow.minimize());
-        return { ok:true, target:target, message:'Mineradio 已最小化', requiresLogin:false };
+        return { ok:true, target:target, message:'Stellaflix 已最小化', requiresLogin:false };
       } else if (target === 'window_close') {
-        if (options.confirmed !== true) return toolError('APP_CONTROL_CONFIRM_REQUIRED', '关闭 Mineradio 需要明确确认');
+        if (options.confirmed !== true) return toolError('APP_CONTROL_CONFIRM_REQUIRED', '关闭 Stellaflix 需要明确确认');
         if (!window.desktopWindow || typeof window.desktopWindow.close !== 'function') return toolError('APP_CONTROL_NOT_READY', '窗口关闭功能尚未初始化');
         await Promise.resolve(window.desktopWindow.close());
-        return { ok:true, target:target, message:'正在关闭 Mineradio', requiresLogin:false };
+        return { ok:true, target:target, message:'正在关闭 Stellaflix', requiresLogin:false };
       }
       return { ok:true, target:target, enabled:desired, message:labels[target] + (desired ? '已开启' : '已关闭'), requiresLogin:false };
     } catch (error) {
@@ -2361,7 +2485,7 @@
 
   function triggerWorldPeaceEasterEgg() {
     if (typeof window.playWorldPeaceEasterEgg !== 'function') {
-      return toolError('WORLD_PEACE_EASTER_EGG_NOT_READY', '世界和平彩蛋尚未加载完成，请重启 Mineradio 后再试');
+      return toolError('WORLD_PEACE_EASTER_EGG_NOT_READY', '世界和平彩蛋尚未加载完成，请重启 Stellaflix 后再试');
     }
     try {
       var result = window.playWorldPeaceEasterEgg();
@@ -2379,15 +2503,15 @@
 
   function getCapabilities() {
     return {
-      name: 'Mineradio music tools',
+      name: 'Stellaflix music tools',
       authMode: 'imported-lx-source',
       requiresLogin: false,
       searchSources: DEFAULT_SOURCES.slice(),
-      tools: ['search_music', 'play_music', 'search_and_play_music', 'replay_current_music', 'set_volume', 'control_playback', 'skip_track', 'set_play_mode', 'control_audio_quality', 'open_music_source_manager', 'open_mineradio_interface', 'control_mineradio_app', 'control_lyric_animation', 'trigger_world_peace_easter_egg', 'open_music_library', 'open_lyric_animation_settings', 'search_and_queue_music', 'add_playlist_to_queue', 'seek_playback', 'save_music_to_playlist', 'create_local_playlist', 'build_recommended_playlist', 'save_pending_recommended_playlist', 'discard_pending_recommended_playlist', 'import_shared_playlist', 'control_diy_visual', 'get_player_context']
+      tools: ['search_music', 'play_music', 'search_and_play_music', 'replay_current_music', 'set_volume', 'control_playback', 'skip_track', 'set_play_mode', 'control_audio_quality', 'open_music_source_manager', 'open_stellaflix_interface', 'control_stellaflix_app', 'control_lyric_animation', 'trigger_world_peace_easter_egg', 'open_music_library', 'open_lyric_animation_settings', 'search_and_queue_music', 'add_playlist_to_queue', 'seek_playback', 'save_music_to_playlist', 'create_local_playlist', 'build_recommended_playlist', 'save_pending_recommended_playlist', 'discard_pending_recommended_playlist', 'import_shared_playlist', 'control_diy_visual', 'get_player_context']
     };
   }
 
-  window.MineradioAgentMusicTools = {
+  window.StellaflixAgentMusicTools = {
     search_music: searchMusic,
     play_music: playMusic,
     search_and_play_music: searchAndPlayMusic,
@@ -2412,10 +2536,10 @@
     openMusicLibrary: openMusicLibrary,
     open_lyric_animation_settings: openLyricAnimationSettings,
     openLyricAnimationSettings: openLyricAnimationSettings,
-    open_mineradio_interface: openMineradioInterface,
-    openMineradioInterface: openMineradioInterface,
-    control_mineradio_app: controlMineradioApp,
-    controlMineradioApp: controlMineradioApp,
+    open_stellaflix_interface: openStellaflixInterface,
+    openStellaflixInterface: openStellaflixInterface,
+    control_stellaflix_app: controlStellaflixApp,
+    controlStellaflixApp: controlStellaflixApp,
     control_lyric_animation: controlLyricAnimation,
     controlLyricAnimation: controlLyricAnimation,
     trigger_world_peace_easter_egg: triggerWorldPeaceEasterEgg,

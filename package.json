@@ -1,7 +1,7 @@
 {
   "name": "stellaflix",
   "productName": "Stellaflix",
-  "version": "2.1.0",
+  "version": "0.1.0",
   "description": "Windows 沉浸式音乐播放器，融合桌面模式、歌词舞台、粒子视觉和 3D 歌单架。",
   "author": "Stellaflix",
   "license": "GPL-3.0-only",
@@ -43,7 +43,19 @@
       "!desktop/wallpaper-preload.js",
       "!public/wallpaper.html",
       "!public/index.*.html",
-      "public/index.html"
+      "public/index.html",
+      "!**/*_1.js",
+      "!**/*_1.html",
+      "!**/*_1.css",
+      "!**/*_1.json",
+      "!**/*_1.bin",
+      "!**/*_1.gif",
+      "!**/*_1.ico",
+      "!**/*_1.png",
+      "!**/*_1.bmp",
+      "!**/*_1.nsh",
+      "!**/*_1.LICENCE",
+      "!public/temp-sfv-diag-probe.js"
     ],
     "asar": false,
     "win": {
@@ -98,7 +110,6 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
-    "gsap": "^3.15.0",
     "mpg123-decoder": "^1.0.3",
     "music-metadata": "11.14.0",
     "NeteaseCloudMusicApi": "^4.32.0",
@@ -151,7 +162,7 @@
       "autoCleanCache": true
     },
     "network": {
-      "userAgent": "Stellaflix/2.1.0 Video",
+      "userAgent": "Stellaflix/0.1.0 Video",
       "timeout": 30000,
       "maxRetries": 3,
       "enableProxy": false,

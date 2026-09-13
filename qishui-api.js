@@ -182,18 +182,41 @@ const QISHUI_MEMBERSHIP_POSITIVE_GRACE_MS = 20 * 1000;
 const qishuiTrackMetadataCache = createTtlCache(120, 20 * 1000);
 const qishuiPlaybackCache = createTtlCache(120, 4 * 60 * 1000);
 
+const REQUEST_TEXT_MAX_BYTES = 4 * 1024 * 1024;
+const sharedHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8 });
+const sharedHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8 });
+
 function requestText(targetUrl, opts, body) {
   opts = opts || {};
   return new Promise((resolve, reject) => {
     const u = new URL(targetUrl);
     const lib = u.protocol === 'https:' ? https : http;
+    const maxBytes = Math.max(64 * 1024, Number(opts.maxBytes) || REQUEST_TEXT_MAX_BYTES);
     const req = lib.request(u, {
       method: opts.method || 'GET',
       headers: opts.headers || {},
+      agent: u.protocol === 'https:' ? sharedHttpsAgent : sharedHttpAgent,
     }, response => {
       const chunks = [];
-      response.on('data', chunk => chunks.push(chunk));
+      let received = 0;
+      let settled = false;
+      const fail = (err) => {
+        if (settled) return;
+        settled = true;
+        try { response.destroy(); } catch (_) {}
+        reject(err);
+      };
+      response.on('data', chunk => {
+        received += chunk.length;
+        if (received > maxBytes) {
+          fail(Object.assign(new Error('Response too large'), { statusCode: response.statusCode, code: 'RESPONSE_TOO_LARGE' }));
+          return;
+        }
+        chunks.push(chunk);
+      });
       response.on('end', () => {
+        if (settled) return;
+        settled = true;
         const text = Buffer.concat(chunks).toString('utf8');
         if (response.statusCode >= 400) {
           const err = new Error('HTTP ' + response.statusCode);
@@ -204,6 +227,7 @@ function requestText(targetUrl, opts, body) {
         }
         resolve(text);
       });
+      response.on('error', fail);
     });
     req.setTimeout(Number(opts.timeoutMs) || 7000, () => req.destroy(new Error('Request timeout')));
     req.on('error', reject);

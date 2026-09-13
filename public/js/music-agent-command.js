@@ -36,15 +36,16 @@
   var voiceProcessing = false;
   var pendingRecommendedPlaylist = null;
   var pendingSharedPlaylistImport = false;
+  var pendingVideoCandidates = null;
   var chatHistoryRestored = false;
   var agentConfig = null;
   var chatHistory = [];
   var currentView = 'chat';
   var petVisible = true;
-  var PET_POSITION_KEY = 'mineradio-music-agent-pet-position-v1';
-  var PET_VISIBILITY_KEY = 'mineradio-music-agent-pet-visible-v1';
-  var DIALOG_LAYOUT_KEY = 'mineradio-music-agent-dialog-layout-v1';
-  var CHAT_HISTORY_KEY = 'mineradio-music-agent-chat-history-v1';
+  var PET_POSITION_KEY = 'stellaflix-music-agent-pet-position-v1';
+  var PET_VISIBILITY_KEY = 'stellaflix-music-agent-pet-visible-v1';
+  var DIALOG_LAYOUT_KEY = 'stellaflix-music-agent-dialog-layout-v1';
+  var CHAT_HISTORY_KEY = 'stellaflix-music-agent-chat-history-v1';
   var CHAT_HISTORY_LIMIT = 40;
   var AGENT_MAX_STEPS = 30;
   var DAILY_RECOMMENDATIONS = [
@@ -169,7 +170,166 @@
     return { action: 'search_and_play_music', query: cleanPart(text), original: original };
   }
 
+  function videoTools() {
+    return window.StellaflixAgentVideoTools || null;
+  }
+
+  function videoPlayerIsActive() {
+    var tools = videoTools();
+    if (!tools || typeof tools.get_video_context !== 'function') return false;
+    try {
+      var ctx = tools.get_video_context();
+      return !!(ctx && ctx.ok && ctx.playerOpen);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function isVideoStrongIntent(message) {
+    var text = String(message || '').trim();
+    if (!text) return false;
+    if (/(?:电影|影片|剧场版|纪录片|电视剧|剧集|连续剧|番剧|观影|影视)/.test(text)) return true;
+    if (/(?:我想看|想看|看一?部|观看|去看)/.test(text)) return true;
+    if (/(?:下一集|上一集|这一集|第\s*\d+\s*集|换一集)/.test(text)) return true;
+    if (/(?:视频|影片|电影).{0,8}(?:全屏|暂停|继续|快进|跳到|播放控制)/.test(text)) return true;
+    if (/(?:打开|进入).{0,8}(?:片源|影视首页|汇联|观看历史)/.test(text)) return true;
+    if (/播放.{0,20}[《“"].{1,40}[》”"]/.test(text) && /影|剧|片|动漫|番/.test(text)) return true;
+    if (/^播放(?:电影|影片|纪录片|动漫|番剧)[《“"]?[^《》"']{0,30}/.test(text)) return true;
+    return false;
+  }
+
+  function parseVideoCommand(message) {
+    var original = String(message || '').trim();
+    var text = original
+      .replace(/^(?:嘿[,，]?\s*)?(?:ai|AI|小助手|助手|小M)[,，]?\s*/i, '')
+      .replace(/^(?:请|麻烦)?(?:你)?(?:帮我|给我)?\s*/, '')
+      .replace(/[。！!？?]+$/g, '')
+      .trim();
+    var lower = text.toLowerCase();
+
+    if (/(?:打开|进入|显示|查看).{0,10}(?:片源|源管理)/.test(text)) {
+      return { action: 'open_interface', target: 'sources', original: original };
+    }
+    if (/(?:打开|进入|显示).{0,10}(?:影视首页|影视主页|汇联|发现页)/.test(text)) {
+      return { action: 'open_interface', target: 'home', original: original };
+    }
+    if (/(?:打开|进入|显示).{0,10}(?:观看历史|观影历史)/.test(text)) {
+      return { action: 'open_interface', target: 'history', original: original };
+    }
+
+    if (/(?:全屏|进入全屏|退出全屏|关闭全屏)/.test(text) || /\bfull\s?screen\b/i.test(text)) {
+      return { action: 'fullscreen', original: original };
+    }
+
+    if (/(?:下一集|下一集播放|换下一集)|\bnext episode\b/i.test(text)) {
+      return { action: 'episode', direction: 'next', original: original };
+    }
+    if (/(?:上一集|前一集|回到上一集)|\b(?:prev|previous) episode\b/i.test(text)) {
+      return { action: 'episode', direction: 'previous', original: original };
+    }
+    var epMatch = /(?:播放|切到|跳到|看)\s*第\s*(\d{1,3})\s*集/.exec(text);
+    if (epMatch) {
+      return { action: 'episode', episodeIndex: Math.max(0, Number(epMatch[1]) - 1), original: original };
+    }
+
+    if (videoPlayerIsActive() && !isVideoStrongIntent(text)) {
+      // 在播影片时，裸暂停/继续优先交给视频
+      if (/(?:暂停|停一下|先停)|\bpause\b/i.test(text)) {
+        return { action: 'playback', playbackAction: 'pause', original: original };
+      }
+      if (/^(?:继续播放|恢复播放|接着播放|继续|恢复)/.test(text) || /\b(?:resume|continue playing)\b/i.test(text)) {
+        return { action: 'playback', playbackAction: 'play', original: original };
+      }
+    }
+    if (/(?:视频|影片|电影).{0,6}(?:暂停|停一下)/.test(text)) {
+      return { action: 'playback', playbackAction: 'pause', original: original };
+    }
+    if (/(?:视频|影片|电影).{0,6}(?:继续|恢复)/.test(text)) {
+      return { action: 'playback', playbackAction: 'play', original: original };
+    }
+
+    var seekMin = /(?:快进|前进|跳到|跳至)\s*(\d{1,3})\s*(?:分钟|min)/i.exec(text);
+    if (seekMin) return { action: 'seek', seconds: Number(seekMin[1]) * 60, original: original };
+    var seekSec = /(?:快进|跳到|跳至)\s*(\d{1,4})\s*(?:秒|sec)/i.exec(text);
+    if (seekSec) return { action: 'seek', seconds: Number(seekSec[1]), original: original };
+    var seekTime = /(?:跳到|跳至|快进到)\s*(\d{1,2}:\d{2}(?::\d{2})?)/.exec(text);
+    if (seekTime) return { action: 'seek', time: seekTime[1], original: original };
+
+    var pickIdx = /(?:播放|播|看|要|选)?\s*第?\s*([一二三四五六七八九十\d]{1,2})\s*个(?:结果|候选|片子|影片|电影)?/.exec(text);
+    if (pickIdx && /(?:结果|候选|个)/.test(text) && !/第\s*\d+\s*集/.test(text)) {
+      var rawIdx = pickIdx[1];
+      var n = /^[一二三四五六七八九十]+$/.test(rawIdx) ? cnNumToInt(rawIdx) : Number(rawIdx);
+      if (isFinite(n) && n >= 1) return { action: 'select_candidate', index: n - 1, original: original };
+    }
+
+    var title = '';
+    // 1) 优先取书名号内的片名：播放电影《奥本海默》 → 奥本海默
+    var quoted = /[《“"]([^》”"]{1,80})[》”"]/.exec(text);
+    if (quoted && quoted[1]) {
+      title = quoted[1];
+    } else {
+      // 2) 无书名号：去掉播放/想看等动词后再剥类型词
+      var m1 = /^(?:播放|放|看|观看|我想看|想看|来一?[部集])\s*(.+?)$/.exec(text);
+      if (m1) title = m1[1];
+    }
+    title = String(title || '')
+      .replace(/^[《“"]+|[》”"]+$/g, '')
+      .replace(/^(?:的|一部|一个)\s*/, '')
+      .replace(/(?:电影|影片|纪录片|动漫|番剧|剧集|剧场版|电视剧)/g, ' ')
+      .replace(/[《》“”"'’‘]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!title) return null;
+
+    // 年份从整句取（书名号外也可能带年份），再从片名里去掉
+    var yearMatch = /(19|20)\d{2}/.exec(text) || /(19|20)\d{2}/.exec(title);
+    var year = yearMatch ? yearMatch[0] : '';
+    var query = title.replace(/\s*(19|20)\d{2}\s*年?/, '').trim() || title;
+    // 兜底：若清洗后仍带「电影」等类型前缀，再剥一次
+    query = query.replace(/^(?:电影|影片|纪录片|动漫|番剧|剧集)\s*/, '').trim() || query;
+    return {
+      action: 'search_and_play_movie',
+      query: query,
+      title: query,
+      year: year,
+      original: original
+    };
+  }
+
+  function cnNumToInt(raw) {
+    var map = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+    if (/^\d+$/.test(raw)) return Number(raw);
+    if (raw.length === 1) return map[raw] || 0;
+    if (raw === '十一') return 11;
+    if (raw.indexOf('十') === 0) return 10 + (map[raw.slice(1)] || 0);
+    if (raw.indexOf('十') > 0) return (map[raw.slice(0, raw.indexOf('十'))] || 1) * 10 + (map[raw.slice(raw.indexOf('十') + 1)] || 0);
+    return 0;
+  }
+
+  function isVideoCommandIntent(message) {
+    var parsed = parseVideoCommand(message);
+    if (!parsed) return false;
+    // 打开片源/影视首页/观看历史
+    if (parsed.action === 'open_interface') return true;
+    // 候选点选：有待选列表，或明确说了「第 N 个」且带影视语境
+    if (parsed.action === 'select_candidate') {
+      return !!(pendingVideoCandidates && pendingVideoCandidates.candidates && pendingVideoCandidates.candidates.length) ||
+        isVideoStrongIntent(message);
+    }
+    // 播控 / 选集 / 跳转 / 全屏：需影视语境，或当前确实有影片在播
+    if (parsed.action === 'playback' || parsed.action === 'episode' || parsed.action === 'seek' || parsed.action === 'fullscreen') {
+      return isVideoStrongIntent(message) || videoPlayerIsActive();
+    }
+    // 搜片/起播：必须有明确影视信号。
+    // 否则「播放周杰伦的东风破」会把歌曲当成片名，整条链路从音乐切到影视。
+    if (parsed.action === 'search_and_play_movie') {
+      return isVideoStrongIntent(message);
+    }
+    return false;
+  }
+
   function isMusicIntent(message) {
+    if (isVideoStrongIntent(message)) return false;
     return /(?:播放|放(?:一首|点|一下)?|想听|听首|来一首|找.{0,12}(?:歌|音乐)|歌曲|音乐)|\b(?:play|listen to)\b/i.test(String(message || ''));
   }
 
@@ -238,7 +398,7 @@
     return /(?:打开|进入|显示|查看).{0,8}(?:音源|音源管理)|(?:音源管理|音源设置).{0,8}(?:打开|进入|显示|查看)?/i.test(text);
   }
 
-  function mineradioInterfaceFromCommand(message) {
+  function stellaflixInterfaceFromCommand(message) {
     var text = String(message || '').trim()
       .replace(/^(?:请|麻烦)?(?:你)?(?:帮我|给我)?\s*/, '')
       .replace(/[。！!？?]+$/g, '');
@@ -283,8 +443,8 @@
     return '';
   }
 
-  function isMineradioInterfaceIntent(message) {
-    return !!mineradioInterfaceFromCommand(message);
+  function isStellaflixInterfaceIntent(message) {
+    return !!stellaflixInterfaceFromCommand(message);
   }
 
   function lyricAnimationRequestFromCommand(message) {
@@ -308,7 +468,7 @@
     return !!lyricAnimationRequestFromCommand(message);
   }
 
-  function mineradioAppControlFromCommand(message) {
+  function stellaflixAppControlFromCommand(message) {
     var text = String(message || '').trim();
     var match = /(?:倍速|播放速度).{0,8}?(\d+(?:\.\d+)?)\s*(?:倍|x|×)?/i.exec(text)
       || /(\d+(?:\.\d+)?)\s*(?:倍|x|×).{0,8}(?:倍速|播放)/i.exec(text);
@@ -357,13 +517,13 @@
     if (/(?:压缩|释放).{0,5}(?:播放器|应用)内存/.test(text)) return { target:'app_memory_trim', operation:'run' };
     if (/(?:释放|清理).{0,5}系统内存/.test(text)) return { target:'system_memory_trim', operation:'run' };
     if (/(?:重置|恢复默认).{0,5}(?:视觉设置|视觉效果|DIY设置)/i.test(text)) return { target:'visual_settings_reset', operation:'reset', confirmed:true };
-    if (/(?:最小化)(?:Mineradio|播放器|软件|应用|窗口)?/i.test(text)) return { target:'window_minimize', operation:'run' };
-    if (/(?:关闭|退出)(?:Mineradio|播放器|软件|应用)(?:程序)?$/i.test(text)) return { target:'window_close', operation:'run', confirmed:true };
+    if (/(?:最小化)(?:Stellaflix|播放器|软件|应用|窗口)?/i.test(text)) return { target:'window_minimize', operation:'run' };
+    if (/(?:关闭|退出)(?:Stellaflix|播放器|软件|应用)(?:程序)?$/i.test(text)) return { target:'window_close', operation:'run', confirmed:true };
     return null;
   }
 
-  function isMineradioAppControlIntent(message) {
-    return !!mineradioAppControlFromCommand(message);
+  function isStellaflixAppControlIntent(message) {
+    return !!stellaflixAppControlFromCommand(message);
   }
 
   function isDiyControlIntent(message) {
@@ -523,15 +683,15 @@
   }
 
   function playerContext() {
-    var tools = window.MineradioAgentMusicTools;
+    var tools = window.StellaflixAgentMusicTools;
     if (!tools || typeof tools.get_player_context !== 'function') return null;
     try { return tools.get_player_context(); } catch (_error) { return null; }
   }
 
   async function triggerWorldPeaceEasterEggFromTool() {
-    var tools = window.MineradioAgentMusicTools;
+    var tools = window.StellaflixAgentMusicTools;
     if (!tools || typeof tools.trigger_world_peace_easter_egg !== 'function') {
-      throw new Error('世界和平彩蛋尚未加载，请重启 Mineradio 后再试。');
+      throw new Error('世界和平彩蛋尚未加载，请重启 Stellaflix 后再试。');
     }
     var result = await tools.trigger_world_peace_easter_egg();
     if (!result || !result.ok) throw new Error(result && result.message || '世界和平彩蛋触发失败');
@@ -545,7 +705,7 @@
     try {
       response = await fetch(url, options || {});
     } catch (_error) {
-      var networkError = new Error('无法连接 Mineradio 本地服务，请重启软件后再试。');
+      var networkError = new Error('无法连接 Stellaflix 本地服务，请重启软件后再试。');
       networkError.code = 'AGENT_LOCAL_SERVER_UNREACHABLE';
       throw networkError;
     }
@@ -1031,7 +1191,7 @@
       if (agentConfig.enabled && agentConfig.configured) {
         setStatus('AI 已启用，可直接对话或控制音乐。', 'success');
       } else {
-        setStatus('无需 API：播放、歌单和明确的 DIY 设置均在本地执行。', '');
+        setStatus('无需 API：音乐播放、影视搜片与明确的本地控制均可执行。', '');
       }
     }
     return agentConfig;
@@ -1223,18 +1383,293 @@
     finally { setBusy(false); }
   }
 
-  async function playFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.search_and_play_music !== 'function') {
-      throw new Error('音乐工具尚未加载，请重启 Mineradio 后再试。');
+  function addHtmlMessage(html) {
+    if (!chatLog) return;
+    setThinkingMessage(false);
+    var item = document.createElement('div');
+    item.className = 'music-agent-message assistant music-agent-html';
+    item.innerHTML = html;
+    chatLog.appendChild(item);
+    while (chatLog.children.length > CHAT_HISTORY_LIMIT) chatLog.removeChild(chatLog.firstChild);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return item;
+  }
+
+  function escapeHtml(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function renderVideoCandidates(candidates, query) {
+    pendingVideoCandidates = {
+      query: String(query || ''),
+      candidates: Array.isArray(candidates) ? candidates : [],
+      createdAt: Date.now()
+    };
+    var list = pendingVideoCandidates.candidates;
+    if (!list.length) {
+      addMessage('assistant', '没有可展示的候选结果。');
+      return;
+    }
+    var html = '<div class="music-agent-video-candidates"><div class="mv-cand-title">找到 ' + list.length + ' 个正片，点一个播放：</div>';
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i] || {};
+      var metaBits = [];
+      if (c.year) metaBits.push(escapeHtml(c.year));
+      if (c.remarks) metaBits.push(escapeHtml(c.remarks));
+      if (c.sourceName) metaBits.push(escapeHtml(c.sourceName));
+      html += '<button type="button" class="mv-cand-item" data-mv-cand="' + i + '">' +
+        '<span class="mv-cand-idx">' + (i + 1) + '</span>' +
+        '<span class="mv-cand-body"><span class="mv-cand-name">' + escapeHtml(c.title || '未命名') + '</span>' +
+        (metaBits.length ? '<span class="mv-cand-meta">' + metaBits.join(' · ') + '</span>' : '') +
+        '</span></button>';
+    }
+    html += '</div><div class="mv-cand-hint">也可以说：播放第 2 个</div>';
+    addHtmlMessage(html);
+  }
+
+  function bindVideoCandidateButtons(root) {
+    if (!root || typeof root.addEventListener !== 'function') return;
+    root.addEventListener('click', function (event) {
+      var btn = event.target && event.target.closest ? event.target.closest('[data-mv-cand]') : null;
+      if (!btn) return;
+      var idx = Number(btn.getAttribute('data-mv-cand'));
+      if (!isFinite(idx)) return;
+      var inputEl = document.getElementById('music-agent-input') || input;
+      if (inputEl) {
+        inputEl.value = '播放第 ' + (idx + 1) + ' 个';
+        if (typeof inputEl.focus === 'function') inputEl.focus();
+      }
+      // 直接执行，避免用户再点发送
+      Promise.resolve(runCommand('播放第 ' + (idx + 1) + ' 个')).catch(function () {});
+    });
+  }
+
+  async function playVideoFromTool(toolArguments, originalMessage) {
+    var tools = videoTools();
+    if (!tools || typeof tools.search_and_play_movie !== 'function') {
+      throw new Error('影视工具尚未加载，请重启 Stellaflix 后再试。');
     }
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
-    if (!args.query && !args.title) args = parseMusicCommand(originalMessage);
+    var parsed = typeof parseVideoCommand === 'function' ? parseVideoCommand(originalMessage) : null;
+    if (parsed) {
+      if (!args.query && parsed.query) args.query = parsed.query;
+      if (!args.year && parsed.year) args.year = parsed.year;
+      if (parsed.action === 'select_candidate' && pendingVideoCandidates && pendingVideoCandidates.candidates[parsed.index]) {
+        return await playVideoCandidateAt(parsed.index, originalMessage);
+      }
+    }
+    // 用户在候选列表之后直接点按钮会走 runCommand「播放第 N 个」
+    if (parsed && parsed.action === 'select_candidate') {
+      return await playVideoCandidateAt(parsed.index, originalMessage);
+    }
+    // LLM 直接调用 play_movie_candidate 字段时
+    if ((args.sourceId || args.vodId) && typeof tools.play_movie_candidate === 'function') {
+      setStatus('正在播放：' + (args.title || '影片') + '…', 'busy');
+      var direct = await tools.play_movie_candidate(args);
+      if (!direct || !direct.ok) {
+        throw new Error(direct && direct.message ? direct.message : '起播失败');
+      }
+      pendingVideoCandidates = null;
+      var directPlaying = direct.message || ('正在播放《' + (args.title || '影片') + '》');
+      setStatus(directPlaying, 'success');
+      addMessage('assistant', directPlaying);
+      return direct;
+    }
+    // LLM 传 index 选择 pending 候选
+    if (args.index != null && pendingVideoCandidates && pendingVideoCandidates.candidates[args.index]) {
+      return await playVideoCandidateAt(args.index, originalMessage);
+    }
+    if (!args.query && !args.title) {
+      throw new Error('请告诉我要播放的电影名称，例如：播放电影《你的名字》。');
+    }
+    if (!args.query) args.query = args.title;
+    setStatus('正在搜索影片…', 'busy');
+    var result = await tools.search_and_play_movie(args);
+    if (result && result.needsSelection) {
+      renderVideoCandidates(result.candidates, result.query || args.query);
+      setStatus('请选择要播放的影片', '');
+      addMessage('assistant', '找到多个结果，请在上面点选，或说「播放第 N 个」。');
+      return {
+        ok: false,
+        needsSelection: true,
+        error: 'NEEDS_SELECTION',
+        message: '找到多个正片候选，请用户点选或说「播放第 N 个」后，再调用 play_movie_candidate。',
+        candidates: result.candidates
+      };
+    }
+    if (!result || !result.ok) {
+      var message = result && result.message ? result.message : '没有找到可播放的影片';
+      if (result && result.error === 'NO_VIDEO_SOURCE') {
+        message = '还没有导入片源。请到 视觉控制台 → 片源 添加 CMS 接口后再试。';
+      }
+      throw new Error(message);
+    }
+    pendingVideoCandidates = null;
+    var movie = result.movie || {};
+    var nowPlaying = result.message || ('正在播放《' + (movie.title || args.query || '影片') + '》');
+    setStatus(nowPlaying, 'success');
+    addMessage('assistant', nowPlaying);
+    return result;
+  }
+
+  async function searchMoviesFromTool(toolArguments, originalMessage) {
+    var tools = videoTools();
+    if (!tools || typeof tools.search_movies !== 'function') {
+      throw new Error('影视工具尚未加载，请重启 Stellaflix 后再试。');
+    }
+    var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
+    var parsed = typeof parseVideoCommand === 'function' ? parseVideoCommand(originalMessage) : null;
+    if (parsed && !args.query && parsed.query) args.query = parsed.query;
+    if (!args.query && !args.title) throw new Error('请告诉我要搜索的电影名称。');
+    if (!args.query) args.query = args.title;
+    setStatus('正在搜索影片候选…', 'busy');
+    var result = await tools.search_movies(args);
+    if (!result || !result.ok) {
+      throw new Error(result && result.message ? result.message : '没有找到可播放的影片');
+    }
+    if (result.candidates && result.candidates.length) {
+      renderVideoCandidates(result.candidates, result.query || args.query);
+    }
+    setStatus(result.message || '已找到候选影片', 'success');
+    var listText = (result.candidates || []).map(function (c, i) {
+      return (i + 1) + '. ' + c.title + (c.year ? '（' + c.year + '）' : '');
+    }).join('；');
+    var reply = (result.message || '找到候选') + (listText ? '：' + listText : '');
+    addMessage('assistant', reply);
+    return result;
+  }
+
+  async function getVideoContextFromTool() {
+    var tools = videoTools();
+    if (!tools || typeof tools.get_video_context !== 'function') {
+      throw new Error('影视工具尚未加载，请重启 Stellaflix 后再试。');
+    }
+    var ctx = tools.get_video_context();
+    if (!ctx || !ctx.ok) throw new Error('无法获取影视上下文');
+    var summary = ctx.playerOpen
+      ? ('当前正在播放：' + (ctx.currentTitle || '影片') + (ctx.playing ? '（播放中）' : '（已暂停）'))
+      : ('当前没有正在播放的影片。已导入片源 ' + ctx.sourceCount + ' 个。');
+    setStatus(summary, 'success');
+    addMessage('assistant', summary);
+    return ctx;
+  }
+
+  async function playVideoCandidateAt(index, originalMessage) {
+    var tools = videoTools();
+    if (!tools || typeof tools.play_movie_candidate !== 'function') {
+      throw new Error('影视工具尚未加载，请重启 Stellaflix 后再试。');
+    }
+    if (!pendingVideoCandidates || !pendingVideoCandidates.candidates || !pendingVideoCandidates.candidates[index]) {
+      throw new Error('候选列表已失效，请重新说一次片名，例如：播放电影《片名》。');
+    }
+    var candidate = pendingVideoCandidates.candidates[index];
+    setStatus('正在播放：' + (candidate.title || '影片') + '…', 'busy');
+    var result = await tools.play_movie_candidate({
+      sourceId: candidate.sourceId,
+      vodId: candidate.vodId,
+      title: candidate.title,
+      year: candidate.year,
+      pic: candidate.pic
+    });
+    if (!result || !result.ok) {
+      throw new Error(result && result.message ? result.message : '起播失败');
+    }
+    pendingVideoCandidates = null;
+    var nowPlaying = result.message || ('正在播放《' + (candidate.title || '影片') + '》');
+    setStatus(nowPlaying, 'success');
+    addMessage('assistant', nowPlaying);
+    return result;
+  }
+
+  async function controlVideoFromTool(toolArguments, originalMessage) {
+    var tools = videoTools();
+    if (!tools) throw new Error('影视工具尚未加载，请重启 Stellaflix 后再试。');
+    var parsed = typeof parseVideoCommand === 'function' ? parseVideoCommand(originalMessage) : {};
+    var action = toolArguments && toolArguments.action;
+    if (!action && parsed) action = parsed.action;
+
+    if (action === 'fullscreen') {
+      setStatus('正在切换全屏…', 'busy');
+      var fs = await tools.toggle_video_fullscreen();
+      if (!fs || !fs.ok) throw new Error(fs && fs.message ? fs.message : '全屏切换失败');
+      setStatus(fs.message, 'success');
+      addMessage('assistant', fs.message);
+      return fs;
+    }
+    if (action === 'episode') {
+      setStatus('正在切换剧集…', 'busy');
+      var epArgs = {};
+      if (parsed && parsed.direction) epArgs.direction = parsed.direction;
+      if (parsed && parsed.episodeIndex != null) epArgs.episodeIndex = parsed.episodeIndex;
+      if (toolArguments && toolArguments.direction) epArgs.direction = toolArguments.direction;
+      if (toolArguments && toolArguments.episodeIndex != null) epArgs.episodeIndex = toolArguments.episodeIndex;
+      var epResult = await tools.select_episode(epArgs);
+      if (!epResult || !epResult.ok) throw new Error(epResult && epResult.message ? epResult.message : '选集失败');
+      setStatus(epResult.message, 'success');
+      addMessage('assistant', epResult.message);
+      return epResult;
+    }
+    if (action === 'seek') {
+      setStatus('正在跳转进度…', 'busy');
+      var seekArgs = {};
+      if (parsed && parsed.seconds != null) seekArgs.seconds = parsed.seconds;
+      if (parsed && parsed.time) seekArgs.time = parsed.time;
+      if (toolArguments && toolArguments.seconds != null) seekArgs.seconds = toolArguments.seconds;
+      if (toolArguments && toolArguments.time) seekArgs.time = toolArguments.time;
+      var seekResult = await tools.seek_video(seekArgs);
+      if (!seekResult || !seekResult.ok) throw new Error(seekResult && seekResult.message ? seekResult.message : '跳转失败');
+      setStatus(seekResult.message, 'success');
+      addMessage('assistant', seekResult.message);
+      return seekResult;
+    }
+    if (action === 'open_interface' || action === 'interface') {
+      setStatus('正在打开影视界面…', 'busy');
+      var openResult = await tools.open_video_interface({ target: (toolArguments && toolArguments.target) || (parsed && parsed.target) || '' });
+      if (!openResult || !openResult.ok) throw new Error(openResult && openResult.message ? openResult.message : '打开界面失败');
+      setStatus(openResult.message, 'success');
+      addMessage('assistant', openResult.message);
+      return openResult;
+    }
+    if (action === 'playback' || action === 'play' || action === 'pause') {
+      var playAction = (toolArguments && toolArguments.playbackAction) || (parsed && parsed.playbackAction) || (action === 'play' || action === 'pause' ? action : '');
+      if (!playAction) throw new Error('没有识别出播放或暂停动作。');
+      setStatus(playAction === 'pause' ? '正在暂停影片…' : '正在继续播放影片…', 'busy');
+      var pb = await tools.control_video_playback({ action: playAction });
+      if (!pb || !pb.ok) throw new Error(pb && pb.message ? pb.message : '播放控制失败');
+      setStatus(pb.message, 'success');
+      addMessage('assistant', pb.message);
+      return pb;
+    }
+    throw new Error('未识别的影视控制指令。');
+  }
+
+  async function playFromTool(toolArguments, originalMessage) {
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.search_and_play_music !== 'function') {
+      throw new Error('音乐工具尚未加载，请重启 Stellaflix 后再试。');
+    }
+    var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
+    // 始终从用户原句中解析出标题/歌手约束并合并到 args，保证"播放周杰伦的《东风破》"即使 LLM
+    // 只传了一个 query，也能把歌手作为匹配条件落到下游（修复被错播同名曲的 bug）。
+    var parsed = (typeof parseMusicCommand === 'function') ? parseMusicCommand(originalMessage) : null;
+    if (parsed && (parsed.title || parsed.artist)) {
+      if (!args.title && parsed.title) args.title = parsed.title;
+      if (!args.artist && parsed.artist) args.artist = parsed.artist;
+      if (!args.query && parsed.query) args.query = parsed.query;
+    }
+    // 兼容旧路径：若模型与解析都没给出 query/title，把整份 parsed 作为兜底
+    if (!args.query && !args.title && parsed) {
+      args = Object.assign({}, parsed, args);
+    }
     setStatus('正在搜索并匹配歌曲…', 'busy');
     var result = await tools.search_and_play_music(args);
     if (!result || !result.ok) {
       var message = result && result.message ? result.message : '没有找到可播放的歌曲';
-      if (result && result.error === 'LX_SOURCE_NOT_CONFIGURED') message = '请先在 Mineradio 中导入并启用 LX 兼容音源。';
+      if (result && result.error === 'LX_SOURCE_NOT_CONFIGURED') message = '请先在 Stellaflix 中导入并启用 LX 兼容音源。';
       throw new Error(message);
     }
     var song = result.song || {};
@@ -1247,8 +1682,8 @@
   }
 
   async function replayCurrentSong() {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.replay_current_music !== 'function') throw new Error('当前歌曲重播工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.replay_current_music !== 'function') throw new Error('当前歌曲重播工具尚未加载，请重启 Stellaflix。');
     setStatus('正在从头播放当前歌曲…', 'busy');
     var result = await tools.replay_current_music();
     if (!result || !result.ok) throw new Error(result && result.message || '当前歌曲重新播放失败');
@@ -1260,8 +1695,8 @@
   }
 
   async function setPlayerVolume(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.set_volume !== 'function') throw new Error('音量控制工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.set_volume !== 'function') throw new Error('音量控制工具尚未加载，请重启 Stellaflix。');
     var target = toolArguments && toolArguments.volume != null ? Number(toolArguments.volume) : volumeFromCommand(originalMessage);
     if (!isFinite(target)) throw new Error('请告诉我要把音量调到多少，例如：音量调到 30%。');
     setStatus('正在调整音量…', 'busy');
@@ -1274,8 +1709,8 @@
   }
 
   async function controlCurrentPlayback(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.control_playback !== 'function') throw new Error('播放控制工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.control_playback !== 'function') throw new Error('播放控制工具尚未加载，请重启 Stellaflix。');
     var action = toolArguments && String(toolArguments.action || '').toLowerCase();
     if (action !== 'play' && action !== 'pause') action = playbackActionFromCommand(originalMessage);
     if (!action) throw new Error('没有识别出播放或暂停动作。');
@@ -1290,8 +1725,8 @@
   }
 
   async function skipCurrentTrack(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.skip_track !== 'function') throw new Error('切歌工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.skip_track !== 'function') throw new Error('切歌工具尚未加载，请重启 Stellaflix。');
     var direction = toolArguments && String(toolArguments.direction || '').toLowerCase();
     if (direction !== 'next' && direction !== 'previous') direction = trackDirectionFromCommand(originalMessage);
     if (!direction) throw new Error('没有识别出上一首或下一首动作。');
@@ -1306,8 +1741,8 @@
   }
 
   async function setCurrentPlayMode(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.set_play_mode !== 'function') throw new Error('播放模式工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.set_play_mode !== 'function') throw new Error('播放模式工具尚未加载，请重启 Stellaflix。');
     var mode = toolArguments && String(toolArguments.mode || '').toLowerCase();
     if (mode !== 'loop' && mode !== 'shuffle' && mode !== 'single' && mode !== 'heart') mode = playModeFromCommand(originalMessage);
     if (!mode) throw new Error('没有识别出播放模式。');
@@ -1320,8 +1755,8 @@
   }
 
   async function controlAudioQualityFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.control_audio_quality !== 'function') throw new Error('音质控制工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.control_audio_quality !== 'function') throw new Error('音质控制工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     var inferred = audioQualityRequestFromCommand(originalMessage);
     if (isAudioQualityIntent(originalMessage)) {
@@ -1341,8 +1776,8 @@
   }
 
   async function openMusicSourceManagerFromTool() {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.open_music_source_manager !== 'function') throw new Error('音源管理工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.open_music_source_manager !== 'function') throw new Error('音源管理工具尚未加载，请重启 Stellaflix。');
     setStatus('正在打开音源管理…', 'busy');
     var result = await tools.open_music_source_manager();
     if (!result || !result.ok) throw new Error(result && result.message || '音源管理打开失败');
@@ -1351,28 +1786,28 @@
     return result;
   }
 
-  async function openMineradioInterfaceFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.open_mineradio_interface !== 'function') throw new Error('界面导航工具尚未加载，请重启 Mineradio。');
+  async function openStellaflixInterfaceFromTool(toolArguments, originalMessage) {
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.open_stellaflix_interface !== 'function') throw new Error('界面导航工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
-    if (!args.section) args.section = mineradioInterfaceFromCommand(originalMessage);
-    if (!args.section) throw new Error('没有识别出要打开的 Mineradio 界面。');
+    if (!args.section) args.section = stellaflixInterfaceFromCommand(originalMessage);
+    if (!args.section) throw new Error('没有识别出要打开的 Stellaflix 界面。');
     setStatus('正在打开界面…', 'busy');
-    var result = await tools.open_mineradio_interface(args);
+    var result = await tools.open_stellaflix_interface(args);
     if (!result || !result.ok) throw new Error(result && result.message || '界面打开失败');
     setStatus(result.message, 'success');
     addMessage('assistant', result.message);
     return result;
   }
 
-  async function controlMineradioAppFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.control_mineradio_app !== 'function') throw new Error('全局软件控制工具尚未加载，请重启 Mineradio。');
+  async function controlStellaflixAppFromTool(toolArguments, originalMessage) {
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.control_stellaflix_app !== 'function') throw new Error('全局软件控制工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
-    if (!args.target) args = mineradioAppControlFromCommand(originalMessage) || {};
+    if (!args.target) args = stellaflixAppControlFromCommand(originalMessage) || {};
     if (!args.target) throw new Error('没有识别出要控制的软件功能。');
-    setStatus('正在控制 Mineradio…', 'busy');
-    var result = await tools.control_mineradio_app(args);
+    setStatus('正在控制 Stellaflix…', 'busy');
+    var result = await tools.control_stellaflix_app(args);
     if (!result || !result.ok) throw new Error(result && result.message || '软件控制失败');
     setStatus(result.message, 'success');
     addMessage('assistant', result.message);
@@ -1380,8 +1815,8 @@
   }
 
   async function controlLyricAnimationFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.control_lyric_animation !== 'function') throw new Error('歌词动画控制工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.control_lyric_animation !== 'function') throw new Error('歌词动画控制工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     if (!args.mode) args = lyricAnimationRequestFromCommand(originalMessage) || {};
     if (!args.mode) throw new Error('没有识别出歌词动画模式。');
@@ -1394,8 +1829,8 @@
   }
 
   async function queueMusicFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.search_and_queue_music !== 'function') throw new Error('播放队列工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.search_and_queue_music !== 'function') throw new Error('播放队列工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     if (!args.query && !args.title) args = queueMusicRequestFromCommand(originalMessage);
     setStatus(args.position === 'end' ? '正在加入播放队列…' : '正在查找下一首…', 'busy');
@@ -1407,8 +1842,8 @@
   }
 
   async function addPlaylistToQueueFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.add_playlist_to_queue !== 'function') throw new Error('整张歌单加入队列工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.add_playlist_to_queue !== 'function') throw new Error('整张歌单加入队列工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     if (!args.playlist_name) {
       var parsed = playlistQueueRequestFromCommand(originalMessage);
@@ -1424,8 +1859,8 @@
   }
 
   async function seekPlaybackFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.seek_playback !== 'function') throw new Error('播放进度工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.seek_playback !== 'function') throw new Error('播放进度工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     if (args.position_seconds == null && args.percent == null) args = seekRequestFromCommand(originalMessage) || {};
     setStatus('正在调整播放进度…', 'busy');
@@ -1437,8 +1872,8 @@
   }
 
   async function saveMusicToPlaylistFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.save_music_to_playlist !== 'function') throw new Error('本地收藏工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.save_music_to_playlist !== 'function') throw new Error('本地收藏工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     if (!args.playlist_name) args = savePlaylistRequestFromCommand(originalMessage);
     setStatus('正在保存到本地歌单…', 'busy');
@@ -1450,8 +1885,8 @@
   }
 
   async function createLocalPlaylistFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.create_local_playlist !== 'function') throw new Error('本地歌单工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.create_local_playlist !== 'function') throw new Error('本地歌单工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     if (!args.name) args = createPlaylistRequestFromCommand(originalMessage) || {};
     setStatus('正在创建本地歌单…', 'busy');
@@ -1463,8 +1898,8 @@
   }
 
   async function buildRecommendedPlaylistFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.build_recommended_playlist !== 'function') throw new Error('推荐歌单工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.build_recommended_playlist !== 'function') throw new Error('推荐歌单工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     if (!Array.isArray(args.search_queries) || !args.search_queries.length) args = recommendedPlaylistRequestFromCommand(originalMessage);
     args.onProgress = function (progress) {
@@ -1492,7 +1927,7 @@
   }
 
   async function resolvePendingRecommendedPlaylist(decision) {
-    var tools = window.MineradioAgentMusicTools;
+    var tools = window.StellaflixAgentMusicTools;
     var pending = pendingRecommendedPlaylist;
     if (!tools || !pending) throw new Error('当前没有等待确认的推荐歌单。');
     if (decision === 'discard') {
@@ -1504,7 +1939,7 @@
       setStatus('', '');
       return discarded;
     }
-    if (typeof tools.save_pending_recommended_playlist !== 'function') throw new Error('推荐歌单保存工具尚未加载，请重启 Mineradio。');
+    if (typeof tools.save_pending_recommended_playlist !== 'function') throw new Error('推荐歌单保存工具尚未加载，请重启 Stellaflix。');
     setStatus('正在保存推荐歌单…', 'busy');
     var saved = tools.save_pending_recommended_playlist({ playlist_name: pending.name });
     if (!saved || !saved.ok) throw new Error(saved && saved.message || '推荐歌单保存失败');
@@ -1515,8 +1950,8 @@
   }
 
   async function controlDiyVisualFromTool(toolArguments, originalMessage) {
-    var tools = window.MineradioAgentMusicTools;
-    if (!tools || typeof tools.control_diy_visual !== 'function') throw new Error('DIY 控制工具尚未加载，请重启 Mineradio。');
+    var tools = window.StellaflixAgentMusicTools;
+    if (!tools || typeof tools.control_diy_visual !== 'function') throw new Error('DIY 控制工具尚未加载，请重启 Stellaflix。');
     var args = toolArguments && typeof toolArguments === 'object' ? Object.assign({}, toolArguments) : {};
     if (Array.isArray(args.controls)) {
       var originalText = String(originalMessage || '');
@@ -1554,7 +1989,7 @@
   }
 
   async function controlLocalDiyFromCommand(message) {
-    var tools = window.MineradioAgentMusicTools;
+    var tools = window.StellaflixAgentMusicTools;
     if (!tools || typeof tools.parse_local_diy_command !== 'function') return null;
     var parsed = tools.parse_local_diy_command(message);
     if (!parsed) return null;
@@ -1562,7 +1997,7 @@
   }
 
   async function importSharedPlaylistFromCommand(message) {
-    var tools = window.MineradioAgentMusicTools;
+    var tools = window.StellaflixAgentMusicTools;
     if (!tools || typeof tools.parse_shared_playlist_import_command !== 'function' || typeof tools.import_shared_playlist !== 'function') return null;
     var text = String(message || '').trim();
     var openEntry = /(?:打开|进入|显示).*(?:导入歌单|歌单导入)|(?:导入歌单|歌单导入).*(?:入口|窗口|页面)/i.test(text);
@@ -1625,8 +2060,8 @@
       set_play_mode: '设置播放模式',
       control_audio_quality: '控制播放音质',
       open_music_source_manager: '打开音源管理',
-      open_mineradio_interface: '打开 Mineradio 界面',
-      control_mineradio_app: '控制 Mineradio 软件',
+      open_stellaflix_interface: '打开 Stellaflix 界面',
+      control_stellaflix_app: '控制 Stellaflix 软件',
       control_lyric_animation: '切换歌词动画',
       search_and_queue_music: '搜索并加入队列',
       add_playlist_to_queue: '整张歌单加入队列',
@@ -1634,8 +2069,17 @@
       save_music_to_playlist: '收藏到本地歌单',
       create_local_playlist: '创建本地歌单',
       build_recommended_playlist: '生成推荐歌单',
-      control_diy_visual: '调整 DIY 视觉'
-    }[String(name || '')] || '执行 Mineradio 动作';
+      control_diy_visual: '调整 DIY 视觉',
+      search_and_play_movie: '搜索并播放影片',
+      search_movies: '搜索影片候选',
+      play_movie_candidate: '播放选定影片',
+      control_video_playback: '控制影片播放',
+      seek_video: '跳转影片进度',
+      select_episode: '切换剧集',
+      toggle_video_fullscreen: '切换影片全屏',
+      get_video_context: '获取影视上下文',
+      open_video_interface: '打开影视界面'
+    }[String(name || '')] || '执行 Stellaflix 动作';
   }
 
   async function executeAgentToolCall(toolCall, originalMessage) {
@@ -1649,8 +2093,8 @@
     if (name === 'set_play_mode') return setCurrentPlayMode(args, originalMessage);
     if (name === 'control_audio_quality') return controlAudioQualityFromTool(args, originalMessage);
     if (name === 'open_music_source_manager') return openMusicSourceManagerFromTool();
-    if (name === 'open_mineradio_interface') return openMineradioInterfaceFromTool(args, originalMessage);
-    if (name === 'control_mineradio_app') return controlMineradioAppFromTool(args, originalMessage);
+    if (name === 'open_stellaflix_interface') return openStellaflixInterfaceFromTool(args, originalMessage);
+    if (name === 'control_stellaflix_app') return controlStellaflixAppFromTool(args, originalMessage);
     if (name === 'control_lyric_animation') return controlLyricAnimationFromTool(args, originalMessage);
     if (name === 'search_and_queue_music') return queueMusicFromTool(args, originalMessage);
     if (name === 'add_playlist_to_queue') return addPlaylistToQueueFromTool(args, originalMessage);
@@ -1659,7 +2103,16 @@
     if (name === 'create_local_playlist') return createLocalPlaylistFromTool(args, originalMessage);
     if (name === 'build_recommended_playlist') return buildRecommendedPlaylistFromTool(args, originalMessage);
     if (name === 'control_diy_visual') return controlDiyVisualFromTool(args, originalMessage);
-    throw new Error('模型请求了未开放的 Mineradio 操作。');
+    if (name === 'search_and_play_movie') return playVideoFromTool(args, originalMessage);
+    if (name === 'search_movies') return searchMoviesFromTool(args, originalMessage);
+    if (name === 'play_movie_candidate') return playVideoFromTool(args, originalMessage);
+    if (name === 'control_video_playback') return controlVideoFromTool({ action: 'playback', playbackAction: args.action }, originalMessage);
+    if (name === 'seek_video') return controlVideoFromTool(Object.assign({}, args, { action: 'seek' }), originalMessage);
+    if (name === 'select_episode') return controlVideoFromTool(Object.assign({}, args, { action: 'episode' }), originalMessage);
+    if (name === 'toggle_video_fullscreen') return controlVideoFromTool({ action: 'fullscreen' }, originalMessage);
+    if (name === 'get_video_context') return getVideoContextFromTool();
+    if (name === 'open_video_interface') return controlVideoFromTool({ action: 'open_interface', target: args.target }, originalMessage);
+    throw new Error('模型请求了未开放的 Stellaflix 操作。');
   }
 
   function isComplexAgentRequest(message) {
@@ -1671,7 +2124,7 @@
     var intentCount = [
       isPlaylistQueueIntent(text), !isPlaylistQueueIntent(text) && isQueueMusicIntent(text), isSeekIntent(text), isSavePlaylistIntent(text), isCreatePlaylistIntent(text),
       isPlayModeIntent(text), isPlaybackControlIntent(text), isVolumeIntent(text), isTrackSkipIntent(text), isReplayIntent(text),
-      isAudioQualityIntent(text), isSourceManagerIntent(text), isMineradioInterfaceIntent(text), isMineradioAppControlIntent(text), isLyricAnimationControlIntent(text), isDiyControlIntent(text)
+      isAudioQualityIntent(text), isSourceManagerIntent(text), isStellaflixInterfaceIntent(text), isStellaflixAppControlIntent(text), isLyricAnimationControlIntent(text), isDiyControlIntent(text)
     ].filter(Boolean).length;
     return intentCount > 1;
   }
@@ -1682,8 +2135,8 @@
     if (!action) return false;
     return isMusicIntent(text) || isReplayIntent(text) || isVolumeIntent(text) || isPlaybackControlIntent(text)
       || isTrackSkipIntent(text) || isPlayModeIntent(text) || isAudioQualityIntent(text) || isSourceManagerIntent(text)
-      || isMineradioInterfaceIntent(text)
-      || isMineradioAppControlIntent(text)
+      || isStellaflixInterfaceIntent(text)
+      || isStellaflixAppControlIntent(text)
       || isLyricAnimationControlIntent(text)
       || isPlaylistQueueIntent(text) || isQueueMusicIntent(text) || isSeekIntent(text) || isSavePlaylistIntent(text)
       || isCreatePlaylistIntent(text) || isRecommendedPlaylistIntent(text) || isDiyControlIntent(text)
@@ -1756,6 +2209,10 @@
       if (result && result.awaitingPlaylistConfirmation) {
         return { ok: true, awaitingPlaylistConfirmation: true, steps: state.results, lastResult: result };
       }
+      if (result && result.needsSelection) {
+        setStatus('请选择要播放的影片', '');
+        return { ok: true, needsSelection: true, steps: state.results, lastResult: result };
+      }
       setStatus('小M正在继续完成任务…', 'busy');
       try {
         response = await requestAgentResponse(message, history, state);
@@ -1801,8 +2258,8 @@
         if (isSourceManagerIntent(message)) return await openMusicSourceManagerFromTool();
         if (isAudioQualityIntent(message)) return await controlAudioQualityFromTool({}, message);
         if (isLyricAnimationControlIntent(message)) return await controlLyricAnimationFromTool({}, message);
-        if (isMineradioInterfaceIntent(message)) return await openMineradioInterfaceFromTool({}, message);
-        if (isMineradioAppControlIntent(message)) return await controlMineradioAppFromTool({}, message);
+        if (isStellaflixInterfaceIntent(message)) return await openStellaflixInterfaceFromTool({}, message);
+        if (isStellaflixAppControlIntent(message)) return await controlStellaflixAppFromTool({}, message);
       }
       // Clear local commands never need to leave the computer. This keeps
       // playback and DIY settings usable even when no model/API is configured.
@@ -1847,9 +2304,17 @@
           setStatus('对话完成', 'success');
           return response;
         } catch (agentError) {
-          if (!isMusicIntent(message) && !isReplayIntent(message) && !isVolumeIntent(message) && !isPlaybackControlIntent(message) && !isTrackSkipIntent(message) && !isPlayModeIntent(message) && !isAudioQualityIntent(message) && !isSourceManagerIntent(message) && !isMineradioInterfaceIntent(message) && !isMineradioAppControlIntent(message) && !isLyricAnimationControlIntent(message) && !isPlaylistQueueIntent(message) && !isQueueMusicIntent(message) && !isSeekIntent(message) && !isSavePlaylistIntent(message) && !isCreatePlaylistIntent(message) && !isRecommendedPlaylistIntent(message)) throw agentError;
+          if (!isVideoCommandIntent(message) && !isMusicIntent(message) && !isReplayIntent(message) && !isVolumeIntent(message) && !isPlaybackControlIntent(message) && !isTrackSkipIntent(message) && !isPlayModeIntent(message) && !isAudioQualityIntent(message) && !isSourceManagerIntent(message) && !isStellaflixInterfaceIntent(message) && !isStellaflixAppControlIntent(message) && !isLyricAnimationControlIntent(message) && !isPlaylistQueueIntent(message) && !isQueueMusicIntent(message) && !isSeekIntent(message) && !isSavePlaylistIntent(message) && !isCreatePlaylistIntent(message) && !isRecommendedPlaylistIntent(message)) throw agentError;
           addMessage('assistant', '模型连接失败，我先用本地播放器指令帮你执行。', false);
         }
+      }
+      // 影视本地指令（无需 API）：优先于音乐，避免「播放电影 / 暂停 / 下一集」被音乐链路抢走
+      if (isVideoCommandIntent(message)) {
+        var videoParsedLocal = parseVideoCommand(message);
+        if (videoParsedLocal && (videoParsedLocal.action === 'search_and_play_movie' || videoParsedLocal.action === 'select_candidate')) {
+          return await playVideoFromTool(videoParsedLocal, message);
+        }
+        return await controlVideoFromTool(videoParsedLocal, message);
       }
       if (isRecommendedPlaylistIntent(message)) return await buildRecommendedPlaylistFromTool({}, message);
       if (isPlaylistQueueIntent(message)) return await addPlaylistToQueueFromTool({}, message);
@@ -1860,8 +2325,8 @@
       if (isSourceManagerIntent(message)) return await openMusicSourceManagerFromTool();
       if (isAudioQualityIntent(message)) return await controlAudioQualityFromTool({}, message);
       if (isLyricAnimationControlIntent(message)) return await controlLyricAnimationFromTool({}, message);
-      if (isMineradioInterfaceIntent(message)) return await openMineradioInterfaceFromTool({}, message);
-      if (isMineradioAppControlIntent(message)) return await controlMineradioAppFromTool({}, message);
+      if (isStellaflixInterfaceIntent(message)) return await openStellaflixInterfaceFromTool({}, message);
+      if (isStellaflixAppControlIntent(message)) return await controlStellaflixAppFromTool({}, message);
       if (isPlayModeIntent(message)) return await setCurrentPlayMode({}, message);
       if (isTrackSkipIntent(message)) return await skipCurrentTrack({}, message);
       if (isPlaybackControlIntent(message)) return await controlCurrentPlayback({}, message);
@@ -1869,8 +2334,8 @@
       if (isReplayIntent(message)) return await replayCurrentSong();
       if (isMusicIntent(message)) return await playFromTool(parseMusicCommand(message), message);
       var setupMessage = config.enabled
-        ? '这句话需要 AI 理解，模型设置还不完整。播放、界面、设置和明确的软件控制仍可在本地直接执行。'
-        : '这句话需要 AI 对话。播放、界面、设置和明确的软件控制无需 API，可在本地直接执行。';
+        ? '这句话需要 AI 理解，模型设置还不完整。音乐/影视播放、界面和明确的软件控制仍可在本地直接执行。'
+        : '这句话需要 AI 对话。音乐/影视播放、界面和明确的软件控制无需 API，可在本地直接执行。';
       addMessage('assistant', setupMessage, false);
       setStatus('本地指令可直接使用；仅聊天需要 AI', '');
       return { ok: false, error: 'AGENT_NOT_CONFIGURED' };
@@ -2195,7 +2660,7 @@
     });
   }
 
-  // --- pet equalizer bars: driven by window.__mineradioAgentAudio ---
+  // --- pet equalizer bars: driven by window.__stellaflixAgentAudio ---
   var petBarsRaf = null;
   var petBarSmooth = [0, 0, 0, 0, 0]; // smoothed heights per bar
 
@@ -2210,7 +2675,7 @@
       // re-query every frame so rebuilds are handled
       var barEls = pet.querySelectorAll('.music-agent-pet-bars > i');
       if (!barEls.length) return;
-      var aud = window.__mineradioAgentAudio;
+      var aud = window.__stellaflixAgentAudio;
       for (var i = 0; i < barEls.length; i++) {
         var raw = aud ? Math.min(1, (aud[bandKeys[i]] || 0) * 1.6) : 0;
         var prev = petBarSmooth[i] || 0;
@@ -2351,9 +2816,9 @@
     panel.innerHTML =
       '<section class="music-agent-card" role="dialog" aria-labelledby="music-agent-title">' +
         '<i class="music-agent-glow" aria-hidden="true"></i>' +
-        '<div class="music-agent-head"><div class="music-agent-heading"><div class="music-agent-kicker">MINERADIO AGENT</div>' +
+        '<div class="music-agent-head"><div class="music-agent-heading"><div class="music-agent-kicker">STELLAFLIX AGENT</div>' +
         '<div class="music-agent-title-row"><div class="music-agent-title" id="music-agent-title">小M</div><span class="music-agent-mode-badge">本地软件控制</span></div>' +
-        '<div class="music-agent-sub">自然语言控制整个 Mineradio · 软件功能无需账号登录</div></div>' +
+        '<div class="music-agent-sub">自然语言控制整个 Stellaflix · 软件功能无需账号登录</div></div>' +
         '<div class="music-agent-head-actions"><button class="music-agent-settings-toggle" type="button" aria-label="AI 设置" title="AI 设置">⚙</button>' +
         '<button class="music-agent-close" type="button" aria-label="关闭">×</button></div></div>' +
         '<div class="music-agent-chat-view">' +
@@ -2406,7 +2871,8 @@
     updateDailyRecommendationExample();
     restoreChatHistory();
     if (chatHistory.length) chatHistory.forEach(function (item) { addMessage(item.role, item.content, false); });
-    else addMessage('assistant', '你好，我是小M。你可以让我播放歌曲、打开界面或控制 Mineradio 的各项功能；配置模型后也可以直接聊天。', false);
+    else addMessage('assistant', '你好，我是小M。你可以让我播放歌曲或电影、打开界面、控制播放；配置模型后也可以直接聊天。搜电影无需 API，但需先导入片源。', false);
+    if (chatLog) bindVideoCandidateButtons(chatLog);
     bindDialogInteractions();
     panel.querySelector('.music-agent-close').addEventListener('click', closePanel);
     panel.querySelector('.music-agent-settings-toggle').addEventListener('click', function () { switchView(currentView === 'settings' ? 'chat' : 'settings'); });
@@ -2430,10 +2896,10 @@
       if (!panel.classList.contains('show') || currentView !== 'chat' || busy || voiceListening || voiceProcessing || event.defaultPrevented) return;
       if (event.key === 'Escape' || event.altKey) return;
       var activeTarget = event.target || document.activeElement;
-      // Do not hijack typing from Mineradio search, modal inputs, textareas,
+      // Do not hijack typing from Stellaflix search, modal inputs, textareas,
       // selects, or any other editable control outside the XiaoM input.
       if (activeTarget !== input && isEditableAgentFocusTarget(activeTarget)) return;
-      // Buttons and controls in other Mineradio panels must keep their own
+      // Buttons and controls in other Stellaflix panels must keep their own
       // keyboard handling while XiaoM remains open in the background.
       if (activeTarget && activeTarget !== document.body && activeTarget !== document.documentElement &&
           activeTarget !== input && !panel.contains(activeTarget)) return;
@@ -2512,7 +2978,7 @@
   // Electron desktop-fusion windows are hosted beneath Explorer. Closing a
   // native confirm dialog can leave Chromium visible and clickable but without
   // keyboard focus. Restore webContents focus immediately on the next click in
-  // any editable Mineradio control instead of waiting for Windows to recover it.
+  // any editable Stellaflix control instead of waiting for Windows to recover it.
   document.addEventListener('pointerdown', function (event) {
     if (!event || event.isTrusted === false) return;
     var target = event.target;
@@ -2530,6 +2996,6 @@
     setPetPosition(rect.left, rect.top, false);
   });
 
-  window.MineradioMusicAgentCommand = { open: openPanel, close: closePanel, toggle: togglePanel, run: runCommand, parse: parseMusicCommand, setPetVisible: setPetVisibility, togglePetVisible: togglePetVisibility };
-  window.openMineradioMusicAgent = openPanel;
+  window.StellaflixMusicAgentCommand = { open: openPanel, close: closePanel, toggle: togglePanel, run: runCommand, parse: parseMusicCommand, parseVideoCommand: parseVideoCommand, isVideoCommandIntent: isVideoCommandIntent, isMusicIntent: isMusicIntent, setPetVisible: setPetVisibility, togglePetVisible: togglePetVisibility };
+  window.openStellaflixMusicAgent = openPanel;
 })();

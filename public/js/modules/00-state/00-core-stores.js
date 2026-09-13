@@ -1,6 +1,48 @@
 'use strict';
 
 // ============================================================
+// 启动默认空间=影视：音乐模块链一执行就同步 body 外壳，并预写影视 home 骨架。
+// 铁律：不延迟/跳过音乐 3D、粒子、登录状态机、首页看板数据加载——它们照常跑；
+// 只改 home 页与音乐/影视态专属 chrome，避免先露音乐 home 再切换。
+// ============================================================
+(function applyStartSpaceVideoShellEarly() {
+  try {
+    var preferVideo = false;
+    try {
+      preferVideo = localStorage.getItem('stellaflix-start-space') === 'video'
+        || document.documentElement.classList.contains('video-space-active');
+    } catch (e) { }
+    if (!preferVideo || !document.body) return;
+    document.documentElement.classList.add('video-space-active');
+    document.body.classList.add('video-space-active');
+    document.body.classList.add('sfv-home-boot');
+    // 静态音乐 HTML 卡片改写成影视 5 卡默认文案（与 video/home-cards.js cardDefs 对齐）。
+    // 完整 action / 封面 / 接着看轨仍等 SFV.home.render() 接管；这里只保证首屏不出现音乐文案。
+    var cards = document.querySelectorAll('#empty-home .home-grid .home-card');
+    var defs = [
+      { label: 'LIKED', title: '心动', sub: '进入浏览厅 · 挑片即看' },
+      { label: 'LISTS', title: '片单', sub: '想看的全放进来' },
+      { label: 'TRACKING', title: '追片', sub: '标记想看的片子' },
+      { label: 'HISTORY', title: '历史', sub: '看过的会记在这里' },
+      { label: 'MUSIC', title: '音乐空间', sub: '返回音乐空间 · 听歌' }
+    ];
+    for (var i = 0; i < cards.length && i < defs.length; i++) {
+      var l = cards[i].querySelector('.home-card-label');
+      var t = cards[i].querySelector('.home-card-title');
+      var s = cards[i].querySelector('.home-card-sub');
+      if (l) l.textContent = defs[i].label;
+      if (t) t.textContent = defs[i].title;
+      if (s) s.textContent = defs[i].sub;
+      try { cards[i].setAttribute('onclick', ''); cards[i].onclick = null; } catch (e2) { }
+    }
+    var railTitle = document.getElementById('home-rail-title');
+    var railNote = document.getElementById('home-rail-note');
+    if (railTitle) railTitle.textContent = '接着看';
+    if (railNote) railNote.textContent = '播放任意影片后，这里会显示最近观看。';
+  } catch (e) { }
+})();
+
+// ============================================================
 //  Global State
 // ============================================================
 var audio = null, audioCtx = null, source = null, audioSourceMedia = null, analyser = null, beatAnalyser = null, gainNode = null, analysisSinkNode = null, audioReady = false;
@@ -175,6 +217,32 @@ var hotkeyCaptureState = null;
 var hotkeyGlobalStatus = {};
 var diyPlayerMode = readDiyModePreference();
 var customCoverMap = readCustomCoverMap();
+// 异步预热自定义封面缓存：将 IDB 中的 Blob 还原到内存 _coverDataUrlCache，
+// 并迁移旧格式 dataURL 到 IDB。不阻塞启动，完成后自动刷新当前封面。
+//
+// ==== Fix: 跨模块 function/var 提升时序 bug 防护。
+// warmCustomCoverCache 函数声明会被 JS 提升到整个 script 作用域顶部，
+// 但 cover-custom-map.js 的 var 初始化（GLOBAL_CUSTOM_COVER_KEY / _coverDataUrlCache 等）
+// 并不会提升。如果立刻在此处调用，会在这些变量仍是 undefined 状态下执行，
+// 触发 undefined.__global__ TypeError，导致后续 60+ 模块（splash/main-loop 等）
+// 全部不执行（数据面板不渲染 + 开屏动画消失）。改为 setTimeout(0) 等本轮
+// 所有模块源码执行完 → 所有 var 初始化都已跑完 → 再回调，彻底避免时序竞态。
+if (typeof warmCustomCoverCache === 'function') {
+  setTimeout(function () {
+    warmCustomCoverCache().then(function (migrated) {
+      if (migrated > 0 || Object.keys(customCoverMap).length > 0) {
+        // 缓存就绪后，若当前正在播放且有自定义封面，重新应用以确保显示
+        try {
+          var cur = (currentIdx >= 0 && playQueue[currentIdx]) || currentLocalSong;
+          if (cur) {
+            var cc = getCustomCoverForSong(cur);
+            if (cc) applyCoverDataUrl(cc, { deferHeavy: true, delay: 0, timeout: 800 });
+          }
+        } catch (_e) { /* non-critical */ }
+      }
+    }).catch(function (_e) { /* warm-up is best-effort */ });
+  }, 0);
+}
 var customLyricMap = readCustomLyricMap();
 var customLyricPrefs = readCustomLyricPrefs();
 var customLyricFonts = readCustomLyricFonts();
@@ -197,7 +265,7 @@ var currentLocalSong = null;
 var persistentLocalLibraryTracks = [];
 var lyricSourceMode = 'original';
 var originalLyricsState = { lines: [], hasNativeKaraoke: false, timingSource: 'none', translationLines: [], translationSource: 'none' };
-var localBeatAnalysis = { song: null, audioUrl: '', mode: 'mr', active: false, token: 0 };
+var localBeatAnalysis = { song: null, audioUrl: '', mode: 'sf', active: false, token: 0 };
 var likedSongMap = {}, likeBusyMap = {}, likeStatusToken = 0;
 var collectTargetSong = null, collectBusy = false;
 var uploadTipTimer = null, uploadTipAttempts = 0;

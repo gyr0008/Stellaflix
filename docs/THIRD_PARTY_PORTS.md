@@ -1,8 +1,8 @@
 # Third-party ports
 
-## Mineradio-LX-Music desktop/home reference
+## Stellaflix-LX-Music desktop/home reference
 
-- Upstream: `ww085213/Mineradio-LX-Music`
+- Upstream: `ww085213/Stellaflix-LX-Music`
 - Initial reference revision: `82826df814c32853d99697c0ee60f749a2fcad79`
 - Homepage refresh revision: `812e2dc2e18bbc263e61dbd0206cb765e003d6e9`
 - License: GNU GPL v3 (`GPL-3.0-only`)

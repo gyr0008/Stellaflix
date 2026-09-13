@@ -87,11 +87,17 @@
 
     // 直链播放：经 source-adapter 跨域直链走 /api/proxy；进度键锚定 站点:vod:集数
     var doPlay = function (playUrl) {
+      dep('toast')('正在加载影片…');
+      // 热切换确认：真正进入 doPlay 才算切换成功，写入播放会话 currentKey
+      if (SFV.detailSource && typeof SFV.detailSource.confirmPlaybackSwitch === 'function') {
+        try { SFV.detailSource.confirmPlaybackSwitch(); } catch (e) {}
+      }
       var sourceName = (view.source && view.source.name) ? view.source.name : ((view.source && view.source.id) ? view.source.id : '');
       var coverUrl = dep('resolvePic')(view);
       var meta = { url: playUrl, title: title, id: id };
       if (SFV.source) SFV.source.open(meta);
       else if (SFV.player) SFV.player.openUrl(playUrl, meta);
+      console.log('[SFV-FREEZE] M10 doPlay after source.open, url=' + String(playUrl).slice(0, 160));
       // 封面/站点名晚到：open 已同步 setCurrentMeta，这里合并（emit sfv:player-meta → 底部控制器刷新）
       if (SFV.player && SFV.player.setMeta) SFV.player.setMeta({ key: id, seriesKey: view.key, cover: coverUrl, subtitle: sourceName });
       // 剧集导航：供底部控制器 prev/next 键使用（无剧集则清空）
@@ -142,7 +148,9 @@
         });
       }
       registerNextEpisode(view, ep, play); // 必须在 open 之后：open 会清空 playNext 钩子
+      console.log('[SFV-FREEZE] M11 doPlay before close');
       dep('close')();                       // 关闭浏览层，露出播放器全屏弹层
+      console.log('[SFV-FREEZE] M12 doPlay done');
     };
 
     // 嵌入第三方解析器页面播放：解析器自渲染播放器、客户端解密真实流地址，
@@ -150,6 +158,10 @@
     var openEmbed = function (embedUrl, embedTitle, embedId) {
       var sourceName = (view.source && view.source.name) ? view.source.name : ((view.source && view.source.id) ? view.source.id : '');
       if (SFV.player && typeof SFV.player.openEmbed === 'function') {
+        // 嵌入成功起播同样确认热切换
+        if (SFV.detailSource && typeof SFV.detailSource.confirmPlaybackSwitch === 'function') {
+          try { SFV.detailSource.confirmPlaybackSwitch(); } catch (e) {}
+        }
         SFV.player.openEmbed(embedUrl, { id: embedId, title: embedTitle, cover: dep('resolvePic')(view), subtitle: sourceName });
         dep('close')(); // 关闭浏览层，露出带 iframe 的播放器弹层
       } else {
@@ -165,7 +177,20 @@
 
     if (isKazumi && SFV.kazumi && typeof SFV.kazumi.resolvePlayUrl === 'function') {
       dep('toast')('正在解析播放地址…');
+      // 超时兜底：30s 内 resolvePlayUrl 未返回则降级
+      var resolveDone = false;
+      var resolveTimer = setTimeout(function () {
+        if (!resolveDone) {
+          resolveDone = true;
+          console.warn('[Kazumi] resolvePlayUrl 超时降级, url=' + String(ep.url).slice(0, 120));
+          dep('toast')('播放地址解析超时，尝试原始地址');
+          doPlay(ep.url);
+        }
+      }, 30000);
       SFV.kazumi.resolvePlayUrl(ep.url, view.ruleName || '').then(function (resolved) {
+        if (resolveDone) return; // 已被超时处理
+        resolveDone = true;
+        clearTimeout(resolveTimer);
         if (resolved && resolved.url) {
           if (resolved.embed) {
             // 第三方解析器页面：无法提取直链，整体嵌入 iframe 交由它自渲染播放器
@@ -174,15 +199,34 @@
             doPlay(resolved.url);
           }
         } else {
-          // 解析失败：降级直接用原始 URL（可能是直链或 iframe 类型）
-          console.warn('[Kazumi] 播放页解析未命中，降级使用原始 URL:', ep.url);
-          dep('toast')('播放页解析未命中，尝试原始地址');
-          doPlay(ep.url);
+          // 解析失败：仅在 URL 看起来像媒体地址时才降级直连，否则提示错误
+          var looksLikeMedia = /\.(m3u8|m3u|mp4|flv|webm|mkv|aac|m4s|ts)(\?|$)/i.test(ep.url || '');
+          if (looksLikeMedia) {
+            console.warn('[Kazumi] 播放页解析未命中，但原始 URL 似媒体地址，降级直连:', ep.url);
+            doPlay(ep.url);
+          } else {
+            console.warn('[Kazumi] 播放页解析未命中，原始 URL 非媒体地址，停止降级:', ep.url);
+            dep('toast')('无法解析视频地址（源站网络不通或规则不匹配）');
+            if (SFV.detailSource && typeof SFV.detailSource.failPlaybackSwitch === 'function') {
+              try { SFV.detailSource.failPlaybackSwitch('无法解析视频地址'); } catch (e) {}
+            }
+          }
         }
       }).catch(function (e) {
+        if (resolveDone) return;
+        resolveDone = true;
+        clearTimeout(resolveTimer);
         console.warn('[Kazumi] 播放页解析异常:', e.message);
-        dep('toast')('解析异常，尝试原始地址');
-        doPlay(ep.url);
+        var looksLikeMedia = /\.(m3u8|m3u|mp4|flv|webm|mkv|aac|m4s|ts)(\?|$)/i.test(ep.url || '');
+        if (looksLikeMedia) {
+          dep('toast')('解析异常，尝试原始地址');
+          doPlay(ep.url);
+        } else {
+          dep('toast')('视频地址解析失败，请尝试切换网络或更换规则源');
+          if (SFV.detailSource && typeof SFV.detailSource.failPlaybackSwitch === 'function') {
+            try { SFV.detailSource.failPlaybackSwitch('视频地址解析失败'); } catch (e) {}
+          }
+        }
       });
     } else {
       // CMS10 / 非 Kazumi：直接播放

@@ -97,6 +97,8 @@
     openDetailFromMeta: openDetailFromMeta,
     applyGridDiyToBody: applyGridDiyToBody,
     openCollections: S.openCollections,
+    openCalendar: S.openCalendar,
+    openBangumiInfo: function (item) { if (SFV.bangumiInfo && typeof SFV.bangumiInfo.open === 'function') return SFV.bangumiInfo.open(item); },
     reopenCollections: S.reopenCollections,
     openCollectionItems: S.openCollectionItems,
     tryPicBackfill: tryPicBackfill,

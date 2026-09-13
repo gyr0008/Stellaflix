@@ -120,17 +120,17 @@ function workflowPointDistance(a, b) {
   var dy = a.y - b.y;
   return Math.sqrt(dx * dx + dy * dy);
 }
-function loginWorkflowMrTargetPoint(graph) {
+function loginWorkflowSfTargetPoint(graph) {
   if (!graph) return null;
-  return workflowPointForPort(graph.querySelector('[data-login-mr-target="mr"]'), graph);
+  return workflowPointForPort(graph.querySelector('[data-login-sf-target="sf"]'), graph);
 }
 function loginWorkflowSnapPoint(point, graph) {
-  var mr = loginWorkflowMrTargetPoint(graph);
+  var mr = loginWorkflowSfTargetPoint(graph);
   if (point && mr && workflowPointDistance(point, mr) <= 92) return mr;
   return point;
 }
-function loginWorkflowNearMr(point, graph) {
-  var mr = loginWorkflowMrTargetPoint(graph);
+function loginWorkflowNearSf(point, graph) {
+  var mr = loginWorkflowSfTargetPoint(graph);
   return !!(point && mr && workflowPointDistance(point, mr) <= 108);
 }
 function workflowBezierPath(a, b) {
@@ -160,14 +160,14 @@ function renderLoginWorkflowEdges(tempPoint) {
   var h = Math.max(1, graph.clientHeight || 1);
   svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
   clearWorkflowSvg(svg);
-  var mrIn = graph.querySelector('[data-login-mr-target="mr"]');
+  var sfIn = graph.querySelector('[data-login-sf-target="sf"]');
   loginWorkflowConnectedProviders().forEach(function (provider) {
     var providerOut = graph.querySelector('[data-login-provider-output="' + provider + '"]');
-    appendWorkflowPath(svg, workflowPointForPort(providerOut, graph), workflowPointForPort(mrIn, graph), 'workflow-link active' + (provider === loginProvider ? ' selected' : ''));
+    appendWorkflowPath(svg, workflowPointForPort(providerOut, graph), workflowPointForPort(sfIn, graph), 'workflow-link active' + (provider === loginProvider ? ' selected' : ''));
   });
   if (loginWorkflowPendingProvider && !providerHasLiveLogin(loginWorkflowPendingProvider)) {
     var pendingOut = graph.querySelector('[data-login-provider-output="' + loginWorkflowPendingProvider + '"]');
-    appendWorkflowPath(svg, workflowPointForPort(pendingOut, graph), workflowPointForPort(mrIn, graph), 'workflow-link pending');
+    appendWorkflowPath(svg, workflowPointForPort(pendingOut, graph), workflowPointForPort(sfIn, graph), 'workflow-link pending');
   }
   if (loginWorkflowDrag && tempPoint) {
     appendWorkflowPath(svg, workflowPointForPort(loginWorkflowDrag.port, graph), loginWorkflowSnapPoint(tempPoint, graph), 'workflow-link temp');
@@ -197,7 +197,7 @@ function selectLoginProviderNode(provider) {
   setLoginAuthDrawerOpen(hasLoginWorkflowConnection(provider) || loginWorkflowPendingProvider === provider);
   updateLoginProviderUi();
 }
-function connectLoginProviderToMr(provider) {
+function connectLoginProviderToSf(provider) {
   provider = normalizeLoginProviderKey(provider);
   if (provider !== loginProvider) setLoginProvider(provider, true);
   loginWorkflowPendingProvider = provider;
@@ -212,13 +212,13 @@ function finishLoginWorkflowDrag(e) {
   var drag = loginWorkflowDrag;
   var target = document.elementFromPoint(e.clientX, e.clientY);
   var port = target && target.closest ? target.closest('.flow-port.in') : null;
-  var mrNode = target && target.closest ? target.closest('[data-login-node="mr"]') : null;
+  var sfNode = target && target.closest ? target.closest('[data-login-node="sf"]') : null;
   var eventPoint = workflowPointFromEvent(e, graph);
-  var nearMr = loginWorkflowNearMr(eventPoint, graph);
-  if ((port && graph.contains(port)) || (mrNode && graph.contains(mrNode)) || nearMr) {
-    var mrTarget = port && port.getAttribute('data-login-mr-target');
-    if (drag.source === 'provider' && (mrTarget || mrNode || nearMr)) {
-      connectLoginProviderToMr(drag.provider);
+  var nearMr = loginWorkflowNearSf(eventPoint, graph);
+  if ((port && graph.contains(port)) || (sfNode && graph.contains(sfNode)) || nearMr) {
+    var sfTarget = port && port.getAttribute('data-login-sf-target');
+    if (drag.source === 'provider' && (sfTarget || sfNode || nearMr)) {
+      connectLoginProviderToSf(drag.provider);
     }
   }
   loginWorkflowDrag = null;
@@ -415,7 +415,7 @@ function bindLoginWorkflowPointerEvents() {
     }
     if (!loginWorkflowDrag) return;
     var point = workflowPointFromEvent(e, graph);
-    graph.classList.toggle('drop-ready', loginWorkflowNearMr(point, graph));
+    graph.classList.toggle('drop-ready', loginWorkflowNearSf(point, graph));
     renderLoginWorkflowEdges(point);
   });
   graph.addEventListener('pointerup', finishLoginProviderPointer);
@@ -493,7 +493,7 @@ function selectLoginMode(mode) {
 }
 function startSelectedLoginConnection() {
   if (!hasLoginWorkflowConnection(loginProvider) && loginWorkflowPendingProvider !== loginProvider) {
-    showToast('先把左侧接口拖到 MR 接入口');
+    showToast('先把左侧接口拖到 SF 接入口');
     return;
   }
   setLoginAuthDrawerOpen(true);

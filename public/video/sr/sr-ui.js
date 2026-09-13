@@ -41,21 +41,58 @@
 
   function apply(id, opts) {
     opts = opts || {};
-    saved.preset = id; persist();
+    var prevId = current;
     current = id;
     degradeHinted = false;
     if (id === 'off') {
+      saved.preset = id; persist();
       SFV.srEngine.setPreset(null);
       refreshBtn();
       if (!opts.silent) toast('画质增强已关闭');
       return;
     }
+    // 先显示"加载中"反馈，避免用户以为卡死（尤其首次 shader fetch 慢时）
+    if (!opts.silent) toast('画质增强加载中…');
     SFV.srPresets.load(id).then(function (def) {
-      SFV.srEngine.setPreset(def);
-      refreshBtn();
-      if (!opts.silent) toast('画质增强 · ' + def.label);
+      // 异步加载途中用户可能已切到 off / 其他档位，要丢弃过期结果
+      if (current !== id) return;
+      saved.preset = id; persist();
+      // ==== Fix: 让出事件循环 1 帧再调用 setPreset（会触发 shader 同步编译），
+      // ==== 这样"编译中"提示 toast 先被 paint，用户不会以为直接黑屏卡死。
+      // ==== 编译最多 5 秒硬超时，超过 engine 内部自动降级为 off 并 toast。
+      if (!opts.silent) toast('正在编译画质增强 shader…首次加载约 1-5 秒（超时 5 秒自动跳过）');
+      try {
+        global.setTimeout(function () {
+          if (current !== id) return;
+          SFV.srEngine.setPreset(def);
+          refreshBtn();
+          if (!opts.silent) {
+            var st = SFV.srEngine.getStatus && SFV.srEngine.getStatus();
+            if (!st || st.preset === 'off') {
+              // setPreset 内部可能已因编译超时降级为 off，这里刷新提示
+              toast('当前电脑编译 shader 较慢，已自动回退原生播放（可手动切换关闭档避免提示）');
+            } else {
+              toast('画质增强 · ' + def.label);
+            }
+          }
+        }, 0);
+      } catch (e) {
+        SFV.srEngine.setPreset(def);
+        refreshBtn();
+        if (!opts.silent) toast('画质增强 · ' + def.label);
+      }
     })['catch'](function (e) {
-      toast('画质档位加载失败：' + (e && e.message ? e.message : e));
+      // ==== Fix: 加载失败 → 回退到上一档（默认 off），
+      // ==== 保证 UI/持久化状态/引擎三者一致，不再反复尝试失败档位
+      current = prevId || 'off';
+      saved.preset = current; persist();
+      SFV.srEngine.setPreset(current !== 'off' ? null : null);
+      if (SFV.srEngine && SFV.srEngine.getStatus) {
+        var s = SFV.srEngine.getStatus();
+        if (s && s.status === 'active') SFV.srEngine.setPreset(null);
+      }
+      refreshBtn();
+      toast('画质档位加载失败：' + (e && e.message ? e.message : e) + '，已回退原生播放');
     });
   }
 

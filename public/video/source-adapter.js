@@ -73,6 +73,9 @@
 
   // FLV(.flv)：flv.js 本地化 vendor 到 public/vendor/flv.min.js（同源静态服务）。
   // 许可证 Apache-2.0（与 GPL-3.0 兼容，可自由内置分发；区别于 GSAP 专有许可冲突）。
+  // flv.js 1.6.2（Apache-2.0），已 vendor 到 public/vendor/flv.min.js，由 server.js 静态路由提供。
+  // 缺失时 attachFlv 会降级到原生 <video>，而 Chromium 不原生支持 FLV，表现为无法播放。
+  // 升级版本时请同步替换该文件并更新 NOTICE.md。
   var FLV_LIB_URL = '/vendor/flv.min.js';
   var flvLibPromise = null;   // 加载中的 Promise，保证只注入一次
   var activeFlv = null;       // 当前存活的 flv.js 播放器实例，close 时销毁
@@ -324,13 +327,105 @@
     }
   }
 
+  // ---- 分享页再解析（Fix: CMS 下发的 /share/<hash> 链接实为 HTML 播放页，需提取真实流）----
+  // 背景：苹果CMS 分享页返回 text/html，直喂 <video> 必报 MEDIA_ERR_SRC_NOT_SUPPORTED；
+  // 页面脚本里有标准变量 `var main = "/path/index.m3u8?sign=..."`（已实测可播）。
+  // 触发面：仅 resolve() 判为 reason='unknown-extension' 的无扩展名直链；
+  // 带 .mp4/.m3u8/.flv 扩展名的链接零成本跳过。探测经 /api/proxy 只读响应头即取消 body，
+  // 确认为 HTML 才读正文（≤64KB）。失败/超时一律回落原直链（行为同旧版，错误 toast 兜底）。
+  var SHARE_PAGE_PROBE_TIMEOUT_MS = 8000;
+  var SHARE_PAGE_BODY_LIMIT = 65536;
+
+  function readBodyUpTo(body, limit) {
+    var reader = body.getReader();
+    var chunks = [];
+    var total = 0;
+    function pump() {
+      return reader.read().then(function (c) {
+        if (c.done) return true;
+        total += c.value.length;
+        chunks.push(c.value);
+        if (total >= limit) { try { reader.cancel(); } catch (e) {} return true; }
+        return pump();
+      });
+    }
+    return pump().then(function () {
+      var all = new Uint8Array(Math.min(total, limit));
+      var off = 0;
+      for (var i = 0; i < chunks.length && off < all.length; i++) {
+        var slice = chunks[i].subarray(0, Math.min(chunks[i].length, all.length - off));
+        all.set(slice, off);
+        off += slice.length;
+      }
+      try { return new TextDecoder('utf-8').decode(all); } catch (e) { return ''; }
+    }, function () { return ''; });
+  }
+
+  // 提取顺序：`var main = "..."`（苹果CMS 标准）→ 页面首个绝对 m3u8/mp4 → 首个根相对 m3u8/mp4
+  function extractStreamFromSharePage(html, pageUrl) {
+    if (!html) return null;
+    var candidates = [];
+    var m = html.match(/\bvar\s+main\s*=\s*['"]([^'"]+)['"]/);
+    if (m && m[1]) candidates.push(m[1]);
+    var abs = html.match(/https?:\/\/[^\s'"<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s'"<>\\]*)?/i);
+    if (abs) candidates.push(abs[0]);
+    var rel = html.match(/["'(=](\/[^\s'"<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s'"<>\\]*)?)/i);
+    if (rel && rel[1]) candidates.push(rel[1]);
+    for (var i = 0; i < candidates.length; i++) {
+      try {
+        var u = new URL(candidates[i], pageUrl);
+        if (u.protocol === 'http:' || u.protocol === 'https:') return u.href;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  function probeSharePageAndOpen(r, pid) {
+    var probeUrl = r.playUrl; // 跨域时 resolve() 已包装为 /api/proxy，同源直读
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = null, timedOut = false;
+    return new Promise(function (resolveP) {
+      timer = setTimeout(function () {
+        timedOut = true;
+        if (ctrl) { try { ctrl.abort(); } catch (e) {} }
+        resolveP(null);
+      }, SHARE_PAGE_PROBE_TIMEOUT_MS);
+      fetch(probeUrl, ctrl ? { signal: ctrl.signal } : {}).then(function (res) {
+        var ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.indexOf('text/html') < 0) {
+          // 非 HTML（真实流/视频）：不读 body，按原直链播
+          try { if (res.body && res.body.cancel) res.body.cancel(); } catch (e) {}
+          return null;
+        }
+        return readBodyUpTo(res.body, SHARE_PAGE_BODY_LIMIT).then(function (html) {
+          return extractStreamFromSharePage(html, r.rawUrl);
+        });
+      }).then(function (streamUrl) {
+        clearTimeout(timer);
+        if (!timedOut) resolveP(streamUrl || null);
+      }, function () {
+        clearTimeout(timer);
+        if (!timedOut) resolveP(null);
+      });
+    }).then(function (streamUrl) {
+      if (!streamUrl) {
+        return SFV.player.openUrl(r.playUrl, { id: pid, title: r.title });
+      }
+      if (global.console) global.console.log('[SFV source] 分享页再解析: ' + urlSummary(r.rawUrl) + ' -> ' + urlSummary(streamUrl));
+      // 保留原 id（站点:vod:集数）锚定进度键；__shareResolved 防止理论上的递归再解析
+      return open({ url: streamUrl, title: r.title, id: pid, __shareResolved: true });
+    });
+  }
+
   /**
    * 解析并驱动播放器打开。真正的播放/进度等仍由 player.js 负责。
    * HLS(.m3u8)：统一走 hls.js 动态加载 + 自定义代理 loader 挂载。
-   * @returns {boolean|Promise<boolean>} 本地/直链同步返回布尔；HLS 返回 Promise。
+   * @returns {boolean|Promise<boolean>} 本地/直链同步返回布尔；HLS/分享页探测返回 Promise。
    */
   function open(input) {
+    console.log('[SFV-FREEZE] M7 source.open entry');
     var r = resolve(input);
+    console.log('[SFV-FREEZE] M7b resolve done kind=' + (r && r.kind) + ' ok=' + (r && r.ok) + ' rawUrl=' + String(r && r.rawUrl).slice(0, 120) + ' playUrl=' + String(r && r.playUrl).slice(0, 160));
     if (!r.ok) {
       if (global.console) global.console.warn('[SFV source] 无法解析来源:', r.reason, input);
       return false;
@@ -348,6 +443,7 @@
       var videoEl = SFV.player.getVideoEl();
       if (SFV.player.setCurrentUrl) SFV.player.setCurrentUrl(r.rawUrl);
       SFV.player.prepareForPlay(pid, r.title);
+      console.log('[SFV-FREEZE] M8 before attachHls');
       return attachHls(videoEl, r.rawUrl, {
         id: pid, title: r.title,
         onError: function (e) {
@@ -393,6 +489,11 @@
       });
     }
     // 直链（含原生可播 HLS）：直接交给 player
+    // ==== Fix: 无扩展名直链（reason='unknown-extension'）先探测是否为分享页 ====
+    // /share/<hash> 这类链接实为 HTML 播放页，内含真实流地址；带扩展名的链接零成本跳过。
+    if (r.reason === 'unknown-extension' && !(input && typeof input === 'object' && input.__shareResolved)) {
+      return probeSharePageAndOpen(r, pid);
+    }
     return SFV.player.openUrl(r.playUrl, { id: pid, title: r.title });
   }
 

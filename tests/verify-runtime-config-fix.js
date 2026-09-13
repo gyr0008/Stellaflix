@@ -8,7 +8,7 @@
  *
  * 修复启用后:
  *  - URL / TEXT 路径: importScript 走完整流程不再炸
- *  - bundled "青听海棠" 安装: 同路径, 之前也 ReferenceError, 同样受益
+ *  - bundled "青听音乐" 安装: 同路径, 之前也 ReferenceError, 同样受益
  *
  * 用例:
  *  1. config=undefined -> this.config === {}

@@ -90,17 +90,30 @@
     railBound = true;
   }
 
-  // 从观看历史恢复播放（接着看卡片点击）
+  // 从观看历史恢复播放（接着看卡片点击）—— 直接起播，跳过详情页
   function resumeFromHistory(key) {
     if (!key || !SFV.model) return;
-    var history = SFV.model.getHistory() || [];
+    // 优先从 watch-history 存储中取（含 lastSourceId 等最近片源信息）
     var entry = null;
-    for (var i = 0; i < history.length; i++) {
-      if (history[i].key === key) { entry = history[i]; break; }
+    if (SFV.watchHistory && typeof SFV.watchHistory.getAll === 'function') {
+      var wh = SFV.watchHistory.getAll() || [];
+      for (var j = 0; j < wh.length; j++) {
+        if (wh[j].key === key) { entry = wh[j]; break; }
+      }
+    }
+    // 兜底：watch-history 没命中时再从 model.history 取
+    if (!entry) {
+      var history = SFV.model.getHistory() || [];
+      for (var i = 0; i < history.length; i++) {
+        if (history[i].key === key) { entry = history[i]; break; }
+      }
     }
     if (!entry) { toast('该记录已不存在'); return; }
-    // 用 meta 信息打开详情/播放（openDetailFromMeta 支持 CMS/Kazumi/本地/URL 全类型）
-    if (SFV.online && SFV.online.openDetailFromMeta) {
+    // 直接起播：优先用上次片源，失败按画质跨源切换
+    if (SFV.detailSource && typeof SFV.detailSource.smartResumePlay === 'function') {
+      SFV.detailSource.smartResumePlay(entry);
+    } else if (SFV.online && SFV.online.openDetailFromMeta) {
+      // 兜底：detail-source 未就绪时退回到旧行为（打开详情页）
       SFV.online.openDetailFromMeta(entry);
     } else {
       toast('浏览模块未就绪');

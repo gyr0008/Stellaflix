@@ -48,12 +48,17 @@ var WALLPAPER_ENGINE_PREPARED_STREAM_TTL_MS = 12000;
 var WALLPAPER_ENGINE_FIRST_FRAME_TIMEOUT_MS = 8000;
 var WALLPAPER_ENGINE_FREEZE_FADE_MS = 180;
 var WALLPAPER_ENGINE_HOST_RECOVERY_MAX_ATTEMPTS = 3;
-var WALLPAPER_ENGINE_POINTER_ACTIVITY_INTERVAL_MS = 8;
+// ~50Hz is enough for WE host pointer wakeups; 8ms (~125Hz) flooded IPC.
+var WALLPAPER_ENGINE_POINTER_ACTIVITY_INTERVAL_MS = 20;
+var wallpaperEnginePointerActivityLastSentX = -1;
+var wallpaperEnginePointerActivityLastSentY = -1;
 
 function cancelWallpaperEnginePointerActivity() {
   if (wallpaperEnginePointerActivityTimer) clearTimeout(wallpaperEnginePointerActivityTimer);
   wallpaperEnginePointerActivityTimer = 0;
   wallpaperEnginePointerActivityLastSentAt = 0;
+  wallpaperEnginePointerActivityLastSentX = -1;
+  wallpaperEnginePointerActivityLastSentY = -1;
 }
 
 function wallpaperEnginePointerActivityReady() {
@@ -75,15 +80,21 @@ function wallpaperEnginePointerActivityReady() {
 function flushWallpaperEnginePointerActivity() {
   wallpaperEnginePointerActivityTimer = 0;
   if (!wallpaperEnginePointerActivityHasPoint || !wallpaperEnginePointerActivityReady()) return;
+  var nextX = wallpaperEnginePointerActivityLatestX;
+  var nextY = wallpaperEnginePointerActivityLatestY;
+  // Skip no-op IPC when the pointer stayed on the same quantized cell.
+  if (nextX === wallpaperEnginePointerActivityLastSentX && nextY === wallpaperEnginePointerActivityLastSentY) return;
   var api = wallpaperEngineDesktopApi();
   if (!api || typeof api.reportWallpaperEnginePointerActivity !== 'function') return;
   wallpaperEnginePointerActivityLastSentAt = typeof performance !== 'undefined' && performance.now
     ? performance.now() : Date.now();
+  wallpaperEnginePointerActivityLastSentX = nextX;
+  wallpaperEnginePointerActivityLastSentY = nextY;
   try {
     api.reportWallpaperEnginePointerActivity({
       sessionId: String(wallpaperEngineNativeSessionId || ''),
-      xUnit: wallpaperEnginePointerActivityLatestX,
-      yUnit: wallpaperEnginePointerActivityLatestY
+      xUnit: nextX,
+      yUnit: nextY
     });
   } catch (e) { }
 }

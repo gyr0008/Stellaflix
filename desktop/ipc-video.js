@@ -71,14 +71,14 @@ function initIpc() {
     catch (err) { return { ok: false, error: err.message }; }
   });
   // 事件派发：主进程 mpv event → 推送到渲染进程
-  mpvCtrl._broadcast = (playerId, event, payload) => {
+  mpvCtrl.setEventBroadcast((playerId, event, payload) => {
     let BrowserWindow;
     try { BrowserWindow = require('electron').BrowserWindow; } catch (e) { return; }
     const ch = 'stellaflix-video:mpv-event:' + playerId + ':' + event;
     BrowserWindow.getAllWindows().forEach(w => {
       try { w.webContents.send(ch, payload); } catch (e) {}
     });
-  };
+  });
 
   // ---- 协议 ----
   ipcMain.handle('stellaflix-video:protocol-resolve-emby', async (_e, { url, creds }) => {

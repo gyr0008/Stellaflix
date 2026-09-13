@@ -648,7 +648,7 @@ async function skipFailedQueueItem(idx, token, message, opts) {
 }
 async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
   opts = opts || {};
-  // 第三方音源失败：当 official-first 失败后 custom 作为最后一级、或 custom-only 时，
+  // 第三方音源失败：当 official-first 失败后 custom 作为最后一级、或 custom-first / aggregate 时，
   // 允许优先让 CustomSourceIntegration 给出一次补锅机会。
   var integration = window.CustomSourceIntegration;
   if (integration && typeof integration.fallbackOnPlaybackFailure === 'function') {

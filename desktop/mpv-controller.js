@@ -57,6 +57,46 @@ function setMainWindow(w) { _mainWindow = w; }
 // -----------------------------------------------------------------------
 const _handles = new Map();
 let _nextId = 1;
+// Optional renderer push hook assigned by ipc-video.initIpc().
+let _eventBroadcast = null;
+
+function setEventBroadcast(fn) {
+  _eventBroadcast = typeof fn === 'function' ? fn : null;
+}
+
+function _killProcessTree(proc) {
+  if (!proc || proc.killed || proc.exitCode !== null) return;
+  const pid = proc.pid;
+  try {
+    if (process.platform === 'win32' && pid) {
+      const { spawnSync } = require('child_process');
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 2000 });
+      return;
+    }
+  } catch (_) {}
+  try { proc.kill('SIGKILL'); } catch (_) {}
+}
+
+function _waitForExit(proc, timeoutMs) {
+  if (!proc) return Promise.resolve(true);
+  if (proc.exitCode !== null || proc.killed) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    proc.once('exit', done);
+    proc.once('error', done);
+  });
+}
 
 function _genId() {
   return 'mpv-' + (_nextId++) + '-' + crypto.randomBytes(3).toString('hex');
@@ -67,9 +107,18 @@ function _genId() {
 // -----------------------------------------------------------------------
 function _connectSocket(pipePath) {
   return new Promise((resolve, reject) => {
-    const sock = net.connect(pipePath, () => resolve(sock));
-    sock.on('error', reject);
-    setTimeout(() => reject(new Error('socket connect timeout')), 5000);
+    const sock = net.connect(pipePath, () => {
+      clearTimeout(timer);
+      resolve(sock);
+    });
+    const timer = setTimeout(() => {
+      try { sock.destroy(); } catch (_) {}
+      reject(new Error('socket connect timeout'));
+    }, 5000);
+    sock.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
@@ -92,64 +141,109 @@ function createPlayer(opts) {
   const mpvExe = _findMpvExe();
   if (!mpvExe) return Promise.reject(new Error('mpv.exe 不存在，请检查 _up_/mpv/mpv.exe'));
 
-  const id = _genId();
-  const pipePath = _makePipePath(id);
-  const args = [
-    '--no-terminal',
-    '--force-window=immediate',
-    '--keep-open=no',
-    '--idle=yes',
-    '--hr-seek-framedrop=no',
-    '--input-ipc-server=' + pipePath,
-  ];
-  if (opts.hwnd) args.push('--wid=' + opts.hwnd.toString('hex'));
-  if (opts.title) args.push('--force-media-title=' + opts.title);
-  // 边播边删：缓存控制
-  args.push('--demuxer-max-bytes=128MiB');
-  args.push('--demuxer-readahead-secs=20');
-  args.push('--cache-pause=yes');
-  args.push('--cache-pause-initial=yes');
-  if (Array.isArray(opts.extraArgs)) args.push(...opts.extraArgs);
-  if (opts.url) args.push(opts.url);
+  // Default exclusive: stop previous players before starting a new one so
+  // track/video switches never leave two mpv processes fighting for GPU/CPU.
+  const exclusive = opts.exclusive !== false;
+  const prepare = exclusive ? destroyAllPlayers({ skipOverlays: false }) : Promise.resolve();
 
-  return new Promise((resolve, reject) => {
-    let proc;
-    try {
-      proc = spawn(mpvExe, args, { windowsHide: true, detached: false });
-    } catch (e) { reject(e); return; }
-    const handle = {
-      id, proc, socket: null, pipePath,
-      eventHandlers: new Map(),
-      meta: { url: opts.url, title: opts.title, pid: proc.pid, startedAt: Date.now() },
-      _reqId: 1, _pending: new Map(),
-    };
-    _handles.set(id, handle);
-    proc.on('exit', (code) => { _onProcessExit(id, code); });
-    proc.on('error', (e) => { _log('proc error', id, e.message); });
-    _connectSocket(pipePath).then(sock => {
-      handle.socket = sock;
-      _bindSocket(id, sock);
-      _log('player created', id, 'pid=' + proc.pid);
-      resolve({ id, pid: proc.pid });
-    }).catch(err => {
-      try { proc.kill('SIGKILL'); } catch (e) {}
-      _handles.delete(id);
-      reject(err);
+  return prepare.then(() => {
+    const id = _genId();
+    const pipePath = _makePipePath(id);
+    const args = [
+      '--no-terminal',
+      '--force-window=immediate',
+      '--keep-open=no',
+      '--idle=yes',
+      '--hr-seek-framedrop=no',
+      '--input-ipc-server=' + pipePath,
+    ];
+    if (opts.hwnd) args.push('--wid=' + opts.hwnd.toString('hex'));
+    if (opts.title) args.push('--force-media-title=' + opts.title);
+    // 边播边删：缓存控制
+    args.push('--demuxer-max-bytes=128MiB');
+    args.push('--demuxer-readahead-secs=20');
+    args.push('--cache-pause=yes');
+    args.push('--cache-pause-initial=yes');
+    if (Array.isArray(opts.extraArgs)) args.push(...opts.extraArgs);
+    if (opts.url) args.push(opts.url);
+
+    return new Promise((resolve, reject) => {
+      let proc;
+      try {
+        // Ignore stdio pipes: unread stdout/stderr can block the child on Windows.
+        proc = spawn(mpvExe, args, {
+          windowsHide: true,
+          detached: false,
+          stdio: ['ignore', 'ignore', 'ignore'],
+        });
+      } catch (e) { reject(e); return; }
+      const handle = {
+        id, proc, socket: null, pipePath,
+        eventHandlers: new Map(),
+        meta: { url: opts.url, title: opts.title, pid: proc.pid, startedAt: Date.now() },
+        _reqId: 1, _pending: new Map(),
+      };
+      _handles.set(id, handle);
+      proc.on('exit', (code) => { _onProcessExit(id, code); });
+      proc.on('error', (e) => { _log('proc error', id, e.message); });
+      _connectSocket(pipePath).then(sock => {
+        if (!_handles.has(id)) {
+          try { sock.destroy(); } catch (_) {}
+          try { _killProcessTree(proc); } catch (_) {}
+          reject(new Error('player exited during socket connect'));
+          return;
+        }
+        handle.socket = sock;
+        _bindSocket(id, sock);
+        _log('player created', id, 'pid=' + proc.pid);
+        resolve({ id, pid: proc.pid });
+      }).catch(err => {
+        _killProcessTree(proc);
+        _handles.delete(id);
+        reject(err);
+      });
     });
   });
 }
 
-/** 销毁实例 */
+/** 销毁实例：保留句柄等 exit，失败时 Windows taskkill /T 兜底 */
 function destroyPlayer(id) {
   const h = _handles.get(id);
   if (!h) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    _cleanupHandle(id);
-    if (h.proc && !h.proc.killed) {
-      try { h.proc.kill('SIGTERM'); } catch (e) {}
-      setTimeout(() => { try { h.proc.kill('SIGKILL'); } catch (e) {} resolve(true); }, 500);
-    } else { resolve(true); }
-  });
+  return (async () => {
+    const proc = h.proc;
+    try { if (h.socket) h.socket.destroy(); } catch (_) {}
+    h.socket = null;
+    for (const p of h._pending.values()) {
+      try { p.reject(new Error('player destroyed')); } catch (_) {}
+    }
+    h._pending.clear();
+    if (!proc || proc.exitCode !== null) {
+      try { fs.unlinkSync(h.pipePath); } catch (_) {}
+      _handles.delete(id);
+      return true;
+    }
+    try { proc.kill('SIGTERM'); } catch (_) {}
+    const exited = await _waitForExit(proc, 400);
+    if (!exited) {
+      _killProcessTree(proc);
+      await _waitForExit(proc, 800);
+    }
+    try { fs.unlinkSync(h.pipePath); } catch (_) {}
+    _handles.delete(id);
+    return true;
+  })();
+}
+
+async function destroyAllPlayers(options) {
+  const skipOverlays = !!(options && options.skipOverlays);
+  const ids = Array.from(_handles.keys());
+  await Promise.all(ids.map((id) => {
+    const h = _handles.get(id);
+    if (skipOverlays && h && h.overlayWin) return Promise.resolve(false);
+    return destroyPlayer(id);
+  }));
+  return true;
 }
 
 /** 发送命令（对齐 mpv JSON IPC） */
@@ -272,14 +366,21 @@ function _handleLine(id, line) {
     if (set) set.forEach(cb => { try { cb(msg); } catch (e) {} });
     const all = h.eventHandlers.get('*');
     if (all) all.forEach(cb => { try { cb(msg); } catch (e) {} });
+    if (_eventBroadcast) {
+      try { _eventBroadcast(id, msg.event, msg); } catch (e) {}
+    }
   }
 }
 
 function _onProcessExit(id, code) {
   const h = _handles.get(id);
   if (!h) return;
+  const payload = { event: 'shutdown', id, code };
   const all = h.eventHandlers.get('*');
-  if (all) all.forEach(cb => { try { cb({ event: 'shutdown', id, code }); } catch (e) {} });
+  if (all) all.forEach(cb => { try { cb(payload); } catch (e) {} });
+  if (_eventBroadcast) {
+    try { _eventBroadcast(id, 'shutdown', payload); } catch (e) {}
+  }
   _cleanupHandle(id);
 }
 
@@ -318,10 +419,14 @@ function createOverlay(opts) {
   win.setIgnoreMouseEvents(true);
   win.loadURL('data:text/html,<html><body style="margin:0;background:transparent"></body></html>');
   const hwnd = win.getNativeWindowHandle();
-  const id = _genId();
-  return createPlayer(Object.assign({}, opts, { hwnd, idPrefix: id })).then(r => {
-    _handles.get(r.id).overlayId = overlayId;
-    _handles.get(r.id).overlayWin = win;
+  return createPlayer(Object.assign({}, opts, { hwnd })).then(r => {
+    const handle = _handles.get(r.id);
+    if (!handle) {
+      try { win.destroy(); } catch (_) {}
+      return { ok: false, error: 'player exited immediately after create' };
+    }
+    handle.overlayId = overlayId;
+    handle.overlayWin = win;
     win.show();
     return { ok: true, data: { overlayId, playerId: r.id, pid: r.pid, hwnd: hwnd.toString('hex') } };
   }).catch(err => {
@@ -337,18 +442,29 @@ function destroyOverlay(playerId) {
   return destroyPlayer(playerId);
 }
 
-function shutdown() {
-  for (const id of Array.from(_handles.keys())) {
-    _cleanupHandle(id);
+async function shutdown() {
+  const ids = Array.from(_handles.keys());
+  await Promise.all(ids.map(async (id) => {
     const h = _handles.get(id);
-    if (h && h.proc && !h.proc.killed) { try { h.proc.kill('SIGKILL'); } catch (e) {} }
-  }
+    if (!h) return;
+    try { if (h.socket) h.socket.destroy(); } catch (_) {}
+    for (const p of h._pending.values()) {
+      try { p.reject(new Error('app shutting down')); } catch (_) {}
+    }
+    h._pending.clear();
+    if (h.proc && h.proc.exitCode === null) {
+      _killProcessTree(h.proc);
+      await _waitForExit(h.proc, 400);
+    }
+    try { fs.unlinkSync(h.pipePath); } catch (_) {}
+    _handles.delete(id);
+  }));
   _handles.clear();
 }
 
 module.exports = {
-  setConfig, setMainWindow,
-  createPlayer, destroyPlayer, createOverlay, destroyOverlay,
+  setConfig, setMainWindow, setEventBroadcast,
+  createPlayer, destroyPlayer, destroyAllPlayers, createOverlay, destroyOverlay,
   command, getProperty, setProperty,
   onEvent, offEvent, seek, stopAndClean, listPlayers, shutdown,
 };

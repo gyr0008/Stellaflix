@@ -1,8 +1,8 @@
 // ====================================================================
-//  Mineradio 2.1.0 — 第三方音源 / 青听海棠 前端集成
+//  Stellaflix 2.1.0 — 第三方音源 / 青听音乐 前端集成
 //  - 对接 window.desktopWindow.customSource（Electron preload 桥）
 //  - 浏览器纯 web 场景提供兼容桩，不会报错
-//  - 三模式切换：official-first / custom-first / custom-only
+//  - 三模式切换：official-first / custom-first / aggregate（聚合解析：元数据跨平台匹配 + 音质降序热切换）
 //  - 14 项 IPC 操作 + 事件/日志/状态变更订阅
 // ====================================================================
 
@@ -25,7 +25,10 @@
       if (!s) return defaultPrefs();
       var raw = s.getItem(STORE_KEY);
       var obj = raw ? JSON.parse(raw) : null;
-      return Object.assign(defaultPrefs(), obj || {});
+      var merged = Object.assign(defaultPrefs(), obj || {});
+      // 旧版兼容迁移：custom-only 模式已删除，统一回退到 aggregate（保留的跨平台匹配模式）
+      if (merged.mode === 'custom-only') merged.mode = 'aggregate';
+      return merged;
     } catch (_) {
       return defaultPrefs();
     }
@@ -38,7 +41,7 @@
   }
   function defaultPrefs() {
     return {
-      mode: 'official-first',       // official-first | custom-first | custom-only
+      mode: 'official-first',       // official-first | custom-first | aggregate
       enabled: true,                // 全局第三方音源总开关
       preferCustomOnOfficialFail: true,
     };
@@ -79,7 +82,8 @@
     if (!hint) return;
     var modeText = prefs.mode === 'official-first' ? '官方优先：先尝试五平台原生接口，失败后再尝试第三方音源（默认，安全稳妥）。'
       : prefs.mode === 'custom-first' ? '自定义优先：先尝试已启用的第三方音源，失败后再回退到五平台官方解析。'
-      : '仅自定义：只使用已启用的第三方音源，若失败则不再回退到官方解析（适合想固定使用第三方源的用户）。';
+      : prefs.mode === 'aggregate' ? '聚合解析：打破平台绑定——全部在线歌曲按歌名/歌手/专辑元数据跨平台匹配真实版本，再从最高音质开始逐级热切换解析；官方接口仅作兜底。'
+      : '（未知取源模式，请重新选择取源模式。）';
     var bridge = getBridge();
     var statusText = bridge
       ? ('<b>当前状态</b>：桌面桥接可用 · 已安装 ' + uiState.installedCount + ' 个音源 · 已启用 ' + uiState.enabledCount + ' 个。')
@@ -129,7 +133,7 @@
       btn.setAttribute('data-active', active ? '1' : '0');
     }
     btn.title = (bridge ? '' : '[Web 预览：桥接未可用] ') + '第三方音源 · ' +
-      (prefs.mode === 'official-first' ? '官方优先' : prefs.mode === 'custom-first' ? '自定义优先' : '仅自定义') +
+      (prefs.mode === 'official-first' ? '官方优先' : prefs.mode === 'custom-first' ? '自定义优先' : prefs.mode === 'aggregate' ? '聚合解析' : '未知') +
       ' · 已安装 ' + uiState.installedCount + '，已启用 ' + uiState.enabledCount;
   }
 
@@ -146,7 +150,7 @@
     if (!box) return;
     var items = Array.isArray(uiState.installed) ? uiState.installed : [];
     if (!items.length) {
-      box.innerHTML = '<div class="custom-source-hint">还没有安装第三方音源，可以到“内置音源”标签安装青听海棠，或从“导入 / 新增”通过 URL 或粘贴源码安装。</div>';
+box.innerHTML = '<div class="custom-source-hint">还没有安装第三方音源，可以到"内置音源"标签安装青听音乐，或从"导入 / 新增"通过 URL 或粘贴源码安装。</div>';
       return;
     }
     box.innerHTML = items.map(function (pkg) {
@@ -391,7 +395,7 @@
   }
 
   function setMode(mode) {
-    if (!/^(official-first|custom-first|custom-only)$/.test(String(mode || ''))) return;
+    if (!/^(official-first|custom-first|aggregate)$/.test(String(mode || ''))) return;
     prefs.mode = String(mode);
     savePrefs(prefs);
     applyOverviewUi();
@@ -417,12 +421,41 @@
     switchTab(uiState.activeTab || 'overview');
     applyOverviewUi();
     Promise.all([refreshInstalled(), refreshBundled()]).catch(function () {});
+    // 点击遮罩空白处关闭（一次性绑定，幂等）
+    bindOverlayOutsideClickOnce();
+    // Esc 键关闭（与 closeModal 里的 removeEventListener 配对）
+    document.addEventListener('keydown', onKeydownCloseEsc);
   }
   function closeModal() {
     var overlay = el('custom-source-modal-overlay');
     if (!overlay) return;
     overlay.setAttribute('data-open', '0');
     overlay.setAttribute('aria-hidden', 'true');
+    document.removeEventListener('keydown', onKeydownCloseEsc);
+  }
+
+  // Esc 键关闭面板（与 openModal 的 add 配对，关闭后立即 removeEventListener，
+  // 保证面板关闭后不留残留监听；同时仅在面板打开期间生效）
+  function onKeydownCloseEsc(e) {
+    if (e && (e.key === 'Escape' || e.keyCode === 27)) closeModal();
+  }
+
+  // 点击遮罩（.custom-source-modal-overlay）空白处关闭：
+  // overlay 是全屏 fixed 遮罩（CSS: position:fixed; inset:0; display:flex 仅在 data-open='1'），
+  // 仅当点击目标就是 overlay 本身（即点到遮罩、未点到 .custom-source-modal）时触发关闭。
+  // 一次性绑定，靠 __csiOutsideClickBound 标记幂等，避免 openModal 多次调用叠加监听。
+  function bindOverlayOutsideClickOnce() {
+    var overlay = el('custom-source-modal-overlay');
+    if (!overlay || overlay.__csiOutsideClickBound) return;
+    overlay.__csiOutsideClickBound = true;
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) {
+        // 阻断事件冒泡到 document/body：防止任何文档级代理监听器把这次「点遮罩」点击
+        // 当作「点击弹窗外内容」并响应弹窗背后的元素（避免点击跨过弹窗、穿透到背后内容）。
+        e.stopPropagation();
+        closeModal();
+      }
+    });
   }
 
   function clearLog() {
@@ -465,7 +498,7 @@
     else if (interval > 60 * 60) interval = Math.floor(interval);
     // 平台 ID（provider / hash / songmid / strMediaMid / mid / rid 等）必须留在顶层。
     // 主进程 toLxMusicInfo() 直接读顶层字段提取 rid，若只塞进 _raw 会导致 rid 取空、
-    // 音源脚本抛 "rid should not be empty"，custom-only 模式必然「找不到音源」。
+    // 音源脚本抛 "rid should not be empty"，第三方音源模式（如 custom-first）必然「找不到音源」。
     // 做法：先平铺原生字段，再用 LX 规范字段覆盖同名项。
     var lx = {};
     for (var key in song) {
@@ -482,8 +515,8 @@
   }
 
   function isOfficialResultUsable(officialResult, mode) {
-    // custom-only / custom-first：官方结果一律不算"可用"，保证第三方音源永远作为主候选
-    if (mode === 'custom-only' || mode === 'custom-first') return false;
+    // custom-first：官方结果一律不算"可用"，保证第三方音源永远作为主候选
+    if (mode === 'custom-first') return false;
     if (!officialResult || typeof officialResult !== 'object') return false;
     if (!officialResult.url) return false;
     if (officialResult.trial) return false;
@@ -491,23 +524,79 @@
     return true;
   }
 
+  function aggregateSourceLabel(source) {
+    if (source === 'wy') return '网易云线路';
+    if (source === 'tx') return 'QQ 线路';
+    if (source === 'kg') return '酷狗线路';
+    if (source === 'kw') return '酷我线路';
+    if (source === 'mg') return '咪咕线路';
+    return '第三方音源';
+  }
+
+  // 聚合解析：把歌曲当纯元数据，交给 server 跨平台搜索匹配（wy/tx/kg 真实版本），
+  // 再由主进程按音质降序逐候选热切换解析。仅在预解析阶段调用，避免与官方兜底重复请求。
+  async function resolveAggregateViaHttp(song, context) {
+    var requestedQuality = context.requestedQuality || 'hires';
+    var payload = {
+      song: songToLxMusicInfo(song, requestedQuality),
+      quality: normalizePlaybackQuality(requestedQuality),
+    };
+    var res;
+    try {
+      res = await apiJson('/api/custom-source/resolve-aggregate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        timeoutMs: 24000,
+      });
+    } catch (e) {
+      pushLog('error', 'aggregate resolve failed: ' + (e.message || String(e)));
+      return { override: false, reason: 'exception' };
+    }
+    if (!res || typeof res !== 'object' || !res.url) {
+      var failReason = res && (res.reason || res.error) || 'unknown';
+      pushLog('info', 'aggregate 未命中: ' + failReason);
+      return { override: false, reason: (res && res.reason) || 'no-url' };
+    }
+    var resolvedLevel = String(res.level || requestedQuality || '');
+    var sourceLabel = '聚合解析 · ' + aggregateSourceLabel(res.source);
+    pushLog('info', 'aggregate 命中: ' + sourceLabel + (resolvedLevel ? ' @ ' + resolvedLevel : ''), { urlPrefix: String(res.url).slice(0, 80) });
+    return {
+      override: true,
+      resolvedPlaybackProvider: CUSTOM_PROVIDER_KEY,
+      sourceLabel: sourceLabel,
+      resolvedSourceLabel: sourceLabel,
+      via: 'aggregate',
+      data: {
+        url: String(res.url),
+        level: resolvedLevel || requestedQuality || 'standard',
+        provider: CUSTOM_PROVIDER_KEY,
+        source: sourceLabel,
+        sourceMatch: true,
+        trial: false,
+      },
+    };
+  }
+
   async function resolveOnlinePlaybackData(song, context) {
     context = context || {};
     if (!prefs.enabled) {
       return { override: false, reason: 'disabled' };
     }
-    var mode = prefs.mode || 'official-first';
+    // 允许调用方通过 context.mode 临时覆盖全局模式（如 AI 助手强制 aggregate 使用青听等第三方源）
+    var mode = context.mode || prefs.mode || 'official-first';
     var officialResult = context.officialResult || {};
     var bridge = getBridge();
     var customEnabled = prefs.enabled && !!bridge;
     var officialUsable = isOfficialResultUsable(officialResult, mode);
 
-    // 仅自定义：跳过官方结果，强制走第三方
-    if (mode === 'custom-only') {
-      if (!customEnabled) {
-        return { override: false, reason: 'official-skip' };
-      }
-      return resolveViaBridge(song, context, 'custom-only');
+    // 聚合解析：打破平台绑定，全部在线歌曲先按元数据匹配真实平台版本 + 音质降序热切换；
+    // 官方接口仅作兜底（预解析未命中后官方结果可用则直接使用，不重复跑聚合）。
+    if (mode === 'aggregate') {
+      if (!customEnabled) return { override: false, reason: 'bridge-missing' };
+      if (context.preResolve === true) return resolveAggregateViaHttp(song, context);
+      if (officialResult && officialResult.url && !officialResult.trial) return { override: false, reason: 'fallback-to-official' };
+      return { override: false, reason: 'aggregate-already-tried' };
     }
     // 自定义优先：先尝试第三方，失败且官方可用则再用官方
     if (mode === 'custom-first') {
@@ -613,8 +702,8 @@
     if (!prefs.enabled) return null;
     var bridge = getBridge();
     if (!bridge) return null;
-    if (prefs.mode === 'custom-only') {
-      // custom-only 已经在主流程里调用过第三方；防止重复请求
+    if (prefs.mode === 'aggregate') {
+      // aggregate 已经在主流程里调用过第三方（聚合解析含搜索匹配，重复代价高）；防止重复请求
       return null;
     }
     var resolved;
@@ -707,17 +796,18 @@
     appendSourceSwitcherEntries: appendSourceSwitcherEntries,
     getMode: function () { return prefs.mode; },
     isEnabled: function () { return !!prefs.enabled; },
-    // 告知播放链路官方请求是否可跳过：custom-only 一定跳；custom-first 跳过后仍会在 resolveOnlinePlaybackData 中失败再回退
+    // 告知播放链路官方请求是否可跳过：aggregate / custom-first 一定跳；custom-first 跳过后仍会在 resolveOnlinePlaybackData 中失败再回退
+    // aggregate 预解析未命中时会重新放行官方请求作为兜底（见 13-playback-start-audio.js 的 preResolve 逻辑）
     shouldSkipOfficialRequest: function () {
       if (!prefs.enabled) return false;
       var m = prefs.mode;
-      return m === 'custom-only' || m === 'custom-first';
+      return m === 'custom-first' || m === 'aggregate';
     },
-    // custom-only 模式时，无论官方返回啥都不算可用
+    // custom-first 模式时，无论官方返回啥都不算可用
     shouldTreatOfficialAsUnusable: function () {
       if (!prefs.enabled) return false;
       var m = prefs.mode;
-      return m === 'custom-only' || m === 'custom-first';
+      return m === 'custom-first';
     },
     hasBridge: hasBridge,
   };

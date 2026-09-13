@@ -220,21 +220,44 @@ function drawIdleGuideTrail(ctx, trail, now, alpha, energy) {
   }
   ctx.restore();
 }
+var idleGuideRafId = 0;
+function cancelIdleGuideFrame() {
+  if (idleGuideDelayTimer) {
+    clearTimeout(idleGuideDelayTimer);
+    idleGuideDelayTimer = null;
+  }
+  if (idleGuideRafId) {
+    cancelAnimationFrame(idleGuideRafId);
+    idleGuideRafId = 0;
+  }
+}
 function scheduleIdleGuideFrame(delay) {
   if (idleGuideDelayTimer) {
     clearTimeout(idleGuideDelayTimer);
     idleGuideDelayTimer = null;
   }
+  if (idleGuideRafId) {
+    cancelAnimationFrame(idleGuideRafId);
+    idleGuideRafId = 0;
+  }
   if (delay && delay > 0) {
     idleGuideDelayTimer = setTimeout(function () {
       idleGuideDelayTimer = null;
-      requestAnimationFrame(drawIdleGuideFrame);
+      idleGuideRafId = requestAnimationFrame(drawIdleGuideFrame);
     }, delay);
   } else {
-    requestAnimationFrame(drawIdleGuideFrame);
+    idleGuideRafId = requestAnimationFrame(drawIdleGuideFrame);
   }
 }
+function idleGuideShelfCueMightShow() {
+  if (!shelfHoverCue) return false;
+  return !!(shelfHoverCue.guide
+    || shelfHoverCue.zoneActive
+    || shelfHoverCue.target > 0
+    || (shelfHoverCue.value || 0) > 0.015);
+}
 function drawIdleGuideFrame() {
+  idleGuideRafId = 0;
   if (!idleGuideCanvas || !idleGuideCtx) return;
   var ctx = idleGuideCtx;
   var nowFrame = performance.now();
@@ -248,7 +271,11 @@ function drawIdleGuideFrame() {
   if (!show) {
     idleGuideCtx.clearRect(0, 0, idleGuideW, idleGuideH);
     resetIdleGuideTrails();
-    scheduleIdleGuideFrame(140);
+    // Idle-guide background is off by default; only keep a slow poll while a
+    // shelf hover cue might still activate. Otherwise stop the rAF chain and
+    // wait for wakeIdleGuideLoop() from shelf pointer events / visibility.
+    if (idleGuideShelfCueMightShow()) scheduleIdleGuideFrame(80);
+    else cancelIdleGuideFrame();
     return;
   }
   var t = (nowFrame - idleGuideStartedAt) / 1000;
@@ -466,6 +493,11 @@ function drawShelfGuideCue(ctx, t, strength) {
   }
   ctx.restore();
 }
+function wakeIdleGuideLoop() {
+  if (!idleGuideCanvas || !idleGuideCtx) return;
+  if (idleGuideRafId || idleGuideDelayTimer) return;
+  scheduleIdleGuideFrame(0);
+}
 function initIdleGuideCanvas() {
   idleGuideCanvas = document.getElementById('idle-guide-canvas');
   if (!idleGuideCanvas) return;
@@ -474,7 +506,13 @@ function initIdleGuideCanvas() {
   idleGuideStartedAt = performance.now();
   resizeIdleGuideCanvas();
   window.addEventListener('resize', resizeIdleGuideCanvas);
-  drawIdleGuideFrame();
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') wakeIdleGuideLoop();
+    else if (!shouldShowIdleGuide() && !idleGuideShelfCueMightShow()) cancelIdleGuideFrame();
+  });
+  // Do not leave a permanent empty rAF: start once so shelf cue can draw,
+  // then drawIdleGuideFrame stops itself when nothing needs frames.
+  scheduleIdleGuideFrame(0);
 }
 
 // ============================================================

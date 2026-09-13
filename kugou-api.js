@@ -68,6 +68,7 @@ function createKugouTtlCache(maxEntries, defaultTtlMs) {
 
 const kugouSearchCache = createKugouTtlCache(120, 2 * 60 * 1000);
 const kugouSongUrlCache = createKugouTtlCache(240, 15 * 60 * 1000);
+const kugouSongUrlInflight = new Map();
 const kugouPlaylistTracksCache = createKugouTtlCache(24, 5 * 60 * 1000);
 const kugouProfileCache = createKugouTtlCache(24, 5 * 60 * 1000);
 const kugouVipCache = createKugouTtlCache(24, 5 * 60 * 1000);
@@ -91,18 +92,41 @@ const KUGOU_QUALITY_CHAIN = [
   { key: 'standard', label: '标准', field: 'FileHash' },
 ];
 
+const REQUEST_TEXT_MAX_BYTES = 4 * 1024 * 1024;
+const sharedHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8 });
+const sharedHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8 });
+
 function requestText(targetUrl, opts, body) {
   opts = opts || {};
   return new Promise((resolve, reject) => {
     const u = new URL(targetUrl);
     const lib = u.protocol === 'https:' ? https : http;
+    const maxBytes = Math.max(64 * 1024, Number(opts.maxBytes) || REQUEST_TEXT_MAX_BYTES);
     const req = lib.request(u, {
       method: opts.method || 'GET',
       headers: opts.headers || {},
+      agent: u.protocol === 'https:' ? sharedHttpsAgent : sharedHttpAgent,
     }, response => {
       const chunks = [];
-      response.on('data', chunk => chunks.push(chunk));
+      let received = 0;
+      let settled = false;
+      const fail = (err) => {
+        if (settled) return;
+        settled = true;
+        try { response.destroy(); } catch (_) {}
+        reject(err);
+      };
+      response.on('data', chunk => {
+        received += chunk.length;
+        if (received > maxBytes) {
+          fail(Object.assign(new Error('Response too large'), { statusCode: response.statusCode, code: 'RESPONSE_TOO_LARGE' }));
+          return;
+        }
+        chunks.push(chunk);
+      });
       response.on('end', () => {
+        if (settled) return;
+        settled = true;
         const text = Buffer.concat(chunks).toString('utf8');
         if (response.statusCode >= 400) {
           const err = new Error('HTTP ' + response.statusCode);
@@ -113,6 +137,7 @@ function requestText(targetUrl, opts, body) {
         }
         resolve(text);
       });
+      response.on('error', fail);
     });
     req.setTimeout(Math.max(250, Number(opts.timeoutMs) || 12000), () => req.destroy(new Error('Request timeout')));
     req.on('error', reject);
@@ -1199,6 +1224,26 @@ async function handleKugouSongUrl(params, cookie) {
   if (!hash) {
     return { provider: 'kugou', url: '', playable: false, error: 'MISSING_HASH', message: '缺少酷狗歌曲 hash' };
   }
+  // Dedupe concurrent misses for the same playback scope before the VIP cascade.
+  const inflightKey = [
+    auth.playbackReady ? '1' : '0',
+    hash.toLowerCase(),
+    albumId,
+    albumAudioId,
+    requestedQuality,
+  ].join(':');
+  if (kugouSongUrlInflight.has(inflightKey)) return kugouSongUrlInflight.get(inflightKey);
+
+  const work = resolveKugouSongUrl(params, cookie, auth, hash, albumId, albumAudioId, requestedQuality);
+  kugouSongUrlInflight.set(inflightKey, work);
+  try {
+    return await work;
+  } finally {
+    if (kugouSongUrlInflight.get(inflightKey) === work) kugouSongUrlInflight.delete(inflightKey);
+  }
+}
+
+async function resolveKugouSongUrl(params, cookie, auth, hash, albumId, albumAudioId, requestedQuality) {
   const vipProbe = auth.playbackReady ? await fetchKugouVipInfo(cookie, auth).catch(() => null) : null;
   const membership = normalizeKugouVipPayloadV2(vipProbe, auth);
   const rightsMembership = Object.assign({}, membership, {

@@ -96,7 +96,7 @@ function buildSandbox(opts) {
     window.localStorage.setItem('stellaflix-home-dashboard-video-meta-v1-music', JSON.stringify(opts.dashMeta));
   }
   if (opts.outerMeta) {
-    window.localStorage.setItem('mineradio.outer.poster.meta.music', JSON.stringify(opts.outerMeta));
+    window.localStorage.setItem('stellaflix.outer.poster.meta.music', JSON.stringify(opts.outerMeta));
   }
 
   // objectURL stub：每次 createObjectURL 返回该场景的 NEW_BLOB；revoke 记录到 revoked[]

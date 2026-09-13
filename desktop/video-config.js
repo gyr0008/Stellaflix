@@ -80,7 +80,7 @@ function init(appPaths) {
       autoCleanCache: raw.mediaLibrary?.autoCleanCache !== false,
     },
     network: {
-      userAgent: raw.network?.userAgent || 'Stellaflix/2.1.0 Video',
+      userAgent: raw.network?.userAgent || 'Stellaflix/0.1.0 Video',
       timeout: raw.network?.timeout || 30000,
       maxRetries: raw.network?.maxRetries || 3,
       enableProxy: raw.network?.enableProxy === true,

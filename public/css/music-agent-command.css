@@ -1,5 +1,5 @@
 /* =====================================================
-   MINERADIO AGENT UI — Liquid Glass Edition
+   STELLAFLIX AGENT UI — Liquid Glass Edition
    ===================================================== */
 
 /* ---------- Pet — Sound-wave Orb ---------- */
@@ -864,6 +864,35 @@ body.desktop-software-locked .music-agent-pet{opacity:0;visibility:hidden;pointe
   .music-agent-resize-handle{display:none}
   .music-agent-card.custom-sized{min-width:0;min-height:0}
 }
+
+/* ---------- Video candidates (agent local movie skill) ---------- */
+.music-agent-html{white-space:normal}
+.music-agent-video-candidates{
+  display:flex;flex-direction:column;gap:6px;margin:6px 0 2px;
+}
+.mv-cand-title{
+  font-size:12px;opacity:.8;margin-bottom:2px;
+}
+.mv-cand-item{
+  display:flex;align-items:flex-start;gap:8px;width:100%;
+  text-align:left;border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.06);color:inherit;border-radius:12px;
+  padding:8px 10px;cursor:pointer;font:inherit;
+  transition:background .15s,border-color .15s;
+}
+.mv-cand-item:hover{
+  background:rgba(var(--fc-accent-rgb,120,160,255),.18);
+  border-color:rgba(var(--fc-accent-rgb,120,160,255),.45);
+}
+.mv-cand-idx{
+  flex:0 0 22px;height:22px;border-radius:999px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:600;background:rgba(255,255,255,.12);
+}
+.mv-cand-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.mv-cand-name{font-size:13px;font-weight:600;line-height:1.35}
+.mv-cand-meta{font-size:11px;opacity:.7;line-height:1.3}
+.mv-cand-hint{font-size:12px;opacity:.75;margin-top:2px}
 
 /* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion:reduce){

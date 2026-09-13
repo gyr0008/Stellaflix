@@ -12,7 +12,7 @@ const vm = require('node:vm');
 
 const { CustomSourceManager } = require('../desktop/custom-source/manager');
 const { readBackendConfig, writeBackendConfig, isValidUrl } = require('../desktop/custom-source/backend-config');
-const BUNDLED = path.join(__dirname, '..', 'desktop', 'custom-source', 'bundled', 'qing_haitang_resolve.js');
+const BUNDLED = path.join(__dirname, '..', 'desktop', 'custom-source', 'bundled', 'qing_music.js');
 const DEFAULT_URL = 'https://musicserver.haitangw.cc/v1/music/resolve-url';
 
 let passed = 0;
@@ -89,7 +89,7 @@ async function main() {
     check('持久化文件可读回', readBackendConfig(dir).backendUrl === sample);
 
     const bundled = fs.readFileSync(BUNDLED, 'utf8');
-    const imported = await manager.importScript(bundled, 'qing_haitang_resolve.js');
+    const imported = await manager.importScript(bundled, 'qing_music.js');
     const id = imported && imported.id;
     check('导入内置脚本成功', !!id, String(id));
     await manager.activate(id);

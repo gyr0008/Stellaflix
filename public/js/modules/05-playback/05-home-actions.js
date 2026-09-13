@@ -47,7 +47,7 @@ function openHomeInsight() {
   }
   showToast('播放几首歌后会生成听歌画像');
 }
-// 影视画像：取今日观看时长最长的影片名 → 打开影视搜索页并立即搜索
+// 查看偏好：取今日观看时长最长的影片名 → 打开影视搜索页并立即搜索
 function openHomeVideoInsight() {
   var SFV = (typeof window !== 'undefined' && window.StellaflixVideo) ? window.StellaflixVideo : null;
   var kw = '';
@@ -64,7 +64,7 @@ function openHomeVideoInsight() {
   } catch (e) { kw = ''; }
   kw = String(kw || '').trim();
   if (!kw) {
-    if (typeof showToast === 'function') showToast('看几部影片后会生成影视画像');
+    if (typeof showToast === 'function') showToast('看几部影片后会生成查看偏好');
     return;
   }
   if (SFV && SFV.online && typeof SFV.online.openSearchPage === 'function'
@@ -73,13 +73,13 @@ function openHomeVideoInsight() {
     // 等搜索页焦点动画 + 初始化完成后自动填入并触发搜索
     setTimeout(function () {
       try { SFV.online.doInlineSearch(kw); } catch (e) {
-        if (typeof showToast === 'function') showToast('影视画像搜索失败');
+        if (typeof showToast === 'function') showToast('查看偏好搜索失败');
       }
     }, 280);
     return;
   }
   // 加载序兜底：SFV.online 未就绪时仅提示关键词
-  if (typeof showToast === 'function') showToast('影视画像关键词：' + kw);
+  if (typeof showToast === 'function') showToast('查看偏好关键词：' + kw);
 }
 function handleHomeTileClick(index) {
   var row = document.getElementById('home-tile-row');
@@ -97,3 +97,7 @@ function handleHomeTileClick(index) {
   else if (item.kind === 'library') openHomeLibrary();
   else runHomeSearch(item.query || item.title || '');
 }
+
+// 兜底：同 04-home-empty-wallpaper.js —— index-loader 拼接源码进 try 块，
+// async function 声明不泄漏到全局，显式挂 window 供首页卡片 onclick 调用。
+window.playHomeRecent = playHomeRecent;

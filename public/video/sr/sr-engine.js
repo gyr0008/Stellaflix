@@ -77,7 +77,13 @@
     status: 'idle', reason: '',
     statsCb: null, degradeCb: null,
     frameTimes: [], lastDegradeTs: 0,
-    fps: 0, frames: 0, fpsTs: 0
+    fps: 0, frames: 0, fpsTs: 0,
+    // ===== 黑屏看门狗 + 首帧延迟隐藏（Fix: 防止 SR 渲染失败导致永久黑屏）=====
+    paintedFrames: 0,                   // 本次会话成功绘制的 canvas 帧数
+    videoHidden: false,                 // 是否已对 video 加 sfv-sr-source-hidden
+    watchdogTimer: 0,                   // 看门狗 setTimeout id（0 = 未启动）
+    rafFallbackId: 0,                   // rVFC 并行 RAF 兜底调度 id（防止 MSE 下 rVFC 不回调）
+    rVFCSeen: false                     // 本会话是否已收到过 rVFC 回调（用于判断 RAF 兜底是否可停）
   };
 
   function overlay() { return DOC.getElementById('sfv-overlay'); }
@@ -124,23 +130,45 @@
     };
   }
 
-  // ---- 链编译（preset 变化时）----
+  // ---- 链编译（preset 变化时）==== Fix: 硬 5s 编译超时 + 逐文件/逐 pass deadline 检查 ====
+  // 在 Windows Intel/AMD 老驱动上，每个 shader 编译/link 可能同步阻塞 200ms~1.5s，
+  // 10+ 个 pass 累加起来会导致窗口 5-15s 无响应（Chromium hang detector 反复报 unresponsive）。
+  // 这里加入 5 秒硬时限，超过就抛出 SR_COMPILE_TIMEOUT，调用方 catch 后自动降级为 off。
+  var SR_COMPILE_DEADLINE_MS = 5000;
   function compileChain() {
     var p = state.preset;
     if (!p || !state.core) { state.parsed = null; return; }
+    var deadline = (typeof performance !== 'undefined' ? performance.now() : Date.now()) + SR_COMPILE_DEADLINE_MS;
     var passes = [];
-    (p.files || []).forEach(function (f) {
-      var arr = SFV.srHook.parseShader(f.text);
+    var files = p.files || [];
+    for (var fi = 0; fi < files.length; fi++) {
+      // 每解析一个 shader 文件后检查 deadline（parseShader 本身是 CPU 正则/字符串密集操作）
+      var arr = SFV.srHook.parseShader(files[fi].text);
       passes = passes.concat(arr);
-    });
-    var progs = passes.map(function (ps) {
+      if ((typeof performance !== 'undefined' ? performance.now() : Date.now()) >= deadline) {
+        // 超时：直接中断，让外层 try/catch 捕获降级
+        state.parsed = null;
+        var err = new Error('SR shader 编译超时（> ' + SR_COMPILE_DEADLINE_MS + 'ms），已自动跳过画质增强以避免窗口卡死。当前 preset=' + p.id + '，已解析 ' + passes.length + ' passes。请点击画质按钮手动选择关闭档/其他档位。');
+        err.code = 'SR_COMPILE_TIMEOUT';
+        throw err;
+      }
+    }
+    var progs = new Array(passes.length);
+    for (var pi = 0; pi < passes.length; pi++) {
+      var ps = passes[pi];
       var hookReal = (ps.hook === 'PREKERNEL' || ps.hook === 'MAIN') ? 'MAIN' : ps.hook;
-      return state.core.getProgram(SFV.srHook.buildFragment(
+      progs[pi] = state.core.getProgram(SFV.srHook.buildFragment(
         ps,
         ['MAIN', 'NATIVE'].concat(p.mode === 'luma' ? ['LUMA'] : []),
         { HOOKED: hookReal }
       ));
-    });
+      if ((typeof performance !== 'undefined' ? performance.now() : Date.now()) >= deadline) {
+        state.parsed = null;
+        var err2 = new Error('SR shader 编译超时（> ' + SR_COMPILE_DEADLINE_MS + 'ms），在第 ' + (pi + 1) + '/' + passes.length + ' 个 pass 达到时限，已自动降级。请选择关闭档或其他更轻量的画质档位。');
+        err2.code = 'SR_COMPILE_TIMEOUT';
+        throw err2;
+      }
+    }
     state.parsed = { passes: passes, progs: progs };
     state.sig = '';
   }
@@ -232,6 +260,13 @@
       core.resetTargets();
     }
     trackPerf(t0, performance.now());
+    // ==== Fix: 抵达此处 = gl.clear() + 最终 blit 上屏均已执行（canvas 画面真实更新）。
+    // ==== 计数首帧：成功后才隐藏原生 video。挂死检测由 startWatchdog 内的 2s 轮询负责，
+    // ==== 不在此每帧 reset 定时器，避免 60fps 下高频 clear+setTimeout 对事件循环的压力。
+    state.paintedFrames++;
+    if (state.paintedFrames === 1) {
+      hideVideoSafely();
+    }
   }
 
   // 预规划：WHEN 过滤 + 尺寸求值（尺寸签名变化时才重算）
@@ -303,6 +338,65 @@
     });
   }
 
+  // ===== Fix: 安全隐藏/显示原生 video + 渲染看门狗 =====
+  // 核心策略：① 只在 canvas 首帧成功绘制后才隐藏 video；② 任何渲染异常/看门狗超时都恢复 video 可见；
+  //           ③ 谨慎使用定时器，避免双路并行调度 / 嵌套 setTimeout 造成 GPU/事件循环崩溃。
+  function _gSetTimeout(fn, ms) {
+    try {
+      if (global && typeof global.setTimeout === 'function') return global.setTimeout(fn, ms);
+    } catch (e) {}
+    try { return window.setTimeout(fn, ms); } catch (e) { return 0; }
+  }
+  function _gClearTimeout(id) {
+    if (!id) return;
+    try { if (global && typeof global.clearTimeout === 'function') global.clearTimeout(id); } catch (e) {}
+    try { window.clearTimeout(id); } catch (e) {}
+  }
+  function hideVideoSafely() {
+    if (state.videoHidden || !state.videoEl) return;
+    try { state.videoEl.classList.add('sfv-sr-source-hidden'); } catch (e) {}
+    state.videoHidden = true;
+  }
+  function showVideoSafely() {
+    if (!state.videoHidden || !state.videoEl) return;
+    try { state.videoEl.classList.remove('sfv-sr-source-hidden'); } catch (e) {}
+    state.videoHidden = false;
+  }
+  function clearWatchdog() {
+    if (state.watchdogTimer) { _gClearTimeout(state.watchdogTimer); state.watchdogTimer = 0; }
+    // 兼容旧 state：清掉可能残留的 rVFC/RAF 兜底 id（虽新版本不再使用）
+    if (state.rafFallbackId) { try { global.cancelAnimationFrame(state.rafFallbackId); } catch (e) {} state.rafFallbackId = 0; }
+  }
+  function startWatchdog() {
+    clearWatchdog();
+    // 3 秒内 canvas 仍未成功绘制首帧 → 判定渲染失败，自动降级关闭 SR 恢复原生 video
+    state.watchdogTimer = _gSetTimeout(function () {
+      state.watchdogTimer = 0;
+      if (!state.running) return;
+      if (state.paintedFrames <= 0) {
+        try { console.warn('[SFV SR] 渲染看门狗超时：3s 内未出首帧，自动降级关闭画质增强恢复画面'); } catch (e) {}
+        try { if (SFV.srUi && SFV.srUi.toast) SFV.srUi.toast('画质增强初始化失败，已回退原生播放'); } catch (e) {}
+        try { if (state.degradeCb) state.degradeCb(9999, state.presetId); } catch (e) {}
+        stop('watchdog-no-render');
+        return;
+      }
+      // 已有首帧：启动"续跑模式"看门狗 —— 每 2s 检查一次 paintedFrames 是否增长，若卡死则降级
+      var lastCount = state.paintedFrames;
+      state.watchdogTimer = _gSetTimeout(function _srStallCheck() {
+        state.watchdogTimer = 0;
+        if (!state.running) return;
+        if (state.paintedFrames <= lastCount) {
+          try { console.warn('[SFV SR] 渲染挂死（2s 内无新帧），自动降级'); } catch (e) {}
+          try { if (SFV.srUi && SFV.srUi.toast) SFV.srUi.toast('画质增强渲染挂死，已回退原生播放'); } catch (e) {}
+          stop('watchdog-stall');
+          return;
+        }
+        lastCount = state.paintedFrames;
+        state.watchdogTimer = _gSetTimeout(_srStallCheck, 2000);
+      }, 2000);
+    }, 3000);
+  }
+
   // ---- 跨域直链 taint：自动换 /api/proxy 同源代理重载（保留进度），一次为限 ----
   function onTaint() {
     var v = state.videoEl;
@@ -351,21 +445,69 @@
     }
   }
 
+  // 封装 compileChain：捕获 SR_COMPILE_TIMEOUT 并自动降级为 off，避免窗口卡死 10s+
+  function _tryCompileChain() {
+    try {
+      compileChain();
+      return true;
+    } catch (e) {
+      if (e && e.code === 'SR_COMPILE_TIMEOUT') {
+        try { console.warn('[SFV SR]', e.message); } catch (_) {}
+        try { if (SFV.srUi && SFV.srUi.toast) SFV.srUi.toast('画质增强编译超时，已自动关闭以避免卡死（您可稍后手动切换关闭档或其他更轻量档位）'); } catch (_) {}
+        // 安全降级：复位 SR 预设状态 + 停止渲染
+        state.preset = null; state.presetId = 'off';
+        state.parsed = null; state.sig = ''; state.activePlan = null; state.frameTimes = [];
+        // 通过 setTimeout 异步停止，避免在 start/setPreset 调用栈中途修改 running 状态导致问题
+        try { _gSetTimeout(function () { if (state.running) stop('compile-timeout'); }, 0); } catch (_) {}
+        if (state.degradeCb) { try { state.degradeCb(SR_COMPILE_DEADLINE_MS, state.presetId); } catch (_) {} }
+        emitStats();
+        return false;
+      }
+      // 非超时错误：原样抛出，让上层处理
+      throw e;
+    }
+  }
+
   // ---- 生命周期 ----
   function start() {
     var v = getVideoEl();
     if (!v) return;
     if (!ensureCore()) return;
     state.videoEl = v;
+    state.paintedFrames = 0;   // 重置帧计数：首帧成功后才隐藏原生 video
+    state._watchdogMetaBound = false;
     resizeCanvas();
-    compileChain();
+    if (!_tryCompileChain()) return;   // ==== Fix: 编译超时就直接 return，不再继续后面的启动/渲染流程
     state.canvas.style.display = 'block';
-    v.classList.add('sfv-sr-source-hidden');
+    // ==== Fix: 不再立即隐藏 video。改为在 renderFrame 首帧成功后才 hideVideoSafely()。
     if (!state.running) {
       state.running = true;
       state.fpsTs = performance.now();
       schedule();
     }
+    // ==== Fix: 不立即启动看门狗。等待 video 解码元数据（videoWidth>0）后再开始计时，
+    // ==== 避免"正在获取播放地址…"阶段 videoWidth=0 的空白期误触发或做无意义渲染。
+    function tryStartWatchdog() {
+      if (!state.running) return;
+      var el = state.videoEl;
+      if (el && el.videoWidth > 0 && el.videoHeight > 0) {
+        startWatchdog();
+        return;
+      }
+      if (state._watchdogMetaBound) return;
+      state._watchdogMetaBound = true;
+      var onLoaded = function () {
+        try { v.removeEventListener('loadedmetadata', onLoaded); } catch (e) {}
+        try { v.removeEventListener('playing', onLoaded); } catch (e) {}
+        state._watchdogMetaBound = false;
+        if (state.running) startWatchdog();
+      };
+      try { v.addEventListener('loadedmetadata', onLoaded, { once: true }); } catch (e) {}
+      try { v.addEventListener('playing', onLoaded, { once: true }); } catch (e) {}
+      // 兜底：10 秒后仍未 loadedmetadata（例如直播纯音频），直接启动看门狗以保证失败可降级
+      _gSetTimeout(function () { if (state.running && !state.watchdogTimer) startWatchdog(); }, 10000);
+    }
+    tryStartWatchdog();
     renderOnceIfPaused();
     state.status = 'active'; state.reason = '';
     emitStats();
@@ -379,12 +521,13 @@
   }
   function stop(reason) {
     state.running = false;
+    clearWatchdog();        // Fix: 关闭时清掉所有定时器
     if (state.rVFC >= 0 && state.videoEl && state.videoEl.cancelVideoFrameCallback) {
       try { state.videoEl.cancelVideoFrameCallback(state.rVFC); } catch (e) {}
     }
     if (state.rafId) { global.cancelAnimationFrame(state.rafId); state.rafId = 0; }
     state.rVFC = -1;
-    if (state.videoEl) state.videoEl.classList.remove('sfv-sr-source-hidden');
+    showVideoSafely();      // Fix: 用安全切换（含状态标记），保证画面一定恢复
     if (state.canvas) state.canvas.style.display = 'none';
     if (state.core) state.core.resetTargets();
     state.status = reason || 'idle';
@@ -396,6 +539,7 @@
     if (state.core) { state.core.dispose(); state.core = null; }
     if (state.canvas && state.canvas.parentNode) state.canvas.parentNode.removeChild(state.canvas);
     state.canvas = null; state.videoEl = null; state.activePlan = null; state.frameTimes = [];
+    state.paintedFrames = 0; state.videoHidden = false;
   }
 
   // ---- 对外 API ----
@@ -412,7 +556,10 @@
       if (state.preset && state.preset.id !== 'off') {
         if (!state.core) ensureCore();
         if (state.core) {
-          compileChain();
+          if (!_tryCompileChain()) {   // ==== Fix: 编译超时已自动降级为 off，停止进一步启动
+            emitStats();
+            return;
+          }
           if (state.embed) { state.status = 'embed'; }
           else { start(); if (!state.running) state.status = 'ready'; }
         }

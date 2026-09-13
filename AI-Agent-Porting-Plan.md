@@ -1,6 +1,6 @@
-# Mineradio AI 助手完整移植计划
+# Stellaflix AI 助手完整移植计划
 
-> 源项目: Mineradio-LX-Music-1.6.0 → 目标项目: Mineradio-2.1.0  
+> 源项目: Stellaflix-LX-Music-1.6.0 → 目标项目: Stellaflix-2.1.0  
 > 策略: 路径A — 完整移植（保留全部功能，通过适配层桥接差异）
 
 ---
@@ -49,7 +49,7 @@ createAgentApi(options) ← 工厂模式，依赖注入
 #### agent-music-tools.js — 极高耦合，需适配层
 
 ```
-IIFE 模块 → window.MineradioAgentMusicTools
+IIFE 模块 → window.StellaflixAgentMusicTools
   ├── 直接读写 ~30 个全局变量
   └── 直接调用 ~80 个全局函数
 ```
@@ -57,11 +57,11 @@ IIFE 模块 → window.MineradioAgentMusicTools
 #### music-agent-command.js — 高耦合，需适配层
 
 ```
-IIFE 模块 → window.MineradioMusicAgentCommand
-  ├── 依赖 window.MineradioAgentMusicTools
+IIFE 模块 → window.StellaflixMusicAgentCommand
+  ├── 依赖 window.StellaflixAgentMusicTools
   ├── 依赖 window.desktopWindow
   ├── 依赖 window.showToast
-  ├── 依赖 window.__mineradioAgentAudio
+  ├── 依赖 window.__stellaflixAgentAudio
   └── 依赖 window.LyricAnimation
 ```
 
@@ -232,7 +232,7 @@ IIFE 模块 → window.MineradioMusicAgentCommand
 
 | 函数名 | 源位置 | 功能 |
 |--------|--------|------|
-| `isMineradioFullscreenActive` | index.html:44826 | 检测全屏状态 |
+| `isStellaflixFullscreenActive` | index.html:44826 | 检测全屏状态 |
 | `beginVoiceInputIsolation` | index.html:32649 | 开始语音隔离 |
 | `endVoiceInputIsolation` | index.html:32660 | 结束语音隔离 |
 | `clearFxPanelAutoCloseTimer` | index.html:44627 | 清除 FX 面板自动关闭定时器 |
@@ -344,7 +344,7 @@ IIFE 模块 → window.MineradioMusicAgentCommand
 |------|------|------|------|
 | **直接映射** | 50 | 目标项目已有同名函数 | `setVolume`, `togglePlay` |
 | **组合实现** | 20 | 目标项目有部分功能，需组合多个调用 | `openPrimaryView`, `focusGlobalSearch` |
-| **源码移植** | 15 | 从源 index.html 提取完整定义 | `openDailyReviewManager`, `isMineradioFullscreenActive` |
+| **源码移植** | 15 | 从源 index.html 提取完整定义 | `openDailyReviewManager`, `isStellaflixFullscreenActive` |
 | **空实现** | 7 | 目标项目无此功能，返回 not-supported | `openRemoteControl`, `openMusicPlanet`, `playWorldPeaceEasterEgg` |
 
 ### 6.4 关键适配实现示例
@@ -374,8 +374,8 @@ window.openAudioOutputSettings = function() {
 #### 示例 3: 源码移植
 
 ```javascript
-// isMineradioFullscreenActive — 完整从源 index.html 移植
-window.isMineradioFullscreenActive = function() {
+// isStellaflixFullscreenActive — 完整从源 index.html 移植
+window.isStellaflixFullscreenActive = function() {
   // === 从源 index.html:44826 复制 ===
   return !!document.fullscreenElement || 
          !!(window.desktopWindow && window.desktopWindow.isFullscreen && window.desktopWindow.isFullscreen());
@@ -438,7 +438,7 @@ window.openRemoteControl = function() {
 | 风险 | 影响 | 缓解措施 |
 |------|------|----------|
 | 彩蛋功能缺失 | 3 个函数源项目也找不到 | 空实现 + Toast 提示 |
-| 版本兼容性 | 源项目 LX-Music vs 目标 Mineradio | 已通过模块化适配解决 |
+| 版本兼容性 | 源项目 LX-Music vs 目标 Stellaflix | 已通过模块化适配解决 |
 
 ---
 
@@ -475,7 +475,7 @@ window.openRemoteControl = function() {
 
 ## 十、总结
 
-本移植计划将 AI 助手 "小M" 从 Mineradio-LX-Music-1.6.0 完整移植到 Mineradio-2.1.0。通过适配层设计，将 42 个缺失函数分类处理（直接映射/组合实现/源码移植/空实现），确保:
+本移植计划将 AI 助手 "小M" 从 Stellaflix-LX-Music-1.6.0 完整移植到 Stellaflix-2.1.0。通过适配层设计，将 42 个缺失函数分类处理（直接映射/组合实现/源码移植/空实现），确保:
 
 1. **功能完整性**: 所有 18 个工具调用在目标项目中可用
 2. **最小侵入**: 不修改目标项目的模块化 JS 文件

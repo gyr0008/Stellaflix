@@ -21,6 +21,28 @@
   function openCollections() {
     S.goToNav('collections');
   }
+  // 打开「时间表」面板弹窗（首页 BANGUMI 卡片入口）。
+  // 行为对齐音乐态「电台/歌单」：居中玻璃面板，Esc/点空白关闭；collections 标签页仍走整页 mount(view)。
+  function openCalendar() {
+    if (SFV.bangumiTimeline && typeof SFV.bangumiTimeline.openPopup === 'function') {
+      SFV.bangumiTimeline.openPopup();
+      return;
+    }
+    if (SFV.bangumiCalendar && typeof SFV.bangumiCalendar.openPopup === 'function') {
+      SFV.bangumiCalendar.openPopup();
+      return;
+    }
+    // 兜底：弹窗不可用则走整页
+    if (SFV.bangumiTimeline && typeof SFV.bangumiTimeline.openPage === 'function') {
+      SFV.bangumiTimeline.openPage();
+      return;
+    }
+    // 最终兜底：旧行为（模块未加载时）
+    if (SFV.pageCollections && typeof SFV.pageCollections.setActiveTab === 'function') {
+      SFV.pageCollections.setActiveTab('calendar');
+    }
+    S.goToNav('collections');
+  }
   // 打开某片单的影片列表（collection-items 视图）
   function openCollectionItems(def) {
     S.pushView({ mode: 'collection-items', collId: def.id, collTitle: def.title, collDef: def });
@@ -212,6 +234,7 @@
 
   // 注册到共享状态，供 online.js 协调器与门面调用
   S.openCollections = openCollections;
+  S.openCalendar = openCalendar;
   S.openCollectionItems = openCollectionItems;
   S.reopenCollections = reopenCollections;
   S.renderCollectionItems = renderCollectionItems;

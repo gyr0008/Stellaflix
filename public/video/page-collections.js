@@ -122,8 +122,11 @@
     view.innerHTML = '';
 
     if (tabId === 'calendar') {
-      if (SFV.bangumiCalendar) SFV.bangumiCalendar.mount(view);
-      else view.innerHTML = '<div class="sfv-placeholder">Bangumi 模块未加载</div>';
+      // 时间表已迁移至 bangumi-timeline.js（Kazumi 形态：单日大卡片 + 七日 TabBar + 季度切换）
+      var tl = SFV.bangumiTimeline;
+      if (tl && typeof tl.mount === 'function') tl.mount(view);
+      else if (SFV.bangumiCalendar) SFV.bangumiCalendar.mount(view);
+      else view.innerHTML = '<div class="sfv-bgm-tl-ph">Bangumi 模块未加载</div>';
       return;
     }
 
@@ -469,6 +472,12 @@
   // 供 online.js 在进入具体片单时通知页内二级视图状态
   function setItemsOpen(v) { itemsOpen = !!v; }
 
+  // 供外部直接打开指定 Tab（如首页 Bangumi 周放送表入口）
+  function setActiveTab(tabId) {
+    activeTab = tabId || 'featured';
+    if (currentHost) renderTab(currentHost, activeTab);
+  }
+
   // T156c：对话框打开态查询 / 关闭（供 online-nav Esc 拦截优先关闭弹窗而非退出片单页）
   function isFolderDialogOpen() { return !!(folderDialogMask && folderDialogMask.parentNode); }
   function closeFolderDialog() {
@@ -506,5 +515,5 @@
     });
   }
 
-  SFV.pageCollections = { mount: mount, renderGrid: renderTab, showFolderDialog: showFolderDialog, setItemsOpen: setItemsOpen, isFolderDialogOpen: isFolderDialogOpen, closeFolderDialog: closeFolderDialog };
+  SFV.pageCollections = { mount: mount, renderGrid: renderTab, showFolderDialog: showFolderDialog, setItemsOpen: setItemsOpen, setActiveTab: setActiveTab, isFolderDialogOpen: isFolderDialogOpen, closeFolderDialog: closeFolderDialog };
 })(typeof window !== 'undefined' ? window : this);

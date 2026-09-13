@@ -13,7 +13,7 @@ const { CustomSourceManager } = require('../desktop/custom-source/manager');
 const { filterInitPayload } = require('../desktop/custom-source/protocol');
 
 const FRONTEND_FILE = path.join(__dirname, '..', 'public', 'js', 'modules', '05-playback', '14-custom-source-integration.js');
-const SCRIPT_FILE = path.join(__dirname, '..', 'desktop', 'custom-source', 'bundled', 'qing_haitang_resolve.js');
+const SCRIPT_FILE = path.join(__dirname, '..', 'desktop', 'custom-source', 'bundled', 'qing_music.js');
 
 let passed = 0;
 let failed = 0;
@@ -64,7 +64,7 @@ const declaredSources = filterInitPayload(bundled.inited).sources;
 // 用真实脚本的 handler 充当 runtime.request
 function buildManager() {
   const store = {
-    getActive: () => ({ id: 'bundled:qing_haitang_resolve.js', name: '青听海棠' }),
+    getActive: () => ({ id: 'bundled:qing_music.js', name: '青听音乐' }),
     get: id => ({ id }),
     getScript: () => fs.readFileSync(SCRIPT_FILE, 'utf8'),
     list: () => [],

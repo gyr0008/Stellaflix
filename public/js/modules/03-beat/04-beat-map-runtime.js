@@ -12,7 +12,7 @@ function smoothBeatMapHandoff(songId, map, token, song) {
     hideBeatChip();
     notifyDesktopLyricsBeatMapReady();
     showToast('节奏分析完成: ' + (map.visualBeatCount || (map.cameraBeats && map.cameraBeats.length) || 0) + ' 个视觉主拍');
-    writeBeatDiskCache(songId, map, song, 'mr');
+    writeBeatDiskCache(songId, map, song, 'sf');
     scheduleQueueBeatPrefetch(currentIdx, 1000);
   };
   scheduleVisualApply(apply, wait, 460);

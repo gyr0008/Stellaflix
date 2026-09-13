@@ -12,8 +12,8 @@
  *            影视态的大媒体还由 home.js 并行管理，本文件对 'outer-video' 只读不写
  *
  * META（LS，因为都是小字段）：
- *   音乐态: 'mineradio.outer.poster.meta.music'  → { kind, blobKey, name, size, ts }
- *   影视态: 'mineradio.outer.poster.meta.video'  → 仅做只读镜像，写权威在 home.js posterStore
+ *   音乐态: 'stellaflix.outer.poster.meta.music'  → { kind, blobKey, name, size, ts }
+ *   影视态: 'stellaflix.outer.poster.meta.video'  → 仅做只读镜像，写权威在 home.js posterStore
  *
  * 说明：
  *   音乐态原有的图片存储（'stellaflix-home-personal-poster-v1' LS key）由打包的 vendor 代码
@@ -35,8 +35,8 @@
   var OUTER_MEDIA_STORE = 'media';
   var OUTER_KEY_MUSIC = 'outer-music';
   var OUTER_KEY_VIDEO = 'outer-video';
-  var MUSIC_META_KEY = 'mineradio.outer.poster.meta.music';
-  var VIDEO_META_KEY = 'mineradio.outer.poster.meta.video'; // 只读同步，不做主写入
+  var MUSIC_META_KEY = 'stellaflix.outer.poster.meta.music';
+  var VIDEO_META_KEY = 'stellaflix.outer.poster.meta.video'; // 只读同步，不做主写入
   var MUSIC_OBJECT_URL = ''; // 音乐态下当前激活的 VIDEO/IMG blob URL，释放用
 
   // ── 工具 ──
@@ -329,7 +329,7 @@
         if (!_isMusicMode()) return;
         _ensureMusicVideoChip();
       } catch (_e) { /* ignore */ }
-    }, 1500);
+    }, 2500);
     try {
       global.addEventListener && global.addEventListener('pagehide', function () {
         if (_chipCheckTimer) { clearInterval(_chipCheckTimer); _chipCheckTimer = null; }
@@ -411,7 +411,7 @@
   }
 
   // 暴露全局 API（方便调试/工具箱手动调用）
-  global.MineradioOuterPosterBridge = {
+  global.StellaflixOuterPosterBridge = {
     DB: OUTER_MEDIA_DB, STORE: OUTER_MEDIA_STORE,
     MUSIC_KEY: OUTER_KEY_MUSIC, VIDEO_KEY: OUTER_KEY_VIDEO,
     pickMusicVideo: _pickMusicOuterPosterVideo,

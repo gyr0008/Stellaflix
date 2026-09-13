@@ -1,13 +1,26 @@
 /* Stellaflix — Bangumi 周表 Widget 样式 (Wave 1)
    玻璃质感对齐 player.css；z-index < 2147482099（顶栏 #sfv-nav 为 2147482100）。 */
 
+/* 容器尺寸对齐音乐态「推荐电台/歌单」卡片：
+   min-height:132px / border-radius:22px / 玻璃质感与搜索框一致（--glass-*）。
+   因 7 列日历内容宽于 280px，宽度采用 max-width 自适应而非硬性 280px。 */
 .sfv-bgm {
-  width: 100%;
-  height: 100%;
+  box-sizing: border-box;
+  width: min(720px, calc(100% - 32px));
+  min-width: 280px;
+  min-height: 132px;
+  max-height: calc(100vh - 220px);
+  margin: 16px auto 32px;
+  padding: 18px 18px 20px;
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
-  padding: 4px 2px 0;
+  /* 对齐音乐态「电台/歌单」面板背景容器：金色渐变 + 金边 + 18px 圆角 */
+  background: linear-gradient(180deg, rgba(24, 23, 26, 0.96), rgba(12, 11, 12, 0.92));
+  border: 1px solid rgba(244, 210, 138, 0.16);
+  border-radius: 18px;
+  box-shadow: 0 26px 90px rgba(0, 0, 0, .56), 0 0 0 1px rgba(255, 255, 255, .035), inset 0 1px 0 rgba(255, 255, 255, .07);
+  color: #fff;
+  overflow: hidden;
 }
 
 /* 工具条 */
@@ -31,9 +44,9 @@
 }
 .sfv-bgm-chip:hover { background: rgba(255, 255, 255, .12); }
 .sfv-bgm-chip.active {
-  background: rgba(0, 245, 212, .16);
-  border-color: rgba(0, 245, 212, .55);
-  color: #d6fff8;
+  background: rgba(255, 255, 255, .16);
+  border-color: rgba(255, 255, 255, .55);
+  color: #fff;
 }
 .sfv-bgm-refresh { margin-left: auto; }
 
@@ -105,6 +118,14 @@
 }
 .sfv-bgm-meta { margin-top: 3px; }
 .sfv-bgm-rate { font-size: 11px; color: #ffd479; }
+
+/* 加载 / 空状态 / 错误提示：继承自 player.css 的 .sfv-placeholder 是深色文字，
+   需覆盖为浅色以适配玻璃卡片背景，同时取消 62vh 大占位。 */
+.sfv-bgm .sfv-placeholder {
+  color: rgba(255, 255, 255, .82);
+  min-height: auto;
+  padding: 24px 16px;
+}
 
 /* 追番角标 */
 .sfv-bgm-badge {
@@ -197,4 +218,68 @@
 }
 @media (max-width: 720px) {
   .sfv-bgm-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* 弹窗模式：首页 BANGUMI 卡片点击后以居中弹窗呈现，不跳转片单页 */
+.sfv-bgm-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147482000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  /* 对齐音乐态「音乐电台」面板的遮罩背景 */
+  background: radial-gradient(circle at 50% 48%, rgba(244, 210, 138, .07), transparent 34%), rgba(0, 0, 0, 0.78);
+  box-sizing: border-box;
+}
+.sfv-bgm-modal {
+  position: relative;
+  box-sizing: border-box;
+  /* 对齐音乐态「音乐电台」面板弹窗：固定尺寸 + .modal 视觉语言 */
+  width: min(980px, 94vw);
+  max-width: min(980px, 94vw);
+  height: min(86vh, 760px);
+  max-height: min(86vh, 760px);
+  min-height: min(86vh, 760px);
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(24, 23, 26, 0.96), rgba(12, 11, 12, 0.92));
+  border: 1px solid rgba(244, 210, 138, 0.16);
+  box-shadow: 0 26px 90px rgba(0, 0, 0, .56), 0 0 0 1px rgba(255, 255, 255, .035), inset 0 1px 0 rgba(255, 255, 255, .07);
+  color: #fff;
+}
+/* 弹窗内的中间宿主 div 拉伸填满固定高度，使内层 .sfv-bgm-tl 的 height:100% 生效 */
+.sfv-bgm-modal > div {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+/* 时间线容器在弹窗内透明化，由外层 .sfv-bgm-modal 提供边框/背景 */
+.sfv-bgm-modal .sfv-bgm-tl {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+}
+.sfv-bgm-modal-overlay .sfv-bgm {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+  max-height: calc(100vh - 40px);
+}
+@media (max-width: 720px) {
+  .sfv-bgm-modal-overlay { padding: 0; }
+  .sfv-bgm-modal-overlay .sfv-bgm { max-height: calc(100vh - 20px); }
+}
+@media (max-width: 480px) {
+  .sfv-bgm-modal { padding: 18px; }
 }

@@ -25,13 +25,13 @@ function resultCategory(result) {
 
 function isCustomFirstMode(mode) {
   const value = String(mode || '').toLowerCase();
-  return value === 'custom-first' || value === 'custom-only';
+  return value === 'custom-first';
 }
 
 function shouldAttemptCustomSource({ enabled, mode, officialResult } = {}) {
   if (!enabled) return false;
-  // custom-first / custom-only：第三方音源是主取源路径，无论官方是否拿到地址，都必须继续解析；
-  // 解析成功后由前端或调用方决定是否覆盖官方结果（custom-only 一定覆盖；custom-first 未命中时回退官方）。
+  // custom-first：第三方音源是主取源路径，无论官方是否拿到地址，都必须继续解析；
+  // 解析成功后由前端或调用方决定是否覆盖官方结果（custom-first 未命中时回退官方）。
   if (isCustomFirstMode(mode)) return true;
   // official-first：只有官方没拿到 URL 才考虑第三方，权限类失败不再兜底触发。
   if (!officialResult || officialResult.url) return false;

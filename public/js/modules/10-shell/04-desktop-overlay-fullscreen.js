@@ -996,14 +996,14 @@ function desktopLyricsPlaybackPayload() {
 function desktopLyricsActiveBeatMap() {
   var useDj = !!(djMode && djMode.active && currentDjBeatMap);
   return {
-    source: useDj ? 'dj' : 'mr',
+    source: useDj ? 'dj' : 'sf',
     map: useDj ? currentDjBeatMap : currentBeatMap
   };
 }
 function desktopLyricsBeatMapPayload(force) {
   var selected = desktopLyricsActiveBeatMap();
   var map = selected && selected.map;
-  var source = selected && selected.source || 'mr';
+  var source = selected && selected.source || 'sf';
   var cameraCount = map ? ((map.cameraBeats && map.cameraBeats.length) || (map.beats && map.beats.length) || (map.kicks && map.kicks.length) || 0) : 0;
   var pulseCount = map ? ((map.pulseBeats && map.pulseBeats.length) || (map.kicks && map.kicks.length) || 0) : 0;
   var duration = map && isFinite(map.duration) ? Number(map.duration) : 0;
@@ -1445,9 +1445,19 @@ function applyWallpaperModeState(force) {
 function syncDesktopOverlayState() {
   if (fx.desktopLyrics) pushDesktopLyricsState(false);
 }
+// Keep-alive only when a desktop surface is actually on. The main loop already
+// pushes desktop-lyrics state while visible; this interval is a low-rate safety
+// net for hidden/occluded main window + desktop lyrics / wallpaper health.
 setInterval(function () {
-  if (fx && fx.desktopLyrics) syncDesktopOverlayState();
-  if (fx && fx.wallpaperMode) ensureDesktopWallpaperFunctionalUi('health-watch');
+  if (!fx) return;
+  var needLyrics = !!fx.desktopLyrics;
+  var needWallpaper = !!fx.wallpaperMode;
+  if (!needLyrics && !needWallpaper) return;
+  // Wallpaper health is a foreground concern; skip it while the app is hidden
+  // unless desktop lyrics still need the same tick for lyric push.
+  if (document.hidden && !needLyrics) return;
+  if (needLyrics) syncDesktopOverlayState();
+  if (needWallpaper && !document.hidden) ensureDesktopWallpaperFunctionalUi('health-watch');
 }, 320);
 
 // 全屏

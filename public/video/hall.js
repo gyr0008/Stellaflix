@@ -456,6 +456,7 @@
         variants.forEach(function (v) {
           candidates.push({
             id: 'cms:' + (v.sourceId || '') + ':' + (v.vodId || ''),
+            sourceKey: 'cms:' + (v.sourceId || ''),
             label: (v.sourceName || v.sourceId || 'CMS') + (v.remarks ? ' · ' + v.remarks : ''),
             sub: it.title + (it.year ? ' (' + it.year + ')' : ''),
             title: it.title || '',
@@ -466,6 +467,7 @@
       (kz.items || []).forEach(function (it) {
         candidates.push({
           id: 'kz:' + (it.ruleName || '') + ':' + (it.src || ''),
+          sourceKey: 'kazumi:' + (it.ruleName || ''),
           label: (it.ruleName || 'Kazumi'),
           sub: it.title || title,
           title: it.title || title,
@@ -478,6 +480,8 @@
         candidates = SFV.SearchFilterCore.filterCandidatesForQuery(candidates, title, { topN: 8 });
       }
       if (!candidates.length) { hideStatus(); toast('未找到「' + title + '」的可用播放源'); return; }
+      // 挂上完整候选池，供播放器「选集」面板跨源热切换
+      candidates.forEach(function (cand) { cand._allCandidates = candidates; });
       if (candidates.length === 1) { playCandidate(candidates[0], item); return; }
       hideStatus();
       if (SFV.sourcePicker && SFV.sourcePicker.open) {
@@ -486,6 +490,19 @@
     }).catch(function (err) {
       hideStatus(); toast('搜索播放源出错：' + (err && err.message ? err.message : '未知错误'));
     });
+  }
+
+  // ---- 默认起播集：跳过「预告片/片花/花絮」，优先「正片/高清/中字」----
+  // CMS10 不提供单集时长，只能按集名关键词判别。某源对电影返回「预告片#HD中字」，
+  // 无脑播 episodes[0] 会起播 2:48 的预告片，表现为「电影总时长只有几分钟」。
+  // 普通剧集（第1集/第2集…）不含关键词，行为不变。
+  function pickEpisode(episodes) {
+    if (!episodes || !episodes.length) return null;
+    if (SFV.sources && typeof SFV.sources.pickMainEpisode === 'function') {
+      var picked = SFV.sources.pickMainEpisode(episodes);
+      if (picked) return picked;
+    }
+    return episodes[0];
   }
 
   // ---- 候选 → 解析剧集 → playEpisode（播放前退厅）----
@@ -509,7 +526,11 @@
           source: { id: 'kazumi:' + (ref.ruleName || ''), name: ref.ruleName || 'Kazumi' },
           vodId: ref.src, isKazumi: true, ruleName: ref.ruleName
         };
-        doPlay(view, episodes[0], episodes);
+        if (SFV.detailSource && SFV.detailSource.beginPlaybackSession) {
+          var hk = (SFV.detailSource.candKeyOf && SFV.detailSource.candKeyOf(c)) || c.id || c.sourceKey;
+          SFV.detailSource.beginPlaybackSession(view, (c._allCandidates || [c]), hk);
+        }
+        doPlay(view, pickEpisode(episodes), episodes);
       }).catch(function (e) { toast('Kazumi 解析失败：' + (e && e.message ? e.message : '')); });
     } else {
       var v = c._ref;
@@ -524,7 +545,17 @@
           year: (item && item.year) || v.year || '',
           source: { id: v.sourceId, name: v.sourceName }, vodId: v.vodId
         };
-        doPlay(view, res.plays[0], res.plays);
+        if (SFV.detailSource && SFV.detailSource.beginPlaybackSession) {
+          var ck = (SFV.detailSource.candKeyOf && SFV.detailSource.candKeyOf(c)) || c.id || c.sourceKey;
+          SFV.detailSource.beginPlaybackSession(view, (c._allCandidates || [c]), ck);
+        }
+        // 修复：原代码把 play 对象（{from, episodes}）当作「单集」传给 doPlay，
+        // 导致 ep.url 恒为 undefined → 编排器直接 toast「该集无播放地址」，
+        // CMS 源在浏览厅永远无法起播。改为传该线路下的单集 + 集列表。
+        var play0 = res.plays[0];
+        var mainEp = pickEpisode(play0.episodes);
+        if (!mainEp || !mainEp.url) { toast('该源无播放地址'); return; }
+        doPlay(view, mainEp, play0.episodes);
       }).catch(function (e) { toast('获取播放地址失败：' + (e && e.message ? e.message : '')); });
     }
   }

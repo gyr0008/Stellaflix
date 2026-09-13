@@ -26,13 +26,14 @@
   'use strict';
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
 
-  // ---------------------------------------------------------------- Tab 定义（6 个平行）
+  // ---------------------------------------------------------------- Tab 定义（7 个平行）
   var TABS = [
     { id: 'featured', label: '推荐' },
     { id: 'theme', label: '主题' },
     { id: 'classic', label: '经典' },
     { id: 'highscore', label: '高分' },
     { id: 'awards', label: '获奖' },
+    { id: 'calendar', label: '每周新番' },
     { id: 'mine', label: '我的片单' }
   ];
 

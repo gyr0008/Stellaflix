@@ -359,6 +359,12 @@ async function fetchLyric(songOrId, token, attempt) {
     if (shouldRetryStartupLyricFetch(song, token, attempt)) scheduleStartupLyricFetchRetry(song, token, attempt);
   }
 }
+// ==== 显式挂到 window：fetchLyric 是 async function，按 ES2017 块级绑定规则不会从 index-loader
+// 的 try { ... } catch 块自动泄漏到全局。agent-adapter.js 作为独立 <script> 在该块外执行，
+// 无法通过词法作用域访问；不挂则 AI 助手切歌时歌词抓取会静默失效。
+if (typeof window !== 'undefined' && !window.fetchLyric) {
+  try { window.fetchLyric = fetchLyric; } catch (e) { /* best-effort */ }
+}
 function currentLyricFallbackText() {
   return lyricFallbackTextForSong(currentLyricSong() || {});
 }

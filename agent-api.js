@@ -23,8 +23,8 @@ const SKIP_TRACK_TOOL_NAME = 'skip_track';
 const PLAY_MODE_TOOL_NAME = 'set_play_mode';
 const AUDIO_QUALITY_TOOL_NAME = 'control_audio_quality';
 const SOURCE_MANAGER_TOOL_NAME = 'open_music_source_manager';
-const OPEN_INTERFACE_TOOL_NAME = 'open_mineradio_interface';
-const CONTROL_APP_TOOL_NAME = 'control_mineradio_app';
+const OPEN_INTERFACE_TOOL_NAME = 'open_stellaflix_interface';
+const CONTROL_APP_TOOL_NAME = 'control_stellaflix_app';
 const LYRIC_ANIMATION_TOOL_NAME = 'control_lyric_animation';
 const QUEUE_MUSIC_TOOL_NAME = 'search_and_queue_music';
 const ADD_PLAYLIST_QUEUE_TOOL_NAME = 'add_playlist_to_queue';
@@ -33,6 +33,15 @@ const SAVE_PLAYLIST_TOOL_NAME = 'save_music_to_playlist';
 const CREATE_PLAYLIST_TOOL_NAME = 'create_local_playlist';
 const BUILD_PLAYLIST_TOOL_NAME = 'build_recommended_playlist';
 const DIY_VISUAL_TOOL_NAME = 'control_diy_visual';
+const VIDEO_SEARCH_PLAY_TOOL_NAME = 'search_and_play_movie';
+const VIDEO_SEARCH_LIST_TOOL_NAME = 'search_movies';
+const VIDEO_PLAY_CANDIDATE_TOOL_NAME = 'play_movie_candidate';
+const VIDEO_PLAYBACK_TOOL_NAME = 'control_video_playback';
+const VIDEO_SEEK_TOOL_NAME = 'seek_video';
+const VIDEO_EPISODE_TOOL_NAME = 'select_episode';
+const VIDEO_FULLSCREEN_TOOL_NAME = 'toggle_video_fullscreen';
+const VIDEO_CONTEXT_TOOL_NAME = 'get_video_context';
+const VIDEO_OPEN_INTERFACE_TOOL_NAME = 'open_video_interface';
 const ALLOWED_TOOL_NAMES = new Set([
   TOOL_NAME,
   REPLAY_TOOL_NAME,
@@ -52,9 +61,18 @@ const ALLOWED_TOOL_NAMES = new Set([
   CREATE_PLAYLIST_TOOL_NAME,
   BUILD_PLAYLIST_TOOL_NAME,
   DIY_VISUAL_TOOL_NAME,
+  VIDEO_SEARCH_PLAY_TOOL_NAME,
+  VIDEO_SEARCH_LIST_TOOL_NAME,
+  VIDEO_PLAY_CANDIDATE_TOOL_NAME,
+  VIDEO_PLAYBACK_TOOL_NAME,
+  VIDEO_SEEK_TOOL_NAME,
+  VIDEO_EPISODE_TOOL_NAME,
+  VIDEO_FULLSCREEN_TOOL_NAME,
+  VIDEO_CONTEXT_TOOL_NAME,
+  VIDEO_OPEN_INTERFACE_TOOL_NAME,
 ]);
 const SYSTEM_PROMPT = [
-  '你是 Mineradio 的桌面音乐伙伴“小M”。',
+  '你是 Stellaflix 的桌面音乐伙伴“小M”。',
   '请优先使用简洁、自然的中文回答，通常不超过三句话。',
   '除了音乐播放与控制，你也是一名通用对话助手；对日常聊天和一般知识问题应正常回答，不要仅因为“音乐伙伴”的身份而拒绝。',
   '遇到天气等依赖实时数据的问题时，不要虚构结果；缺少城市时先询问城市，无法获取实时数据时清楚说明限制并给出可行建议。',
@@ -67,11 +85,11 @@ const SYSTEM_PROMPT = [
   '当用户要求随机播放、单曲循环、顺序循环或心动模式时，调用 set_play_mode；mode 只能是 shuffle、single、loop 或 heart。',
   '当用户要求打开音质选择或切换播放音质时，调用 control_audio_quality。未指定档位时 action 使用 open；指定档位时 action 使用 set，quality 使用 standard、exhigh、lossless、hires 或 jymaster。',
   '当用户要求打开音源、音源设置或音源管理时，调用 open_music_source_manager。',
-  '当用户要求打开或进入 Mineradio 已有界面时，调用 open_mineradio_interface。音乐库用 library，音乐电台用 radio，各平台排行榜用 ranking，歌词动画设置用 lyric_animation；不要只回复“无法打开”。',
-  '当用户要求控制 Mineradio 的倍速、音调、全屏、沉浸、窗口歌词、DIY、自动隐藏、界面动画、壁纸镜像、队列打乱/清空、伴奏、内存释放或视觉重置时，调用 control_mineradio_app。',
+  '当用户要求打开或进入 Stellaflix 已有界面时，调用 open_stellaflix_interface。音乐库用 library，音乐电台用 radio，各平台排行榜用 ranking，歌词动画设置用 lyric_animation；不要只回复“无法打开”。',
+  '当用户要求控制 Stellaflix 的倍速、音调、全屏、沉浸、窗口歌词、DIY、自动隐藏、界面动画、壁纸镜像、队列打乱/清空、伴奏、内存释放或视觉重置时，调用 control_stellaflix_app。',
   '当用户要求切换歌词动画时，调用 control_lyric_animation。漂浮/柔滑/玻璃/线光/故障分别使用 float/smooth/glass/shine/glitch；流光/心象/云阶/浮名/群唱/倾诉/莫奈分别使用 classic/cadenza/partita/fume/cappella/tilt/monet。',
   '倍速或音调的相对调整应根据播放器上下文 app 中的 playbackSpeed 和 playbackPitch 计算明确目标值；开关操作应根据 app 当前状态提供 enabled。',
-  'control_mineradio_app 的 queue_clear、visual_settings_reset 和 window_close 只有在用户明确说“清空”“重置”或“关闭软件”时才能 confirmed=true；不得根据含糊语句猜测确认。',
+  'control_stellaflix_app 的 queue_clear、visual_settings_reset 和 window_close 只有在用户明确说“清空”“重置”或“关闭软件”时才能 confirmed=true；不得根据含糊语句猜测确认。',
   '当用户要求把某首歌设为下一首或加入播放队列时，调用 search_and_queue_music；position 只能是 next 或 end。',
   '当用户要求把整张、整个或全部歌单加入当前播放队列时，调用 add_playlist_to_queue；若用户说“这个歌单”可省略 playlist_name，position 只能是 next 或 end。',
   '当用户要求跳转播放进度、快进到某时间或跳到某百分比时，调用 seek_playback。',
@@ -84,15 +102,23 @@ const SYSTEM_PROMPT = [
   '当同一句话要求修改两个或更多 DIY 设置时，必须只调用一次 control_diy_visual，并把每一项完整放入 controls 数组；不得拆成多轮，不得漏项。常用快捷字段（如 lyric_font）可以和 controls 同时提供。',
   'controls 中 toggle 操作必须始终提供 option="开启" 或 option="关闭"，不能省略。用户说“打开歌单架并切换成舞台”时只生成一项：control="3D 歌单架"、operation="select"、option="舞台"，不要再生成歌单架 toggle。',
   '用户说“EQ 切换成人声/伴奏/其他预设”时，control 必须使用“音效预设”，operation="select"，不要把 EQ 当成单个频段。',
-  '只要用户要求改变 Mineradio 的状态，就必须调用对应工具，不能只用文字声称已经调整。非 DIY 的多步骤请求才逐项继续；收到 agent_progress 后完成尚未执行的项目，直到全部执行或明确失败再总结。',
+  '只要用户要求改变 Stellaflix 的状态，就必须调用对应工具，不能只用文字声称已经调整。非 DIY 的多步骤请求才逐项继续；收到 agent_progress 后完成尚未执行的项目，直到全部执行或明确失败再总结。',
   '每次回复最多选择一个工具。若提供了 agent_progress，结合已经成功或失败的步骤继续完成原目标，不要重复已经成功的操作；目标完成后直接给出简短总结。',
   '用户询问“这首歌”时，根据提供的播放器上下文回答；不要猜测不存在的当前歌曲。',
-  '不要在工具真正执行前声称歌曲已经开始播放。',
+  '当用户要求播放、寻找电影/剧集/动漫/纪录片，或说“我想看/播放电影”时，优先调用 search_and_play_movie，不要用音乐工具。',
+  '影视搜索只使用用户已导入的 CMS 片源；Stellaflix 不内置站点、不提供盗版资源。未导入片源时如实说明并引导到片源管理。',
+  'search_and_play_movie 返回 needsSelection 且附带 candidates 时，不要自动改播其它片；把候选清单简要展示给用户点选，或等待用户说“播放第 N 个”。',
+  '用户确认播放某个候选时，用 play_movie_candidate（传入该候选的 sourceId 与 vodId），不要重复搜索。',
+  '影视暂停/继续用 control_video_playback（action 为 pause 或 play）；下一集/上一集/第 N 集用 select_episode；影视全屏用 toggle_video_fullscreen。',
+  '影视快进/跳转用 seek_video，seconds 为从 0 开始的秒数，或用 time 形如 01:20:00。不要与音乐进度工具 seek_playback 混用。',
+  '询问当前是否在放电影、有没有片源时，可调用 get_video_context。打开片源管理/影视首页用 open_video_interface。',
+  '当用户说“暂停/继续”且上下文显示影片正在播放时，优先用 control_video_playback，不要误用音乐 control_playback。',
+  '不要在工具真正执行前声称影片已经开始播放。',
   '你只能执行已提供工具中的操作；不要虚构删除歌单、清空队列或其他未开放操作。',
 ].join('\n');
 const MUSIC_TOOL_SCHEMA = {
   name: TOOL_NAME,
-  description: '在 Mineradio 已导入的 LX 兼容音源中搜索歌曲并立即播放。用户要求播放或想听音乐时使用。',
+  description: '在 Stellaflix 已导入的 LX 兼容音源中搜索歌曲并立即播放。用户要求播放或想听音乐时使用。',
   parameters: {
     type: 'object',
     properties: {
@@ -107,7 +133,7 @@ const MUSIC_TOOL_SCHEMA = {
 };
 const REPLAY_TOOL_SCHEMA = {
   name: REPLAY_TOOL_NAME,
-  description: '把 Mineradio 当前歌曲从头开始播放。用户说“再放一遍”“重新播放”或“从头播放这首歌”时使用。',
+  description: '把 Stellaflix 当前歌曲从头开始播放。用户说“再放一遍”“重新播放”或“从头播放这首歌”时使用。',
   parameters: {
     type: 'object',
     properties: {},
@@ -116,7 +142,7 @@ const REPLAY_TOOL_SCHEMA = {
 };
 const SET_VOLUME_TOOL_SCHEMA = {
   name: SET_VOLUME_TOOL_NAME,
-  description: '设置 Mineradio 播放音量。volume 使用 0 到 100 的整数，0 表示静音。',
+  description: '设置 Stellaflix 播放音量。volume 使用 0 到 100 的整数，0 表示静音。',
   parameters: {
     type: 'object',
     properties: {
@@ -128,7 +154,7 @@ const SET_VOLUME_TOOL_SCHEMA = {
 };
 const PLAYBACK_CONTROL_TOOL_SCHEMA = {
   name: PLAYBACK_CONTROL_TOOL_NAME,
-  description: '暂停或继续 Mineradio 当前歌曲。使用明确动作，不要用它搜索或切换歌曲。',
+  description: '暂停或继续 Stellaflix 当前歌曲。使用明确动作，不要用它搜索或切换歌曲。',
   parameters: {
     type: 'object',
     properties: {
@@ -140,7 +166,7 @@ const PLAYBACK_CONTROL_TOOL_SCHEMA = {
 };
 const SKIP_TRACK_TOOL_SCHEMA = {
   name: SKIP_TRACK_TOOL_NAME,
-  description: '切换 Mineradio 的上一首或下一首歌曲。用户说“上一首”“下一首”“换一首”或“跳过这首”时使用。',
+  description: '切换 Stellaflix 的上一首或下一首歌曲。用户说“上一首”“下一首”“换一首”或“跳过这首”时使用。',
   parameters: {
     type: 'object',
     properties: {
@@ -152,7 +178,7 @@ const SKIP_TRACK_TOOL_SCHEMA = {
 };
 const PLAY_MODE_TOOL_SCHEMA = {
   name: PLAY_MODE_TOOL_NAME,
-  description: '设置 Mineradio 的播放模式。用户要求随机播放、单曲循环、顺序播放或列表循环时使用。',
+  description: '设置 Stellaflix 的播放模式。用户要求随机播放、单曲循环、顺序播放或列表循环时使用。',
   parameters: {
     type: 'object',
     properties: {
@@ -164,7 +190,7 @@ const PLAY_MODE_TOOL_SCHEMA = {
 };
 const AUDIO_QUALITY_TOOL_SCHEMA = {
   name: AUDIO_QUALITY_TOOL_NAME,
-  description: '打开 Mineradio 音质面板，或切换当前音源的播放音质。高音质是否可用取决于歌曲、音源和账号权限。',
+  description: '打开 Stellaflix 音质面板，或切换当前音源的播放音质。高音质是否可用取决于歌曲、音源和账号权限。',
   parameters: {
     type: 'object',
     properties: {
@@ -176,7 +202,7 @@ const AUDIO_QUALITY_TOOL_SCHEMA = {
 };
 const SOURCE_MANAGER_TOOL_SCHEMA = {
   name: SOURCE_MANAGER_TOOL_NAME,
-  description: '打开 Mineradio 已有的 LX 兼容音源管理界面，用户可在其中导入、启用、停用、检查或删除音源。',
+  description: '打开 Stellaflix 已有的 LX 兼容音源管理界面，用户可在其中导入、启用、停用、检查或删除音源。',
   parameters: {
     type: 'object',
     properties: {},
@@ -185,7 +211,7 @@ const SOURCE_MANAGER_TOOL_SCHEMA = {
 };
 const OPEN_INTERFACE_TOOL_SCHEMA = {
   name: OPEN_INTERFACE_TOOL_NAME,
-  description: '打开 Mineradio 已有的页面、面板或设置界面。用户说“打开、进入、查看、显示某界面”时使用，不能只文字声称已打开。',
+  description: '打开 Stellaflix 已有的页面、面板或设置界面。用户说“打开、进入、查看、显示某界面”时使用，不能只文字声称已打开。',
   parameters: {
     type: 'object',
     properties: {
@@ -201,7 +227,7 @@ const OPEN_INTERFACE_TOOL_SCHEMA = {
 };
 const CONTROL_APP_TOOL_SCHEMA = {
   name: CONTROL_APP_TOOL_NAME,
-  description: '控制 Mineradio 全局软件功能。适用于非 DIY 控件的播放调节、窗口模式、自动隐藏、队列、伴奏、内存和重置动作。',
+  description: '控制 Stellaflix 全局软件功能。适用于非 DIY 控件的播放调节、窗口模式、自动隐藏、队列、伴奏、内存和重置动作。',
   parameters: {
     type: 'object',
     properties: {
@@ -221,7 +247,7 @@ const CONTROL_APP_TOOL_SCHEMA = {
 };
 const LYRIC_ANIMATION_TOOL_SCHEMA = {
   name: LYRIC_ANIMATION_TOOL_NAME,
-  description: '直接切换 Mineradio 窗口内歌词动画。传统效果和新歌词动画都通过这个工具选择，不要把它误当成桌面歌词动画开关。',
+  description: '直接切换 Stellaflix 窗口内歌词动画。传统效果和新歌词动画都通过这个工具选择，不要把它误当成桌面歌词动画开关。',
   parameters: {
     type: 'object',
     properties: {
@@ -237,7 +263,7 @@ const LYRIC_ANIMATION_TOOL_SCHEMA = {
 };
 const QUEUE_MUSIC_TOOL_SCHEMA = {
   name: QUEUE_MUSIC_TOOL_NAME,
-  description: '搜索歌曲并加入 Mineradio 播放队列，可设为下一首或放到队列末尾。不要用它立即播放歌曲。',
+  description: '搜索歌曲并加入 Stellaflix 播放队列，可设为下一首或放到队列末尾。不要用它立即播放歌曲。',
   parameters: {
     type: 'object',
     properties: {
@@ -253,7 +279,7 @@ const QUEUE_MUSIC_TOOL_SCHEMA = {
 };
 const ADD_PLAYLIST_QUEUE_TOOL_SCHEMA = {
   name: ADD_PLAYLIST_QUEUE_TOOL_NAME,
-  description: '把 Mineradio 中一整张本地、文件夹或落雪导入歌单批量加入当前播放队列，并自动跳过队列中已有的歌曲。',
+  description: '把 Stellaflix 中一整张本地、文件夹或落雪导入歌单批量加入当前播放队列，并自动跳过队列中已有的歌曲。',
   parameters: {
     type: 'object',
     properties: {
@@ -265,7 +291,7 @@ const ADD_PLAYLIST_QUEUE_TOOL_SCHEMA = {
 };
 const SEEK_TOOL_SCHEMA = {
   name: SEEK_TOOL_NAME,
-  description: '跳转 Mineradio 当前歌曲的播放进度。position_seconds 和 percent 二选一。',
+  description: '跳转 Stellaflix 当前歌曲的播放进度。position_seconds 和 percent 二选一。',
   parameters: {
     type: 'object',
     properties: {
@@ -277,7 +303,7 @@ const SEEK_TOOL_SCHEMA = {
 };
 const SAVE_PLAYLIST_TOOL_SCHEMA = {
   name: SAVE_PLAYLIST_TOOL_NAME,
-  description: '把当前歌曲或搜索到的指定歌曲收藏到 Mineradio 本地歌单。歌单不存在时可以安全创建。',
+  description: '把当前歌曲或搜索到的指定歌曲收藏到 Stellaflix 本地歌单。歌单不存在时可以安全创建。',
   parameters: {
     type: 'object',
     properties: {
@@ -294,7 +320,7 @@ const SAVE_PLAYLIST_TOOL_SCHEMA = {
 };
 const CREATE_PLAYLIST_TOOL_SCHEMA = {
   name: CREATE_PLAYLIST_TOOL_NAME,
-  description: '创建一个 Mineradio 本地歌单，可同时把当前歌曲加入新歌单。不能删除或覆盖歌单。',
+  description: '创建一个 Stellaflix 本地歌单，可同时把当前歌曲加入新歌单。不能删除或覆盖歌单。',
   parameters: {
     type: 'object',
     properties: {
@@ -334,7 +360,7 @@ const BUILD_PLAYLIST_TOOL_SCHEMA = {
 };
 const DIY_VISUAL_TOOL_SCHEMA = {
   name: DIY_VISUAL_TOOL_NAME,
-  description: '安全控制 Mineradio 的 DIY 视觉设置。可以一次修改多个项目；不会导入文件、音源脚本或 Wallpaper Engine 内容。',
+  description: '安全控制 Stellaflix 的 DIY 视觉设置。可以一次修改多个项目；不会导入文件、音源脚本或 Wallpaper Engine 内容。',
   parameters: {
     type: 'object',
     properties: {
@@ -386,6 +412,121 @@ const DIY_VISUAL_TOOL_SCHEMA = {
     additionalProperties: false,
   },
 };
+const VIDEO_SEARCH_PLAY_TOOL_SCHEMA = {
+  name: VIDEO_SEARCH_PLAY_TOOL_NAME,
+  description: '在用户已导入的 CMS 片源中搜索电影/剧集并在可自动判定时起播。用户要求看电影、播放影片时使用；不内置片源。',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: '搜索关键词，通常为片名。' },
+      title: { type: 'string', description: '片名（如果能识别）。' },
+      year: { type: 'string', description: '可选年份，如 2010。' },
+      resultIndex: { type: 'integer', description: '可选：直接播放上次候选列表中的序号，从 0 开始。', minimum: 0 },
+      episodeIndex: { type: 'integer', description: '可选：剧集从 0 开始的集序号。', minimum: 0 },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+};
+const VIDEO_SEARCH_LIST_TOOL_SCHEMA = {
+  name: VIDEO_SEARCH_LIST_TOOL_NAME,
+  description: '仅搜索电影/剧集候选列表，不起播。需要用户从多个结果中选择，或先确认片名时使用。已自动过滤电影解说/混剪类结果。',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: '搜索关键词。' },
+      title: { type: 'string', description: '片名（如果能识别）。' },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+};
+const VIDEO_PLAY_CANDIDATE_TOOL_SCHEMA = {
+  name: VIDEO_PLAY_CANDIDATE_TOOL_NAME,
+  description: '播放用户已选定的影视候选。用户提供或确认了 sourceId 与 vodId，或说“播放第 N 个”时使用。',
+  parameters: {
+    type: 'object',
+    properties: {
+      sourceId: { type: 'string', description: '候选的片源 id。' },
+      vodId: { type: 'string', description: '候选的影片 id。' },
+      title: { type: 'string', description: '片名（可选，便于回显）。' },
+      year: { type: 'string', description: '年份（可选）。' },
+      index: { type: 'integer', description: '可选：pending 候选列表序号，从 0 开始。', minimum: 0 },
+      episodeIndex: { type: 'integer', description: '可选：剧集序号，从 0 开始。', minimum: 0 },
+    },
+    additionalProperties: false,
+  },
+};
+const VIDEO_PLAYBACK_TOOL_SCHEMA = {
+  name: VIDEO_PLAYBACK_TOOL_NAME,
+  description: '暂停或继续当前正在播放的影片。不要用于歌曲控制。',
+  parameters: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['play', 'pause'], description: 'play 继续，pause 暂停。' },
+    },
+    required: ['action'],
+    additionalProperties: false,
+  },
+};
+const VIDEO_SEEK_TOOL_SCHEMA = {
+  name: VIDEO_SEEK_TOOL_NAME,
+  description: '跳转当前影片播放进度。seconds 为秒数，或 time 为 HH:MM:SS / MM:SS。',
+  parameters: {
+    type: 'object',
+    properties: {
+      seconds: { type: 'number', description: '目标秒数，从 0 开始。' },
+      time: { type: 'string', description: '时间码，如 01:20:00。' },
+    },
+    additionalProperties: false,
+  },
+};
+const VIDEO_EPISODE_TOOL_SCHEMA = {
+  name: VIDEO_EPISODE_TOOL_NAME,
+  description: '切换当前影片的剧集：下一集、上一集或指定第 N 集。',
+  parameters: {
+    type: 'object',
+    properties: {
+      direction: { type: 'string', enum: ['next', 'previous'], description: 'next 下一集，previous 上一集。' },
+      episodeIndex: { type: 'integer', description: '指定集序号，从 0 开始；与 direction 二选一。', minimum: 0 },
+    },
+    additionalProperties: false,
+  },
+};
+const VIDEO_FULLSCREEN_TOOL_SCHEMA = {
+  name: VIDEO_FULLSCREEN_TOOL_NAME,
+  description: '切换当前影片播放器的全屏状态。',
+  parameters: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+  },
+};
+const VIDEO_CONTEXT_TOOL_SCHEMA = {
+  name: VIDEO_CONTEXT_TOOL_NAME,
+  description: '获取影视播放器上下文：是否在播、片名、已导入片源数量、是否影视空间。',
+  parameters: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+  },
+};
+const VIDEO_OPEN_INTERFACE_TOOL_SCHEMA = {
+  name: VIDEO_OPEN_INTERFACE_TOOL_NAME,
+  description: '打开影视相关界面：片源管理、影视首页或观看历史。',
+  parameters: {
+    type: 'object',
+    properties: {
+      target: {
+        type: 'string',
+        enum: ['sources', 'home', 'history'],
+        description: 'sources=片源管理，home=影视首页，history=观看历史。',
+      },
+    },
+    required: ['target'],
+    additionalProperties: false,
+  },
+};
 const MUSIC_TOOL_SCHEMAS = [
   MUSIC_TOOL_SCHEMA,
   REPLAY_TOOL_SCHEMA,
@@ -405,6 +546,15 @@ const MUSIC_TOOL_SCHEMAS = [
   CREATE_PLAYLIST_TOOL_SCHEMA,
   BUILD_PLAYLIST_TOOL_SCHEMA,
   DIY_VISUAL_TOOL_SCHEMA,
+  VIDEO_SEARCH_PLAY_TOOL_SCHEMA,
+  VIDEO_SEARCH_LIST_TOOL_SCHEMA,
+  VIDEO_PLAY_CANDIDATE_TOOL_SCHEMA,
+  VIDEO_PLAYBACK_TOOL_SCHEMA,
+  VIDEO_SEEK_TOOL_SCHEMA,
+  VIDEO_EPISODE_TOOL_SCHEMA,
+  VIDEO_FULLSCREEN_TOOL_SCHEMA,
+  VIDEO_CONTEXT_TOOL_SCHEMA,
+  VIDEO_OPEN_INTERFACE_TOOL_SCHEMA,
 ];
 
 class AgentApiError extends Error {
@@ -599,6 +749,61 @@ function parseToolArguments(value, toolName) {
     const allowedSections = new Set(['home', 'library', 'radio', 'ranking', 'visual_console', 'advanced_settings', 'lyric_animation', 'hotkeys', 'audio_output', 'wallpaper', 'update', 'remote_control', 'music_planet', 'song_details', 'artist_details', 'collect', 'current_queue', 'playlist_panel', 'global_search', 'playback_tuning', 'volume_panel', 'playlist_import', 'lx_playlist_import', 'playlist_selection', 'source_import', 'local_file_import', 'local_folder_import', 'custom_lyrics', 'daily_review', 'listening_insight', 'visual_guide', 'author_support', 'beat_analysis']);
     const section = safeText(input.section || input.page, 40).trim().toLowerCase();
     return allowedSections.has(section) ? { section } : {};
+  }
+  if (toolName === VIDEO_SEARCH_PLAY_TOOL_NAME || toolName === VIDEO_SEARCH_LIST_TOOL_NAME) {
+    const args = {};
+    const query = safeText(input.query || input.keyword || input.title, 240).trim();
+    if (query) args.query = query;
+    const title = safeText(input.title, 240).trim();
+    if (title && toolName === VIDEO_SEARCH_PLAY_TOOL_NAME) args.title = title;
+    const year = safeText(input.year, 16).trim();
+    if (/^(19|20)\d{2}$/.test(year)) args.year = year;
+    if (toolName === VIDEO_SEARCH_PLAY_TOOL_NAME) {
+      if (Number.isInteger(input.resultIndex) && input.resultIndex >= 0 && input.resultIndex < 50) args.resultIndex = input.resultIndex;
+      if (Number.isInteger(input.episodeIndex) && input.episodeIndex >= 0 && input.episodeIndex < 500) args.episodeIndex = input.episodeIndex;
+    }
+    if (!args.query && args.title) args.query = args.title;
+    return args;
+  }
+  if (toolName === VIDEO_PLAY_CANDIDATE_TOOL_NAME) {
+    const args = {};
+    const sourceId = safeText(input.sourceId || input.source_id, 80).trim();
+    if (sourceId) args.sourceId = sourceId;
+    const vodId = safeText(input.vodId || input.vod_id, 80).trim();
+    if (vodId) args.vodId = vodId;
+    const title = safeText(input.title, 240).trim();
+    if (title) args.title = title;
+    const year = safeText(input.year, 16).trim();
+    if (year) args.year = year;
+    if (Number.isInteger(input.index) && input.index >= 0 && input.index < 50) args.index = input.index;
+    if (Number.isInteger(input.episodeIndex) && input.episodeIndex >= 0 && input.episodeIndex < 500) args.episodeIndex = input.episodeIndex;
+    return args;
+  }
+  if (toolName === VIDEO_PLAYBACK_TOOL_NAME) {
+    const action = safeText(input.action, 16).trim().toLowerCase();
+    return action === 'play' || action === 'pause' ? { action } : {};
+  }
+  if (toolName === VIDEO_SEEK_TOOL_NAME) {
+    const args = {};
+    if (input.seconds != null) {
+      const seconds = Number(input.seconds);
+      if (Number.isFinite(seconds) && seconds >= 0) args.seconds = Math.min(86400, Math.round(seconds));
+    }
+    const time = safeText(input.time, 16).trim();
+    if (!args.seconds && /^\d{1,2}:\d{2}(:\d{2})?$/.test(time)) args.time = time;
+    return args;
+  }
+  if (toolName === VIDEO_EPISODE_TOOL_NAME) {
+    const args = {};
+    const direction = safeText(input.direction, 16).trim().toLowerCase();
+    if (direction === 'next' || direction === 'previous') args.direction = direction;
+    if (Number.isInteger(input.episodeIndex) && input.episodeIndex >= 0 && input.episodeIndex < 500) args.episodeIndex = input.episodeIndex;
+    return args;
+  }
+  if (toolName === VIDEO_FULLSCREEN_TOOL_NAME || toolName === VIDEO_CONTEXT_TOOL_NAME) return {};
+  if (toolName === VIDEO_OPEN_INTERFACE_TOOL_NAME) {
+    const target = safeText(input.target || input.page, 24).trim().toLowerCase();
+    return target === 'sources' || target === 'home' || target === 'history' ? { target } : {};
   }
   if (toolName === CONTROL_APP_TOOL_NAME) {
     const allowedOperations = new Set(['open', 'set', 'toggle', 'run', 'clear', 'reset']);
@@ -909,7 +1114,7 @@ function createAgentApi(options) {
     try {
       if (electron.app && electron.app.isReady && electron.app.isReady()) base = electron.app.getPath('userData');
     } catch (_error) {}
-    if (!base) base = process.env.MINERADIO_AGENT_CONFIG_DIR || path.join(process.env.APPDATA || os.homedir(), 'Mineradio');
+    if (!base) base = process.env.STELLAFLIX_AGENT_CONFIG_DIR || path.join(process.env.APPDATA || os.homedir(), 'Stellaflix');
     return path.join(base, 'agent-config.json');
   }
 
@@ -930,7 +1135,7 @@ function createAgentApi(options) {
   }
 
   async function decryptApiKeySecurely(stored) {
-    if (process.env.MINERADIO_AGENT_API_KEY) return String(process.env.MINERADIO_AGENT_API_KEY);
+    if (process.env.STELLAFLIX_AGENT_API_KEY) return String(process.env.STELLAFLIX_AGENT_API_KEY);
     if (!stored || !stored.apiKeyEncrypted || !safeStorage) return '';
     const encrypted = Buffer.from(stored.apiKeyEncrypted, 'base64');
     try {
@@ -949,7 +1154,7 @@ function createAgentApi(options) {
     const stored = storedValue || readStored();
     const provider = normalizeProvider(stored.provider);
     const baseUrl = normalizeBaseUrl(stored.baseUrl || DEFAULT_BASE_URLS[provider], provider);
-    const hasApiKey = !!(process.env.MINERADIO_AGENT_API_KEY || stored.apiKeyEncrypted);
+    const hasApiKey = !!(process.env.STELLAFLIX_AGENT_API_KEY || stored.apiKeyEncrypted);
     const model = safeText(stored.model, 160).trim();
     return {
       provider,
@@ -1052,7 +1257,7 @@ function createAgentApi(options) {
         message: safeText(error && error.message || 'Agent 请求失败。', 500),
       };
     },
-    _test: { invokeProvider, parseToolArguments, sanitizeHistory, sanitizePlayerContext, sanitizeAgentState, buildSystemPrompt, SYSTEM_PROMPT, MUSIC_TOOL_SCHEMA, REPLAY_TOOL_SCHEMA, SET_VOLUME_TOOL_SCHEMA, PLAYBACK_CONTROL_TOOL_SCHEMA, SKIP_TRACK_TOOL_SCHEMA, PLAY_MODE_TOOL_SCHEMA, AUDIO_QUALITY_TOOL_SCHEMA, SOURCE_MANAGER_TOOL_SCHEMA, OPEN_INTERFACE_TOOL_SCHEMA, CONTROL_APP_TOOL_SCHEMA, LYRIC_ANIMATION_TOOL_SCHEMA, QUEUE_MUSIC_TOOL_SCHEMA, ADD_PLAYLIST_QUEUE_TOOL_SCHEMA, SEEK_TOOL_SCHEMA, SAVE_PLAYLIST_TOOL_SCHEMA, CREATE_PLAYLIST_TOOL_SCHEMA, BUILD_PLAYLIST_TOOL_SCHEMA, DIY_VISUAL_TOOL_SCHEMA },
+    _test: { invokeProvider, parseToolArguments, sanitizeHistory, sanitizePlayerContext, sanitizeAgentState, buildSystemPrompt, SYSTEM_PROMPT, MUSIC_TOOL_SCHEMA, REPLAY_TOOL_SCHEMA, SET_VOLUME_TOOL_SCHEMA, PLAYBACK_CONTROL_TOOL_SCHEMA, SKIP_TRACK_TOOL_SCHEMA, PLAY_MODE_TOOL_SCHEMA, AUDIO_QUALITY_TOOL_SCHEMA, SOURCE_MANAGER_TOOL_SCHEMA, OPEN_INTERFACE_TOOL_SCHEMA, CONTROL_APP_TOOL_SCHEMA, LYRIC_ANIMATION_TOOL_SCHEMA, QUEUE_MUSIC_TOOL_SCHEMA, ADD_PLAYLIST_QUEUE_TOOL_SCHEMA, SEEK_TOOL_SCHEMA, SAVE_PLAYLIST_TOOL_SCHEMA, CREATE_PLAYLIST_TOOL_SCHEMA, BUILD_PLAYLIST_TOOL_SCHEMA, DIY_VISUAL_TOOL_SCHEMA, VIDEO_SEARCH_PLAY_TOOL_SCHEMA, VIDEO_SEARCH_LIST_TOOL_SCHEMA, VIDEO_PLAY_CANDIDATE_TOOL_SCHEMA, VIDEO_PLAYBACK_TOOL_SCHEMA, VIDEO_SEEK_TOOL_SCHEMA, VIDEO_EPISODE_TOOL_SCHEMA, VIDEO_FULLSCREEN_TOOL_SCHEMA, VIDEO_CONTEXT_TOOL_SCHEMA, VIDEO_OPEN_INTERFACE_TOOL_SCHEMA, ALLOWED_TOOL_NAMES, MUSIC_TOOL_SCHEMAS },
   };
 }
 

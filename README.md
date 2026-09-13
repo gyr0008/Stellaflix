@@ -10,16 +10,16 @@ Stellaflix 是一款 Windows 桌面沉浸式音乐播放器，把搜索播放、
 
 | 下载入口 | 推荐人群 | 链接 |
 | --- | --- | --- |
-| 夸克盘 | 夸克用户 | [下载 Stellaflix 2.1.0](https://pan.quark.cn/s/f40289e1c5d3) |
-| 百度云 | 百度网盘用户（提取码 `sjhp`） | [下载 Stellaflix 2.1.0](https://pan.baidu.com/s/14fgTABgbfseOg9QuX0Um7Q?pwd=sjhp) |
-| 蓝奏云 | 直接下载 | [下载 Stellaflix 2.1.0](https://xxhuber.lanzout.com/stellaflix2) |
-| GitHub Release | GitHub 用户、版本说明与源码 | [下载 Stellaflix 2.1.0](https://github.com/gyr0008/Stellaflix/releases/tag/v2.1.0) |
+| 夸克盘 | 夸克用户 | [下载 Stellaflix 0.1.0](https://pan.quark.cn/s/f40289e1c5d3) |
+| 百度云 | 百度网盘用户（提取码 `sjhp`） | [下载 Stellaflix 0.1.0](https://pan.baidu.com/s/14fgTABgbfseOg9QuX0Um7Q?pwd=sjhp) |
+| 蓝奏云 | 直接下载 | [下载 Stellaflix 0.1.0](https://xxhuber.lanzout.com/stellaflix2) |
+| GitHub Release | GitHub 用户、版本说明与源码 | [下载 Stellaflix 0.1.0](https://github.com/gyr0008/Stellaflix/releases) |
 
-安装时只需要下载并运行 `Stellaflix-2.1.0-Setup.exe`。不要把 `.blockmap`、`latest.yml` 或 `win-unpacked` 当成正式安装包。
+安装时只需要下载并运行 `Stellaflix-0.1.0-Setup.exe`。不要把 `.blockmap`、`latest.yml` 或 `win-unpacked` 当成正式安装包。
 
 ## 下载或安装被拦截怎么办
 
-小众 Electron 桌面软件、未签名安装包有时会被浏览器、Windows Defender 或 SmartScreen 提示风险。请先确认安装包来自上面的网盘入口或官方 GitHub Release，文件名是 `Stellaflix-2.1.0-Setup.exe`。
+小众 Electron 桌面软件、未签名安装包有时会被浏览器、Windows Defender 或 SmartScreen 提示风险。请先确认安装包来自上面的网盘入口或官方 GitHub Release，文件名是 `Stellaflix-0.1.0-Setup.exe`。
 
 1. 浏览器下载栏提示风险时，打开下载列表，点这条下载右侧的 `...` 三个点，选择 `保留` / `仍要保留` / `显示更多` 后继续保留。
 2. Windows SmartScreen 弹出蓝色拦截窗口时，点 `更多信息`，再点 `仍要运行`。
@@ -33,15 +33,15 @@ Stellaflix 是一款 Windows 桌面沉浸式音乐播放器，把搜索播放、
 
 ![Stellaflix 作者支持渠道](./docs/assets/support/stellaflix-author-support-poster.png)
 
-Stellaflix 2.1 进一步优化了壁纸与全屏体验，并提升了登录、账号、本地曲库和长时间运行的稳定性。
+Stellaflix 0.1.0 进一步优化了壁纸与全屏体验，并提升了登录、账号、本地曲库和长时间运行的稳定性。
 
 ## 当前版本
 
-当前版本：`2.1.0`
+当前版本：`0.1.0`
 
-状态：Stellaflix 2.1.0 正式版。
+状态：Stellaflix 0.1.0 正式版。
 
-> 安全提示：`v1.0.10` 及更早旧安装包不再建议继续安装或传播。请使用本页提供的 `Stellaflix-2.1.0-Setup.exe`。
+> 安全提示：历史错误标注的 `2.1.0` 安装包请以本页 `0.1.0` 为准重新安装；`v1.0.10` 及更早包同样不再建议继续使用。
 
 ## 核心特性
 
@@ -63,9 +63,9 @@ Stellaflix 2.1 进一步优化了壁纸与全屏体验，并提升了登录、�
 
 Windows 用户可以从本页列出的夸克盘、百度云、蓝奏云或 GitHub Release 下载安装包。
 
-正式分发以 `Stellaflix-2.1.0-Setup.exe` 为准，不建议直接使用 `win-unpacked` 目录。安装包会创建桌面快捷方式。
+正式分发以 `Stellaflix-0.1.0-Setup.exe` 为准，不建议直接使用 `win-unpacked` 目录。安装包会创建桌面快捷方式。
 
-已经安装过旧版本的用户可直接运行 `Stellaflix-2.1.0-Setup.exe` 完成更新。软件内更新入口只会打开浏览器下载页，不会在客户端内下载或应用补丁。
+已经安装过其他版本的用户可直接运行 `Stellaflix-0.1.0-Setup.exe` 完成更新。打包版优先走应用内自动更新；失败时可在浏览器打开网盘/Release 手动下载。
 
 ## 开发运行
 
@@ -79,9 +79,25 @@ npm run build:win
 
 ## 更新机制
 
-Stellaflix 会请求 GitHub Releases latest 检测新版本。远端版本高于本地版本时，应用内更新入口会展示 Release 内容，并通过系统浏览器打开可选网盘线路；即使 Release 附带完整安装包，`2.0.3+` 客户端也不会读取、下载、缓存或应用该附件与补丁。
+Stellaflix 采用 **应用内自动更新为主、网盘/Release 外链为辅** 的双轨更新：
 
-本地验证更新链路时，可以通过 `STELLAFLIX_UPDATE_MANIFEST` 指向一个本地 manifest JSON 或 HTTP 地址来模拟线上 Release。
+1. **应用内热更新（主路径）**  
+   客户端通过 electron-updater 检查 GitHub Releases（失败时回退国内镜像 feed），下载对应版本的 NSIS 安装包（`latest.yml` 校验），用户确认后静默安装并重启。下载前会做磁盘空间预检；下载失败会自动切换线路重试。
+
+2. **网盘 / GitHub Release 外链（降级）**  
+   当应用内更新不可用（开发环境、未配置仓库、网络/校验失败、磁盘不足等）时，更新面板会展示夸克/百度/蓝奏等下载线路，由用户在浏览器中手动下载 `Stellaflix-x.y.z-Setup.exe` 安装。
+
+### 发布要求（维护者）
+
+若要让已安装客户端吃到应用内更新，Release 必须同时包含：
+
+- `Stellaflix-<version>-Setup.exe`
+- 同目录的 `latest.yml`（`electron-builder` 自动生成）
+- 可选 `.blockmap`（用于差分更新，减小下载体积）
+
+版本号必须严格高于本地版本（SemVer）。
+
+本地验证时，可通过 `STELLAFLIX_UPDATE_MANIFEST` 指向本地 manifest JSON 或 HTTP 地址模拟线上 Release；应用内更新仅在打包安装版（`app.isPackaged`）中启用，开发模式会走外链降级。
 
 ## 第三方音乐平台说明
 
@@ -107,4 +123,4 @@ Copyright (C) 2026 gyr0008.
 
 本项目采用 GPL-3.0 授权。详见 [LICENSE](./LICENSE)。
 
-MR Logo、Stellaflix 名称、界面视觉设计与原创视觉表达归作者所有；第三方依赖和第三方服务分别遵循其各自授权与服务条款。
+SF Logo、Stellaflix 名称、界面视觉设计与原创视觉表达归作者所有；第三方依赖和第三方服务分别遵循其各自授权与服务条款。

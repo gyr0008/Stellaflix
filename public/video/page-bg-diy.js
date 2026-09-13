@@ -55,6 +55,10 @@
     var searchPage = (S.getSearchPage && S.getSearchPage());
     if (searchPage && searchPage.classList.contains('sfv-search-open')) return 'search';
     if (!S.overlay || !S.overlay.classList.contains('sfv-show')) return null;
+    // 详情页（电影/动漫等）绝不该挂载背景 DIY FAB。从 历史/追片/片单 等源页进入详情时，
+    // activePageId 仍残留上一页 id，若仅凭 activePageId 判定会误判仍停在该源页，导致右下角
+    // 「背景」按钮泄漏到详情页。故以当前视图 mode 为准：detail 视图一律视为非 DIY 页。
+    if (S.current && S.current.mode === 'detail') return null;
     // Router 页（movie/anime/world/huilians/collections/history）由 activePageId 识别；
     // 除 collections / history 外，其它 router 页一律不挂 DIY 玻璃背景。category 页 activePageId 为 null。
     if (S.activePageId && S.activePageId !== 'collections' && S.activePageId !== 'history') return null;

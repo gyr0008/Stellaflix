@@ -20,14 +20,17 @@ const {
 } = require('./local-music-library');
 const { WallpaperEngineRuntime } = require('./wallpaper-engine-runtime');
 const { FullDesktopModeRuntime } = require('./full-desktop-mode-runtime');
-const { extractKugouAuth } = require('../kugou-api');
-const { qishuiCookieHasLogin } = require('../qishui-api');
-const {
-  getSpotifyOAuthConfig,
-  buildSpotifyOAuthAuthorizeUrl,
-  exchangeSpotifyOAuthCode,
-  clearSpotifyToken,
-} = require('../spotify-api');
+// Platform auth helpers are only needed on login/migration paths. Lazy-load so
+// cold start does not pull kugou/qishui/spotify modules before the window shows.
+function requireKugouApi() { return require('../kugou-api'); }
+function requireQishuiApi() { return require('../qishui-api'); }
+function requireSpotifyApi() { return require('../spotify-api'); }
+function extractKugouAuth(...args) { return requireKugouApi().extractKugouAuth(...args); }
+function qishuiCookieHasLogin(...args) { return requireQishuiApi().qishuiCookieHasLogin(...args); }
+function getSpotifyOAuthConfig(...args) { return requireSpotifyApi().getSpotifyOAuthConfig(...args); }
+function buildSpotifyOAuthAuthorizeUrl(...args) { return requireSpotifyApi().buildSpotifyOAuthAuthorizeUrl(...args); }
+function exchangeSpotifyOAuthCode(...args) { return requireSpotifyApi().exchangeSpotifyOAuthCode(...args); }
+function clearSpotifyToken(...args) { return requireSpotifyApi().clearSpotifyToken(...args); }
 const { autoUpdater } = require('electron-updater');
 
 registerWallpaperEngineScheme(protocol);
@@ -1564,7 +1567,15 @@ function configureLocalAppPermissions() {
   ses.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     const origin = requestingOrigin || (details && details.requestingUrl) || (webContents && webContents.getURL && webContents.getURL()) || '';
     if (permission === 'display-capture') return isTrustedWallpaperEngineDisplayCapturePermission(webContents, origin, details);
-    if (permission === 'media') return isTrustedWallpaperEnginePreparationMediaPermission(webContents, origin, details);
+    if (permission === 'media') {
+      const weGrant = getWallpaperEngineCaptureGrant();
+      // 只有 Wallpaper Engine 正处于截屏准备状态时，才走 WE 严格检查（仅放行其自身的 video 请求）。
+      // 其他场景（如 AI 助手麦克风）直接放行本应用的媒体权限。
+      if (weGrant && wallpaperEngineCapturePreparationOperation === weGrant.operation) {
+        return isTrustedWallpaperEnginePreparationMediaPermission(webContents, origin, details);
+      }
+      return isLocalAppUrl(origin);
+    }
     return LOCAL_APP_PERMISSION_ALLOWLIST.has(permission) && isLocalAppUrl(origin);
   });
   ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
@@ -1574,7 +1585,14 @@ function configureLocalAppPermissions() {
       return;
     }
     if (permission === 'media') {
-      callback(isTrustedWallpaperEnginePreparationMediaPermission(webContents, origin, details));
+      const weGrant = getWallpaperEngineCaptureGrant();
+      // 只有 Wallpaper Engine 正处于截屏准备状态时，才走 WE 严格检查（仅放行其自身的 video 请求）。
+      // 其他场景（如 AI 助手麦克风）直接放行本应用的媒体权限。
+      if (weGrant && wallpaperEngineCapturePreparationOperation === weGrant.operation) {
+        callback(isTrustedWallpaperEnginePreparationMediaPermission(webContents, origin, details));
+        return;
+      }
+      callback(isLocalAppUrl(origin));
       return;
     }
     callback(LOCAL_APP_PERMISSION_ALLOWLIST.has(permission) && isLocalAppUrl(origin));
@@ -2076,15 +2094,15 @@ function startupErrorText(error) {
 
 function resolveStartupErrorCode(context, error) {
   const text = `${context || ''}\n${startupErrorText(error)}`;
-  if (/EADDRINUSE|address already in use|listen EADDRINUSE|端口/i.test(text)) return 'MR-BOOT-SERVER-PORT';
-  if (/waitForServer|server|ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(text)) return 'MR-BOOT-SERVER-START';
-  if (/loadURL|ERR_FAILED|ERR_ABORTED|navigation|did-fail-load/i.test(text)) return 'MR-BOOT-WINDOW-LOAD';
-  if (/ReferenceError|TypeError|is not defined|Cannot read/i.test(text)) return 'MR-BOOT-MAIN-RUNTIME';
-  if (/EPERM|EACCES|access is denied|permission/i.test(text)) return 'MR-BOOT-PERMISSION';
-  if (/gpu|angle|d3d|webgl/i.test(text)) return 'MR-BOOT-GPU';
-  if (/second/i.test(context || '')) return 'MR-BOOT-SECOND-INSTANCE';
-  if (/activate/i.test(context || '')) return 'MR-BOOT-ACTIVATE';
-  return 'MR-BOOT-MAIN';
+  if (/EADDRINUSE|address already in use|listen EADDRINUSE|端口/i.test(text)) return 'SF-BOOT-SERVER-PORT';
+  if (/waitForServer|server|ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(text)) return 'SF-BOOT-SERVER-START';
+  if (/loadURL|ERR_FAILED|ERR_ABORTED|navigation|did-fail-load/i.test(text)) return 'SF-BOOT-WINDOW-LOAD';
+  if (/ReferenceError|TypeError|is not defined|Cannot read/i.test(text)) return 'SF-BOOT-MAIN-RUNTIME';
+  if (/EPERM|EACCES|access is denied|permission/i.test(text)) return 'SF-BOOT-PERMISSION';
+  if (/gpu|angle|d3d|webgl/i.test(text)) return 'SF-BOOT-GPU';
+  if (/second/i.test(context || '')) return 'SF-BOOT-SECOND-INSTANCE';
+  if (/activate/i.test(context || '')) return 'SF-BOOT-ACTIVATE';
+  return 'SF-BOOT-MAIN';
 }
 
 function startupErrorLogPath() {
@@ -2203,20 +2221,141 @@ function reportWindowCreationFailure(context, error) {
 }
 
 function bindStartupFailureHandlers() {
+  // ------------------------------------------------------------------
+  // 崩溃诊断助手：把致命事件同时输出到：① stderr (PowerShell 可见)；
+  // ② userData/crash-logs 目录的 .log 文件；③ dialog（可选 QA 提示）。
+  // ------------------------------------------------------------------
+  function _diag(tag, detail, extras) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const lines = [];
+    lines.push(`[CRASH-DIAG ${ts}] ==== ${tag} ====`);
+    if (detail instanceof Error) {
+      lines.push('Error.message: ' + detail.message);
+      lines.push('Error.stack: ' + (detail.stack || '<no stack>'));
+      if (detail.code) lines.push('Error.code: ' + detail.code);
+    } else if (detail != null) {
+      try { lines.push('Detail: ' + JSON.stringify(detail)); } catch (e) { lines.push('Detail: ' + String(detail)); }
+    }
+    if (extras != null) {
+      try { lines.push('Extras: ' + JSON.stringify(extras)); } catch (e) { lines.push('Extras: ' + String(extras)); }
+    }
+    // 写入 stderr（PowerShell 终端可见）
+    lines.forEach(l => process.stderr.write(l + '\n'));
+    // 写崩溃日志文件（启动期失败时会覆盖 writeStartupErrorLog 逻辑，保证一定落盘）
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      let logDir;
+      try { logDir = path.join(app.getPath('userData'), 'crash-logs'); }
+      catch (e) { logDir = path.join(__dirname, '..', 'crash-logs'); }
+      try { fs.mkdirSync(logDir, { recursive: true }); } catch (e) {}
+      const logFile = path.join(logDir, `stellaflix-crash-${ts}.log`);
+      try { fs.writeFileSync(logFile, lines.join('\n') + '\n'); } catch (e) {
+        process.stderr.write(`[CRASH-DIAG] cannot write log file: ${e && e.message}\n`);
+      }
+      process.stderr.write(`[CRASH-DIAG] 日志文件: ${logFile}\n`);
+      return logFile;
+    } catch (e) {
+      process.stderr.write(`[CRASH-DIAG] logFile write failed: ${e && e.message}\n`);
+      return null;
+    }
+  }
+
   process.on('uncaughtException', (error) => {
-    if (startupCompleted) {
-      console.error('[UncaughtException]', error);
+    const callerStack = {};
+    try { Error.captureStackTrace(callerStack); } catch (e) {}
+    const logFile = _diag('UNCAUGHT-EXCEPTION', error, {
+      startupCompleted: !!startupCompleted,
+      appQuitting: !!appQuitting,
+      capturedAt: callerStack.stack || '',
+      uptimeSec: Number(process.uptime && process.uptime() || 0).toFixed(2),
+    });
+    if (!startupCompleted) {
+      reportWindowCreationFailure('Uncaught exception', error);
       return;
     }
-    reportWindowCreationFailure('Uncaught exception', error);
+    // 运行期未捕获异常：日志 + 弹窗提示用户，防止默默退出
+    try {
+      process.nextTick(() => {
+        try {
+          dialog.showErrorBox(
+            'Stellaflix 遇到未处理错误',
+            '错误信息：' + (error && error.message || String(error)) + '\n\n' +
+            '崩溃日志已保存至：\n' + (logFile || '(写入失败)') + '\n\n' +
+            '如果继续崩溃，请把此文件发给开发者排查。应用将尝试继续运行，若无法恢复会自动退出。'
+          );
+        } catch (e) {}
+      });
+    } catch (e) {}
   });
   process.on('unhandledRejection', (reason) => {
-    if (startupCompleted) {
-      console.error('[UnhandledRejection]', reason);
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    const callerStack = {};
+    try { Error.captureStackTrace(callerStack); } catch (e) {}
+    const logFile = _diag('UNHANDLED-PROMISE-REJECTION', err, {
+      startupCompleted: !!startupCompleted,
+      capturedAt: callerStack.stack || '',
+      uptimeSec: Number(process.uptime && process.uptime() || 0).toFixed(2),
+    });
+    if (!startupCompleted) {
+      reportWindowCreationFailure('Unhandled rejection', err);
       return;
     }
-    reportWindowCreationFailure('Unhandled rejection', reason instanceof Error ? reason : new Error(String(reason)));
+    // 运行期未处理 Promise：只记录日志，不要退出。大多数此类错误由网络/异步时序问题引起。
+    process.stderr.write(`[CRASH-DIAG] UNHANDLED-PROMISE-REJECTION 日志: ${logFile}\n`);
   });
+
+  // 渲染进程崩溃 / 消失：最可能导致"播放器点击后整个应用退出"的根因（WebGL/GPU 层 crash）
+  try {
+    app.on('render-process-gone', (event, webContents, details) => {
+      const tag = 'RENDER-PROCESS-GONE';
+      _diag(tag, null, {
+        reason: details && details.reason || 'unknown',
+        exitCode: details && details.exitCode,
+        url: (webContents && webContents.getURL && webContents.getURL()) || '',
+        title: (webContents && webContents.getTitle && webContents.getTitle()) || '',
+        isMainWindow: (webContents && mainWindow && webContents.id === mainWindow.webContents.id) || false,
+        uptimeSec: Number(process.uptime && process.uptime() || 0).toFixed(2),
+      });
+    });
+  } catch (e) { process.stderr.write(`[CRASH-DIAG] cannot attach render-process-gone: ${e.message}\n`); }
+
+  try {
+    app.on('child-process-gone', (event, details) => {
+      _diag('CHILD-PROCESS-GONE', null, {
+        reason: details && details.reason || 'unknown',
+        exitCode: details && details.exitCode,
+        name: details && details.name || '',
+        serviceName: details && details.serviceName || '',
+        type: details && details.type || '',
+        uptimeSec: Number(process.uptime && process.uptime() || 0).toFixed(2),
+      });
+    });
+  } catch (e) { process.stderr.write(`[CRASH-DIAG] cannot attach child-process-gone: ${e.message}\n`); }
+
+  try {
+    app.on('gpu-process-crashed', (event, killed) => {
+      _diag('GPU-PROCESS-CRASHED', null, {
+        killed: !!killed,
+        uptimeSec: Number(process.uptime && process.uptime() || 0).toFixed(2),
+      });
+    });
+  } catch (e) {}
+
+  // 记录"谁触发了 app.quit()"——帮助区分是代码主动 quit 还是外部信号
+  const originalQuit = app.quit.bind(app);
+  app.quit = function patchedQuit() {
+    const capture = {};
+    try { Error.captureStackTrace(capture); } catch (e) {}
+    _diag('APP-QUIT-CALLED', null, {
+      stack: capture.stack || '<unavailable>',
+      appQuitting: !!appQuitting,
+      startupCompleted: !!startupCompleted,
+      windowCount: BrowserWindow.getAllWindows().length,
+      uptimeSec: Number(process.uptime && process.uptime() || 0).toFixed(2),
+    });
+    return originalQuit();
+  };
 }
 
 bindStartupFailureHandlers();
@@ -3485,7 +3624,7 @@ while ($true) {
   try {
     desktopLyricsMousePoller = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
     desktopLyricsMousePoller.stdout.on('data', (chunk) => {
       desktopLyricsMousePollerBuffer += chunk.toString('utf8');
@@ -4338,7 +4477,7 @@ ipcMain.handle('stellaflix-local-library-list', async (event) => {
 ipcMain.handle('stellaflix-local-library-lyric', async (event, localFileId) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, lyric: '', lyricSource: '', error: 'UNTRUSTED_SENDER' };
   try {
-    return localMusicLibrary.lyricForTrack(localFileId);
+    return await localMusicLibrary.lyricForTrack(localFileId);
   } catch (error) {
     return { ok: false, lyric: '', lyricSource: '', error: error.message || 'LOCAL_LYRIC_READ_FAILED' };
   }
@@ -4528,12 +4667,8 @@ ipcMain.handle('stellaflix-import-json-file', async (event) => {
   }
 });
 
-ipcMain.on('stellaflix-current-fx-autosave-read-sync', (event) => {
-  event.returnValue = { ok: true, payload: readCurrentFxAutosaveFile() };
-});
-
-ipcMain.on('stellaflix-current-fx-autosave-save-sync', (event, payload) => {
-  event.returnValue = writeCurrentFxAutosaveFile(payload || {});
+ipcMain.handle('stellaflix-current-fx-autosave-read', async () => {
+  return { ok: true, payload: readCurrentFxAutosaveFile() };
 });
 
 ipcMain.handle('stellaflix-current-fx-autosave-save', async (_event, payload = {}) => {
@@ -4591,9 +4726,9 @@ ipcMain.handle('stellaflix-open-update-page', async (event, value) => {
 });
 
 // ============================================================
-// electron-updater 集成：自动下载 + 静默安装。
-// 失败（未打包 / 网络 / 未配置 / 校验失败）时前端降级到网盘或 GitHub 外部下载页。
-// feed 策略：GitHub 直连优先，error 时依次回退 package.json 里配置的国内镜像。
+// electron-updater：应用内热更新主路径（下载 NSIS + 静默安装）。
+// 网盘 / GitHub Release 外链仅作失败降级。
+// feed：GitHub 直连优先，失败回退 package.json stellaflix.update.mirrors。
 // ============================================================
 const UPDATE_OWNER = (APP_METADATA.update && APP_METADATA.update.owner) || '';
 const UPDATE_REPO = (APP_METADATA.update && APP_METADATA.update.repo) || '';
@@ -4604,6 +4739,9 @@ const UPDATE_MIRRORS = (APP_METADATA.update && Array.isArray(APP_METADATA.update
 let updaterFeeds = [];
 let updaterFeedIndex = 0;
 let updaterState = 'idle';
+let updaterBusy = false;
+let updaterInstallPending = false;
+let updaterDownloadAttempted = false;
 
 function buildUpdaterFeeds() {
   const feeds = [];
@@ -4612,13 +4750,19 @@ function buildUpdaterFeeds() {
     label: 'GitHub 直连',
     options: { provider: 'github', owner: UPDATE_OWNER, repo: UPDATE_REPO },
   });
-  const base = 'https://github.com/' + UPDATE_OWNER + '/' + UPDATE_REPO + '/releases/latest/download';
+  const releasePath = UPDATE_OWNER + '/' + UPDATE_REPO + '/releases/latest/download';
   UPDATE_MIRRORS.forEach((mirror, index) => {
     const trimmed = String(mirror || '').trim().replace(/\/+$/, '');
     if (!trimmed) return;
+    // 兼容两种常见国内加速前缀：
+    //   A) https://gh-proxy.com → .../https://github.com/owner/repo/releases/latest/download
+    //   B) https://gh-proxy.com/https://github.com → .../owner/repo/releases/latest/download
+    const genericUrl = /github\.com/i.test(trimmed)
+      ? (trimmed + '/' + releasePath)
+      : (trimmed + '/https://github.com/' + releasePath);
     feeds.push({
       label: '国内加速 ' + (index + 1),
-      options: { provider: 'generic', url: trimmed + '/' + base },
+      options: { provider: 'generic', url: genericUrl },
     });
   });
   return feeds;
@@ -4629,6 +4773,40 @@ function postUpdateEvent(payload) {
     if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
     mainWindow.webContents.send('stellaflix-update-event', payload || {});
   } catch (_) { /* 渲染进程不可用时静默丢弃 */ }
+}
+
+function estimateFreeDiskBytesNearApp() {
+  try {
+    const target = path.dirname(process.execPath);
+    const stats = require('fs').statfsSync(target);
+    return Number(stats.bsize || 4096) * Number(stats.bavail || 0);
+  } catch (_) {
+    return null;
+  }
+}
+
+function assertEnoughDiskForInstaller() {
+  const freeBytes = estimateFreeDiskBytesNearApp();
+  if (freeBytes === null) return true;
+  const need = 250 * 1024 * 1024;
+  if (freeBytes < need) {
+    const freeMb = Math.round(freeBytes / 1024 / 1024);
+    const err = new Error('磁盘空间不足（约需 250MB，当前 ' + freeMb + 'MB）');
+    err.code = 'UPDATE_DISK_LOW';
+    throw err;
+  }
+  return true;
+}
+
+function switchUpdaterFeedOrThrow(lastError) {
+  if (updaterFeedIndex < updaterFeeds.length - 1) {
+    updaterFeedIndex += 1;
+    const next = updaterFeeds[updaterFeedIndex];
+    console.warn('[AutoUpdate] 切换线路 →', next.label, lastError && lastError.message || lastError || '');
+    autoUpdater.setFeedURL(next.options);
+    return true;
+  }
+  return false;
 }
 
 function initAutoUpdater() {
@@ -4673,19 +4851,36 @@ function initAutoUpdater() {
   });
   autoUpdater.on('update-downloaded', info => {
     updaterState = 'downloaded';
-    postUpdateEvent({ type: 'downloaded', version: (info && info.version) || '' });
+    updaterBusy = false;
+    postUpdateEvent({
+      type: 'downloaded',
+      version: (info && info.version) || '',
+      path: (info && info.downloadedFile) || '',
+    });
   });
   autoUpdater.on('error', error => {
     const message = String((error && error.message) || error || '');
-    if (updaterFeedIndex < updaterFeeds.length - 1) {
-      updaterFeedIndex += 1;
-      console.warn('[AutoUpdate] 切换线路 →', updaterFeeds[updaterFeedIndex].label, message);
-      try {
-        autoUpdater.setFeedURL(updaterFeeds[updaterFeedIndex].options);
-        autoUpdater.checkForUpdates();
-        return;
-      } catch (_) { /* 落到下面统一报错 */ }
+    // 下载中失败优先换镜像重试；安装阶段错误直接失败，避免误触发再次下载。
+    if (updaterDownloadAttempted && updaterState === 'downloading' && switchUpdaterFeedOrThrow(message)) {
+      updaterState = 'available';
+      postUpdateEvent({
+        type: 'retrying',
+        feedLabel: (updaterFeeds[updaterFeedIndex] && updaterFeeds[updaterFeedIndex].label) || '',
+      });
+      autoUpdater.downloadUpdate().catch((retryError) => {
+        console.warn('[AutoUpdate] 镜像重试下载失败:', retryError && retryError.message || retryError);
+        updaterBusy = false;
+        updaterState = 'error';
+        postUpdateEvent({ type: 'error', message: String((retryError && retryError.message) || message), fallback: true });
+      });
+      return;
     }
+    if (!updaterDownloadAttempted && switchUpdaterFeedOrThrow(message)) {
+      console.warn('[AutoUpdate] 检查失败，切换线路重试');
+      autoUpdater.checkForUpdates().catch(() => {});
+      return;
+    }
+    updaterBusy = false;
     updaterState = 'error';
     postUpdateEvent({ type: 'error', message, fallback: true });
   });
@@ -4696,10 +4891,17 @@ ipcMain.handle('stellaflix-update-check', async event => {
   if (!app.isPackaged) return { ok: false, error: 'UPDATE_DISABLED_IN_DEV', fallback: true };
   if (!updaterFeeds.length) return { ok: false, error: 'UPDATE_NOT_CONFIGURED', fallback: true };
   updaterFeedIndex = 0;
+  updaterDownloadAttempted = false;
   try {
     autoUpdater.setFeedURL(updaterFeeds[0].options);
     const result = await autoUpdater.checkForUpdates();
-    return { ok: true, version: (result && result.updateInfo && result.updateInfo.version) || '' };
+    const version = (result && result.updateInfo && result.updateInfo.version) || '';
+    return {
+      ok: true,
+      version,
+      mode: 'in-app',
+      feedLabel: (updaterFeeds[updaterFeedIndex] && updaterFeeds[updaterFeedIndex].label) || '',
+    };
   } catch (error) {
     return { ok: false, error: (error && error.message) || 'UPDATE_CHECK_FAILED', fallback: true };
   }
@@ -4708,12 +4910,17 @@ ipcMain.handle('stellaflix-update-check', async event => {
 ipcMain.handle('stellaflix-update-download', async event => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   if (!app.isPackaged) return { ok: false, error: 'UPDATE_DISABLED_IN_DEV', fallback: true };
+  if (updaterBusy) return { ok: true, alreadyRunning: true };
   // 不前置校验 updaterState：electron-updater 会在 checkForUpdates() resolve 之前派发
   // update-available，此处再判状态会与事件时序形成竞态。直接下载，交由它自己报错。
   try {
+    assertEnoughDiskForInstaller();
+    updaterBusy = true;
+    updaterDownloadAttempted = true;
     await autoUpdater.downloadUpdate();
     return { ok: true };
   } catch (error) {
+    updaterBusy = false;
     return { ok: false, error: (error && error.message) || 'UPDATE_DOWNLOAD_FAILED', fallback: true };
   }
 });
@@ -4722,13 +4929,33 @@ ipcMain.handle('stellaflix-update-install', async event => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   if (!app.isPackaged) return { ok: false, error: 'UPDATE_DISABLED_IN_DEV' };
   if (updaterState !== 'downloaded') return { ok: false, error: 'UPDATE_NOT_DOWNLOADED' };
+  if (updaterInstallPending) return { ok: true, installing: true };
   // isSilent=true 静默安装；isForceRunAfter=true 装完自动启动新版。
   // 必须延后到本轮 IPC 应答之后，否则渲染进程收不到返回结果。
+  updaterInstallPending = true;
   setImmediate(() => {
     try { autoUpdater.quitAndInstall(true, true); }
-    catch (error) { console.error('[AutoUpdate] quitAndInstall 失败:', error && error.message || error); }
+    catch (error) {
+      updaterInstallPending = false;
+      console.error('[AutoUpdate] quitAndInstall 失败:', error && error.message || error);
+      postUpdateEvent({ type: 'error', message: String((error && error.message) || 'UPDATE_INSTALL_FAILED'), fallback: true });
+    }
   });
-  return { ok: true };
+  return { ok: true, installing: true };
+});
+
+ipcMain.handle('stellaflix-update-status', async event => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  return {
+    ok: true,
+    packaged: !!app.isPackaged,
+    state: updaterState,
+    feedIndex: updaterFeedIndex,
+    feeds: updaterFeeds.map((f, i) => ({ index: i, label: f.label, active: i === updaterFeedIndex })),
+    installPending: updaterInstallPending,
+    busy: updaterBusy,
+    version: String(APP_PACKAGE_INFO.version || app.getVersion() || ''),
+  };
 });
 
 ipcMain.handle('stellaflix-restart-app', async () => {
@@ -5024,55 +5251,302 @@ ipcMain.handle('stellaflix-poster-cache', async (event, action, payload) => {
 });
 
 // 影视态解析页真实媒体直链嗅探：主进程隐藏窗口加载剧集页，从网络层捕获 m3u8/mp4 媒体 URL。
+// 契约（与 kazumi-bridge.js 对齐）：
+//   成功 → { ok:true, best:{url,score,mime}, candidates:[...] }
+//   失败 → { ok:false, error }
+// 旧版只回 {ok,url}，渲染层读 best.url 会把「已命中」当成未命中，导致规则源几乎总跌入 iframe embed。
+// 影视态解析页真实媒体直链嗅探（对齐 Kazumi VideoWebview：常驻 WebView + JS 钩子 + 网络拦截）。
+// 契约：成功 { ok:true, best:{url,score,mime}, candidates } / 失败 { ok:false, error }
+// 为何要 JS 钩子：大量站（含 7sefun）播放页 URL 是 .html，真实 m3u8 由页面 XHR/fetch 拉取，
+// 仅靠 URL 后缀嗅探会永远未命中 → 跌入 iframe embed 或「停止降级」。
+const SFV_SNIFF_MARK = '[SFV-MEDIA]';
+let sfvSniffWin = null;
+let sfvSniffBusy = false;
+let sfvSniffActive = null; // { settle, candidates, seen, settled }
+
+function sfvScoreMediaUrl(u, extra) {
+  const lower = String(u || '').toLowerCase();
+  if (!lower || lower.startsWith('blob:') || lower.startsWith('data:') || lower.startsWith('about:')) return -1;
+  if (/googleads|googlesyndication|adtrafficquality|doubleclick|analytics|beacon|doubleclick|favicon|\.jpg(\?|$)|\.jpeg(\?|$)|\.png(\?|$)|\.webp(\?|$)|\.gif(\?|$)|\.vtt(\?|$)|\.srt(\?|$)|\.css(\?|$)|\.js(\?|$)/i.test(lower)) return -1;
+  let s = 0;
+  if (/\.(m3u8|m3u)(\?|$)/i.test(lower) || /mpegurl/i.test(lower) || (extra && extra.fromExtM3u)) s += 120;
+  else if (/\.mp4(\?|$)/i.test(lower) || (extra && extra.fromRange)) s += 90;
+  else if (/\.flv(\?|$)/i.test(lower)) s += 80;
+  else if (/\.webm|\.mkv|\.m4s(\?|$)/i.test(lower)) s += 70;
+  else if (/(?:^|[/?&=.])(m3u8|mp4|flv)(?:[/?&=.]|$)/i.test(lower)) s += 50;
+  else if (extra && extra.fromVideoTag) s += 60;
+  else return -1;
+  if (extra && extra.resourceType === 'media') s += 20;
+  if (/\/(hls|hlv|video|stream|media|player)\//i.test(lower)) s += 10;
+  if (/playlist|index|master|chunklist/i.test(lower)) s += 10;
+  if (/[?&](sign|token|auth|key|t|v)=/i.test(lower)) s += 5;
+  return s;
+}
+
+function sfvEnsureSniffWindow() {
+  if (sfvSniffWin && !sfvSniffWin.isDestroyed()) return sfvSniffWin;
+  sfvSniffWin = new BrowserWindow({
+    width: 960, height: 640,
+    show: false,
+    webPreferences: {
+      sandbox: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      // 常驻 partition：复用 cookie / 缓存，接近 Kazumi 的 WebView 复用
+      partition: 'persist:sfv-media-sniff',
+    },
+  });
+  // 禁止弹窗抢焦点
+  sfvSniffWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  sfvSniffWin.webContents.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+    const act = sfvSniffActive;
+    if (!act || act.settled) { callback({}); return; }
+    const u = details.url || '';
+    const headers = details.headers || {};
+    const range = headers.Range || headers.range || '';
+    const isRangeVideo = /^bytes=/i.test(range) &&
+      !/\.(js|css|html|json|png|jpe?g|gif|svg|woff2?|wasm)(\?|$)/i.test(u);
+    const score = sfvScoreMediaUrl(u, { resourceType: details.resourceType, fromRange: isRangeVideo });
+    if (score > 0 && !act.seen.has(u)) {
+      act.seen.add(u);
+      act.candidates.push({ url: u, score, mime: details.resourceType || (isRangeVideo ? 'range' : '') });
+      if (score >= 90) {
+        callback({ cancel: true });
+        sfvSettleSniff(true);
+        return;
+      }
+    }
+    callback({});
+  });
+
+  // 页内 JS 钩子结果经 console 回传（对齐 Kazumi VideoBridgeDebug / #EXTM3U 检测）
+  // Electron 42+ 可能传 details 对象；旧版是 (event, level, message, ...)
+  sfvSniffWin.webContents.on('console-message', (...args) => {
+    const act = sfvSniffActive;
+    if (!act || act.settled) return;
+    let msg = '';
+    if (args && args[0] && typeof args[0] === 'object' && args[0].message != null) {
+      msg = String(args[0].message || '');
+    } else if (typeof args[2] === 'string') {
+      msg = args[2];
+    } else if (typeof args[1] === 'string') {
+      msg = args[1];
+    }
+    if (!msg.startsWith(SFV_SNIFF_MARK)) return;
+    const raw = msg.slice(SFV_SNIFF_MARK.length).trim();
+    if (!raw || act.seen.has(raw)) return;
+    const score = sfvScoreMediaUrl(raw, { fromExtM3u: msg.includes('EXTM3U'), fromVideoTag: msg.includes('VIDEO'), resourceType: 'js-hook' });
+    if (score <= 0) return;
+    act.seen.add(raw);
+    act.candidates.push({ url: raw, score, mime: 'js-hook' });
+    if (score >= 100) sfvSettleSniff(true);
+  });
+
+  return sfvSniffWin;
+}
+
+function sfvSettleSniff(force) {
+  const act = sfvSniffActive;
+  if (!act || act.settled) return false;
+  if (!act.candidates.length) return false;
+  act.candidates.sort((a, b) => b.score - a.score);
+  const best = act.candidates[0];
+  if (!best) return false;
+  if (!force && best.score < 50) return false;
+  act.settled = true;
+  act.resolve({
+    ok: true,
+    best: { url: best.url, score: best.score, mime: best.mime },
+    candidates: act.candidates.slice(0, 6).map((c) => ({ url: c.url, score: c.score, mime: c.mime })),
+  });
+  return true;
+}
+
+// 对齐 Kazumi onLoadStart/onLoadStop：钩 Response/XHR/#EXTM3U + video/src + iframe
+const SFV_SNIFF_INJECT = `(function () {
+  if (window.__sfvSniffHooked) return;
+  window.__sfvSniffHooked = true;
+  var MARK = ${JSON.stringify(SFV_SNIFF_MARK)};
+  function report(url, tag) {
+    try {
+      if (!url) return;
+      var u = String(url);
+      if (u.indexOf('blob:') === 0 || u.indexOf('data:') === 0) return;
+      if (/googleads|googlesyndication|adtrafficquality|doubleclick/i.test(u)) return;
+      console.log(MARK + (tag || '') + u);
+    } catch (e) {}
+  }
+  try {
+    var _rt = window.Response && window.Response.prototype && window.Response.prototype.text;
+    if (_rt) {
+      window.Response.prototype.text = function () {
+        var self = this;
+        return _rt.call(this).then(function (text) {
+          try {
+            if (text && text.trim().indexOf('#EXTM3U') === 0) report(self.url, 'EXTM3U ');
+          } catch (e) {}
+          return text;
+        });
+      };
+    }
+  } catch (e) {}
+  try {
+    var _open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function () {
+      var args = arguments;
+      try {
+        this.addEventListener('load', function () {
+          try {
+            var c = this.responseText;
+            if (c && c.trim().indexOf('#EXTM3U') === 0) report(args[1], 'EXTM3U ');
+          } catch (e) {}
+        });
+      } catch (e) {}
+      return _open.apply(this, args);
+    };
+  } catch (e) {}
+  try {
+    var _fetch = window.fetch;
+    if (_fetch) {
+      window.fetch = function (input, init) {
+        var url = (typeof input === 'string') ? input : (input && input.url);
+        return _fetch.call(this, input, init).then(function (res) {
+          try {
+            var ct = (res.headers && res.headers.get && res.headers.get('content-type')) || '';
+            if (/mpegurl|m3u8|video\\//i.test(ct)) report(url, 'FETCH ');
+            else if (res.clone) {
+              res.clone().text().then(function (t) {
+                if (t && t.trim().indexOf('#EXTM3U') === 0) report(url, 'EXTM3U ');
+              }).catch(function () {});
+            }
+          } catch (e) {}
+          return res;
+        });
+      };
+    }
+  } catch (e) {}
+  function scanVideo(root) {
+    try {
+      var list = (root || document).querySelectorAll('video, source');
+      for (var i = 0; i < list.length; i++) {
+        var el = list[i];
+        var src = el.getAttribute('src') || (el.currentSrc || '');
+        if (src) report(src, 'VIDEO ');
+      }
+    } catch (e) {}
+  }
+  function hookIframe(iframe) {
+    try {
+      if (!iframe) return;
+      // 同源 iframe：直接扫 video；跨域只能靠网络层 webRequest
+      var doc = iframe.contentDocument;
+      if (doc) scanVideo(doc);
+    } catch (e) {}
+  }
+  function setup() {
+    scanVideo(document);
+    try {
+      var obs = new MutationObserver(function (muts) {
+        muts.forEach(function (m) {
+          if (m.addedNodes) {
+            for (var i = 0; i < m.addedNodes.length; i++) {
+              var n = m.addedNodes[i];
+              if (!n || n.nodeType !== 1) continue;
+              if (n.tagName === 'VIDEO' || n.tagName === 'SOURCE') {
+                var src = n.getAttribute && n.getAttribute('src');
+                if (src) report(src, 'VIDEO ');
+              }
+              if (n.tagName === 'IFRAME') hookIframe(n);
+              if (n.querySelectorAll) scanVideo(n);
+            }
+          }
+          if (m.type === 'attributes' && m.target && m.target.tagName === 'VIDEO') {
+            var s2 = m.target.getAttribute('src');
+            if (s2) report(s2, 'VIDEO ');
+          }
+        });
+      });
+      obs.observe(document.documentElement || document.body, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ['src']
+      });
+    } catch (e) {}
+    document.querySelectorAll('iframe').forEach(hookIframe);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup);
+  else setup();
+  // 轮询兜底（对齐 Kazumi videoParserTimer）
+  var n = 0;
+  var t = setInterval(function () {
+    n++;
+    scanVideo(document);
+    if (n > 20) clearInterval(t);
+  }, 500);
+})();`;
+
 ipcMain.handle('stellaflix-resolve-media-sniff', async (_event, payload = {}) => {
+  // 串行：同一时刻只跑一个嗅探（对齐 Kazumi _resolveTail）
+  if (sfvSniffBusy) {
+    return { ok: false, error: 'BUSY' };
+  }
+  sfvSniffBusy = true;
   try {
     const url = payload && payload.url;
     if (!url) return { ok: false, error: 'NO_URL' };
-    const timeoutMs = (payload && payload.timeoutMs) || 15000;
-    let win = null;
-    let settled = false;
-    let resolver;
-    const result = new Promise((resolve) => { resolver = resolve; });
-    try {
-      win = new BrowserWindow({
-        width: 800, height: 600,
-        show: false,
-        webPreferences: { sandbox: false, nodeIntegration: false },
-      });
-      win.webContents.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
-        if (settled) { callback({}); return; }
-        const lower = (details.url || '').lower || String(details.url || '').toLowerCase();
-        if (/\.(m3u8|mp4|flv|mkv)(\?|$)/i.test(lower) && !lower.includes('analytics')) {
-          settled = true;
-          callback({ cancel: true });
-          resolver({ ok: true, url: details.url, mime: details.resourceType });
-          try { win.destroy(); } catch (e) {}
-          return;
+    const timeoutMs = Math.max(4000, (payload && payload.timeoutMs) || 15000);
+    const win = sfvEnsureSniffWindow();
+    if (win.isDestroyed()) return { ok: false, error: 'WIN_DESTROYED' };
+
+    let resolveFn;
+    const result = new Promise((resolve) => { resolveFn = resolve; });
+    sfvSniffActive = {
+      settled: false,
+      candidates: [],
+      seen: new Set(),
+      resolve: resolveFn,
+    };
+
+    const timer = setTimeout(() => {
+      if (sfvSniffActive && !sfvSniffActive.settled) {
+        if (!sfvSettleSniff(true)) {
+          sfvSniffActive.settled = true;
+          sfvSniffActive.resolve({ ok: false, error: 'TIMEOUT', candidates: sfvSniffActive.candidates.slice(0, 5) });
         }
-        callback({});
-      });
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          resolver({ ok: false, error: 'TIMEOUT' });
-          try { win.destroy(); } catch (e) {}
-        }
-      }, timeoutMs);
-      try {
-        await win.loadURL(url);
-      } catch (e) {
-        if (!settled) { settled = true; clearTimeout(timer); resolver({ ok: false, error: 'LOAD_FAILED' }); }
       }
-      const r = await result;
-      clearTimeout(timer);
-      return r;
+    }, timeoutMs);
+
+    const onNav = () => {
+      try { win.webContents.executeJavaScript(SFV_SNIFF_INJECT, true).catch(() => {}); } catch (e) {}
+    };
+    win.webContents.on('did-finish-load', onNav);
+    win.webContents.on('did-frame-finish-load', onNav);
+
+    try {
+      await win.loadURL(url);
     } catch (e) {
-      return { ok: false, error: e.message || 'SNIFF_FAILED' };
-    } finally {
-      try { if (win && !win.isDestroyed()) { win.loadURL('about:blank'); win.destroy(); } } catch (e) {}
+      // load 报错时仍尝试注入 + 收已捕获候选
+      onNav();
     }
+    // load 后再注入一次（部分站 SPA 迟到）
+    onNav();
+    // 给延迟 XHR / video 挂载留窗口，但高分命中会提前 settle
+    await new Promise((r) => setTimeout(r, Math.min(3000, Math.floor(timeoutMs / 3))));
+    if (sfvSniffActive && !sfvSniffActive.settled) sfvSettleSniff(true);
+
+    const r = await result;
+    clearTimeout(timer);
+    try {
+      win.webContents.removeListener('did-finish-load', onNav);
+      win.webContents.removeListener('did-frame-finish-load', onNav);
+    } catch (e) {}
+    // 复用窗口：回空白，避免残留页面继续跑
+    try { win.loadURL('about:blank'); } catch (e) {}
+    return r;
   } catch (e) {
     return { ok: false, error: e.message || 'SNIFF_ERROR' };
+  } finally {
+    sfvSniffActive = null;
+    sfvSniffBusy = false;
   }
 });
 
@@ -5455,7 +5929,7 @@ function recoverMainWindowAfterRendererGone(win, details = {}, cleanupPromise = 
   const attempt = reserveMainWindowRendererRecoveryAttempt();
   if (!attempt) {
     const error = new Error('renderer recovery limit reached');
-    const log = writeStartupErrorLog('Runtime renderer recovery', 'MR-RUNTIME-RENDERER-LOOP', error);
+    const log = writeStartupErrorLog('Runtime renderer recovery', 'SF-RUNTIME-RENDERER-LOOP', error);
     dialog.showErrorBox('Stellaflix 显示恢复失败', `前台界面连续异常退出，已停止自动重载。\n日志：${log.file}`);
     return Promise.resolve(false);
   }
@@ -5485,14 +5959,26 @@ function recoverMainWindowAfterRendererGone(win, details = {}, cleanupPromise = 
     });
     return true;
   })().catch((error) => {
-    const log = writeStartupErrorLog('Runtime renderer recovery', 'MR-RUNTIME-RENDERER-LOAD', error);
+    const log = writeStartupErrorLog('Runtime renderer recovery', 'SF-RUNTIME-RENDERER-LOAD', error);
     console.error('[WindowRecovery] renderer reload failed:', error && error.message || error);
     if (!appQuitting && !win.isDestroyed()) {
       if (!keepIntentionallyHidden) {
         try { win.show(); } catch (_) { }
       }
       if (attempt >= RENDERER_RECOVERY_MAX_ATTEMPTS) {
-        dialog.showErrorBox('Stellaflix 显示恢复失败', `前台界面无法重新加载。\n日志：${log.file}`);
+        try {
+          dialog.showErrorBox(
+            'Stellaflix 显示恢复失败',
+            `前台界面无法重新加载，已达到最大恢复尝试次数 ${RENDERER_RECOVERY_MAX_ATTEMPTS} 次。\n` +
+            `为避免后台残留僵尸进程导致下次启动无法运行，应用将自动退出。\n\n` +
+            `崩溃日志：${log.file}\n\n` +
+            `请把日志内容发给开发者排查。`
+          );
+        } catch (_) {}
+        // ==== Fix: 恢复失败必须 quit，绝不能留下 0 窗口的僵尸进程，否则单实例锁永远被占用
+        appQuitting = true;
+        // 稍后执行 quit（给 dialog 留出关闭时间），再走 patchedQuit 会自动留下诊断栈
+        setTimeout(() => app.quit(), 300);
       }
     }
     return false;
@@ -5648,15 +6134,77 @@ async function createWindowOnce() {
     console.error('[StartupWindow]', error.message);
     writeStartupErrorLog(
       startupCompleted ? 'Runtime renderer process gone' : 'Renderer process gone',
-      startupCompleted ? 'MR-RUNTIME-RENDERER-GONE' : 'MR-BOOT-GPU',
+      startupCompleted ? 'SF-RUNTIME-RENDERER-GONE' : 'SF-BOOT-GPU',
       error
     );
     if (startupCompleted && String(details && details.reason || '') !== 'clean-exit') {
       setTimeout(() => recoverMainWindowAfterRendererGone(win, details, cleanupPromise), 0);
     }
   });
+  let _lastUnresponsiveAt = 0;
+  // ---- 卡死诊断（临时 instrumentation，仅终端日志，不触碰 UI/功能逻辑）----
+  // unresponsive 期间每 3s 采样一次 app.getAppMetrics()，输出各进程类型/PID/内存/CPU，
+  // 用于判定内存爆炸发生在渲染进程还是 GPU 进程。最多采样 20 次（60s），responsive 即停。
+  let _unresponsiveMetricsTimer = null;
+  let _unresponsiveMetricsCount = 0;
+  function logAppMetricsSnapshot(tag) {
+    try {
+      const metrics = app.getAppMetrics();
+      const lines = metrics.map((m) => {
+        const memMb = m.memory && typeof m.memory.workingSetSize === 'number'
+          ? Math.round(m.memory.workingSetSize / 1024) : 0;
+        const cpu = m.cpu && typeof m.cpu.percentCPUUsage === 'number'
+          ? (Math.round(m.cpu.percentCPUUsage * 10) / 10) : 0;
+        return '    [' + (m.type || '?') + '] pid=' + m.pid + ' mem=' + memMb + 'MB cpu=' + cpu + '%';
+      });
+      console.warn('[StartupWindow] app metrics (' + tag + ')\n' + lines.join('\n'));
+      // [临时诊断] 同步落盘一份，卡死后可直接读 outputs/sfv-diag-main.log（无需回传终端）
+      try {
+        const diagFile = path.join(__dirname, '..', 'outputs', 'sfv-diag-main.log');
+        fs.appendFileSync(diagFile, JSON.stringify({
+          at: new Date().toISOString(), tag,
+          rows: metrics.map((m) => ({ type: m.type, pid: m.pid, memMB: m.memory ? Math.round((m.memory.workingSetSize || 0) / 1024) : 0, cpu: m.cpu ? Math.round((m.cpu.percentCPUUsage || 0) * 10) / 10 : 0 }))
+        }) + '\n');
+      } catch (_) {}
+    } catch (e) {
+      console.warn('[StartupWindow] app metrics failed:', (e && e.message) || e);
+    }
+  }
+  function stopUnresponsiveMetrics() {
+    if (_unresponsiveMetricsTimer) { clearInterval(_unresponsiveMetricsTimer); _unresponsiveMetricsTimer = null; }
+    _unresponsiveMetricsCount = 0;
+  }
   win.on('unresponsive', () => {
-    console.warn('[StartupWindow] main window became unresponsive', { startupCompleted });
+    _lastUnresponsiveAt = Date.now();
+    console.warn('[StartupWindow] main window became unresponsive', {
+      startupCompleted,
+      unresponsiveAt: new Date().toISOString(),
+      heapUsedMb: (() => { try { return Math.round((process.memoryUsage().heapUsed / 1024 / 1024) * 10) / 10; } catch (_) { return 0; } })(),
+    });
+    // 立即采一帧 + 每 3s 一帧，共 20 帧；结束后提示用户截取终端日志
+    stopUnresponsiveMetrics();
+    logAppMetricsSnapshot('unresponsive #0');
+    _unresponsiveMetricsTimer = setInterval(() => {
+      _unresponsiveMetricsCount++;
+      if (_unresponsiveMetricsCount > 20) {
+        stopUnresponsiveMetrics();
+        console.warn('[StartupWindow] app metrics sampling finished (20 frames). 请截取以上日志反馈。');
+        return;
+      }
+      logAppMetricsSnapshot('unresponsive #' + _unresponsiveMetricsCount);
+    }, 3000);
+  });
+  win.on('responsive', () => {
+    stopUnresponsiveMetrics();
+    const now = Date.now();
+    const durMs = _lastUnresponsiveAt ? Math.max(0, now - _lastUnresponsiveAt) : 0;
+    _lastUnresponsiveAt = 0;
+    console.warn('[StartupWindow] main window became responsive again', {
+      startupCompleted,
+      responsiveAt: new Date().toISOString(),
+      blockedDurationMs: durMs,
+      blockedDurationHuman: durMs >= 1000 ? (Math.round(durMs / 100) / 10) + 's' : durMs + 'ms',
+    });
   });
 
   win.webContents.on('before-input-event', (event, input) => {
@@ -5867,7 +6415,99 @@ function createWindow() {
 
 if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
 
-if (!gotSingleInstanceLock) {
+// ------------------------------------------------------------------
+// ==== Fix: 单实例锁失败时不再 silent quit（这是你"npm start 立刻闪退"的根因）
+// 可能原因：上一次渲染进程崩溃后，恢复流程达到上限却没调用 app.quit()，
+// 变成 0 窗口僵尸进程常驻后台，永久占用 requestSingleInstanceLock。
+// 策略：（1）dev 环境可用 STELLAFLIX_NO_SINGLE_INSTANCE=1 直接跳过；
+//       （2）Windows 上先自动用 taskkill 尝试清理同名僵尸进程；
+//       （3）二次请求锁仍失败 → stderr 明确输出 + 弹窗提示用户手动清进程，再 quit。
+// ------------------------------------------------------------------
+function _syncSleepMs(ms) {
+  // 启动期锁失败路径专用：简单忙等（非热路径）。避免 Atomics.wait + SharedArrayBuffer 在 Electron 主线程被 V8 安全策略拒绝。
+  const start = Date.now();
+  while (Date.now() - start < ms) { try { require('child_process').execFileSync('ping', ['-n', '1', '-w', String(Math.min(ms, 999)), '127.0.0.1'], { windowsHide: true, timeout: ms + 500 }); } catch (e) { break; } }
+}
+function _releaseLockFromZombies() {
+  if (process.platform !== 'win32') return false;
+  const killList = [];
+  const candidates = ['electron.exe', 'stellaflix.exe'].filter(Boolean);
+  let killedAny = false;
+  for (const name of candidates) {
+    try {
+      const r = require('child_process').spawnSync(
+        'taskkill', ['/F', '/T', '/IM', name],
+        { windowsHide: true, timeout: 8000 }
+      );
+      const out = String((r && r.stdout) || '') + String((r && r.stderr) || '');
+      if (/SUCCESS|已终止|成功终止|终止了进程|ERROR: [^"]+"?[^ ]+被跳过|"没有运行的实例/.test(out) || (r && r.status === 0 && out.length > 0)) {
+        if (!/未找到|"没有运行的实例|没有找到/.test(out)) killedAny = true;
+        killList.push(`${name}: ${out.trim().split('\n')[0] || 'taskkill done'}`);
+      }
+    } catch (e) {
+      killList.push(`${name}: taskkill err ${e.message}`);
+    }
+  }
+  return { killedAny, killList };
+}
+
+let _lock = gotSingleInstanceLock;
+if (!_lock && process.env.STELLAFLIX_NO_SINGLE_INSTANCE === '1') {
+  process.stderr.write('[CRASH-DIAG] STELLAFLIX_NO_SINGLE_INSTANCE=1: 已绕过单实例锁检查\n');
+  _lock = true;
+}
+if (!_lock && process.platform === 'win32') {
+  process.stderr.write('[CRASH-DIAG] 单实例锁失败：尝试用 taskkill 清理后台僵尸进程（electron.exe / stellaflix.exe）…\n');
+  const res = _releaseLockFromZombies();
+  if (res.killedAny) {
+    process.stderr.write(`[CRASH-DIAG] taskkill 输出：${(res.killList || []).join(' | ')}\n`);
+    // 给被杀进程释放锁 1s 窗口（同步等待，锁失败路径只跑一次，对启动无额外影响）
+    _syncSleepMs(1000);
+    // 被杀进程释放锁后：先确保自己不再持有旧引用（如果仍占着），再重新申请
+    try {
+      if (typeof app.releaseSingleInstanceLock === 'function') app.releaseSingleInstanceLock();
+    } catch (e) {}
+    try { _lock = app.requestSingleInstanceLock(); } catch (e) { _lock = false; }
+    process.stderr.write(`[CRASH-DIAG] 二次请求单实例锁：${_lock ? '成功 → 继续启动' : '仍失败 → 将提示用户手动清理'}\n`);
+  } else {
+    process.stderr.write('[CRASH-DIAG] taskkill 未命中目标进程：已有真实可见窗口在前台运行的可能性较大，请先关闭原窗口再试。\n');
+  }
+}
+
+if (!_lock) {
+  const reason = '无法获取单实例锁：系统中已存在 Stellaflix/Electron 进程（可能是上次崩溃残留的后台僵尸进程，或你之前启动的实例尚未完全关闭）。\n\n' +
+    '【立即解决 1（推荐）】打开 PowerShell 执行：\n    taskkill /F /T /IM electron.exe\n    taskkill /F /T /IM Stellaflix.exe\n然后重新 npm start。\n\n' +
+    '【立即解决 2（临时绕过，便于调试）】：\n    $env:STELLAFLIX_NO_SINGLE_INSTANCE=1 ; npm start\n\n' +
+    '【定位说明】单实例锁是防止你在前台播放器崩溃（GPU/渲染进程 crash）后，后台残留 0 窗口僵尸进程永久占用锁，导致每次 npm start 都闪退。\n\n' +
+    `崩溃/诊断日志目录：${(function () { try { return require('path').join(app.getPath('userData'), 'crash-logs'); } catch (e) { return '%APPDATA%\\Stellaflix\\crash-logs'; } })()}\\请在闪退时把日志和 stderr 输出一起发给开发者。`;
+  process.stderr.write('[CRASH-DIAG] ==== SINGLE-INSTANCE-LOCK FAILED ====\n');
+  process.stderr.write('[CRASH-DIAG] ' + reason.split('\n').join('\n[CRASH-DIAG] ') + '\n');
+  try {
+    // 不要等事件循环：同步写日志 + 同步弹框
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      let dir;
+      try { dir = path.join(app.getPath('userData'), 'crash-logs'); }
+      catch (e) { dir = path.join(__dirname, '..', 'crash-logs'); }
+      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const logFile = path.join(dir, `stellaflix-single-instance-lock-${ts}.log`);
+      fs.writeFileSync(logFile, reason);
+      process.stderr.write(`[CRASH-DIAG] 单实例锁诊断日志：${logFile}\n`);
+    } catch (_) {}
+    // 只在有 UI 线程时弹框（whenReady 之后），否则会阻塞
+    if (app.isReady()) dialog.showErrorBox('Stellaflix 已在运行（或残留僵尸进程）', reason);
+    else {
+      app.once('ready', () => {
+        try { dialog.showErrorBox('Stellaflix 已在运行（或残留僵尸进程）', reason); } catch (_) {}
+        setTimeout(() => app.quit(), 200);
+      });
+      // 最多等 5s ready，超时直接 quit（避免真的无限挂）
+      setTimeout(() => { try { app.quit(); } catch (_) {} }, 5000);
+      return; // 不立即执行下面那句 quit，等 ready 弹框后 quit
+    }
+  } catch (_) {}
   app.quit();
 } else {
   writeStartupState('module-loaded', {
@@ -5940,6 +6580,13 @@ if (!gotSingleInstanceLock) {
 
   app.on('before-quit', (event) => {
     appQuitting = true;
+    // electron-updater quitAndInstall must not be blocked by the long desktop
+    // dispose path or the NSIS installer never launches.
+    if (updaterInstallPending) {
+      try { mpvController.shutdown(); } catch (_) {}
+      try { downloadManager.shutdown(); } catch (_) {}
+      return;
+    }
     if (appQuitCleanupComplete) return;
     event.preventDefault();
     if (appQuitCleanupPromise) return;
@@ -6008,6 +6655,16 @@ if (!gotSingleInstanceLock) {
       }).catch((error) => {
         console.warn('[Wallpaper Engine] dispose failed:', error && error.message || error);
       });
+      // Always reap video/download child processes so quit never leaves orphan
+      // mpv/qBittorrent trees holding GPU, pipes, or single-instance locks.
+      await Promise.all([
+        Promise.resolve().then(() => mpvController.shutdown()).catch((error) => {
+          console.warn('[Shutdown] mpv shutdown failed:', error && error.message || error);
+        }),
+        Promise.resolve().then(() => downloadManager.shutdown()).catch((error) => {
+          console.warn('[Shutdown] qbt shutdown failed:', error && error.message || error);
+        }),
+      ]);
     })();
     const runtimeCleanup = fullDesktopAndWallpaperEngineCleanup;
     const timeoutCleanup = new Promise((resolve) => {
@@ -6025,7 +6682,7 @@ if (!gotSingleInstanceLock) {
 }
 
 // ====================================================================
-//  第三方音源（自定义音源 + 青听海棠内置音源）
+//  第三方音源（自定义音源 + 青听音乐内置音源）
 // ====================================================================
 
 function getCustomSourceUserDataDir() {
@@ -6079,18 +6736,18 @@ function initializeCustomSource(localServerInstance, serverPort) {
   Promise.resolve().then(function () {
     try { return manager.startActive && manager.startActive(); } catch (_) { return null; }
   }).catch(function (e) {
-    try { pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_LOG', { level: 'warn', message: 'startActive failed: ' + (e && e.message || String(e)), data: null }); } catch (_) {}
+    try { pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_LOG', { level: 'warn', message: 'startActive failed: ' + (e && e.message || String(e)), data: null }); } catch (_) {}
   });
 
   // 状态事件 → 渲染进程推送 + 日志
   try {
-    manager.on('status', (st) => pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_EVENT', { name: 'status', payload: st || {} }));
+    manager.on('status', (st) => pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_EVENT', { name: 'status', payload: st || {} }));
   } catch (_) {}
   try {
-    manager.on('runtimeError', (err) => pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_LOG', { level: 'error', message: (err && err.message) || 'runtimeError', data: err || null }));
+    manager.on('runtimeError', (err) => pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_LOG', { level: 'error', message: (err && err.message) || 'runtimeError', data: err || null }));
   } catch (_) {}
   try {
-    manager.on('updateAlert', (data) => pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_EVENT', { name: 'updateAlert', payload: data || {} }));
+    manager.on('updateAlert', (data) => pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_EVENT', { name: 'updateAlert', payload: data || {} }));
   } catch (_) {}
 
   // 内置音源 manifest 缓存
@@ -6200,6 +6857,13 @@ function initializeCustomSource(localServerInstance, serverPort) {
       }
       return result && typeof result === 'object' ? result : null;
     },
+    resolveAggregate: async ({ candidates, quality, signal }) => {
+      const result = await manager.resolveAggregate({ candidates, quality, signal });
+      if (result && result.url && /^https?:/i.test(String(result.url))) {
+        return { ...result, url: String(result.url) };
+      }
+      return result && typeof result === 'object' ? result : null;
+    },
     issue: (remoteUrl) => customSourceAudioProxy.issue(remoteUrl),
     pipe: async (ticket, req, res) => customSourceAudioProxy.pipe(ticket, req, res),
   };
@@ -6207,7 +6871,7 @@ function initializeCustomSource(localServerInstance, serverPort) {
   if (typeof localServerInstance.setCustomSourceBridge === 'function') {
     localServerInstance.setCustomSourceBridge(bridge);
   }
-  process.env.MINERADIO_CUSTOM_SOURCE_SERVER_PORT = String(serverPort || mainServerPort || 0);
+  process.env.STELLAFLIX_CUSTOM_SOURCE_SERVER_PORT = String(serverPort || mainServerPort || 0);
 
   // ---------------- IPC 接线：渲染进程 -> 主进程 ----------------
   const bindIpc = (channel, handler) => {
@@ -6215,7 +6879,7 @@ function initializeCustomSource(localServerInstance, serverPort) {
     customSourceDisposables.push({ dispose: () => ipcMain.removeHandler(channel) });
   };
 
-  bindIpc('MINERADIO_CUSTOM_SOURCE_GET_STATE', async () => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_GET_STATE', async () => {
     const status = (typeof manager.getStatus === 'function') ? (manager.getStatus() || {}) : {};
     return {
       ok: true,
@@ -6228,9 +6892,9 @@ function initializeCustomSource(localServerInstance, serverPort) {
       active: !!status.active,
     };
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_LIST_INSTALLED', async () => decoratedInstalledItems());
-  bindIpc('MINERADIO_CUSTOM_SOURCE_LIST_AVAILABLE_BUNDLED', async () => listAvailableBundledItems());
-  bindIpc('MINERADIO_CUSTOM_SOURCE_IMPORT_SCRIPT_URL', async (_e, url) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_LIST_INSTALLED', async () => decoratedInstalledItems());
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_LIST_AVAILABLE_BUNDLED', async () => listAvailableBundledItems());
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_IMPORT_SCRIPT_URL', async (_e, url) => {
     const u = String(url || '').trim();
     if (!/^https?:/i.test(u)) throw new Error('INVALID_URL');
     let text = '';
@@ -6255,28 +6919,28 @@ function initializeCustomSource(localServerInstance, serverPort) {
       } catch (_) { throw err; }
     }
     const imported = await manager.importScript(text, require('path').basename(new (require('url').URL)(u).pathname) || 'remote.js');
-    pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', {});
+    pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', {});
     return { ok: true, pkgId: imported && imported.id || '', imported: imported || null };
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_IMPORT_SCRIPT_TEXT', async (_e, text) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_IMPORT_SCRIPT_TEXT', async (_e, text) => {
     const src = String(text || '');
     if (!src) throw new Error('SCRIPT_EMPTY');
     const meta = parseScriptInfo(src);
     const imported = await manager.importScript(src, (meta && meta.name ? meta.name + '.js' : 'pasted-' + Date.now() + '.js'));
-    pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', {});
+    pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', {});
     return { ok: true, pkgId: imported && imported.id || '', imported: imported || null, enabled: !!(imported && imported.active) };
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_ENABLE', async (_e, pkgId) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_ENABLE', async (_e, pkgId) => {
     const r = await enableOrDisable(pkgId, true);
-    pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', {});
+    pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', {});
     return r;
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_DISABLE', async (_e, pkgId) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_DISABLE', async (_e, pkgId) => {
     const r = await enableOrDisable(pkgId, false);
-    pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', {});
+    pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', {});
     return r;
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_INSTALL_BUNDLED', async (_e, pkgId) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_INSTALL_BUNDLED', async (_e, pkgId) => {
     const pkg = String(pkgId || '').replace(/^bundled:/, '');
     const manifest = getBundledManifest();
     const entry = manifest.sources.find((s) => s.fileName === pkg);
@@ -6290,15 +6954,15 @@ function initializeCustomSource(localServerInstance, serverPort) {
     else item = await manager.importScript(local.script, entry.fileName);
     // 修正写入的 id（store 默认用 name 当 id）：这里不强改，保持 store 自身语义
     const finalItem = (item && item.id) ? item : { id: targetId, ...(item || {}) };
-    pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', {});
+    pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', {});
     return { ok: true, pkgId: finalItem.id || targetId, item: finalItem, installed: true };
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_REMOVE', async (_e, pkgId) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_REMOVE', async (_e, pkgId) => {
     const r = await manager.remove(pkgId);
-    pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', {});
+    pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', {});
     return { ok: true, list: r || [] };
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_PARSE_PREVIEW', async (_e, text) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_PARSE_PREVIEW', async (_e, text) => {
     const src = String(text || '');
     if (!src) return { ok: false, error: 'SCRIPT_EMPTY' };
     try {
@@ -6308,7 +6972,7 @@ function initializeCustomSource(localServerInstance, serverPort) {
       return { ok: false, error: e.message || 'PARSE_FAILED' };
     }
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_GET_POLICY', async () => ({
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_GET_POLICY', async () => ({
     ok: true,
     policy: {
       enabled: true,
@@ -6316,16 +6980,16 @@ function initializeCustomSource(localServerInstance, serverPort) {
       installed: decoratedInstalledItems().map((it) => ({ pkgId: it.pkgId, enabled: it.enabled })),
     },
   }));
-  bindIpc('MINERADIO_CUSTOM_SOURCE_SET_POLICY', async (_e, patch) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_SET_POLICY', async (_e, patch) => {
     patch = patch && typeof patch === 'object' ? patch : {};
     if (typeof patch.activeId === 'string' && patch.activeId) await enableOrDisable(patch.activeId, true);
     if (Array.isArray(patch.enabled)) {
       for (const id of patch.enabled) await enableOrDisable(String(id || ''), true);
     }
-    pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', {});
+    pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', {});
     return { ok: true };
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_CHECK_UPDATES', async () => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_CHECK_UPDATES', async () => {
     const manifest = getBundledManifest();
     if (!manifest.sources.length) return { ok: true, updates: [] };
     for (const entry of manifest.sources) {
@@ -6344,25 +7008,25 @@ function initializeCustomSource(localServerInstance, serverPort) {
     }
     return { ok: true, updates };
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_OPEN_SCRIPT_DIRECTORY', async () => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_OPEN_SCRIPT_DIRECTORY', async () => {
     const dir = path.join(userDataDir, 'custom-sources');
     try { require('fs').mkdirSync(dir, { recursive: true }); } catch (_) {}
     try { await shell.openPath(dir); return { ok: true, dir }; } catch (e) { return { ok: false, dir, error: e.message }; }
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_GET_BACKEND', async () => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_GET_BACKEND', async () => {
     try { return { ok: true, ...manager.getBackendConfig() }; }
     catch (e) { return { ok: false, error: e && e.message || String(e) }; }
   });
-  bindIpc('MINERADIO_CUSTOM_SOURCE_SET_BACKEND', async (_e, patch) => {
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_SET_BACKEND', async (_e, patch) => {
     try {
       const result = manager.setBackendConfig(patch && typeof patch === 'object' ? patch : {});
-      pushCustomSourceEvent('MINERADIO_CUSTOM_SOURCE_REFRESH_ACTIVATION', {});
+      pushCustomSourceEvent('STELLAFLIX_CUSTOM_SOURCE_REFRESH_ACTIVATION', {});
       return { ok: true, ...result };
     } catch (e) { return { ok: false, error: e && e.message || String(e) }; }
   });
 
-  // 播放链路直接解析：绕开 HTTP 路由层，保证 custom-only 模式即使 bridge 未被注入 server，也能拿到地址
-  bindIpc('MINERADIO_CUSTOM_SOURCE_RESOLVE_ONLINE', async (_e, payload) => {
+  // 播放链路直接解析：绕开 HTTP 路由层，保证第三方音源模式即使 bridge 未被注入 server，也能拿到地址
+  bindIpc('STELLAFLIX_CUSTOM_SOURCE_RESOLVE_ONLINE', async (_e, payload) => {
     payload = payload && typeof payload === 'object' ? payload : {};
     const song = payload.song && typeof payload.song === 'object' ? payload.song : {};
     const quality = String(payload.quality || 'hires');
@@ -6372,7 +7036,7 @@ function initializeCustomSource(localServerInstance, serverPort) {
     if (!resolved || typeof resolved !== 'object') return { ok: false, result: null };
     if (resolved.url && /^https?:/i.test(String(resolved.url))) {
       const ticket = customSourceAudioProxy.issue(String(resolved.url));
-      const port = Number(process.env.MINERADIO_CUSTOM_SOURCE_SERVER_PORT || serverPort || mainServerPort || 0) || 0;
+      const port = Number(process.env.STELLAFLIX_CUSTOM_SOURCE_SERVER_PORT || serverPort || mainServerPort || 0) || 0;
       return {
         ok: true,
         result: {

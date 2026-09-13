@@ -260,7 +260,13 @@ function beatMapSongKey(song) {
 
 function localBeatDiskKey(localKey, mode) {
   if (!localKey) return '';
-  return 'local:' + localKey + ':' + (mode === 'dj' ? 'dj' : 'mr');
+  return 'local:' + localKey + ':' + (mode === 'dj' ? 'dj' : 'sf');
+}
+
+// 旧版磁盘键（改名前使用 :mr）。读缓存时用于一次性回退。
+function localBeatDiskLegacyKeys(localKey, mode) {
+  if (!localKey || mode === 'dj') return [];
+  return ['local:' + localKey + ':mr'];
 }
 
 function updateBeatDiskCacheStatus(data) {
@@ -315,7 +321,7 @@ async function writeBeatDiskCache(key, map, song, mode) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         key: key,
-        mode: mode || 'mr',
+        mode: mode || 'sf',
         provider: songProviderKey(song),
         title: song && song.name,
         artist: song && song.artist,
@@ -436,7 +442,7 @@ async function runQueueBeatPrefetch(fromIdx, token, seq, state) {
     });
     if (token !== beatMapToken || seq !== beatPrefetchToken || !map) return;
     beatMapCache[key] = map;
-    writeBeatDiskCache(key, map, song, 'mr');
+    writeBeatDiskCache(key, map, song, 'sf');
     console.log('队列节奏预热完成:', song.name || key, map.visualBeatCount || 0);
   } catch (err) {
     console.warn('queue beat prefetch failed:', err && err.message ? err.message : err);

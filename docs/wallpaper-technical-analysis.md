@@ -1,6 +1,6 @@
 # Stellaflix 壁纸（Wallpaper）技术深度分析报告
 
-> 分析对象：Stellaflix 2.1.0（`C:\Users\Administrator\Desktop\Mineradio-2.1.0`）
+> 分析对象：Stellaflix 2.1.0（`C:\Users\Administrator\Desktop\Stellaflix-2.1.0`）
 > 分析范围：项目与"壁纸 / 桌面背景"相关的全部实现，基于实际代码与结构
 > 生成日期：2026-08-03
 
@@ -35,7 +35,7 @@ Stellaflix 的"壁纸"能力由**两套相互独立、可并存**的技术路径
    - `SetWindowPos` 对齐主屏物理像素坐标（已做 DPI 处理）。
 3. 生命周期由 `start / update / reconcileDisplay / stop / dispose` 管理，内置 `operation` 代际锁防竞态、display-change 自动重连、abort 控制器（`wallpaper-mode-runtime.js:491-729`）。
 
-**实际入口**：`main.js` 的 `createWallpaperWindow → enableFullDesktopMode`、`positionWallpaperWindow → reconcileFullDesktopMode`，并监听 Explorer 重启（`hookExplorerRestartForFullDesktop`，`main.js:3658`）。其设计改编自上游 `Mineradio-LX-Music`，但原生附加/分离代码已重写（`docs/THIRD_PARTY_PORTS.md:11-16`）。
+**实际入口**：`main.js` 的 `createWallpaperWindow → enableFullDesktopMode`、`positionWallpaperWindow → reconcileFullDesktopMode`，并监听 Explorer 重启（`hookExplorerRestartForFullDesktop`，`main.js:3658`）。其设计改编自上游 `Stellaflix-LX-Music`，但原生附加/分离代码已重写（`docs/THIRD_PARTY_PORTS.md:11-16`）。
 
 ### 2.2 路径 B：Steam Wallpaper Engine 集成
 

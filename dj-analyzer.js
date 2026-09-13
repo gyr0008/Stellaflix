@@ -1,5 +1,23 @@
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const FULL_STREAM_QUALITY_LIMIT_SEC = 7200;
+// MPEGDecoder (WASM) + full-audio decode is memory heavy; keep at most one job.
+const MPG123_MAX_CONCURRENT = 1;
+let mpg123Active = 0;
+const mpg123Waiters = [];
+
+function acquireMpg123Slot() {
+  if (mpg123Active < MPG123_MAX_CONCURRENT) {
+    mpg123Active += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => mpg123Waiters.push(resolve));
+}
+
+function releaseMpg123Slot() {
+  const next = mpg123Waiters.shift();
+  if (next) next();
+  else if (mpg123Active > 0) mpg123Active -= 1;
+}
 
 function clamp01(v) {
   return Math.max(0, Math.min(1, Number(v) || 0));
@@ -383,6 +401,15 @@ function buildBeatMapFromLowEnergy(lowEnergy, hitEnergy, hopSec, durationSec) {
 
 async function decodePodcastDjEnergyRange(audioUrl, opts) {
   opts = opts || {};
+  await acquireMpg123Slot();
+  try {
+    return await decodePodcastDjEnergyRangeUnlocked(audioUrl, opts);
+  } finally {
+    releaseMpg123Slot();
+  }
+}
+
+async function decodePodcastDjEnergyRangeUnlocked(audioUrl, opts) {
   const { MPEGDecoder } = await import('mpg123-decoder');
   const decoder = new MPEGDecoder({ enableGapless: false });
   await decoder.ready;
@@ -759,6 +786,15 @@ async function analyzePodcastDjStream(audioUrl, opts) {
 
 async function analyzePodcastDjStreamFull(audioUrl, opts) {
   opts = opts || {};
+  await acquireMpg123Slot();
+  try {
+    return await analyzePodcastDjStreamFullUnlocked(audioUrl, opts);
+  } finally {
+    releaseMpg123Slot();
+  }
+}
+
+async function analyzePodcastDjStreamFullUnlocked(audioUrl, opts) {
   const { MPEGDecoder } = await import('mpg123-decoder');
   const decoder = new MPEGDecoder({ enableGapless: false });
   await decoder.ready;

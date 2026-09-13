@@ -114,16 +114,34 @@ function repairCurrentFxAutosaveLocalMirror(payload) {
     try { localStorage.removeItem(LYRIC_LAYOUT_STORE_KEY); } catch (cleanupError) { }
   } catch (e) { }
 }
-function readDesktopCurrentFxAutosaveRaw() {
+var currentFxAutosaveDiskCache = null;
+var currentFxAutosaveDiskHydrateStarted = false;
+function hydrateCurrentFxAutosaveDiskCache() {
+  if (currentFxAutosaveDiskHydrateStarted) return;
+  currentFxAutosaveDiskHydrateStarted = true;
   try {
     var bridge = window.desktopWindow;
-    if (!bridge || typeof bridge.readCurrentFxAutosaveSync !== 'function') return null;
-    var result = bridge.readCurrentFxAutosaveSync();
-    return plainCurrentFxAutosavePayload(result && result.payload);
+    if (!bridge || typeof bridge.readCurrentFxAutosave !== 'function') return;
+    Promise.resolve(bridge.readCurrentFxAutosave()).then(function (result) {
+      var payload = plainCurrentFxAutosavePayload(result && result.payload);
+      if (!payload) return;
+      currentFxAutosaveDiskCache = payload;
+      // First hydrate may finish after boot read; reconcile local mirror once.
+      try {
+        var localRaw = parseCurrentFxAutosaveText(localStorage.getItem(CURRENT_FX_AUTOSAVE_STORE_KEY));
+        var chosen = chooseCurrentFxAutosaveRaw(localRaw, payload);
+        if (chosen) repairCurrentFxAutosaveLocalMirror(chosen);
+      } catch (e) { }
+    }).catch(function (e) {
+      console.warn('[FxAutosave] desktop read failed:', e);
+    });
   } catch (e) {
     console.warn('[FxAutosave] desktop read failed:', e);
-    return null;
   }
+}
+function readDesktopCurrentFxAutosaveRaw() {
+  hydrateCurrentFxAutosaveDiskCache();
+  return plainCurrentFxAutosavePayload(currentFxAutosaveDiskCache);
 }
 function chooseCurrentFxAutosaveRaw(localRaw, diskRaw) {
   if (localRaw && diskRaw) {
@@ -436,16 +454,15 @@ function readSavedLyricLayout() {
     return readSavedLyricLayoutCriticalFallback(raw, e);
   }
 }
-function persistCurrentFxAutosaveDisk(payload, syncDisk) {
+function persistCurrentFxAutosaveDisk(payload) {
   try {
     var bridge = window.desktopWindow;
     if (!bridge) return;
-    if (syncDisk && typeof bridge.saveCurrentFxAutosaveSync === 'function') {
-      bridge.saveCurrentFxAutosaveSync(payload);
-      return;
-    }
+    // Always async: never block the renderer on disk IPC.
     if (typeof bridge.saveCurrentFxAutosave === 'function') {
-      bridge.saveCurrentFxAutosave(payload).catch(function (e) {
+      bridge.saveCurrentFxAutosave(payload).then(function () {
+        currentFxAutosaveDiskCache = plainCurrentFxAutosavePayload(payload);
+      }).catch(function (e) {
         console.warn('[FxAutosave] async disk write failed:', e);
       });
     }
@@ -460,7 +477,7 @@ function queueCurrentFxAutosaveDiskWrite(payload) {
     currentFxAutosaveDiskTimer = null;
     var next = currentFxAutosaveDiskPayload;
     currentFxAutosaveDiskPayload = null;
-    if (next) persistCurrentFxAutosaveDisk(next, false);
+    if (next) persistCurrentFxAutosaveDisk(next);
   }, 220);
 }
 function writeCurrentFxAutosavePayload(payload, opts) {
@@ -476,12 +493,13 @@ function writeCurrentFxAutosavePayload(payload, opts) {
     console.warn('[FxAutosave] localStorage write failed, disk mirror will be used:', localError);
   }
   if (opts.syncDisk) {
+    // "syncDisk" now means flush the debounce immediately, still async IPC.
     if (currentFxAutosaveDiskTimer) {
       clearTimeout(currentFxAutosaveDiskTimer);
       currentFxAutosaveDiskTimer = null;
     }
     currentFxAutosaveDiskPayload = null;
-    persistCurrentFxAutosaveDisk(payload, true);
+    persistCurrentFxAutosaveDisk(payload);
   } else {
     queueCurrentFxAutosaveDiskWrite(payload);
   }
@@ -708,6 +726,20 @@ function saveLyricLayout(opts) {
       clearTimeout(lyricLayoutSaveTimer);
       lyricLayoutSaveTimer = null;
       lyricLayoutSaveOpts = null;
+    }
+    // ==== Fix: fx 对象 / preset 缺失的守卫。在启动初期（fx 初始化尚未完成 / 场景模块
+    // 失败导致 fx 未赋值）saveEveryLayoutSave 被 HTMLMLayoutSave 触发时会读 undefined.preset
+    // 抛 TypeError，并被 try/catch 吞掉后记录橙警「[FxAutosave] full save failed」给用户，
+    // 造成用户错觉"数据坏了"。此时应：直接走 fallback patch 写入关键字段，不弹警告，
+    // 等下一次 fx 就绪后自然 full-save。
+    if (typeof fx === 'undefined' || !fx || typeof presetMeta === 'undefined' || !presetMeta || !presetMeta.length) {
+      try { console.warn('[FxAutosave] full save skipped (fx / presetMeta not ready yet); writing fallback patch'); } catch(e) {}
+      try {
+        saveCurrentFxAutosavePatch(currentFxAutosaveCriticalPatch(), { syncDisk: opts.syncDisk === true, user: opts.user === true, reason: currentFxAutosaveSaveReason(opts, 'fx-not-ready') });
+      } catch (fallbackError) {
+        try { console.warn('[FxAutosave] fallback patch save failed:', fallbackError); } catch(e) {}
+      }
+      return;
     }
     var presetForSave = startupVisualPreviewActive && !playing && currentIdx < 0
       ? playbackVisualPreset

@@ -136,6 +136,13 @@
   // ---- slot providers ----
   function render() {
     if (!isVideoSpace()) return;
+    // FIX: 影视态 render() 必须确保容器上有 home-quick-grid 类，
+    // 否则基础 .home-grid { grid-template-columns: repeat(2, 1fr) } 会把 5 卡挤成 2 列 3 行，
+    // 右上角空一格，形成"容器变形"的视觉问题。
+    var gridEl = document.querySelector('#empty-home .home-grid');
+    if (gridEl && !gridEl.classList.contains('home-quick-grid')) {
+      gridEl.classList.add('home-quick-grid');
+    }
     bindGridCapture();
     bindRailCapture();
     var cards = $all('#empty-home .home-grid .home-card');
@@ -496,7 +503,7 @@
       //    因为 blob: 海报在 layer4 被故意留空，必须走到这里重新水合。
       if (true) {
         try {
-          var metaRaw = global.localStorage.getItem('mineradio.outer.poster.meta.music');
+          var metaRaw = global.localStorage.getItem('stellaflix.outer.poster.meta.music');
           if (metaRaw) {
             var meta = JSON.parse(metaRaw);
             if (meta && meta.blobKey === 'outer-music' && typeof outerPosterBlobGet === 'function') {
@@ -1113,6 +1120,58 @@
     if (typeof global.renderHomeDiscover === 'function') {
       try { global.renderHomeDiscover(); } catch (e) {}
     }
+    // FIX-v2: 与 goHome() 完全对齐，先设置「强制打开空壳首页」的锁变量，再调 updateEmptyHomeVisibility。
+    // 根因：shouldShowEmptyHomeCore(04-home-empty-wallpaper.js L20-22) 在 playQueue 有值 /
+    //       currentIdx>=0 / playing=true 时会 return false，导致 updateEmptyHomeVisibility 走
+    //       show=false 分支：移除 body.empty-home-active（布局专用类→间距大）+ 完全跳过
+    //       show=true 分支（activate 壁纸、setPeek search-area、最关键 scheduleVisualApply
+    //       异步调 loadHomeDiscover(force=true) 刷 cover → 蓝色圆盘）。
+    //       而 goHome() 先设置 homeForcedOpen=true，shouldShowEmptyHomeCore L14 会优先返回 true。
+    //       切态 restoreMusic 没设这个锁 → 必然触发 show=false 全跳过的逻辑。
+    try {
+      if (typeof global.homeSuppressed !== 'undefined') global.homeSuppressed = false;
+      if (typeof global.homeForcedOpen !== 'undefined') global.homeForcedOpen = true;
+      if (typeof global.setHomeControlsLocked === 'function') global.setHomeControlsLocked(true);
+      if (typeof global.setPeek === 'function' && global.document) {
+        var searchArea = global.document.getElementById('search-area');
+        if (searchArea) global.setPeek(searchArea, true, 'search');
+      }
+    } catch (_lockErr) { /* ignore state-lock 异常 */ }
+    if (typeof global.updateEmptyHomeVisibility === 'function') {
+      try { global.updateEmptyHomeVisibility({ forceLoad: true }); } catch (e) {
+        if (global.console) global.console.warn('[SFV restoreMusic] updateEmptyHomeVisibility failed:', e);
+      }
+    }
+    // FIX-v2 兜底：即使 updateEmptyHomeVisibility 内部因为任何边缘判定依然 show=false，
+    // 手动保证空壳首页的关键状态/动作全部就位，彻底避免「updateEmptyHomeVisibility 判定
+    // 了不显示但 DOM 上空壳首页明明显示着 → 类缺失 + cover 不刷」的矛盾。
+    try {
+      var doc2 = global.document;
+      // 1) 强制 body 上有 empty-home-active 类（布局专用规则，管间距/容器尺寸）
+      if (doc2 && doc2.body && !doc2.body.classList.contains('empty-home-active')) {
+        doc2.body.classList.add('empty-home-active');
+      }
+      // 2) 手动执行壁纸预览激活
+      if (typeof global.activateHomeWallpaperPreview === 'function') {
+        try { global.activateHomeWallpaperPreview(); } catch (_e1) { /* ignore */ }
+      }
+      // 3) 兜底再调度一次 loadHomeDiscover(force=true) 刷 cover
+      //    （如果 updateEmptyHomeVisibility 已调过，scheduleVisualApply 自己的防抖/合并会去重）
+      if (typeof global.scheduleVisualApply === 'function' && typeof global.loadHomeDiscover === 'function') {
+        try {
+          global.scheduleVisualApply(function () {
+            try { global.loadHomeDiscover(true); } catch (_e2) { /* ignore */ }
+          }, 220, 1200);
+        } catch (_saErr) { /* ignore */ }
+      }
+      // 4) 同步强制再跑一次 renderHomeDashboardQuickCards 的 patch，
+      //    保证即使 fingerprint 守卫拦截也能及时重写卡的文字/封面。
+      if (typeof global.renderHomeDashboard === 'function') {
+        try { global.renderHomeDashboard(); } catch (_e3) { /* ignore */ }
+      }
+    } catch (_fallbackErr) {
+      if (global.console) global.console.warn('[SFV restoreMusic] fallback state apply failed:', _fallbackErr);
+    }
     // 3D 歌单架：影视/音乐态切换时必须 rebuild，否则 currentItems 走错分支但 DOM 残留
     if (typeof global.scheduleShelfRebuild === 'function') {
       try { global.scheduleShelfRebuild('sfv-restore-music', true); } catch (e) {}
@@ -1121,6 +1180,23 @@
     try {
       if (typeof global.renderHomeInsightDock === 'function') global.renderHomeInsightDock();
     } catch (e) { /* 非致命 */ }
+    // FIX-v3 时序保险：分 3 档时间点强制确保 cover 一定被正确 patch。
+    // 背景：
+    //   同步帧（restoreMusic 内）fallbackFillCardCovers → pool 可能还空（songs 未加载）
+    //   scheduleVisualApply(loadHomeDiscover) 计划在 220~1200ms 后执行，但如果防抖合并异常，
+    //   或上游守卫拦截了 renderHomeDashboard，就错过了唯一一次「数据就绪后重 patch」的机会。
+    // 方案：在 60ms / 400ms / 1500ms 三个时间点各直接绕过 renderHomeDashboard 守卫，
+    //   裸调 renderHomeDashboardQuickCards（它只依赖 #empty-home .home-grid 是否存在），
+    //   确保 songs 一旦加载，fallbackFillCardCovers 就会回填 cover，patchCard 立即写入。
+    //   3 次冗余调用的性能损失 ≈ 0，换来绝对不出现蓝色圆盘。
+    try {
+      if (typeof global.renderHomeDashboardQuickCards === 'function') {
+        var _patchDirectly = global.renderHomeDashboardQuickCards;
+        setTimeout(function () { try { _patchDirectly(); } catch (_e) {} }, 60);
+        setTimeout(function () { try { _patchDirectly(); } catch (_e) {} }, 400);
+        setTimeout(function () { try { _patchDirectly(); } catch (_e) {} }, 1500);
+      }
+    } catch (_patchErr) { /* ignore */ }
   }
 
   function install() {

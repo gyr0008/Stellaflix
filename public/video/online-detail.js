@@ -28,6 +28,12 @@
     if (it.pic) return it.pic;
     if (it.poster) return it.poster;
     if (it._tmdb && it._tmdb.poster) return it._tmdb.poster;
+    // 本地海报缓存兜底：详情页/浏览厅看过的片子已由 detail.js 把海报存成本地 data URL，
+    // 起播时即使源没给图也能复用（与 player-controller 的本地兜底共用同一份缓存）。
+    if (it.key && SFV.posterCache && typeof SFV.posterCache.resolvePic === 'function') {
+      var cached = SFV.posterCache.resolvePic(it.key, '');
+      if (cached) return cached;
+    }
     return '';
   }
 

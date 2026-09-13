@@ -17,12 +17,13 @@
 
   var origHandlers = {};   // 按钮 id -> 原始 onclick（用于恢复）
   var injectedBtns = [];   // 动态注入的视频键 DOM
+  var movedActionBtns = null; // 影视态把 #heart-btn/#collect-btn/#track-detail-btn 从 .actions 移入 .transport 前的原始位置（退出时还原）
   var videoEl = null;
   var active = false;
   var volInputHandler = null;   // 影视态音量 slider input 监听（用于解绑）
   var volChangeHandler = null;  // 影视态音量 slider change 监听（覆盖 audio engine 的 toast）
   var volumePref = 1.0;     // 用户意图音量（持久化到 SFV.player settings.volume），默认 1.0 = 100%
-  var userMuted = false;    // 用户显式静音切换：仅会话内、不持久化、每次打开默认 false（需求：初始非静音）
+  var userMuted = false;    // 用户显式静音切换：随 onVolumeBtnClick 持久化到 SFV.player settings.muted，默认 false（首次启动非静音）
   var origBarParent = null; // 影视态激活时把 #bottom-bar 提到 body 以免被 desktop-window-shell 的 transform/clip-path 截断
   var origBarNext = null;
   var origVolParent = null; // 影视态激活时把 #volume-control 从 .modes 移到 .transport 的 #prev-btn 位置
@@ -31,12 +32,15 @@
   var progressDocBound = false;   // document 级 move/up/touch 监听是否已挂
   var lastProgressMoveTs = 0;     // 拖拽 seek 节流（ms）
   var origHeart = null;     // 影视态激活时替换 #heart-btn 为追片状态按钮（退出时还原）
+  var origControlTrack = null; // 影视态激活时替换 #control-cover/#control-title/#control-artist 点击为视频详情（退出时还原）
   var currentSeriesKey = null;
   var heartBtnStates = [null, 'watching', 'planToWatch', 'onHold', 'watched', 'abandoned'];
   var epPanel = null;          // 「选集」弹层 DOM
   var epAnchorEl = null;       // 「选集」按钮（用于捕获阶段排除，避免点击瞬间被空白判定提前关闭）
   var barProtectTimer = null;  // 控制条保护期：持续清除 music.js 可能注入的 soft-hidden
   var barProtectMO = null;     // 控制条 class 变化观察器（兜底，防止定时轮询漏过）
+  var tmdbPosterTried = {};    // 影视态下 TMDB 海报补全：按标题去重，避免重复请求
+  var coverReqSeq = 0;         // 海报异步请求序号：每次换片 +1，作废在途回调（防旧片海报盖新片）
 
   function $(id) { return doc && doc.getElementById ? doc.getElementById(id) : null; }
   function toast(msg) {
@@ -72,12 +76,14 @@
     if (doc && doc.body && typeof MutationObserver !== 'undefined') {
       barProtectMO = new MutationObserver(function (mutations) {
         if (!active) { stopBarProtection(); return; }
-        mutations.forEach(function (m) {
-          if (m.type === 'attributes' && m.attributeName === 'class') {
-            var b = m.target;
-            if (b && b.id === 'bottom-bar') sanitizeBar(b);
-          }
-        });
+        // ==== Fix(播放卡死根因): 状态守卫 —— 仅当 bar 当前状态确需纠偏时才 sanitize，
+        // 且每批突变最多调一次。旧实现对每条记录无条件 sanitize，而 Blink 中 classList
+        // 的"无效写入"（加已有类/删没有的类）同样产生 MutationRecord，会形成
+        // MO→sanitize→写入→MO 的指数级自激环路（记录 2^n 爆炸、内存爆涨、主线程卡死）。
+        var b = $('bottom-bar');
+        if (b && (b.classList.contains('soft-hidden') || !b.classList.contains('visible'))) {
+          sanitizeBar(b);
+        }
       });
       barProtectMO.observe(bar, { attributes: true, attributeFilter: ['class'] });
     }
@@ -88,10 +94,11 @@
   }
   function sanitizeBar(bar) {
     if (!bar) return;
-    // 强制清除所有可能来自音乐态的隐藏类（只在视频态生效）
-    bar.classList.remove('soft-hidden');
-    // 强制保持 visible 类（music.js 的 setControlsHidden 可能同步移除它）
-    bar.classList.add('visible');
+    // ==== Fix(播放卡死根因): 条件写入 —— Blink 中 classList 无效写入（加已有类/删没有的类）
+    // 也会产生 MutationRecord。本函数会被 bar 自身 class 的 MutationObserver 回调调用，
+    // 无条件写入会形成 MO→写入→MO 的指数级自激环路，故仅在状态确实不符时才写。
+    if (bar.classList.contains('soft-hidden')) bar.classList.remove('soft-hidden');
+    if (!bar.classList.contains('visible')) bar.classList.add('visible');
     // 清除任何可能被 music.js 设的 inline pointer-events:none
     if (bar.style && bar.style.pointerEvents === 'none') bar.style.pointerEvents = '';
     // 如果 music.js 在我们的 reparent 之后又把 bar 搬回 desktop-window-shell，
@@ -152,6 +159,7 @@
     bindGlobalKeys(); // 空格键播放/暂停（capture 阶段，影视态独占）
     bindProgressControls(); // 进度条拖拽 seek
     setupHeartBtn(); // 必须在 applyMeta 之前捕获原始心形按钮，否则 refreshHeartBtn 先改了它
+    swapControlTrackHandlers(true); // 左侧海报/标题/歌手点击改为打开视频详情
     applyMeta(meta);
     updateNavButtons();
     // [#11] 影视态下把 ⓘ 信息按钮的 tooltip 改为「视频详情」（退出时还原）
@@ -213,7 +221,17 @@
       }
       origHeart = null;
     }
+    swapControlTrackHandlers(false); // 还原左侧海报/标题/歌手的音乐态点击
+    // =====【修复2026-09-06 17:50】退出影视态时清空左侧海报容器，避免音乐态残留视频海报 =====
+    var coverOut = $('control-cover');
+    if (coverOut) { coverOut.style.backgroundImage = ''; coverOut.classList.add('cover-empty'); }
+    var titleOut = $('control-title');
+    if (titleOut) titleOut.textContent = '';
+    var artistOut = $('control-artist');
+    if (artistOut) artistOut.textContent = '';
+    // ===== 修复结束 =====
     currentSeriesKey = null;
+    tmdbPosterTried = {}; // 退出影视态后清除 TMDB 海报补全尝试记录
   }
 
   // ---------- 追片状态按钮（影视态下心形按钮改为6态图标，无文字） ----------
@@ -260,6 +278,33 @@
     };
     hb.onclick = onHeartClick;
     refreshHeartBtn();
+  }
+
+  // 影视态下把左侧 #control-cover/#control-title/#control-artist 的点击改成分发函数（退出时还原）
+  function swapControlTrackHandlers(on) {
+    if (on) {
+      var cover = $('control-cover'), title = $('control-title'), artist = $('control-artist');
+      if (!origControlTrack && cover && title && artist) {
+        origControlTrack = {
+          cover: { title: cover.title, ariaLabel: cover.getAttribute('aria-label'), onclick: cover.getAttribute('onclick'), onkeydown: cover.getAttribute('onkeydown') },
+          title: { title: title.title, onclick: title.getAttribute('onclick') },
+          artist: { title: artist.title, onclick: artist.getAttribute('onclick') }
+        };
+      }
+      function openVideoInfo(e) { e && e.stopPropagation(); if (typeof global.sfvOpenTrackDetailOrVideoInfo === 'function') global.sfvOpenTrackDetailOrVideoInfo('video'); }
+      function coverKey(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openVideoInfo(e); } }
+      if (cover) { cover.title = '视频详情'; cover.setAttribute('aria-label', '视频详情'); cover.onclick = openVideoInfo; cover.onkeydown = coverKey; }
+      if (title) { title.title = '视频详情'; title.onclick = openVideoInfo; }
+      if (artist) { artist.title = ''; artist.onclick = null; }
+    } else {
+      if (!origControlTrack) return;
+      var cover = $('control-cover'), title = $('control-title'), artist = $('control-artist');
+      var oc = origControlTrack;
+      if (cover) { cover.title = oc.cover.title; cover.setAttribute('aria-label', oc.cover.ariaLabel); cover.setAttribute('onclick', oc.cover.onclick); cover.setAttribute('onkeydown', oc.cover.onkeydown); }
+      if (title) { title.title = oc.title.title; title.setAttribute('onclick', oc.title.onclick); }
+      if (artist) { artist.title = oc.artist.title; artist.setAttribute('onclick', oc.artist.onclick); }
+      origControlTrack = null;
+    }
   }
 
   // ---------- 音量控制 reposition（影视态移到 transport 区 prev 位置，退出时还原） ----------
@@ -382,43 +427,194 @@
       if (ref && ref.parentNode) ref.parentNode.insertBefore(b, ref);
       else modes.appendChild(b);
     });
+    // 把追片(#heart-btn)·收藏(#collect-btn)·视频详情(#track-detail-btn) 三个按钮从 .actions
+    // 移入 .transport，并置于 #play-mode-btn（连播）之前。这样它们与连播按钮同处一个 flex 容器，
+    // 间距天然等于 .control-cluster 的 13px gap，从而「视频详情—连播」间距 ==「收藏—视频详情」间距；
+    // 同时 transport 仍 justify-content:center，播放按钮保持居中。退出时由 removeInjectedButtons 还原。
+    var transport = doc.querySelector && doc.querySelector('#bottom-bar .control-cluster.transport');
+    var playMode = $('play-mode-btn');
+    if (transport && playMode) {
+      movedActionBtns = [
+        { el: $('heart-btn'), next: null, parent: null },
+        { el: $('collect-btn'), next: null, parent: null },
+        { el: $('track-detail-btn'), next: null, parent: null }
+      ];
+      // 先记录原始位置（父节点 + 原下一个兄弟），再按 heart→collect→track-detail 顺序插入 transport
+      movedActionBtns.forEach(function (it) {
+        if (it.el) { it.parent = it.el.parentNode; it.next = it.el.nextSibling; }
+      });
+      // 依次 insertBefore(playMode)：每次插入都落在 play-mode 之前、上一颗已插入按钮之后，
+      // 故按 heart → collect → track-detail 正序插入即可得到 [heart, collect, track-detail, play-mode]。
+      ['heart-btn', 'collect-btn', 'track-detail-btn'].forEach(function (id) {
+        var el = $(id);
+        if (el && el.parentNode !== transport) transport.insertBefore(el, playMode);
+      });
+    }
   }
   function removeInjectedButtons() {
     injectedBtns.forEach(function (b) { if (b.parentNode) b.parentNode.removeChild(b); });
     injectedBtns = [];
+    // 还原被挪入 .transport 的三个按钮到影视态激活前的原始位置（.actions 内的原顺序）
+    if (movedActionBtns) {
+      movedActionBtns.forEach(function (it) {
+        if (!it.el || !it.parent) return;
+        try {
+          if (it.next && it.next.parentNode === it.parent) it.parent.insertBefore(it.el, it.next);
+          else it.parent.appendChild(it.el);
+        } catch (e) {}
+      });
+      movedActionBtns = null;
+    }
   }
 
   // ---------- 「选集」弹层 ----------
-  // 点击「选集」弹出剧集列表；再次点击按钮或点击面板外空白区域则收回。
-  // 行为对齐「画质」/「收藏」面板（捕获阶段排除锚点，避免点击瞬间被空白判定提前关闭）。
+  // 与详情页多源面板功能对齐：展示全部片源（跨源候选 + 当前源线路）供热切换，
+  // 并标出正在播放的那一项；下方仍保留剧集列表。
+  // 再次点击按钮或点击面板外空白区域则收回。
   function openEpisodePanel(e) {
     if (epPanel && epPanel.parentNode) { closeEpisodePanel(); return; }
+    var d = global.document;
     var pl = (SFV.player && typeof SFV.player.getPlaylist === 'function') ? SFV.player.getPlaylist() : null;
     var tracks = (pl && pl.tracks) || null;
-    if (!tracks || !tracks.length) { toast('当前没有可选剧集'); return; }
+    var roads = (SFV.player && typeof SFV.player.getRoads === 'function') ? SFV.player.getRoads() : null;
+    var roadFromIndex = (SFV.player && typeof SFV.player.getRoadFromIndex === 'function') ? SFV.player.getRoadFromIndex() : -1;
+    var session = (SFV.detailSource && typeof SFV.detailSource.getPlaybackSession === 'function')
+      ? SFV.detailSource.getPlaybackSession() : null;
+    // 面板只展示与当前影片真正相关的源（剔除子串噪声），并保证唯一「播放中」
+    var sources = [];
+    if (session && SFV.detailSource && typeof SFV.detailSource.candidatesForPanel === 'function') {
+      sources = SFV.detailSource.candidatesForPanel(session.view) || [];
+    } else if (session && session.candidates) {
+      sources = session.candidates;
+    }
+    var currentKey = (session && session.currentKey) || null;
+    var candKey = (SFV.detailSource && typeof SFV.detailSource.candKeyOf === 'function')
+      ? SFV.detailSource.candKeyOf
+      : function (c) { return (c && (c.id || c.sourceKey)) || ''; };
+    // 不把 currentKey 硬对齐到 sources[0]：那会把高亮错贴到无关源上
+    var switching = !!(session && session.switching);
+    var hasTracks = !!(tracks && tracks.length);
+    var hasRoads = !!(roads && roads.length > 1);
+    var hasSources = !!(sources && sources.length);
+    if (!hasTracks && !hasRoads && !hasSources) { toast('当前没有可选片源'); return; }
     var curIdx = (pl && typeof pl.index === 'number') ? pl.index : -1;
-    var d = global.document;
     var panel = d.createElement('div');
     panel.className = 'sfv-episode-panel';
     var hd = d.createElement('div');
     hd.className = 'sfv-ep-head';
-    hd.textContent = '选集';
+    hd.textContent = (hasSources || hasRoads) ? '片源 · 选集' : '选集';
     panel.appendChild(hd);
-    var list = d.createElement('div');
-    list.className = 'sfv-ep-list';
-    tracks.forEach(function (ep, i) {
-      var item = d.createElement('button');
-      item.type = 'button';
-      item.className = 'sfv-ep-item' + (i === curIdx ? ' is-current' : '');
-      item.textContent = (ep && ep.name) ? ep.name : ('第' + (i + 1) + '集');
-      item.addEventListener('click', function (ev) {
-        ev.preventDefault(); ev.stopPropagation();
-        if (SFV.player && typeof SFV.player.playEpisodeAt === 'function') SFV.player.playEpisodeAt(i);
-        closeEpisodePanel();
+
+    function addSection(title, items) {
+      if (!items || !items.length) return;
+      var sec = d.createElement('div');
+      sec.className = 'sfv-ep-section';
+      if (title) {
+        var st = d.createElement('div');
+        st.className = 'sfv-ep-section-title';
+        st.textContent = title;
+        sec.appendChild(st);
+      }
+      var list = d.createElement('div');
+      list.className = 'sfv-ep-list';
+      items.forEach(function (item) {
+        var btn = d.createElement('button');
+        btn.type = 'button';
+        btn.className = 'sfv-ep-item' + (item.current ? ' is-current' : '');
+        btn.textContent = item.label || '';
+        if (item.sub) {
+          var sub = d.createElement('span');
+          sub.className = 'sfv-ep-item-sub';
+          sub.textContent = item.sub;
+          btn.appendChild(sub);
+        }
+        if (item.current) {
+          var badge = d.createElement('span');
+          badge.className = 'sfv-ep-item-badge';
+          badge.textContent = '播放中';
+          btn.appendChild(badge);
+        }
+        btn.addEventListener('click', function (ev) {
+          ev.preventDefault(); ev.stopPropagation();
+          if (item.onClick) item.onClick();
+          closeEpisodePanel();
+        });
+        list.appendChild(btn);
       });
-      list.appendChild(item);
-    });
-    panel.appendChild(list);
+      sec.appendChild(list);
+      panel.appendChild(sec);
+    }
+
+    // ---- 片源（跨源候选，与详情页多源面板同源数据）----
+    if (hasSources) {
+      var srcItems = sources.map(function (c) {
+        var key = candKey(c);
+        var label = c.label || c.group || '片源';
+        // 唯一高亮：严格等于 currentKey（用 id，不用 sourceKey）
+        var isCur = !!(currentKey && key && key === currentKey);
+        return {
+          label: label,
+          sub: c.sub || '',
+          current: isCur,
+          onClick: function () {
+            if (isCur || switching) return;
+            if (SFV.detailSource && typeof SFV.detailSource.switchPlaybackSource === 'function') {
+              SFV.detailSource.switchPlaybackSource(c);
+            } else if (SFV.detailSource && typeof SFV.detailSource.playCandidate === 'function') {
+              SFV.detailSource.playCandidate(c, session.view, null);
+            } else {
+              toast('片源切换组件未就绪');
+            }
+          }
+        };
+      });
+      addSection('片源', srcItems);
+    }
+
+    // ---- 线路（当前源内的多线路热切换）----
+    if (hasRoads) {
+      var roadItems = roads.map(function (p, i) {
+        var eps = (p && p.episodes) || [];
+        var label = (p && p.from) || ('线路 ' + (i + 1));
+        var isCur = (i === (roadFromIndex | 0));
+        return {
+          label: label,
+          sub: eps.length ? (eps.length + ' 集') : '',
+          current: isCur,
+          onClick: function () {
+            if (isCur) return;
+            var curName = null;
+            if (hasTracks && curIdx >= 0 && tracks[curIdx]) curName = tracks[curIdx].name || null;
+            var epIdx = 0;
+            if (curName != null && SFV.detail && typeof SFV.detail.alignEpisodeByIdentifier === 'function') {
+              var aligned = SFV.detail.alignEpisodeByIdentifier(roads, i, curName, curIdx);
+              if (aligned) epIdx = aligned.episodeIndex;
+              else { toast('该线路无对应集'); return; }
+            }
+            if (SFV.player && typeof SFV.player.switchRoad === 'function') {
+              var ok = SFV.player.switchRoad(i, epIdx);
+              if (!ok) toast('线路切换失败');
+            }
+          }
+        };
+      });
+      addSection('线路', roadItems);
+    }
+
+    // ---- 剧集 ----
+    if (hasTracks) {
+      var epItems = tracks.map(function (ep, i) {
+        return {
+          label: (ep && ep.name) ? ep.name : ('第' + (i + 1) + '集'),
+          current: (i === curIdx),
+          onClick: function () {
+            if (SFV.player && typeof SFV.player.playEpisodeAt === 'function') SFV.player.playEpisodeAt(i);
+          }
+        };
+      });
+      addSection(hasSources || hasRoads ? '选集' : '', epItems);
+    }
+
     var anchor = $('sfv-ctrl-ep') || (e && e.currentTarget) || null;
     // 面板必须挂载到影视态顶层覆盖层（或 body），不能放在底部控制栏内部，
     // 否则会被 #bottom-bar 的边界/clip-path/overflow 裁剪，导致右侧面板看不到。
@@ -464,7 +660,10 @@
     if (!videoEl) return;
     if (isDraggingProgress) return; // 拖拽期间由指针事件驱动 UI，避免 timeupdate 回写导致闪烁
     var c = Math.floor(videoEl.currentTime || 0), d = Math.floor(videoEl.duration || 0);
-    var ratio = d ? (c / d) : 0;
+    // 进度条比例用未取整浮点时间（同 player.js updateTime 的修复）：取整会把
+    // 4Hz timeupdate 量化成 1Hz，长视频下底部进度条每秒跳一格。
+    var ct = videoEl.currentTime || 0, dur = videoEl.duration || 0;
+    var ratio = (dur > 0 && isFinite(dur)) ? (ct / dur) : 0;
     var fill = $('progress-fill'), thumb = $('progress-thumb'), time = $('time-display');
     if (fill) fill.style.width = (ratio * 100) + '%';
     if (thumb) thumb.style.left = (ratio * 100) + '%';
@@ -481,16 +680,19 @@
     refreshVolumeUI();
   }
 
-  // 恢复上次记忆音量（持久化于 SFV.player settings.volume），默认 1.0（100%）；每次打开默认非静音。
-  // 注意：仅同步 videoEl.volume 与显示意图，不在此解除 player.js 初始的 muted shim，
+  // 恢复上次记忆音量（含静音状态）。持久化键：volume (0~1) + muted (boolean)。
+  // 默认值：volume=1.0 (100%)、muted=false（首次启动或存储缺失时）。
+  // 注意：仅同步 videoEl.volume/videoEl.muted 与显示意图，不在此解除 player.js 初始的 muted shim，
   // 以保留 Chrome 自动播放合规；真实静音解除由 wireUnmuteOnInteraction（首次手势）完成。
   function restoreVolumeState() {
     if (!videoEl) return;
     var saved = (SFV.player && typeof SFV.player.getSettings === 'function') ? SFV.player.getSettings() : {};
     var v = (saved && typeof saved.volume === 'number' && saved.volume >= 0 && saved.volume <= 1) ? saved.volume : 1.0;
+    var m = (saved && typeof saved.muted === 'boolean') ? saved.muted : false;
     volumePref = v;
-    userMuted = false; // 每次打开默认非静音
+    userMuted = m; // 持久化静音：上次静音 → 这次仍静音；上次非静音 → 这次非静音
     videoEl.volume = v; // 同步真实音量（muted shim 保持原样）
+    videoEl.muted = m; // 同步真实静音
   }
 
   // 同步音量 slider / 百分比 / 图标 / muted 状态到意图层（与 videoEl.muted 解耦）
@@ -540,7 +742,7 @@
   }
 
   // 影视态：点击音量图标切换静音；同时保留原 toggleVolumePanel 的面板展开行为。
-  // 静音切换仅作用于会话内 userMuted（不持久化）；muted 状态本身不写入 settings，每次打开默认非静音。
+  // 静音切换会持久化到 SFV.player settings.muted，下次打开时 restoreVolumeState 恢复。
   function onVolumeBtnClick(e) {
     if (!videoEl) return;
     e && e.preventDefault();
@@ -548,10 +750,13 @@
     if (typeof global.toggleVolumePanel === 'function') global.toggleVolumePanel(e);
     userMuted = !userMuted;
     videoEl.muted = userMuted;
+    // 持久化静音状态（含 true/false 都写，便于下次精确恢复）
+    if (SFV.player && typeof SFV.player.setSetting === 'function') SFV.player.setSetting('muted', userMuted);
     if (!userMuted && videoEl.volume === 0) {
-      videoEl.volume = 0.5;
-      volumePref = 0.5;
-      if (SFV.player && typeof SFV.player.setSetting === 'function') SFV.player.setSetting('volume', 0.5);
+      // 解除静音但真实音量为 0：用户上次把音量拖到 0 后再静音，解除后应有声。
+      // 此处不强制改 volumePref，只把真实音量拉起一次（用于本次会话立即出声），
+      // 不写持久化——下次按持久化值（volume=0, muted=false）原样恢复。
+      videoEl.volume = volumePref > 0 ? volumePref : 0.5;
     }
     refreshVolumeUI();
   }
@@ -714,15 +919,112 @@
     if (title) title.textContent = meta.title || '';
     if (artist) artist.textContent = meta.subtitle || '';
     if (cover) {
-      if (meta.cover) {
-        cover.style.backgroundImage = 'url("' + String(meta.cover).replace(/"/g, '\\"') + '")';
+      // =====【修复2026-09-06 17:50】影视态左侧海报容器 fallback 接线 =====
+      // 优先用本次事件带来的 cover；若为空则回退到 player 当前元数据或 video 原生 poster，
+      // 保证即使某些起播路径（openFile / 部分源延迟）没显式传 cover，左侧也不留空。
+      var coverUrl = meta.cover || meta.pic;
+      if (!coverUrl && SFV.player && typeof SFV.player.getMeta === 'function') {
+        var pm = SFV.player.getMeta();
+        if (pm && pm.cover) coverUrl = pm.cover;
+        if (!coverUrl && pm && pm.pic) coverUrl = pm.pic;
+      }
+      if (!coverUrl && videoEl && videoEl.poster) coverUrl = videoEl.poster;
+      // ===== 修复结束 =====
+      if (coverUrl) {
+        cover.style.backgroundImage = 'url("' + String(coverUrl).replace(/"/g, '\\"') + '")';
         cover.classList.remove('cover-empty');
       } else {
         cover.style.backgroundImage = '';
         cover.classList.add('cover-empty');
+        // =====【修复2026-09-12 23:36】本地海报缓存兜底（不依赖网络）=====
+        // 用户在浏览厅/详情页看过的片子，海报已由 SFV.posterCache 以 data URL 落到本地，
+        // 播放器优先复用它，避免「源无海报 + TMDB 不可达」时左侧永远空白。
+        // 缓存键 = view.key（与 online-detail.js / model.js 存缓存用的键一致），
+        // 即 meta.seriesKey；单集级 meta.key 作为次选。
+        var cacheKeys = [];
+        if (meta.seriesKey) cacheKeys.push(meta.seriesKey);
+        if (meta.key && meta.key !== meta.seriesKey) cacheKeys.push(meta.key);
+        if (!cacheKeys.length && typeof pm !== 'undefined' && pm) {
+          if (pm.seriesKey) cacheKeys.push(pm.seriesKey);
+          if (pm.key && pm.key !== pm.seriesKey) cacheKeys.push(pm.key);
+        }
+        coverReqSeq++; // 换片：作废所有在途异步回调，防止旧片海报盖到新片上
+        if (!tryLocalPosterForCover(cacheKeys)) {
+          // =====【修复2026-09-12 22:40】本地仍无 → 走 TMDB 补全 =====
+          // 只有影视态激活中、有标题、且未对该标题尝试过 TMDB 时才请求，
+          // 命中后写回 player.setMeta，使底部控制器与历史记录共享同一张海报。
+          var titleForSearch = meta.title || (SFV.player && typeof SFV.player.getMeta === 'function' && SFV.player.getMeta() || {}).title;
+          if (active && titleForSearch) tryTmdbPosterForCover(titleForSearch);
+          // ===== 修复结束 =====
+        }
+        // ===== 修复结束 =====
       }
     }
     refreshModeBtn(); refreshSpeed(); updateNavButtons(); refreshHeartBtn();
+  }
+
+  // 写入 #control-cover；seq 不匹配（已换片）或已有海报时放弃写入。
+  // 返回 true 表示海报已就位。
+  function setCoverUrl(url, seq) {
+    if (seq !== coverReqSeq) return false;
+    var cover = $('control-cover');
+    if (!cover || !url) return false;
+    if (cover.style.backgroundImage) return true;
+    cover.style.backgroundImage = 'url("' + String(url).replace(/"/g, '\\"') + '")';
+    cover.classList.remove('cover-empty');
+    return true;
+  }
+
+  // 本地海报缓存兜底：先同步查内存（resolvePic），未命中再异步查 IPC/localStorage（get）。
+  // 返回 true 表示同步已命中（调用方无需再走 TMDB）。
+  function tryLocalPosterForCover(keys) {
+    if (!keys || !keys.length || !SFV.posterCache) return false;
+    var seq = coverReqSeq;
+    var i;
+    // ① 同步：posterCache 内存层
+    if (typeof SFV.posterCache.resolvePic === 'function') {
+      for (i = 0; i < keys.length; i++) {
+        if (!keys[i]) continue;
+        var hit = SFV.posterCache.resolvePic(keys[i], '');
+        if (hit) return setCoverUrl(hit, seq);
+      }
+    }
+    // ② 异步：IPC 文件桥 / localStorage 兜底
+    if (typeof SFV.posterCache.get !== 'function') return false;
+    var idx = 0;
+    function attemptNext() {
+      if (seq !== coverReqSeq || idx >= keys.length) return;
+      var key = keys[idx++];
+      if (!key) { attemptNext(); return; }
+      try {
+        SFV.posterCache.get(key).then(function (dataUrl) {
+          if (seq !== coverReqSeq) return;
+          if (dataUrl && setCoverUrl(dataUrl, seq)) return;
+          attemptNext();
+        }).catch(function () { if (seq === coverReqSeq) attemptNext(); });
+      } catch (e) { attemptNext(); }
+    }
+    attemptNext();
+    return false;
+  }
+
+  // 影视态下源未提供海报时，用 TMDB bestMatch 补全左侧 #control-cover
+  function tryTmdbPosterForCover(title) {
+    if (!title || tmdbPosterTried[title]) return;
+    tmdbPosterTried[title] = true; // 先标记，避免 TMDB 未配置或失败时反复请求
+    if (!SFV.tmdb || typeof SFV.tmdb.hasKey !== 'function' || !SFV.tmdb.hasKey()) return;
+    if (typeof SFV.tmdb.bestMatch !== 'function') return;
+    SFV.tmdb.bestMatch(title).then(function (m) {
+      if (!m || !m.poster) return;
+      var cover = $('control-cover');
+      if (!cover) return;
+      // 若此时已有海报（例如 TMDB 请求过程中用户切换了源），不再覆盖
+      if (cover.style.backgroundImage) return;
+      cover.style.backgroundImage = 'url("' + String(m.poster).replace(/"/g, '\\"') + '")';
+      cover.classList.remove('cover-empty');
+      // 同步写回 player 元数据，避免下次重进还要再查
+      if (SFV.player && typeof SFV.player.setMeta === 'function') SFV.player.setMeta({ cover: m.poster });
+    }).catch(function (e) { /* TMDB 未配置/网络失败静默降级，不打扰播放 */ });
   }
 
   // ---------- 空间切换：切到音乐空间强制关闭视频 ----------

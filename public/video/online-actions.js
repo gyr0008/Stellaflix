@@ -116,7 +116,7 @@
     if (typeof global.setFxPanelTab === 'function') {
       try { global.setFxPanelTab('system'); opened = true; } catch (e) {}
     }
-    if (!opened) toast('未找到视觉控制台「CMS10 片源」入口，请确认 fx-sources.js 已加载。');
+    if (!opened) toast('未找到视觉控制台「CMS10」入口，请确认 fx-sources.js 已加载。');
   }
 
   // ---------------------------------------------------------------- 规则管理面板（Kazumi）

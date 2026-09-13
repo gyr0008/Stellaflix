@@ -401,20 +401,30 @@
     // <webview>.getWebContents() 返回 null，无法注册 webRequest，故改为可靠的主进程路径）。
     if (typeof window !== 'undefined' && window.desktopWindow && typeof window.desktopWindow.resolveMediaSniff === 'function') {
       try {
-        var sniffRes = await window.desktopWindow.resolveMediaSniff(episodePageUrl, { timeoutMs: timeoutMs || 12000 });
-        if (sniffRes && sniffRes.ok && sniffRes.best && sniffRes.best.url) {
-          var rawUrl = sniffRes.best.url;
+        var sniffRes = await window.desktopWindow.resolveMediaSniff(episodePageUrl, { timeoutMs: timeoutMs || 15000 });
+        // 兼容两种契约：
+        //   新：{ ok, best:{url,score}, candidates:[...] }
+        //   旧：{ ok, url, mime }（历史 IPC）
+        var best = null;
+        if (sniffRes && sniffRes.best && sniffRes.best.url) {
+          best = sniffRes.best;
+        } else if (sniffRes && sniffRes.ok && sniffRes.url) {
+          best = { url: sniffRes.url, score: sniffRes.score || 0, mime: sniffRes.mime };
+        }
+        if (best && best.url) {
+          var rawUrl = best.url;
           var playUrl = rawUrl;
           if (/^https?:\/\//i.test(rawUrl)) {
             try { playUrl = '/api/proxy?url=' + encodeURIComponent(rawUrl); } catch (e) {}
           }
-          console.log('[KazumiBridge] 隐藏窗口嗅探命中(score=' + sniffRes.best.score + '): ' + rawUrl.slice(0, 120));
+          console.log('[KazumiBridge] 隐藏窗口嗅探命中(score=' + (best.score || 0) + '): ' + rawUrl.slice(0, 120));
           return { url: playUrl, method: 'media-sniff', embed: false };
         }
-        console.log('[KazumiBridge] 隐藏窗口嗅探未命中');
+        console.log('[KazumiBridge] 隐藏窗口嗅探未命中', sniffRes && sniffRes.error ? ('(' + sniffRes.error + ')') : '');
       } catch (e) {
         console.warn('[KazumiBridge] 隐藏窗口嗅探异常:', (e && e.message) || e);
       }
+      // 嗅探 API 存在但未命中：返回 null 交给上层 HTML 嗅探 / embed 兜底
       return null;
     }
 

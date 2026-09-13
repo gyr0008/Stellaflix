@@ -6,6 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Stellaflix</title>
   <meta name="referrer" content="no-referrer">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="icon" type="image/png" sizes="512x512" href="icon.png">
   <link
     href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap"
     rel="stylesheet">
@@ -18,6 +20,7 @@
 <link rel="stylesheet" href="video/watch-history.css">
 <link rel="stylesheet" href="video/hall.css">
 <link rel="stylesheet" href="video/bangumi-calendar.css">
+<link rel="stylesheet" href="video/bangumi-timeline.css">
 <link rel="stylesheet" href="video/wallpaper-engine.css">
 <link rel="stylesheet" href="video/lighthouse/lighthouse.css">
 <link rel="stylesheet" href="css/music-agent-command.css">
@@ -279,11 +282,11 @@
             </button>
 
             <button class="home-insight-card home-ranking-entry home-radio-entry" type="button"
-              onclick="openHomeDashboardRadio()" aria-label="打开平台推荐">
+              onclick="openRadioModes('all')" aria-label="打开音乐电台">
               <span class="home-ranking-entry-copy">
-                <span class="home-insight-kicker">PLATFORM PICKS · 平台推荐</span>
+                <span class="home-insight-kicker">RADIO MODES · 场景漫游</span>
                 <span class="home-ranking-entry-title">推荐电台 / 歌单</span>
-                <span class="home-ranking-entry-sub">读取每日歌曲、推荐歌单与推荐 Feed，不用关键词搜索</span>
+                <span class="home-ranking-entry-sub">私人漫游、热门 DJ、二次元、R&B、游戏与深夜模式</span>
               </span>
               <span class="home-radio-entry-art" aria-hidden="true"><i></i><i></i></span>
               <span class="home-next-arrow" aria-hidden="true">›</span>
@@ -325,6 +328,30 @@
           <button id="home-platform-recommend-refresh" type="button">刷新当前平台</button>
           <button id="home-platform-recommend-done" type="button">完成</button>
         </div>
+      </div>
+    </div>
+
+    <div id="home-radio-modes-mask" class="modal-mask" role="dialog" aria-modal="true" aria-hidden="true"
+      aria-labelledby="home-radio-modes-title">
+      <div class="modal home-radio-modes-modal">
+        <div class="home-radio-modes-head">
+          <div>
+            <h2 id="home-radio-modes-title">音乐电台</h2>
+            <p>选一个状态，让音乐自己往下走；优先从本地与常听偏好挑选，再由多平台搜索补足。</p>
+          </div>
+          <button id="home-radio-modes-close" class="home-radio-modes-close" type="button" aria-label="关闭音乐电台">×</button>
+        </div>
+        <div class="home-radio-modes-toolbar">
+          <div id="home-radio-modes-tabs" class="home-radio-modes-tabs" role="tablist" aria-label="电台分类">
+            <button class="radio-category-btn active" type="button" role="tab" data-radio-category="all" onclick="selectRadioCategory('all')">全部</button>
+            <button class="radio-category-btn" type="button" role="tab" data-radio-category="personal" onclick="selectRadioCategory('personal')">为你推荐</button>
+            <button class="radio-category-btn" type="button" role="tab" data-radio-category="scene" onclick="selectRadioCategory('scene')">场景</button>
+            <button class="radio-category-btn" type="button" role="tab" data-radio-category="style" onclick="selectRadioCategory('style')">风格</button>
+            <button class="radio-category-btn" type="button" role="tab" data-radio-category="energy" onclick="selectRadioCategory('energy')">能量</button>
+          </div>
+          <button class="radio-refresh-btn" type="button" onclick="refreshRadioModes()">换一批顺序</button>
+        </div>
+        <div id="radio-mode-grid" class="radio-mode-grid" aria-live="polite"></div>
       </div>
     </div>
 
@@ -1356,6 +1383,15 @@
               <path d="M12 5v14" />
               <path d="M5 12h14" />
             </svg></button>
+          <!-- 修复2026-09-06：补回 #track-detail-btn（ⓘ 视频信息按钮）。
+               影视态播放时显示并打开视频技术信息面板；音乐态保持隐藏（player.css 已处理显示逻辑）。 -->
+          <button id="track-detail-btn" class="ctrl-btn" onclick="sfvOpenTrackDetailOrVideoInfo('song')" title="视频信息"
+            aria-label="视频详情" style="display:none;"><svg width="18" height="18" fill="none" stroke="currentColor"
+              stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg></button>
         </div>
         <div class="control-cluster transport">
           <button id="play-mode-btn" class="ctrl-btn" onclick="cyclePlayMode()" title="播放顺序"><svg id="play-mode-icon"
@@ -1492,7 +1528,7 @@
     <div id="login-modal" class="modal-mask">
       <div class="modal dual-login-modal">
         <div class="login-panel-head">
-          <div><b>登录接入</b><small>拖接口端口到 MR</small></div>
+          <div><b>登录接入</b><small>拖接口端口到 SF</small></div>
           <button id="login-reset-all-btn" class="login-reset-all-btn" type="button"
             onclick="logoutAllAccountsAndResetEasterEgg()" title="清除所有平台登录">退出登录</button>
           <button class="login-panel-close" type="button" onclick="closeLoginModal()">×</button>
@@ -1501,20 +1537,20 @@
           <svg id="login-workflow-svg" class="workflow-link-layer login-link-layer" aria-hidden="true"></svg>
           <div class="login-platform-tabs login-node-providers" id="login-platform-tabs">
             <button id="login-provider-netease" class="netease active workflow-node" type="button" data-login-provider="netease"
-              onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><b>网易云</b><small>官方扫码 / Cookie</small><span class="flow-port out" data-login-provider-output="netease" title="拖到 MR 接入口"></span></button>
+              onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><b>网易云</b><small>官方扫码 / Cookie</small><span class="flow-port out" data-login-provider-output="netease" title="拖到 SF 接入口"></span></button>
             <button id="login-provider-qq" class="qq workflow-node" type="button" data-login-provider="qq" onclick="selectLoginProviderNode('qq')"><span
-                class="provider-logo">QQ</span><b>QQ 音乐</b><small>官方扫码 / Cookie</small><span class="flow-port out" data-login-provider-output="qq" title="拖到 MR 接入口"></span></button>
+                class="provider-logo">QQ</span><b>QQ 音乐</b><small>官方扫码 / Cookie</small><span class="flow-port out" data-login-provider-output="qq" title="拖到 SF 接入口"></span></button>
             <button id="login-provider-kugou" class="kugou workflow-node" type="button" data-login-provider="kugou" onclick="selectLoginProviderNode('kugou')"><span
-                class="provider-logo">KG</span><b>酷狗音乐</b><small>官方窗口 / Cookie</small><span class="flow-port out" data-login-provider-output="kugou" title="拖到 MR 接入口"></span></button>
+                class="provider-logo">KG</span><b>酷狗音乐</b><small>官方窗口 / Cookie</small><span class="flow-port out" data-login-provider-output="kugou" title="拖到 SF 接入口"></span></button>
             <button id="login-provider-qishui" class="qishui workflow-node" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span
-                class="provider-logo">QS</span><b>汽水音乐</b><small>官方扫码 / 抖音确认</small><span class="flow-port out" data-login-provider-output="qishui" title="拖到 MR 接入口"></span></button>
+                class="provider-logo">QS</span><b>汽水音乐</b><small>官方扫码 / 抖音确认</small><span class="flow-port out" data-login-provider-output="qishui" title="拖到 SF 接入口"></span></button>
             <button id="login-provider-spotify" class="spotify workflow-node" type="button" data-login-provider="spotify" onclick="selectLoginProviderNode('spotify')"><span
-                class="provider-logo">SP</span><b>Spotify</b><small>官方 OAuth</small><span class="flow-port out" data-login-provider-output="spotify" title="拖到 MR 接入口"></span></button>
+                class="provider-logo">SP</span><b>Spotify</b><small>官方 OAuth</small><span class="flow-port out" data-login-provider-output="spotify" title="拖到 SF 接入口"></span></button>
           </div>
-          <div class="login-node-hub workflow-node" data-login-node="mr">
-            <span class="flow-port in" data-login-mr-target="mr" title="MR 接入口"></span>
-            <span class="login-node-orb">MR</span>
-            <div class="login-node-copy"><b>MR</b><small>等待接入</small></div>
+          <div class="login-node-hub workflow-node" data-login-node="sf">
+            <span class="flow-port in" data-login-sf-target="sf" title="SF 接入口"></span>
+            <span class="login-node-orb" aria-label="Stellaflix"><svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="300" height="300" rx="64" fill="#F7F4EC"/><ellipse cx="150" cy="160" rx="128" ry="34" fill="none" stroke="#2E2B26" stroke-width="14" transform="rotate(-16 150 160)"/><circle cx="150" cy="148" r="70" fill="#5B7A9D"/><path d="M 45 178 A 128 34 -16 0 0 150 190" fill="none" stroke="#2E2B26" stroke-width="14" stroke-linecap="round"/><path d="M 232 118 L 246 146 L 232 138 L 218 146 Z" fill="#2E2B26"/></svg></span>
+            <div class="login-node-copy"><b>SF</b><small>等待接入</small></div>
             <div class="login-mode-nodes">
               <button id="login-mode-official" class="login-mode-node active workflow-node" type="button" data-login-mode="official"
                 onclick="selectLoginMode('official')"><span class="provider-logo">QR</span><b>扫码</b><small>官方窗口</small></button>
@@ -1538,7 +1574,7 @@
           <div class="login-auth-copy">
             <h2 id="login-modal-title">扫码登录网易云音乐</h2>
             <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
-            <div id="qr-status">拖动接口到 MR 接入口后开始登录。</div>
+            <div id="qr-status">拖动接口到 SF 接入口后开始登录。</div>
           </div>
           <div class="login-auth-body">
             <div id="qr-shell" class="qr-shell">
@@ -1741,9 +1777,9 @@
           <div id="local-beat-sub" class="local-beat-track-sub">选择一种电影视角分析方式</div>
         </div>
         <div class="local-beat-tabs">
-          <button id="local-beat-tab-mr" class="local-beat-tab active" type="button"
-            onclick="selectLocalBeatMode('mr')">
-            <b>MR 分析</b><span>日常电影视角</span>
+          <button id="local-beat-tab-sf" class="local-beat-tab active" type="button"
+            onclick="selectLocalBeatMode('sf')">
+            <b>SF 分析</b><span>日常电影视角</span>
           </button>
           <button id="local-beat-tab-dj" class="local-beat-tab" type="button" onclick="selectLocalBeatMode('dj')">
             <b>DJ 分析</b><span>长混音/强节奏</span>
@@ -1964,21 +2000,22 @@
     "video/back-to-top.js",
 "video/page-home.js",
 "video/page-world.js",
-    "video/lighthouse/state.js",
-    "video/lighthouse/security.js",
-    "video/lighthouse/geo.js",
-    "video/lighthouse/edge.js",
-    "video/lighthouse/room.js",
-    "video/lighthouse/sync.js",
-    "video/lighthouse/webrtc.js",
-    "video/lighthouse/beacon-view.js",
-    "video/lighthouse/mock.js",
-    "video/lighthouse/globe.js",
-    "video/lighthouse/ui.js",
-    "video/lighthouse/view.js",
+    // "video/lighthouse/state.js",          // 灯塔模块已暂停，待新3D地球实现
+    // "video/lighthouse/security.js",
+    // "video/lighthouse/geo.js",
+    // "video/lighthouse/edge.js",
+    // "video/lighthouse/room.js",
+    // "video/lighthouse/sync.js",
+    // "video/lighthouse/webrtc.js",
+    // "video/lighthouse/beacon-view.js",
+    // "video/lighthouse/mock.js",
+    // "video/lighthouse/globe.js",
+    // "video/lighthouse/ui.js",
+    // "video/lighthouse/view.js",
     "video/kazumi/rule-schema.js",
     "video/kazumi/url-utils.js",
     "video/kazumi/http-client.js",
+    "video/kazumi/rules-repo-client.js",
     "video/kazumi/xpath-engine.js",
     "video/kazumi/rule-engine.js",
     "video/kazumi/index.js",
@@ -1986,6 +2023,9 @@
     "video/kazumi-bridge.js",
     "video/kazumi-bridge-captcha.js",
     "video/bangumi.js",
+    "video/bangumi-season.js",
+    "video/bangumi-timeline.js",
+    "video/bangumi-info.js",
     "video/bangumi-calendar.js",
     "video/danmaku/entry.js",
     "video/danmaku/episode.js",
@@ -2015,14 +2055,16 @@
     "video/hall.js",
     "video/page-collections.js",
     "video/watch-history.js",
-    "video/huilian-providers.js",
-    "video/huilian-stream.js",
-    "video/huilian-provider-hls.js",
-    "video/huilian-provider-webdav.js",
-    "video/huilian-provider-emby.js",
-    "video/huilian-provider-aliyun.js",
-    "video/huilian-provider-magnet.js",
-    "video/huilian-page.js"
+    "video/page-discover.js"
+    // 汇联完整实现暂时下线，改为占位页；恢复时取消下列注释并去掉 page-discover.js
+    // "video/huilian-providers.js",
+    // "video/huilian-stream.js",
+    // "video/huilian-provider-hls.js",
+    // "video/huilian-provider-webdav.js",
+    // "video/huilian-provider-emby.js",
+    // "video/huilian-provider-aliyun.js",
+    // "video/huilian-provider-magnet.js",
+    // "video/huilian-page.js"
   ];
   var CAP = [];
   var docAdd = null, winAdd = null, wrapped = false;
@@ -2068,6 +2110,7 @@
  <!-- AI 助手 (小M) -->
  <script src="js/agent-adapter.js"></script>
  <script src="js/agent-music-tools.js"></script>
+ <script src="js/agent-video-tools.js"></script>
  <script src="js/music-agent-command.js"></script>
 
  <!-- 第三方音源：模态 DOM -->
@@ -2091,19 +2134,13 @@
            <div id="custom-source-mode-switch" class="custom-source-mode-switch">
              <button type="button" data-mode="official-first" data-active="1" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setMode('official-first')">官方优先</button>
              <button type="button" data-mode="custom-first" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setMode('custom-first')">自定义优先</button>
-             <button type="button" data-mode="custom-only" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setMode('custom-only')">仅自定义</button>
+            <button type="button" data-mode="aggregate" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setMode('aggregate')">聚合解析</button>
            </div>
          </div>
          <div class="row">
            <label>解析后端地址</label>
-           <input id="custom-source-backend-url" type="text" placeholder="https://your-musicserver.example/v1/music/resolve-url（留空用内置默认）" style="flex:1;min-width:240px;">
+           <input id="custom-source-backend-url" type="text" placeholder="https://your-musicserver.example/v1/music/resolve-url" style="flex:1;min-width:240px;">
            <button class="btn-primary" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setBackendUrl((document.getElementById('custom-source-backend-url')||{}).value)">保存</button>
-         </div>
-         <div class="custom-source-hint">
-           解析后端地址（musicserver 类）：仅对内置「青听海棠」源生效。留空使用内置默认（青听公共后端，可能已失效）；填入你自建或可用的解析后端并保存即生效（已启用音源会自动重载配置）。
-         </div>
-         <div class="custom-source-hint" id="custom-source-overview-hint">
-           加载中...
          </div>
        </section>
        <section class="panel" data-panel="installed" data-active="0">
@@ -2141,10 +2178,7 @@
              <span id="custom-source-import-status" style="color:#a9b0d4;font-size:12px;align-self:center;"></span>
            </div>
          </div>
-         <div class="custom-source-hint">
-           建议使用 <b>洛雪 LX Music 自定义音源 API 2.0.0</b> 标准编写的脚本；粘贴后可先“预览校验”查看 packageMeta 与能力声明后再安装。
-         </div>
-       </section>
+      </section>
        <section class="panel" data-panel="log" data-active="0">
          <div class="row" style="justify-content:space-between;">
            <span style="color:#b6c0e4;font-size:13px;">运行日志（脚本 import / 网络 / resolve 时会产出）</span>

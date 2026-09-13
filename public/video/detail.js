@@ -81,6 +81,20 @@
     }).catch(function () { return null; });
   }
 
+  // 详情页抓到的海报回写（2026-09-13）：
+  //   ① 补 view.pic —— 起播链路 detail-source.playCandidate 构造 v2 时取 `view.pic || v.pic`，
+  //      详情页 enrich 出的 TMDB 海报原先只画到背景层、没写回 view，起播后海报就丢了。
+  //   ② 落本地缓存 SFV.posterCache（键 = view.key）—— 供底部控制条左侧海报容器、
+  //      历史/追片列表离线复用，不依赖 TMDB 是否可达。
+  // 已有源海报时不覆盖（源海报才是该条目的正片海报），仅在缺失时补齐。
+  function rememberPoster(view, url) {
+    if (!view || !url) return;
+    if (!view.pic) view.pic = url;
+    if (view.key && SFV.posterCache && typeof SFV.posterCache.cache === 'function') {
+      try { SFV.posterCache.cache(view.key, view.pic || url); } catch (e) { /* 缓存失败不影响展示 */ }
+    }
+  }
+
   function mkPill(extraCls, iconHtml, label) {
     var b = el('button', 'sfv-plex-pill' + (extraCls ? ' ' + extraCls : ''));
     b.type = 'button';
@@ -387,6 +401,9 @@
         if (!b) return; // 基础渲染已显示 view.title/pic，静默保留
         // 背景替换为 TMDB backdrop
         if (b.backdrop) bg.style.backgroundImage = 'url("' + esc(b.backdrop) + '")';
+        // 详情页已抓到 TMDB 海报（w500）：回写 view.pic + 落本地缓存，
+        // 让底部控制条左侧海报容器直接复用这张已经下载好的图。
+        if (b.poster) rememberPoster(view, b.poster);
         // 主标题：A 方案 - TMDB logo 矢量图优先
         // 1. 有 TMDB logo（zh 优先 > en > null > 其他, 同语种按 vote_average 降序）
         //    → 渲染透明 PNG 标题设计(鬼玩人红字 / 蚁人红蓝 Marvel 字)
@@ -479,6 +496,7 @@
     // 海报背景层（基础：view.pic；enrich 后替换为 TMDB backdrop）
     var bg = el('div', 'sfv-plex-bg');
     if (view.pic) bg.style.backgroundImage = 'url("' + esc(view.pic) + '")';
+    rememberPoster(view, view.pic); // 源自带海报：立即落本地缓存，供起播后底部控制条复用
     root.appendChild(bg);
 
     var content = el('div', 'sfv-plex-content');

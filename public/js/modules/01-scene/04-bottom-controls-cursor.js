@@ -1,3 +1,33 @@
+// Cached layout rects for high-frequency pointer hit tests. Forced
+// getBoundingClientRect on every mousemove causes layout thrash on low-end GPUs.
+var pointerUiRectCache = {
+  at: 0,
+  ttl: 80,
+  map: Object.create(null),
+};
+function invalidatePointerUiRectCache() {
+  pointerUiRectCache.at = 0;
+  pointerUiRectCache.map = Object.create(null);
+}
+window.addEventListener('resize', invalidatePointerUiRectCache, { passive: true });
+function pointerUiRect(id) {
+  var now = performance.now();
+  if (now - pointerUiRectCache.at > pointerUiRectCache.ttl) {
+    pointerUiRectCache.at = now;
+    pointerUiRectCache.map = Object.create(null);
+  }
+  if (pointerUiRectCache.map[id] !== undefined) return pointerUiRectCache.map[id];
+  var el = document.getElementById(id);
+  var rect = el ? el.getBoundingClientRect() : null;
+  pointerUiRectCache.map[id] = rect;
+  return rect;
+}
+function pointInExpandedRect(x, y, rect, pad) {
+  if (!rect) return false;
+  var p = pad || 0;
+  return x >= rect.left - p && x <= rect.right + p && y >= rect.top - p && y <= rect.bottom + p;
+}
+
 function hasRestoredPlaybackCandidate() {
   if (!restoredLastPlaybackSnapshot) return false;
   if (currentLocalSong) return true;
@@ -223,23 +253,23 @@ function updateControlsAutoHideFromPointer(x, y) {
   if (diyPlayerMode) {
     var fxPanel = document.getElementById('fx-panel');
     var fxFab = document.getElementById('fx-fab');
-    var fr = fxPanel ? fxPanel.getBoundingClientRect() : null;
-    var br = fxFab ? fxFab.getBoundingClientRect() : null;
-    var overFxPanel = fxPanel && (fxPanel.classList.contains('peek') || fxPanel.classList.contains('show')) && fr && x >= fr.left - 18 && x <= fr.right + 18 && y >= fr.top - 18 && y <= fr.bottom + 18;
-    var overFxFab = br && x >= br.left - 18 && x <= br.right + 18 && y >= br.top - 18 && y <= br.bottom + 18;
+    var fr = fxPanel ? pointerUiRect('fx-panel') : null;
+    var br = fxFab ? pointerUiRect('fx-fab') : null;
+    var overFxPanel = fxPanel && (fxPanel.classList.contains('peek') || fxPanel.classList.contains('show')) && pointInExpandedRect(x, y, fr, 18);
+    var overFxFab = br && pointInExpandedRect(x, y, br, 18);
     if (overFxPanel || overFxFab) {
       scheduleControlsHide(80);
       return;
     }
   }
   controlsLastMoveAt = performance.now();
-  var rect = bar.getBoundingClientRect();
+  var rect = pointerUiRect('bottom-bar');
   var handle = document.getElementById('bottom-handle');
-  var hr = handle ? handle.getBoundingClientRect() : null;
+  var hr = handle ? pointerUiRect('bottom-handle') : null;
   var overHandle = hr && x >= hr.left - 18 && x <= hr.right + 18 && y >= hr.top - 12 && y <= hr.bottom + 14;
-  var overBar = x >= rect.left - 18 && x <= rect.right + 18 && y >= rect.top - 18 && y <= rect.bottom + 14;
+  var overBar = rect && x >= rect.left - 18 && x <= rect.right + 18 && y >= rect.top - 18 && y <= rect.bottom + 14;
   var mini = document.getElementById('mini-queue-popover');
-  var miniRect = mini ? mini.getBoundingClientRect() : null;
+  var miniRect = mini ? pointerUiRect('mini-queue-popover') : null;
   var overMini = miniQueueOpen && miniRect && x >= miniRect.left - 16 && x <= miniRect.right + 16 && y >= miniRect.top - 16 && y <= miniRect.bottom + 16;
   if (overHandle) wakeBottomHandle();
   if (overBar || overMini || overHandle) revealBottomControls(overHandle ? 900 : 520);
@@ -251,6 +281,23 @@ function toggleControlsAutoHide() {
   saveBooleanPreference(CONTROLS_AUTO_HIDE_STORE_KEY, controlsAutoHide);
   var btn = document.getElementById('controls-hide-btn');
   if (btn) btn.classList.toggle('active', controlsAutoHide);
+  // =====【修复2026-09-06 17:31】影视态下控制条常驻设计 =====
+  // player-controller.js 的 sanitizeBar()（150ms 轮询 + MutationObserver）会在影视态激活期间
+  // 强制移除 #bottom-bar 的 soft-hidden class，目的是防止 HLS/拖动时控制条被意外隐藏。
+  // 这套保护器会一并清掉用户主动开启的 soft-hidden，导致用户在影视态下点 #controls-hide-btn
+  // 看似「按钮无效」（持久化已写、.active 已切换、但视觉上控制条永不隐藏）。
+  //
+  // 设计权衡：影视态下控制条必须常驻（防播放卡死），但用户的偏好必须被尊重且持久化。
+  // 方案 A：影视态下点击只持久化偏好 + 切换 .active 视觉态，不调度隐藏；
+  // 退出影视态回到音乐态时，由 01-scene/04-bottom-controls-cursor 的鼠标移动 / 调度逻辑按持久化值生效。
+  if (document.body && document.body.classList.contains('video-player-active')) {
+    setControlsHidden(false); // 影视态下不隐藏，但确保当前显示态正确（防御性）
+    showToast(controlsAutoHide
+      ? '影视态控制条常驻；自动隐藏已开启，切回音乐态后生效'
+      : '影视态控制条常驻；自动隐藏已关闭，切回音乐态后生效');
+    return;
+  }
+  // ===== 修复结束 =====
   setControlsHidden(false);
   if (controlsAutoHide) {
     scheduleControlsHide(520);

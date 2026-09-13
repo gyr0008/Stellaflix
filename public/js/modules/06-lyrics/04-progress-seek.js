@@ -152,7 +152,15 @@ function setProgressVisual(percent) {
   if (fill) fill.style.width = percent + '%';
   if (thumb) thumb.style.left = percent + '%';
 }
+// 影视态下底部进度区（#progress-fill/#progress-thumb/#time-display）已由
+// player-controller.js 的视频 onTimeUpdate 接管；音乐侧若继续写入，两个数据源
+// （音乐 ~4min 与视频 ~数小时）会互相覆盖，表现为进度条与时长显示"跳动"（互窜）。
+// 守卫只拦 UI 写入：音乐播放、听时统计、快照保存不受影响。
+function isVideoPlayerActive() {
+  return typeof document !== 'undefined' && document.body && document.body.classList.contains('video-player-active');
+}
 function updatePlaybackProgressUi() {
+  if (isVideoPlayerActive()) return;
   if (isProgressDragPreviewActive() && progressDragState.previewDuration > 0) {
     renderProgressPreview(getProgressPreviewClockSeconds(), progressDragState.previewDuration);
     return;
@@ -432,6 +440,9 @@ function commitProgressSeek(targetTime, resumeAfterSeek) {
 }
 var progressBar = document.getElementById('progress-bar');
 progressBar.addEventListener('pointerdown', function (e) {
+  // 影视态下 #progress-bar 已由 player-controller 的 mousedown/touchstart 接管（视频 seek），
+  // 音乐侧 pointerdown 若同时响应会造成双重 seek 与 UI 互窜。
+  if (isVideoPlayerActive()) return;
   if (!audio || !getPlaybackDurationSeconds()) return;
   if (typeof resetCuefieldAutoMix === 'function') resetCuefieldAutoMix('manual-seek');
   if (
@@ -489,12 +500,24 @@ progressBar.addEventListener('pointerup', function (e) { endProgressDrag(e, true
 progressBar.addEventListener('pointercancel', function (e) { endProgressDrag(e, false); });
 progressBar.addEventListener('lostpointercapture', function (e) { endProgressDrag(e, true); });
 setInterval(function () {
+  var activePlayback = !!(playing && audio && !audio.paused);
+  // Hidden + idle: skip DOM/localStorage work. Keep running while playing,
+  // while dragging progress, or while a restored snapshot still needs UI paint.
+  if (document.hidden && !activePlayback && !progressDragState.active
+    && !(restoredLastPlaybackSnapshot && pendingPlaybackResumeAt > 0)) {
+    return;
+  }
   if (!audio) {
     if (restoredLastPlaybackSnapshot && pendingPlaybackResumeAt > 0) applyRestoredPlaybackProgressUi(restoredLastPlaybackSnapshot);
     else updatePlaybackProgressUi();
     return;
   }
   if (progressDragState.active) {
+    updatePlaybackProgressUi();
+    return;
+  }
+  if (!activePlayback) {
+    // Paused/seeking UI only — do not burn listen-stats or snapshot writes.
     updatePlaybackProgressUi();
     return;
   }

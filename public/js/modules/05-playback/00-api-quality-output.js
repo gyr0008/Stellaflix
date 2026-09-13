@@ -12,11 +12,28 @@ async function apiJson(url, opts) {
   }
   try {
     var res = await fetch(url, fetchOpts);
+    // 容错: 非 JSON 响应 (如 404 的纯文本 "Not Found") 直接 res.json() 会抛 SyntaxError,
+    // 被调用方 catch 包成晦涩的 "Unexpected token 'N'..."。仅当 Content-Type 不含 json 时显式抛清晰错误,
+    // 让 searchMusic/importedSourceStatus 等上层 try 兜底为 toolError, 不再崩溃。
+    // 注意: 不在此拦截 res.ok —— 后端许多错误响应 (如 /api/search 的 500) 本身就是 JSON,
+    // 调用方依赖其返回体降级, 拦截会误伤既有 JSON 错误流。
+    var ct = (res.headers && res.headers.get ? res.headers.get('content-type') : '') || '';
+    if (ct.indexOf('json') === -1) {
+      var raw = '';
+      try { raw = await res.text(); } catch (e) { /* 忽略读取失败 */ }
+      throw new Error('NON_JSON_RESPONSE status=' + res.status + ' body=' + String(raw || '').slice(0, 120));
+    }
     return res.json();
   } finally {
     if (timer) clearTimeout(timer);
   }
 }
+// 注：本文件经 index-loader.js 拼接进一个 try 块内执行。async function 声明受 ES2017
+// 块级作用域规则约束，不会泄漏到全局（普通 function 因 Annex B 宽松提升才会泄漏），
+// 因此必须显式挂到 window，否则 agent-music-tools.js 等外部独立脚本调用 apiJson 时会
+// 抛出 "ReferenceError: apiJson is not defined"。
+if (typeof window !== 'undefined') { window.apiJson = apiJson; }
+else if (typeof globalThis !== 'undefined') { globalThis.apiJson = apiJson; }
 function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function normalizePlaybackQuality(value) {
   value = String(value || '').toLowerCase();
@@ -676,7 +693,7 @@ function renderAudioOutputDeviceUi() {
     '<div class="audio-route-graph' + (bridgeEnabled ? ' bridge-on' : '') + '">' +
       '<svg id="audio-route-workflow-svg" class="workflow-link-layer audio-link-layer" aria-hidden="true"></svg>' +
       '<div class="audio-flow-source workflow-node" data-audio-node="player">' +
-        '<span class="route-node-kicker">SOURCE</span><span class="route-node-icon">MR</span><span class="route-node-text"><b>Stellaflix Player</b><small>' + escHtml(summaryText) + '</small></span><span class="audio-source-meter" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="flow-port out" data-audio-route-source="player" title="Stellaflix 输出"></span>' +
+        '<span class="route-node-kicker">SOURCE</span><span class="route-node-icon" aria-label="Stellaflix"><svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="300" height="300" rx="64" fill="#F7F4EC"/><ellipse cx="150" cy="160" rx="128" ry="34" fill="none" stroke="#2E2B26" stroke-width="14" transform="rotate(-16 150 160)"/><circle cx="150" cy="148" r="70" fill="#5B7A9D"/><path d="M 45 178 A 128 34 -16 0 0 150 190" fill="none" stroke="#2E2B26" stroke-width="14" stroke-linecap="round"/><path d="M 232 118 L 246 146 L 232 138 L 218 146 Z" fill="#2E2B26"/></svg></span><span class="route-node-text"><b>Stellaflix Player</b><small>' + escHtml(summaryText) + '</small></span><span class="audio-source-meter" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="flow-port out" data-audio-route-source="player" title="Stellaflix 输出"></span>' +
       '</div>' +
       '<div class="audio-route-status"><span class="route-energy-dot"></span><b>Patch Bay</b><small>' + escHtml(audioOutputDeviceId ? '主监听已指定' : '主监听跟随系统默认') + '</small></div>' +
       '<div class="audio-route-board">' +
@@ -702,7 +719,7 @@ function renderAudioOutputDeviceUi() {
   if (workflowSubtitle) workflowSubtitle.textContent = summaryText;
   list.innerHTML =
     '<button class="audio-output-summary-card" type="button" onclick="openAudioOutputWorkflowPanel()">' +
-      '<span class="route-node-icon">MR</span>' +
+      '<span class="route-node-icon" aria-label="Stellaflix"><svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="300" height="300" rx="64" fill="#F7F4EC"/><ellipse cx="150" cy="160" rx="128" ry="34" fill="none" stroke="#2E2B26" stroke-width="14" transform="rotate(-16 150 160)"/><circle cx="150" cy="148" r="70" fill="#5B7A9D"/><path d="M 45 178 A 128 34 -16 0 0 150 190" fill="none" stroke="#2E2B26" stroke-width="14" stroke-linecap="round"/><path d="M 232 118 L 246 146 L 232 138 L 218 146 Z" fill="#2E2B26"/></svg></span>' +
       '<span class="audio-output-summary-copy"><b>' + escHtml(summaryText) + '</b><small>' +
         escHtml((activePrimary ? '主输出已指定' : '主输出使用系统默认') + ' / 镜像监听 ' + mirrorStateLabel + ' / 桥接 ' + (bridgeEnabled ? '开启' : '关闭')) +
       '</small></span>' +

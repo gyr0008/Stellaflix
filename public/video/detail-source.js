@@ -36,6 +36,166 @@
   // B1：按 sourceKey 缓存最近一次 captcha 上下文（searchURL/antiConfig/keyword/ruleName），
   // 供「进行验证」webview 弹窗取用与「已验证，重试」前读回分区 cookie 注入重查。
   var captchaCtxByKey = {};
+  // 播放会话：跨源热切换用。详情页/浏览厅起播时写入全部候选 + 当前源，
+  // 播放器「选集」面板据此展示全部片源并标出正在播放的那一个。
+  // currentKey 仅在「真正起播成功」后写入；切换失败必须回滚，避免高亮跑到失败源。
+  var playbackSession = null; // { view, candidates, currentKey, switching }
+  var switchSeq = 0; // 切换令牌：失败/过期回调不得改写 currentKey
+
+  function beginPlaybackSession(view, candidates, currentKey) {
+    playbackSession = {
+      view: view || null,
+      candidates: (candidates && candidates.length) ? candidates.slice() : [],
+      currentKey: currentKey || null,
+      switching: false
+    };
+    return playbackSession;
+  }
+  function getPlaybackSession() { return playbackSession; }
+  function markPlaybackSource(currentKey) {
+    if (playbackSession) playbackSession.currentKey = currentKey || null;
+  }
+  function clearPlaybackSession() { playbackSession = null; }
+
+  /**
+   * 候选唯一键：必须用 id（cms:site:vod / kz:rule:src），不能用 sourceKey。
+   * 同一源下多条搜索命中共享 sourceKey，用它做 currentKey 会整片一起高亮，
+   * 并让 isCur 误判为 true 导致点击被吞（表现为“切不动且无提示”）。
+   */
+  function candKeyOf(c) {
+    if (!c) return '';
+    return c.id || c.sourceKey || '';
+  }
+
+  /**
+   * 播放器面板展示用候选：只保留与当前影片标题真正相关的源。
+   * 优先精确匹配（清洗后全等）；有精确命中时绝不混入「你的名字是玫瑰」等子串噪声。
+   */
+  function candidatesForPanel(view) {
+    var all = (playbackSession && playbackSession.candidates) || [];
+    if (!all.length) return [];
+    var title = ((view && view.title) || (playbackSession.view && playbackSession.view.title) || '').trim();
+    if (!title) return all.slice();
+    if (SFV.SearchFilterCore && typeof SFV.SearchFilterCore.filterCandidatesForQuery === 'function') {
+      var filtered = SFV.SearchFilterCore.filterCandidatesForQuery(all, title, { topN: 6 });
+      if (filtered && filtered.length) return filtered;
+    }
+    // 兜底：手动做精确/前缀收敛，避免子串噪声
+    var norm = function (s) { return String(s || '').trim().toLowerCase().replace(/[。．.\s]+$/g, ''); };
+    var q = norm(title);
+    var exact = all.filter(function (c) { return norm(c.title) === q; });
+    if (exact.length) return exact;
+    var prefix = all.filter(function (c) {
+      var t = norm(c.title);
+      return t && (t.indexOf(q) === 0 || q.indexOf(t) === 0);
+    });
+    return prefix.length ? prefix : all.slice(0, 6);
+  }
+
+  /**
+   * 跨源热切换（播放器「选集」面板调用）。
+   * 只有真正起播成功（编排器 doPlay / 解析完成）才 markPlaybackSource；
+   * 失败必须回滚到切换前的 currentKey，绝不能把高亮留在失败源上。
+   */
+  function switchPlaybackSource(c) {
+    if (!c || !playbackSession) { toast('当前无法切换片源'); return; }
+    var key = candKeyOf(c);
+    if (key && playbackSession.currentKey === key) return;
+    var prevKey = playbackSession.currentKey;
+    var mySeq = ++switchSeq;
+    playbackSession.switching = true;
+    toast('正在切换片源…');
+
+    function fail(msg) {
+      if (mySeq !== switchSeq) return;
+      if (playbackSession) {
+        playbackSession.switching = false;
+        playbackSession.currentKey = prevKey; // 回滚到真实在播源
+      }
+      toast(msg || '切换片源失败，已保持原片源');
+    }
+    function armOk() {
+      // 起播链路成功后由编排器回调 confirm；此处不提前改 currentKey
+      if (mySeq !== switchSeq) return;
+      playbackSession._switchConfirmSeq = mySeq;
+      playbackSession._switchConfirmKey = key;
+      playbackSession._switchFail = fail;
+    }
+
+    if (c.kind === 'kazumi') {
+      var ref = c._ref || {};
+      if (!SFV.kazumi || !SFV.kazumi.getChapters) { fail('Kazumi 不可用'); return; }
+      SFV.kazumi.getChapters(ref.ruleName, ref.src).then(function (res) {
+        if (mySeq !== switchSeq) return;
+        var plays = (res && res.plays) || [];
+        var chosen = plays[0];
+        var episodes = (chosen && chosen.episodes) || [];
+        if (!episodes.length) { fail('该源无可播放剧集'); return; }
+        var v2 = {
+          key: 'kazumi:' + (ref.ruleName || '') + ':' + (ref.src || ''),
+          title: (playbackSession.view && playbackSession.view.title) || ref.title || c.label,
+          pic: (playbackSession.view && playbackSession.view.pic) || ref.pic || '',
+          year: (playbackSession.view && playbackSession.view.year) || '',
+          source: { id: 'kazumi:' + (ref.ruleName || ''), name: ref.ruleName || 'Kazumi' },
+          vodId: ref.src, isKazumi: true, ruleName: ref.ruleName
+        };
+        var ep0 = pickEpisode(episodes);
+        if (!ep0 || !ep0.url) { fail('该源无可播放地址'); return; }
+        armOk();
+        if (episodes.length === 1 && plays.length === 1) doPlayEpisode(v2, ep0, plays[0]);
+        else if (SFV.online && SFV.online.playEpisode) SFV.online.playEpisode(v2, ep0, plays[0], { plays: plays, fromIndex: 0 });
+        else fail('播放模块未就绪');
+      }).catch(function (e) {
+        fail('切换失败：' + (e && e.message ? e.message : '源站网络不通或规则不匹配'));
+      });
+      return;
+    }
+
+    // CMS10
+    var v = c._ref || {};
+    if (!v.sourceId || v.vodId == null) { fail('该源缺少影片信息'); return; }
+    if (!SFV.sources || !SFV.sources.detail) { fail('CMS 不可用'); return; }
+    SFV.sources.detail(v.sourceId, v.vodId).then(function (res) {
+      if (mySeq !== switchSeq) return;
+      if (!res || !res.ok || !res.plays || !res.plays.length) { fail('该源无播放地址'); return; }
+      var v2 = {
+        key: (v.sourceId || '?') + ':' + (v.vodId || ''),
+        title: (playbackSession.view && playbackSession.view.title) || v.title || c.label,
+        pic: (playbackSession.view && playbackSession.view.pic) || v.pic || '',
+        year: (playbackSession.view && playbackSession.view.year) || v.year || '',
+        source: { id: v.sourceId, name: v.sourceName || v.sourceId }, vodId: v.vodId
+      };
+      var play0 = res.plays[0];
+      var mainEp = pickEpisode(play0.episodes);
+      if (!mainEp || !mainEp.url) { fail('该源无可播放地址'); return; }
+      armOk();
+      if (play0.episodes.length === 1 && res.plays.length === 1) doPlayEpisode(v2, mainEp, play0);
+      else if (SFV.online && SFV.online.playEpisode) SFV.online.playEpisode(v2, mainEp, play0, { plays: res.plays, fromIndex: 0 });
+      else fail('播放模块未就绪');
+    }).catch(function (e) {
+      fail('切换失败：' + (e && e.message ? e.message : '获取播放地址失败'));
+    });
+  }
+
+  /** 编排器 doPlay 成功后调用：确认切换，写入 currentKey。 */
+  function confirmPlaybackSwitch() {
+    if (!playbackSession) return;
+    if (playbackSession._switchConfirmKey) {
+      playbackSession.currentKey = playbackSession._switchConfirmKey;
+      playbackSession.switching = false;
+      playbackSession._switchConfirmKey = null;
+      playbackSession._switchConfirmSeq = null;
+      playbackSession._switchFail = null;
+    }
+  }
+  /** 编排器/解析失败时调用：回滚高亮。 */
+  function failPlaybackSwitch(msg) {
+    if (!playbackSession || typeof playbackSession._switchFail !== 'function') return;
+    var fn = playbackSession._switchFail;
+    playbackSession._switchFail = null;
+    playbackSession._switchConfirmKey = null;
+    try { fn(msg); } catch (e) {}
+  }
 
   /**
    * 加载可播放的剧集列表（plays）。
@@ -91,6 +251,22 @@
     // if (sections.scrollIntoView) {
     //   setTimeout(function () { sections.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 30);
     // }
+  }
+
+  /**
+   * 默认起播集：优先用 sources.pickMainEpisode 挑「正片」，跳过「预告片/片花/花絮」等
+   * 短片（CMS10 不提供单集时长，只能按集名关键词判别）。
+   * 修复场景：某源对电影返回「预告片#HD中字」，无脑播 episodes[0] 会起播 2:48 的预告片，
+   * 表现为「电影总时长只有几分钟」。普通剧集（第1集/第2集…）不含关键词，行为不变。
+   * 片源模块尚未就绪时回退第一集，保持旧行为。
+   */
+  function pickEpisode(episodes) {
+    if (!episodes || !episodes.length) return null;
+    if (SFV.sources && typeof SFV.sources.pickMainEpisode === 'function') {
+      var picked = SFV.sources.pickMainEpisode(episodes);
+      if (picked) return picked;
+    }
+    return episodes[0];
   }
 
   /**
@@ -159,7 +335,10 @@
         title: title, poster: view.pic,
         candidates: candidates,
         groups: preGroups,   // 阶段2 流式：显式预建源 Tab（每个单元一 Tab）
-        onPick: function (c) { playCandidate(c, view, sections); }
+        onPick: function (c) {
+          beginPlaybackSession(view, candidates, candKeyOf(c));
+          playCandidate(c, view, sections);
+        }
       });
     }
 
@@ -372,9 +551,17 @@
 
   /**
    * 候选 → 解析剧集 → 单集直播 / 多集渲染选集区（对齐 hall.js playCandidate）。
+   * 注意：此路径用于「首次选源」；播放器内热切换请走 switchPlaybackSource
+   * （带失败回滚，不会把高亮提前写到未起播的源上）。
    */
   function playCandidate(c, view, sections) {
     if (!c) return;
+    // 首次选源：建立会话。currentKey 用唯一 id，避免同源多命中一起高亮。
+    if (!playbackSession || playbackSession.view !== view) {
+      beginPlaybackSession(view, [c], candKeyOf(c));
+    } else {
+      markPlaybackSource(candKeyOf(c));
+    }
     if (c.kind === 'kazumi') {
       var ref = c._ref;
       toast('正在解析 Kazumi 源…');
@@ -393,8 +580,9 @@
           vodId: ref.src, isKazumi: true, ruleName: ref.ruleName
         };
         // 阶段3：多线路全部传入编排器（播放器侧线路切换），不再只在详情页禁用选集
-        if (episodes.length === 1 && plays.length === 1) doPlayEpisode(v2, episodes[0], plays[0]);
-        else SFV.online.playEpisode(v2, episodes[0], plays[0], { plays: plays, fromIndex: 0 });
+        var ep0 = pickEpisode(episodes);
+        if (episodes.length === 1 && plays.length === 1) doPlayEpisode(v2, ep0, plays[0]);
+        else SFV.online.playEpisode(v2, ep0, plays[0], { plays: plays, fromIndex: 0 });
       }).catch(function (e) { toast('Kazumi 解析失败：' + (e && e.message ? e.message : '')); });
     } else {
       var v = c._ref;
@@ -411,8 +599,10 @@
         };
         var play0 = res.plays[0];
         // 阶段3：多线路全部传入编排器（播放器侧线路切换）
-        if (play0.episodes.length === 1 && res.plays.length === 1) doPlayEpisode(v2, play0.episodes[0], play0);
-        else SFV.online.playEpisode(v2, play0.episodes[0], play0, { plays: res.plays, fromIndex: 0 });
+        // 起播集改由 pickEpisode 挑选：跳过预告片/片花，优先「正片/高清/中字」
+        var mainEp = pickEpisode(play0.episodes);
+        if (play0.episodes.length === 1 && res.plays.length === 1) doPlayEpisode(v2, mainEp, play0);
+        else SFV.online.playEpisode(v2, mainEp, play0, { plays: res.plays, fromIndex: 0 });
       }).catch(function (e) { toast('获取播放地址失败：' + (e && e.message ? e.message : '')); });
     }
   }
@@ -429,16 +619,228 @@
         if (!plays.length || !plays[0] || !plays[0].episodes || !plays[0].episodes.length) {
           toast('未找到「' + title + '」的可用播放源'); return;
         }
+        // 自带回退也写入播放会话，播放器面板可标出当前片源
+        var ownKey = view.source && view.source.id
+          ? ((String(view.source.id).indexOf('kazumi:') === 0 ? '' : 'cms:') + view.source.id)
+          : (view.key || '');
+        beginPlaybackSession(view, [{
+          id: ownKey || (view.key || 'own'),
+          sourceKey: ownKey || (view.key || 'own'),
+          label: (view.source && view.source.name) || title || '当前源',
+          sub: title,
+          kind: D.isKazumiView(view) ? 'kazumi' : 'cms',
+          _ref: view
+        }], ownKey || (view.key || 'own'));
         var play = plays[0];
         // 阶段3：多线路全部传入编排器（播放器侧线路切换）
-        if (play.episodes.length === 1 && plays.length === 1) doPlayEpisode(view, play.episodes[0], play);
-        else SFV.online.playEpisode(view, play.episodes[0], play, { plays: plays, fromIndex: 0 });
+        // 起播集改由 pickEpisode 挑选：跳过预告片/片花，优先「正片/高清/中字」
+        var mainEp2 = pickEpisode(play.episodes);
+        if (play.episodes.length === 1 && plays.length === 1) doPlayEpisode(view, mainEp2, play);
+        else SFV.online.playEpisode(view, mainEp2, play, { plays: plays, fromIndex: 0 });
       }).catch(function () {
         toast('未找到「' + title + '」的可用播放源');
       });
     } else {
       toast('未找到「' + title + '」的可用播放源');
     }
+  }
+
+  // ---------------------------------------------------------------- 画质评级
+  // 按片源"线路名(from)"/"集名"中的常见画质关键词从高到低打分，用于片源热切换排序。
+  // 返回整数分 (0~100)，分值越高画质越优；无关键词时返回中性分 50。
+  var QUALITY_KEYWORD_TIERS = [
+    { re: /(4k|uhd|2160p|2160)/i, score: 100 },
+    { re: /(1080p?|full.?hd|fhd|高清)/i, score: 85 },
+    { re: /(720p?|hd|标清)/i, score: 70 },
+    { re: /(bd|bluray|蓝光|remux)/i, score: 95 },
+    { re: /(杜比|dolby|hdr|hlg)/i, score: 90 },
+    { re: /(粤语|双语|中英|中字|特效)/i, score: 55 },
+    { re: /(tc|ts|枪版|cam|scr|webrip|web.?dl)/i, score: 30 },
+    { re: /(dvds|vcd|标清|lq|低清)/i, score: 20 },
+  ];
+  function scoreFromLabel(label) {
+    if (!label) return 50;
+    var s = String(label).trim();
+    for (var i = 0; i < QUALITY_KEYWORD_TIERS.length; i++) {
+      if (QUALITY_KEYWORD_TIERS[i].re.test(s)) return QUALITY_KEYWORD_TIERS[i].score;
+    }
+    return 50;
+  }
+  // 对 plays 列表（多线路）按画质评分降序排列，返回排序后的副本。
+  function sortPlaysByQuality(plays) {
+    if (!plays || plays.length <= 1) return plays || [];
+    var indexed = plays.map(function (p, i) { return { play: p, fromIndex: i, score: scoreFromLabel(p.from) }; });
+    indexed.sort(function (a, b) { return b.score - a.score; });
+    return indexed.map(function (x) { return { play: x.play, fromIndex: x.fromIndex, score: x.score }; });
+  }
+
+  // ---------------------------------------------------------------- 智能恢复播放
+  // 供「历史记录 / 接着看」点击调用：跳过详情页，直接起播。
+  // 策略：
+  //   1) 若历史记录中保存了 lastSourceId + lastVodId，先用该片源试加载播放列表；
+  //   2) 若自带源不可用（失效/无播放列表），跨源搜索同名影片，按画质（BD/4K/1080P/720P...）
+  //      从优到劣排序后逐个尝试，首个有播放列表即起播并回写"最近片源"供下次直用；
+  //   3) 若全部失败，提示未找到。
+  // 进度恢复：优先使用 SFV.model.getProgress(key) 中的 position；无则回退 0。
+  function smartResumePlay(rec) {
+    if (!rec) return;
+    var title = (rec.title || '').trim();
+    if (!title) { toast('该记录缺少标题，无法续播'); return; }
+    // lastVodId 有效判定：排除 null/undefined/空字符串；vodId=0 视为有效（CMS id 从 1 开始，但防御性兼容）
+    function hasVodId(v) { return v != null && v !== ''; }
+    // 统一起播函数：拿到 plays 后再决定起播集
+    var startPlay = function (v2, plays, fromIndex) {
+      if (!plays || !plays.length || !plays[fromIndex] || !plays[fromIndex].episodes || !plays[fromIndex].episodes.length) {
+        toast('未找到「' + title + '」的可用播放源');
+        return;
+      }
+      var target = plays[fromIndex];
+      var ep = pickEpisode(target.episodes);
+      // 获取历史进度
+      var pos = 0;
+      if (SFV.model && typeof SFV.model.getProgress === 'function' && rec.key) {
+        var p = SFV.model.getProgress(rec.key);
+        if (p && typeof p.position === 'number') pos = p.position;
+      }
+      // 标记 lastPlaySource，使下次点击可直用此源
+      if (SFV.watchHistory && typeof SFV.watchHistory.update === 'function') {
+        SFV.watchHistory.update(rec.key, {
+          lastSourceId: v2.source.id,
+          lastVodId: v2.vodId,
+          lastSourceName: v2.source.name || '',
+          lastPlayFromIndex: fromIndex,
+          lastPlayEpisodeIndex: ep.index,
+        });
+      }
+      // 续播也写入播放会话，播放器「选集」面板可标出当前片源
+      var resumeKey = v2.source && v2.source.id
+        ? ((String(v2.source.id).indexOf('kazumi:') === 0 ? '' : 'cms:') + v2.source.id)
+        : (v2.key || '');
+      beginPlaybackSession(v2, [{
+        id: resumeKey || (v2.key || 'resume'),
+        sourceKey: resumeKey || (v2.key || 'resume'),
+        label: (v2.source && v2.source.name) || title || '当前源',
+        sub: title,
+        kind: 'cms',
+        _ref: { sourceId: v2.source && v2.source.id, vodId: v2.vodId, sourceName: v2.source && v2.source.name }
+      }], resumeKey || (v2.key || 'resume'));
+      if (plays.length === 1 && target.episodes.length === 1) {
+        doPlayEpisode(v2, ep, target);
+      } else {
+        SFV.online.playEpisode(v2, ep, target, { plays: plays, fromIndex: fromIndex });
+      }
+      // 续播进度恢复：监听 videoEl 元数据加载完成后跳转（open → src → loadedmetadata → currentTime）
+      if (pos > 0 && SFV.player && typeof SFV.player.getVideoEl === 'function') {
+        var vEl = SFV.player.getVideoEl();
+        if (vEl) {
+          var done = false;
+          var doSeek = function () {
+            if (done) return;
+            try {
+              if (vEl.duration && vEl.duration > 0) {
+                vEl.currentTime = Math.min(pos, vEl.duration - 1);
+                done = true;
+              }
+            } catch (e) {}
+          };
+          vEl.addEventListener('loadedmetadata', doSeek, { once: true });
+          vEl.addEventListener('loadeddata', doSeek, { once: true });
+          // 兜底：200ms 轮询一次，最长等 8s
+          var pollCnt = 0;
+          var poll = setInterval(function () {
+            pollCnt++;
+            if (done || pollCnt > 40) { clearInterval(poll); return; }
+            doSeek();
+          }, 200);
+        }
+      }
+    };
+
+    // 1) 优先用 history 自带源试播
+    var useLast = rec.lastSourceId && hasVodId(rec.lastVodId);
+    var tryLastSource = function (cb) {
+      if (!useLast) { cb(false); return; }
+      var src = (SFV.sources && typeof SFV.sources.getSources === 'function')
+        ? SFV.sources.getSources().filter(function (s) { return s.id === rec.lastSourceId; })[0]
+        : null;
+      if (!src) { cb(false); return; }
+      SFV.sources.detail(src, rec.lastVodId).then(function (res) {
+        if (!res || !res.ok || !res.plays || !res.plays.length) { cb(false); return; }
+        var sorted = sortPlaysByQuality(res.plays);
+        var target = sorted[0];
+        var fromIndex = target.fromIndex;
+        var v2 = {
+          key: (src.id || '?') + ':' + rec.lastVodId,
+          title: title,
+          pic: rec.img || rec.pic || '',
+          year: rec.year || '',
+          source: { id: src.id, name: src.name || '' },
+          vodId: rec.lastVodId
+        };
+        startPlay(v2, res.plays, fromIndex);
+        cb(true);
+      }).catch(function () { cb(false); });
+    };
+
+    // 2) 跨源搜索同片作为兜底
+    var fallbackSearch = function () {
+      var enabled = (SFV.sources && typeof SFV.sources.getEnabledSources === 'function')
+        ? SFV.sources.getEnabledSources() : [];
+      if (!enabled.length) { toast('未配置任何播放源，无法续播'); return; }
+      toast('正在查找「' + title + '」的可用片源…');
+      SFV.sources.search(title, { sources: enabled, pg: 1, timeout: 12000 }).then(function (sres) {
+        if (!sres || !sres.items || !sres.items.length) {
+          toast('未找到「' + title + '」的可用播放源');
+          return;
+        }
+        // 按标题匹配召回候选（精确或前缀匹配优先，否则保留首个）
+        var candidates = [];
+        var inTitle = title.trim().toLowerCase();
+        for (var i = 0; i < sres.items.length; i++) {
+          var it = sres.items[i];
+          if (!it || !it.title) continue;
+          var t = it.title.trim().toLowerCase();
+          if (t === inTitle || t.indexOf(inTitle) === 0 || inTitle.indexOf(t) === 0) {
+            candidates.push(it);
+          }
+        }
+        if (!candidates.length) candidates = sres.items.slice(0, 1);
+        // 串行尝试每个候选，首个有播放列表即起播（避免并发风暴）
+        var q = candidates.slice();
+        function next() {
+          if (!q.length) {
+            toast('未找到「' + title + '」的可用播放源');
+            return;
+          }
+          var cand = q.shift();
+          var variant = (cand.variants && cand.variants.length) ? cand.variants[0] : cand;
+          if (!variant.sourceId || variant.vodId == null) { next(); return; }
+          SFV.sources.detail(variant.sourceId, variant.vodId).then(function (dres) {
+            if (!dres || !dres.ok || !dres.plays || !dres.plays.length) { next(); return; }
+            var sorted = sortPlaysByQuality(dres.plays);
+            var target = sorted[0];
+            var fromIndex = target.fromIndex;
+            var v2 = {
+              key: (variant.sourceId || '?') + ':' + (variant.vodId || ''),
+              title: cand.title || title,
+              pic: rec.img || rec.pic || '',
+              year: rec.year || '',
+              source: { id: variant.sourceId, name: variant.sourceName || variant.sourceId || '' },
+              vodId: variant.vodId
+            };
+            startPlay(v2, dres.plays, fromIndex);
+          }).catch(function () { next(); });
+        }
+        next();
+      }).catch(function () {
+        toast('搜索「' + title + '」失败');
+      });
+    };
+
+    // 执行：先试自带源，失败再跨源搜索
+    tryLastSource(function (ok) {
+      if (!ok) fallbackSearch();
+    });
   }
 
   SFV.detailSource = {
@@ -451,6 +853,17 @@
     doPlayEpisode: doPlayEpisode,
     playCandidate: playCandidate,
     fallbackOwnSource: fallbackOwnSource,
-    onPlayClick: onPlayClick
+    onPlayClick: onPlayClick,
+    smartResumePlay: smartResumePlay,
+    sortPlaysByQuality: sortPlaysByQuality,
+    beginPlaybackSession: beginPlaybackSession,
+    getPlaybackSession: getPlaybackSession,
+    markPlaybackSource: markPlaybackSource,
+    clearPlaybackSession: clearPlaybackSession,
+    candidatesForPanel: candidatesForPanel,
+    switchPlaybackSource: switchPlaybackSource,
+    confirmPlaybackSwitch: confirmPlaybackSwitch,
+    failPlaybackSwitch: failPlaybackSwitch,
+    candKeyOf: candKeyOf
   };
 })(typeof window !== 'undefined' ? window : this);

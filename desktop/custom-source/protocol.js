@@ -99,6 +99,7 @@ module.exports = {
   SOURCE_KEYS,
   QUALITY_KEYS,
   ACTIONS,
+  TARGET_QUALITY,
   parseScriptInfo,
   filterInitPayload,
   selectLxQuality,

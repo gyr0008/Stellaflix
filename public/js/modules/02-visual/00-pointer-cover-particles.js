@@ -1,4 +1,66 @@
 // ============================================================
+// ==== Fix: 初始化全局依赖守卫。本模块属于 02-visual 目录（在 00-state/01-scene 之后），
+// 代码历史上隐式要求 THREE / renderer / scene / camera / orbit / fx / fxDefaults /
+// coverParticleGridForResolution 在进入本模块前已经定义完毕。若缺失就打印一行警告
+// 并把 _pointerCoverInitFailed 置为真，后续全局引用的函数守卫已在 queueParticlePointerFrame /
+// updateParticlePointerFrame / main-loop animate / applyCoverParticleResolution 中存在，
+// 不会级联 TypeError 刷屏。注意：这里特意不 throw，避免单段拼接脚本模式下一个视觉模块
+// 初始化失败直接打断整个启动流程（回到 splash 2.5s failsafe 兜底的全停白屏模式）。
+var _pointerCoverInitFailed = false;
+(function _initDependenciesReadyGuard() {
+  var missing = [];
+  if (typeof THREE === 'undefined') missing.push('THREE');
+  if (typeof renderer === 'undefined' || !renderer || !renderer.domElement) missing.push('renderer');
+  if (typeof scene === 'undefined') missing.push('scene');
+  if (typeof camera === 'undefined') missing.push('camera');
+  if (typeof orbit === 'undefined') missing.push('orbit');
+  if (typeof fx === 'undefined' || !fx) missing.push('fx');
+  if (typeof fxDefaults === 'undefined' || !fxDefaults) missing.push('fxDefaults');
+  if (typeof coverParticleGridForResolution !== 'function') missing.push('coverParticleGridForResolution');
+  if (missing.length > 0) {
+    _pointerCoverInitFailed = true;
+    try { console.warn('[PointerCover] deps not ready on module init; skipping pointer-cover-particles visual init:', missing); } catch(e) {}
+  }
+})();
+// 单段拼接脚本全局模式下，uniforms / positions / uvs / aRand / PCOUNT / GRID_X 这些 var 声明
+// 依然会被 hoist 到整段 script scope，其它模块能引用到；_pointerCoverInitFailed 只用来
+// 在下面的 init 代码里做初始化守卫，避免未就绪时触发 TypeError。
+// ==== Fix: 初始化路径失败时的桩函数。若上游依赖未就绪导致本模块视觉初始化整体跳过，
+// 这些 no-op stub 仍然存在，main-loop / 其它模块调用时不会 "is not a function"。
+// 如果后续 _pointerCoverInitFailed=false 的路径真的运行了，同名函数声明会按顺序覆盖这些桩。
+if (typeof queueParticlePointerFrame !== 'function') {
+  function queueParticlePointerFrame() { return; }
+}
+if (typeof updateParticlePointerFrame !== 'function') {
+  function updateParticlePointerFrame() { return; }
+}
+if (typeof applyCoverParticleResolution !== 'function') {
+  function applyCoverParticleResolution() { return; }
+}
+if (typeof loadCoverFromUrl !== 'function') {
+  function loadCoverFromUrl() { return Promise.resolve(false); }
+}
+if (typeof applyCoverDataUrl !== 'function') {
+  function applyCoverDataUrl() { return Promise.resolve(false); }
+}
+if (typeof getCoverHistogramColor !== 'function') {
+  function getCoverHistogramColor() { return null; }
+}
+// uniforms fallback stub：即便本模块完全跳过初始化，其它模块引用 uniforms.uTime / uBass 等
+// 也不会 undefined（main-loop animate 的守卫也加了，但这里仍然以"最小可运行对象"兜底）。
+if (typeof uniforms === 'undefined') {
+  var uniforms = {
+    uTime: { value: 0 }, uBass: { value: 0 }, uMid: { value: 0 }, uTreble: { value: 0 },
+    uBeat: { value: 0 }, uEnergy: { value: 0 }, uPixel: { value: 1 }, uPointScale: { value: 1 },
+    uBurstAmt: { value: 0 }, uCover: { value: null }, uCoverEdge: { value: null },
+    uTintColor: { value: null }, uRipple: { value: null }
+  };
+}
+var positions = null, uvs = null, aRand = null;
+var PCOUNT = 0; var GRID_X = 0; var GRID_Y = 0;
+
+if (!_pointerCoverInitFailed) {
+try {
 var mouseWorld = new THREE.Vector3(-999, -999, 0);
 var mouseActive = false;
 var mouseDownAt = { x: 0, y: 0, t: 0, hadDrag: false };
@@ -47,17 +109,28 @@ function particleLocalPointFromNdc(ndcX, ndcY, out) {
 }
 
 function queueParticlePointerFrame(clientX, clientY) {
+  // ==== Fix: pointerTarget 全局对象未初始化时（上游 ui-playback-runtime 初始化失败或
+  // 跨模块赋值时序错位）直接 return，避免 undefined.x=... 每帧 TypeError 刷屏。
+  if (typeof pointerTarget === 'undefined' || !pointerTarget || typeof pointerTarget !== 'object') return;
   var mx = (clientX / innerWidth) * 2 - 1;
   var my = -(clientY / innerHeight) * 2 + 1;
   pointerTarget.x = mx; pointerTarget.y = my;
-  particlePointerFrame.ndcX = mx;
-  particlePointerFrame.ndcY = my;
-  particlePointerFrame.dirty = true;
+  if (particlePointerFrame) {
+    particlePointerFrame.ndcX = mx;
+    particlePointerFrame.ndcY = my;
+    particlePointerFrame.dirty = true;
+  }
 }
 
 function updateParticlePointerFrame() {
-  if (!particlePointerFrame.dirty) return;
+  if (!particlePointerFrame || !particlePointerFrame.dirty) return;
   particlePointerFrame.dirty = false;
+  // ==== Fix: 引用 globals 的前置守卫（防止 scene/camera/particles 尚未初始化）
+  if (typeof camera === 'undefined' || !camera) return;
+  if (typeof particlePointerNdc === 'undefined' || !particlePointerNdc) return;
+  if (typeof particlePointerRay === 'undefined' || !particlePointerRay) return;
+  if (typeof particlePointerLocalHit === 'undefined' || !particlePointerLocalHit) return;
+  if (typeof mouseWorld === 'undefined' || !mouseWorld) return;
   if (particleLocalPointFromNdc(particlePointerFrame.ndcX, particlePointerFrame.ndcY, particlePointerLocalHit)) {
     mouseWorld.x = particlePointerLocalHit.x;
     mouseWorld.y = particlePointerLocalHit.y;
@@ -1042,3 +1115,9 @@ console.log('v7 shell loaded, JS pending');
 // ============================================================
 //  浮空粒子层 (独立 Points)
 //   v7.1: 速度大幅放慢, 改用 sin/cos 长周期漂移 (优雅而非乱飞)
+} catch (__pointerCoverInnerErr__) {
+  _pointerCoverInitFailed = true;
+  try { console.warn('[PointerCover] inner init failed; keeping no-op stub functions:', __pointerCoverInnerErr__ && __pointerCoverInnerErr__.message ? __pointerCoverInnerErr__.message : __pointerCoverInnerErr__); } catch(e){}
+  try { if (__pointerCoverInnerErr__ && typeof __pointerCoverInnerErr__.stack === 'string') console.warn(__pointerCoverInnerErr__.stack); } catch(e){}
+} // closes try
+} // closes if (!_pointerCoverInitFailed)

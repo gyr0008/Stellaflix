@@ -39,8 +39,52 @@
   }
 
   // ---------------------------------------------------------------- 存储层
+  // model.js 历史键（粗粒度，按片聚合，不含进度）；watch-history.js 只读自己的细粒度键。
+  // 当自身键为空但 model 有数据时，执行一次性格式迁移，保证旧版本升级用户也能看到历史。
+  var MODEL_KEY = 'stellaflix-video-history';
+
+  function migrateFromModelIfEmpty() {
+    try {
+      // 只有当自身键为空时才迁移（幂等，迁过一次就不再触发）
+      if (LS.getItem(KEY)) return;
+      var raw = LS.getItem(MODEL_KEY);
+      if (!raw) return;
+      var modelArr = JSON.parse(raw);
+      if (!Array.isArray(modelArr) || !modelArr.length) return;
+      // 格式转换：model 粗粒度 → watch-history 细粒度（缺进度字段用默认值）
+      var converted = [];
+      for (var i = 0; i < modelArr.length; i++) {
+        var m = modelArr[i];
+        if (!m || !m.key) continue;
+        converted.push({
+          key: m.key,
+          title: m.title || '',
+          sub: (m.year ? (m.year + ' 年') : ''),
+          img: m.pic || '',
+          progress: 0,
+          cur: '00:00',
+          total: '',
+          ts: m.ts || Date.now(),
+          finished: false,
+          sourceId: m.sourceId || '',
+          vodId: m.vodId || '',
+          pic: m.pic || '',
+          watchedSec: 0
+        });
+      }
+      if (converted.length) {
+        writeAll(converted);
+        // 调试日志：仅首次迁移时输出一次
+        if (typeof console !== 'undefined' && console.info) {
+          console.info('[SFV watch-history] 从 model.js 迁移了 ' + converted.length + ' 条历史记录到 ' + KEY);
+        }
+      }
+    } catch (e) { /* 迁移失败不阻断正常读取 */ }
+  }
+
   function readAll() {
     try {
+      migrateFromModelIfEmpty();  // 先尝试一次性迁移（自身键为空才迁）
       var raw = LS.getItem(KEY);
       if (!raw) return [];
       var p = JSON.parse(raw);
@@ -67,9 +111,15 @@
       ts: rec.ts || Date.now(),
       finished: !!rec.finished,
       sourceId: rec.sourceId || '',
-      vodId: rec.vodId || '',
+      vodId: rec.vodId != null ? rec.vodId : '',
       pic: rec.pic || '',
-      watchedSec: Math.max(0, Number(rec.watchedSec) || 0)
+      watchedSec: Math.max(0, Number(rec.watchedSec) || 0),
+      // 最近一次播放使用的片源（供 smartResumePlay 直用）
+      lastSourceId: rec.lastSourceId || '',
+      lastVodId: rec.lastVodId != null ? rec.lastVodId : '',
+      lastSourceName: rec.lastSourceName || '',
+      lastPlayFromIndex: (typeof rec.lastPlayFromIndex === 'number') ? rec.lastPlayFromIndex : 0,
+      lastPlayEpisodeIndex: (typeof rec.lastPlayEpisodeIndex === 'number') ? rec.lastPlayEpisodeIndex : 0,
     };
   }
 
@@ -135,7 +185,7 @@
     return parts.join(':');
   }
 
-  // 增量更新指定 key 的进度/时长/完成态，不移动该条在历史列表中的位置，
+  // 增量更新指定 key 的进度/时长/完成态/最近片源，不移动该条在历史列表中的位置，
   // 供播放器 timeupdate/pause/ended 时回写真实观影数据。
   // 优先匹配「当天 + 同 key」的记录，确保跨天重复观看时不会误更新到旧记录。
   function update(key, patch) {
@@ -168,6 +218,12 @@
         var incoming = Math.max(0, Number(patch.watchedSec) || 0);
         rec.watchedSec = Math.max(Number(rec.watchedSec) || 0, incoming);
       }
+      // 最近一次播放使用的片源（供下次点击「接着看 / 历史」直用）
+      if (patch.lastSourceId != null) rec.lastSourceId = patch.lastSourceId;
+      if (patch.lastVodId != null) rec.lastVodId = patch.lastVodId;
+      if (patch.lastSourceName != null) rec.lastSourceName = patch.lastSourceName;
+      if (typeof patch.lastPlayFromIndex === 'number') rec.lastPlayFromIndex = patch.lastPlayFromIndex;
+      if (typeof patch.lastPlayEpisodeIndex === 'number') rec.lastPlayEpisodeIndex = patch.lastPlayEpisodeIndex;
     }
     writeAll(a); return rec;
   }
@@ -384,7 +440,11 @@
   }
   function activate(rec) {
     try {
-      if (SFV.online && SFV.online.openDetailFromMeta && rec.sourceId && rec.vodId) {
+      if (SFV.detailSource && typeof SFV.detailSource.smartResumePlay === 'function') {
+        // 直接起播：跳过详情页，按「上次片源 → 跨源画质优先」策略恢复播放
+        SFV.detailSource.smartResumePlay(rec);
+      } else if (SFV.online && SFV.online.openDetailFromMeta && rec.sourceId && rec.vodId) {
+        // 兜底：detail-source 未就绪时退回到旧行为（打开详情页）
         SFV.online.openDetailFromMeta(Object.assign({}, rec, { _origin: 'history', pic: rec.img || rec.pic }));
       }
     } catch (e) { /* 历史记录缺回放开局字段时静默 */ }

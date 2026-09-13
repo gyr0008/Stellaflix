@@ -50,17 +50,6 @@
     title.textContent = 'TMDB API Key 设置';
     card.appendChild(title);
 
-    var desc = doc.createElement('div');
-    desc.className = 'sfv-tmdb-settings-desc';
-    desc.textContent = '应用内置一个开发期默认 Key。你可填入自己的 TMDB v3 Key（免费、可随时在后台重置），以提升请求稳定性并避免共享默认额度。留空即使用默认 Key。';
-    card.appendChild(desc);
-
-    var warn = doc.createElement('div');
-    warn.className = 'sfv-tmdb-settings-warn';
-    warn.setAttribute('role', 'alert');
-    warn.innerHTML = '⚠️ <b>当前为开发期默认 Key</b>，可能被 TMDB 限流或随时失效（开发者可随时在后台 revoke）。<br>强烈建议替换为你自己的 <b>TMDB v3 Key</b>（免费 Developer 档）：申请 → themoviedb.org/settings/api';
-    card.appendChild(warn);
-
     var input = doc.createElement('input');
     input.type = 'text';
     input.className = 'sfv-tmdb-settings-input';

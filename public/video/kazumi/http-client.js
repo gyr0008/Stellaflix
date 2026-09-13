@@ -55,6 +55,22 @@
   }
 
   /**
+   * 用 AbortController 在指定毫秒后中断请求；若调用方已传 signal 则保持原信号。
+   */
+  function withTimeout(signal, timeoutMs) {
+    if (!timeoutMs || timeoutMs <= 0) return { signal: signal || null, dispose: function () {} };
+    var controller = new AbortController();
+    if (signal) {
+      signal.addEventListener('abort', function () { controller.abort(); });
+    }
+    var timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+    return {
+      signal: controller.signal,
+      dispose: function () { clearTimeout(timer); }
+    };
+  }
+
+  /**
    * 执行 GET 请求（经代理中转）
    *
    * @param {string} url - 目标 URL（可以是绝对 URL 或已编码的代理 URL）
@@ -62,6 +78,7 @@
    * @param {Object} [options.rule] - 规则对象（用于构造头）
    * @param {boolean} [options.useProxy=true] - 是否走代理
    * @param {AbortSignal} [options.signal] - 取消信号
+   * @param {number} [options.timeoutMs=0] - 超时毫秒数（0 表示无超时）
    * @returns {Promise<string>} 响应文本
    */
   async function get(url, options) {
@@ -70,17 +87,22 @@
     var targetUrl = useProxy ? toProxyUrl(url) : url;
     var headers = buildHeaders(options.rule, url);
 
-    var resp = await fetch(targetUrl, {
-      method: 'GET',
-      headers: headers,
-      signal: options.signal || null
-    });
+    var to = withTimeout(options.signal, options.timeoutMs);
+    try {
+      var resp = await fetch(targetUrl, {
+        method: 'GET',
+        headers: headers,
+        signal: to.signal
+      });
 
-    if (!resp.ok) {
-      throw new Error('HTTP ' + resp.status + ' (' + resp.statusText + ') for ' + url.slice(0, 100));
+      if (!resp.ok) {
+        throw new Error('HTTP ' + resp.status + ' (' + resp.statusText + ') for ' + url.slice(0, 100));
+      }
+
+      return resp.text();
+    } finally {
+      to.dispose();
     }
-
-    return resp.text();
   }
 
   /**
@@ -89,6 +111,7 @@
    * @param {string} url - 目标 URL
    * @param {Object|FormData|string} body - 请求体
    * @param {Object} [options] - 可选配置
+   * @param {number} [options.timeoutMs=0] - 超时毫秒数（0 表示无超时）
    * @returns {Promise<string>} 响应文本
    */
   async function post(url, body, options) {
@@ -102,18 +125,23 @@
       body = JSON.stringify(body);
     }
 
-    var resp = await fetch(targetUrl, {
-      method: 'POST',
-      headers: headers,
-      body: body,
-      signal: options.signal || null
-    });
+    var to = withTimeout(options.signal, options.timeoutMs);
+    try {
+      var resp = await fetch(targetUrl, {
+        method: 'POST',
+        headers: headers,
+        body: body,
+        signal: to.signal
+      });
 
-    if (!resp.ok) {
-      throw new Error('HTTP ' + resp.status + ' for POST ' + url.slice(0, 100));
+      if (!resp.ok) {
+        throw new Error('HTTP ' + resp.status + ' for POST ' + url.slice(0, 100));
+      }
+
+      return resp.text();
+    } finally {
+      to.dispose();
     }
-
-    return resp.text();
   }
 
   return {

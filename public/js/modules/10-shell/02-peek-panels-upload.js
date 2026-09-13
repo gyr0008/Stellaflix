@@ -74,6 +74,7 @@ function setPeek(el, on, key) {
   if (on && !diyPlayerMode && key === 'fx') return;
   if (!on && key === 'search' && emptyHomeActive && !immersiveMode) return;
   if (!on && key === 'pl' && playlistPanelPinned) return;
+  if (typeof invalidatePointerUiRectCache === 'function') invalidatePointerUiRectCache();
   if (on && key === 'fx') document.body.classList.remove('fullscreen-diy-peek');
   if (on) {
     if (key === 'pl') resetSecondaryPlaylistEdgeGuard();
@@ -371,7 +372,13 @@ window.addEventListener('blur', function () {
   if (playlistPanelPinned) return;
   setTimeout(function () { closePlaylistPanelSoft('window-blur'); }, 60);
 });
-window.addEventListener('mousemove', function (e) {
+var peekPanelsPointerLastAt = 0;
+var peekPanelsPointerPending = null;
+var peekPanelsPointerRaf = 0;
+function flushPeekPanelsPointerMove(e) {
+  peekPanelsPointerLastAt = performance.now();
+  peekPanelsPointerPending = null;
+  if (!e) return;
   var sa = document.getElementById('search-area');
   var fp = document.getElementById('fx-panel');
   var pp = document.getElementById('playlist-panel');
@@ -390,7 +397,7 @@ window.addEventListener('mousemove', function (e) {
     updateShelfCardHoverSelection(e);
     updateControlsAutoHideFromPointer(ex, ey);
     var ppOnImm = isPlaylistPanelActiveState(pp);
-    var ppRectImm = pp.getBoundingClientRect();
+    var ppRectImm = typeof pointerUiRect === 'function' ? pointerUiRect('playlist-panel') : pp.getBoundingClientRect();
     var inQueueTriggerImm = isPlaylistEdgeTrigger(ex, ey, H, e.target);
     var inQueuePanelImm = isPlaylistPanelPanelHit(pp, ppRectImm, ex, ey);
     var inQueueBridgeImm = isPlaylistPanelBridgeHit(pp, ppRectImm, ex, ey, H);
@@ -411,7 +418,7 @@ window.addEventListener('mousemove', function (e) {
   updateShelfCardHoverSelection(e);
   // 搜索 (上): 顶部 48px 内进入; 已显示时鼠标在 280px 内保留
   var saOn = sa.classList.contains('peek');
-  var saRect = sa.getBoundingClientRect();
+  var saRect = typeof pointerUiRect === 'function' ? pointerUiRect('search-area') : sa.getBoundingClientRect();
   var searchFocused = document.activeElement === $input;
   var uploadTip = document.getElementById('upload-tip');
   var uploadTipOpen = !!(uploadTip && uploadTip.classList.contains('show'));
@@ -421,9 +428,9 @@ window.addEventListener('mousemove', function (e) {
   else if ((saOn || isSearchPeekRevealPending()) && !emptyHomeActive) setPeek(sa, false, 'search');
   // 控制台: 右下角触发；一旦面板出现，就按真实面板矩形保留显示
   var fpOn = fp.classList.contains('peek') || fp.classList.contains('show');
-  var fpRect = fp.getBoundingClientRect();
+  var fpRect = typeof pointerUiRect === 'function' ? pointerUiRect('fx-panel') : fp.getBoundingClientRect();
   var fab = document.getElementById('fx-fab');
-  var fabRect = fab ? fab.getBoundingClientRect() : { left: W, right: W, top: H, bottom: H };
+  var fabRect = fab ? (typeof pointerUiRect === 'function' ? pointerUiRect('fx-fab') : fab.getBoundingClientRect()) : { left: W, right: W, top: H, bottom: H };
   var inFxPanel = fpOn && ex >= fpRect.left - 24 && ex <= fpRect.right + 24 && ey >= fpRect.top - 24 && ey <= fpRect.bottom + 24;
   var inFxFab = ex >= fabRect.left - 18 && ex <= fabRect.right + 18 && ey >= fabRect.top - 18 && ey <= fabRect.bottom + 18;
   var inFxBridge = fpOn && ex >= Math.min(fpRect.left, fabRect.left) - 18 && ex <= W && ey >= fpRect.bottom - 10 && ey <= fabRect.bottom + 18;
@@ -432,7 +439,7 @@ window.addEventListener('mousemove', function (e) {
   else if (fpOn) setPeek(fp, false, 'fx');
   // 歌单/队列 DOM 面板只在左侧明确停留时出现，避免和右侧 3D 架抢焦点
   var ppOn = isPlaylistPanelActiveState(pp);
-  var ppRect = pp.getBoundingClientRect();
+  var ppRect = typeof pointerUiRect === 'function' ? pointerUiRect('playlist-panel') : pp.getBoundingClientRect();
   var inQueueTrigger = isPlaylistEdgeTrigger(ex, ey, H, e.target);
   var inQueuePanel = isPlaylistPanelPanelHit(pp, ppRect, ex, ey);
   var inQueueBridge = isPlaylistPanelBridgeHit(pp, ppRect, ex, ey, H);
@@ -462,6 +469,21 @@ window.addEventListener('mousemove', function (e) {
     newFocus = 'shelf-stage';
   }
   setFocusZone(newFocus, newFocus === 'queue');
+}
+window.addEventListener('mousemove', function (e) {
+  // ~33Hz is enough for peek/hover UX; full-rate mousemove + gBCR thrashed layout.
+  var now = performance.now();
+  var elapsed = now - peekPanelsPointerLastAt;
+  if (elapsed >= 33) {
+    flushPeekPanelsPointerMove(e);
+    return;
+  }
+  peekPanelsPointerPending = e;
+  if (peekPanelsPointerRaf) return;
+  peekPanelsPointerRaf = requestAnimationFrame(function () {
+    peekPanelsPointerRaf = 0;
+    if (peekPanelsPointerPending) flushPeekPanelsPointerMove(peekPanelsPointerPending);
+  });
 });
 
 // ============================================================

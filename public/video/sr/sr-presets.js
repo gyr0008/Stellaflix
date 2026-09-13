@@ -15,13 +15,21 @@
     'Anime4K_Upscale_CNN_x2_M.glsl'
   ];
 
+  // tier5（动漫·双倍）专用链：Anime4K VL（超大杯）替代 M，成本约翻倍但质量更高。
+  // 红线：绝不直接改 A4K_MODE_A_FAST（tier4 仍在引用），只新增本数组，保持降档梯度连续。
+  var A4K_MODE_A_HQ = [
+    'Anime4K_Clamp_Highlights.glsl',
+    'Anime4K_Restore_CNN_VL.glsl',
+    'Anime4K_Upscale_CNN_x2_VL.glsl'
+  ];
+
   var LIST = [
     { id: 'off', label: '关闭', desc: '原生直出，零额外开销', files: [], mode: 'rgb', tier: 0 },
     { id: 'fsrcnnx', label: '通用 · FSRCNNX', desc: '通用内容 AI 超分（亮度链 2×）', files: ['FSRCNNX_x2_8-0-4-1.glsl'], mode: 'luma', tier: 1 },
-    { id: 'live', label: '真人 · 锐化', desc: 'FSRCNNX + 边缘细节锐化', files: ['FSRCNNX_x2_8-0-4-1.glsl'], mode: 'luma', refine: true, tier: 2 },
+    { id: 'live', label: '真人 · 锐化', desc: 'FSRCNNX + 边缘细节锐化', files: ['Deband.glsl', 'FSRCNNX_x2_16-0-4-1.glsl'], mode: 'luma', refine: true, tier: 2 },
     { id: 'anime-fast', label: '动漫 · 流畅', desc: 'Anime4K 去噪放大（S 级链）', files: ['Anime4K_Clamp_Highlights.glsl', 'Anime4K_Upscale_Denoise_CNN_x2_S.glsl'], mode: 'rgb', tier: 3 },
     { id: 'anime-hq', label: '动漫 · 质量', desc: 'Anime4K 修复 + 放大（M 级链）', files: A4K_MODE_A_FAST.slice(), mode: 'rgb', tier: 4 },
-    { id: 'anime-4k', label: '动漫 · 双倍', desc: 'Anime4K 双级放大（低清源 → 4K）', files: A4K_MODE_A_FAST.concat(['Anime4K_AutoDownscalePre_x2.glsl', 'Anime4K_AutoDownscalePre_x4.glsl', 'Anime4K_Upscale_CNN_x2_S.glsl']), mode: 'rgb', tier: 5 }
+    { id: 'anime-4k', label: '动漫 · 双倍', desc: 'Anime4K 双级放大（低清源 → 4K）', files: A4K_MODE_A_HQ.concat(['Anime4K_AutoDownscalePre_x2.glsl', 'Anime4K_AutoDownscalePre_x4.glsl', 'Anime4K_Upscale_CNN_x2_S.glsl']), mode: 'rgb', tier: 5 }
   ];
 
   var textCache = {};   // 文件名 → shader 文本

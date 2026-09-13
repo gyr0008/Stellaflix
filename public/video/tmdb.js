@@ -79,7 +79,12 @@
     if (!global.fetch) return Promise.reject(new Error('TMDB_NO_FETCH'));
     return global.fetch(url).then(function (r) {
       if (!r.ok) throw new Error('TMDB_HTTP_' + r.status);
-      return r.json();
+      // [修复2026-09-12] 上游异常（Cloudflare 拦截页 / 代理错误页 / 站点维护页）会以 2xx
+      // 返回 HTML，直接 r.json() 会抛 `SyntaxError: Unexpected token '<'`，在 DevTools 里
+      // 表现为「Uncaught (in promise)」噪音，且掩盖真实原因。先校验 content-type 再解析。
+      var ct = (r.headers && typeof r.headers.get === 'function') ? (r.headers.get('content-type') || '') : '';
+      if (ct && ct.toLowerCase().indexOf('json') < 0) throw new Error('TMDB_NON_JSON');
+      return r.json().catch(function () { throw new Error('TMDB_BAD_JSON'); });
     });
   }
 

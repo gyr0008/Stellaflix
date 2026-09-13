@@ -136,6 +136,7 @@ function setShelfGuideCueActive(on) {
     shelfHoverCue.x = c.x;
     shelfHoverCue.y = c.y;
     shelfHoverCue.lastAt = performance.now();
+    if (typeof wakeIdleGuideLoop === 'function') wakeIdleGuideLoop();
   } else {
     shelfHoverCue.target = 0;
   }
@@ -160,6 +161,7 @@ function updateShelfHoverCueFromPointer(e) {
   if (inZone && !shelfHoverCue.zoneActive) {
     shelfHoverCue.zoneActive = true;
     shelfHoverCue.enteredAt = performance.now();
+    if (typeof wakeIdleGuideLoop === 'function') wakeIdleGuideLoop();
   } else if (!inZone) {
     shelfHoverCue.zoneActive = false;
     shelfHoverCue.enteredAt = 0;

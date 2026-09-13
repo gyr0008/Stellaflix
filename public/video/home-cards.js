@@ -152,6 +152,13 @@
     // 原因：.home-skeleton { position:relative } 在源码顺序上晚于 .home-card-art { position:absolute }，
     // 若同时存在会覆盖 absolute 定位，导致封面从右下角飘到左下角并把卡片撑高。
     art.classList.remove('home-skeleton');
+    // 双态独立（防串扰）：影视态接管卡片封面时，必须同步失效音乐态
+    // homeDashboardSetStableBackgroundImage 的去重守卫字段。
+    // 原因：影视态直接改 art.style.backgroundImage 不碰这两个字段，若不清，
+    //   切回音乐态时 homeDashboardSetStableBackgroundImage 发现
+    //   "音乐cover === __homeDashboardRequestedBackground(旧音乐值)" → 直接 return 跳过写入
+    //   → 影视态海报残留在音乐态。清掉后，音乐态下次 patch 会真正重新写入正确封面。
+    try { delete art.__homeDashboardRequestedBackground; delete art.__homeDashboardBackground; } catch (e) {}
     var pic = '';
     if (flag === 'music-space') {
       // 跨态连线：音乐空间卡展示音乐态左侧个人海报

@@ -1066,6 +1066,8 @@ async function playQueueAt(idx, opts) {
     markPlayPhase('cover-load');
     safePlaybackStep('cover-load', function () {
       if (qualitySwitch) return;
+      // 先 hydrate 确保歌曲对象上挂载自定义封面（从热缓存/旧格式索引同步读取）
+      hydrateCustomCover(song);
       var customCover = getCustomCoverForSong(song);
       var coverOpts = {
         trackToken: token,
@@ -1076,8 +1078,44 @@ async function playQueueAt(idx, opts) {
         noCoverTransition: sameAlbumCoverSwitch,
         colorMixDuration: sameAlbumCoverSwitch ? 1 : undefined
       };
-      if (customCover) applyCoverDataUrl(customCover, coverOpts);
-      else loadCoverFromUrl(song.cover ? coverUrlWithSize(song.cover, 400) : '', coverOpts);
+      if (customCover) {
+        applyCoverDataUrl(customCover, coverOpts);
+      } else {
+        // 同步未命中 → 先显示音乐自身封面（避免白屏）
+        loadCoverFromUrl(song.cover ? coverUrlWithSize(song.cover, 400) : '', coverOpts);
+        // 收集需要异步回填的 key：按歌曲 key（如有 IDB 引用）或全局 key（如有 IDB 引用）
+        var pendingKeys = [];
+        var songKey = songCustomCoverKey(song);
+        if (songKey && customCoverMap[songKey] && typeof customCoverMap[songKey] === 'object' && customCoverMap[songKey].__ref) {
+          pendingKeys.push(songKey);
+        }
+        if (customCoverMap[GLOBAL_CUSTOM_COVER_KEY] && typeof customCoverMap[GLOBAL_CUSTOM_COVER_KEY] === 'object' && customCoverMap[GLOBAL_CUSTOM_COVER_KEY].__ref) {
+          pendingKeys.push(GLOBAL_CUSTOM_COVER_KEY);
+        }
+        if (pendingKeys.length && typeof coverIdbGet === 'function') {
+          // 优先取全局（用户上传的一张图覆盖所有歌曲）；若无全局则取按歌曲 key
+          var primaryKey = pendingKeys.indexOf(GLOBAL_CUSTOM_COVER_KEY) >= 0 ? GLOBAL_CUSTOM_COVER_KEY : pendingKeys[0];
+          coverIdbGet(primaryKey).then(function (entry) {
+            if (!entry || !entry.blob) return;
+            var toDataUrl = typeof blobToDataUrl === 'function' ? blobToDataUrl(entry.blob) : Promise.resolve(null);
+            if (toDataUrl && toDataUrl.then) {
+              toDataUrl.then(function (dataUrl) {
+                if (!dataUrl) return;
+                // 写入热缓存供后续同步读取
+                if (typeof _coverDataUrlCache !== 'undefined') _coverDataUrlCache[primaryKey] = dataUrl;
+                // 仅当当前仍在播放同一首歌时才刷新（防止竞态闪烁）
+                var cur = currentIdx >= 0 && playQueue[currentIdx] ? playQueue[currentIdx] : currentLocalSong;
+                if (cur && songCustomCoverKey(cur) === songKey) {
+                  cur.customCover = dataUrl;
+                  applyCoverDataUrl(dataUrl, { deferHeavy: true, delay: 0, timeout: 800 });
+                  safeRenderQueuePanel('custom-cover-async-fill');
+                  safeShelfRebuild('custom-cover-async-fill');
+                }
+              }).catch(function () { /* best-effort */ });
+            }
+          }).catch(function () { /* best-effort */ });
+        }
+      }
     });
     safePlaybackStep('trial-banner-reset', function () { document.getElementById('trial-banner').classList.remove('show'); });
     if (song.type === 'local' || song.source === 'local' || song.localUrl) {
@@ -1113,7 +1151,7 @@ async function playQueueAt(idx, opts) {
         requestedQuality = runtimeQualityCap;
       }
       var qualityParam = '&quality=' + encodeURIComponent(requestedQuality);
-      // ====== 第三方音源：解析优先级重排（custom-only / custom-first 先跑解析，跳过或延后官方请求） ======
+      // ====== 第三方音源：解析优先级重排（custom-first / aggregate 先跑解析，跳过或延后官方请求） ======
       var hasCustomSource = typeof window.CustomSourceIntegration !== 'undefined' && typeof window.CustomSourceIntegration.resolveOnlinePlaybackData === 'function';
       var skipOfficialRequest = false;
       var forceOfficialUnusable = false;
@@ -1127,7 +1165,7 @@ async function playQueueAt(idx, opts) {
             forceOfficialUnusable = !!window.CustomSourceIntegration.shouldTreatOfficialAsUnusable();
           }
           if (skipOfficialRequest) {
-            // custom-only / custom-first：先跑第三方解析；拿到 URL 就跳过官方请求
+            // custom-first / aggregate：先跑第三方解析；拿到 URL 就跳过官方请求
             preCustomResolved = await window.CustomSourceIntegration.resolveOnlinePlaybackData(song, {
               officialResult: opts.preResolvedPlaybackData || {},
               requestedQuality: requestedQuality,
@@ -1139,8 +1177,8 @@ async function playQueueAt(idx, opts) {
               // 第三方解析已命中：完全跳过官方请求
               skipOfficialRequest = true;
             } else {
-              // custom-first 未命中时，允许官方请求后续再跑作为兜底
-              skipOfficialRequest = !!skipOfficialRequest && (window.CustomSourceIntegration.getMode ? window.CustomSourceIntegration.getMode() === 'custom-only' : false);
+              // custom-first / aggregate 预解析未命中时，不再强制跳过官方请求，允许官方兜底
+              skipOfficialRequest = false;
             }
           }
         } catch (customSourcePreErr) {
@@ -1157,8 +1195,8 @@ async function playQueueAt(idx, opts) {
         data = opts.preloadedData;
       } else if (opts.preResolvedPlaybackData && opts.preResolvedPlaybackData.url) {
         data = opts.preResolvedPlaybackData;
-      } else if (skipOfficialRequest) {
-        // custom-only 官方请求被跳过，留空让后面的 resolveOnlinePlaybackData 再统一尝试
+        } else if (skipOfficialRequest) {
+        // 第三方音源模式（custom-first / aggregate）官方请求被跳过，留空让后面的 resolveOnlinePlaybackData 再统一尝试
         data = { skipped: true };
       } else if (isQQPlayback) {
         data = await apiJson('/api/qq/song/url?mid=' + encodeURIComponent(song.mid || song.songmid || song.id || '') + '&mediaMid=' + encodeURIComponent(song.mediaMid || song.media_mid || '') + qqPlaybackEvidenceQuery(song) + qualityParam, { timeoutMs: 15000 });
@@ -1185,7 +1223,7 @@ async function playQueueAt(idx, opts) {
         data = await apiJson('/api/song/url?id=' + encodeURIComponent(song.id || '') + neteasePlaybackMatchQuery(song) + qualityParam, { timeoutMs: 14000 });
       }
       var beforeOfficialData = data;
-      // custom-only / custom-first：官方结果即使有 url 也不算可用，交给第三方解析
+      // custom-first：官方结果即使有 url 也不算可用，交给第三方解析
       if (forceOfficialUnusable && beforeOfficialData && beforeOfficialData.url && beforeOfficialData.skipped !== true) {
         var officialCopy = Object.assign({}, beforeOfficialData || {});
         delete officialCopy.url;
@@ -1196,7 +1234,7 @@ async function playQueueAt(idx, opts) {
       if (preCustomResolved && preCustomResolved.override === true && preCustomResolved.data && preCustomResolved.data.url) {
         needReResolve = false;
       }
-      // 第三方音源三种模式切换：custom-first / official-first / custom-only
+      // 第三方音源模式切换：custom-first / official-first / aggregate
       if (typeof window.CustomSourceIntegration !== 'undefined' && typeof window.CustomSourceIntegration.resolveOnlinePlaybackData === 'function' && needReResolve) {
         try {
           customResolvedFinal = await window.CustomSourceIntegration.resolveOnlinePlaybackData(song, {
@@ -1223,7 +1261,7 @@ async function playQueueAt(idx, opts) {
           if (customResolvedFinal.sourceLabel) song.sourceLabel = customResolvedFinal.sourceLabel;
           if (customResolvedFinal.resolvedSourceLabel) song.resolvedSourceLabel = customResolvedFinal.resolvedSourceLabel;
         } else if (customResolvedFinal.reason === 'official-skip' && (!data || !data.url)) {
-          // custom-only / 自定义优先要求跳过官方解析；保持现有状态，由兜底决定失败
+          // 自定义优先要求跳过官方解析；保持现有状态，由兜底决定失败
         }
       }
       if (token !== trackSwitchToken) return;

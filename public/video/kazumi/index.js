@@ -35,6 +35,7 @@
   var HttpClient = global.KazumiHttpClient;
   var XPathEngine = global.KazumiXPathEngine;
   var RuleEngineModule = global.KazumiRuleEngine;
+  var RulesRepo = global.KazumiRulesRepo;
 
   /**
    * 规则管理器 — 对齐 PluginsController 的核心功能
@@ -233,7 +234,14 @@
   }
 
   return {
-    createRuleManager: createRuleManager
+    createRuleManager: createRuleManager,
+    rulesRepo: RulesRepo ? {
+      configure: RulesRepo.configure,
+      getBaseUrl: RulesRepo.getBaseUrl,
+      getPluginList: RulesRepo.getPluginList,
+      getPlugin: RulesRepo.getPlugin,
+      getRuleText: RulesRepo.getRuleText
+    } : null
   };
 
 });

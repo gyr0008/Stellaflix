@@ -33,7 +33,7 @@ function loadFrontendSongToLxMusicInfo() {
 
 const songToLxMusicInfo = loadFrontendSongToLxMusicInfo();
 
-// 复刻 bundled/qing_haitang_resolve.js:41-47 的 rid 契约
+// 复刻 bundled/qing_music.js:41-47 的 rid 契约
 function scriptRid(musicInfo) {
   return musicInfo.hash
     ?? musicInfo.songmid

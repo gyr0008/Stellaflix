@@ -40,7 +40,7 @@ function httpRequest(url, opts) {
   const mod = url.startsWith('https') ? https : http;
   return new Promise((resolve, reject) => {
     const u = new URL(url);
-    const headers = Object.assign({ 'User-Agent': _config?.network?.userAgent || 'Stellaflix/2.1.0 Video' }, opts.headers || {});
+    const headers = Object.assign({ 'User-Agent': _config?.network?.userAgent || 'Stellaflix/0.1.0 Video' }, opts.headers || {});
     const reqOpts = { hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), path: u.pathname + u.search, method: opts.method || 'GET', headers };
     const req = mod.request(reqOpts, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {

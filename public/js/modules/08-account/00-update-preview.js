@@ -1,6 +1,8 @@
 // ============================================================
-// Update preview: external download page only.
-// Stellaflix no longer downloads installers or applies resource patches.
+// Update preview: in-app auto-update is the primary path.
+// electron-updater downloads the NSIS package and quitAndInstall silently.
+// External pan / GitHub Release pages remain as fallback when auto-update
+// is unavailable (dev build, missing latest.yml, network failure, low disk).
 // ============================================================
 function isSafeUpdatePageUrl(value) {
   var raw = String(value || '').trim();
@@ -93,6 +95,9 @@ function handleAutoUpdateEvent(payload) {
     au.phase = 'available';
     au.usable = true;
     au.feedLabel = payload.feedLabel || '';
+  } else if (type === 'retrying') {
+    au.phase = 'downloading';
+    au.feedLabel = payload.feedLabel || au.feedLabel || '';
   } else if (type === 'not-available') au.phase = 'idle';
   else if (type === 'downloaded') {
     au.phase = 'downloaded';
@@ -334,13 +339,19 @@ function syncUpdatePreviewStateClass() {
   var label = document.getElementById('update-btn-label');
   if (label) {
     if (au.phase === 'checking') label.textContent = '正在检查更新';
-    else if (au.phase === 'downloading') label.textContent = '正在下载 ' + Math.round(au.percent) + '%';
+    else if (au.phase === 'downloading') {
+      label.textContent = au.feedLabel
+        ? ('正在下载 ' + Math.round(au.percent) + '% · ' + au.feedLabel)
+        : ('正在下载 ' + Math.round(au.percent) + '%');
+    }
     else if (au.phase === 'downloaded') label.textContent = '立即安装并重启';
     else if (au.phase === 'installing') label.textContent = '正在启动安装';
     else if (isOpening) label.textContent = '正在打开下载页';
     else if (isOpened) label.textContent = '下载页已打开';
+    else if (isError && au.phase === 'error') label.textContent = '应用内更新失败，点网盘线路';
     else if (isError) label.textContent = '重试打开';
     else if (!updatePreviewState.updateAvailable) label.textContent = '当前已是最新';
+    else if (au.supported && au.phase !== 'error') label.textContent = '应用内下载更新';
     else if (selectedPage) label.textContent = '前往' + selectedPage.label;
     else if (updatePreviewState.externalUrl) label.textContent = '前往网盘下载';
     else label.textContent = '查看更新页面';

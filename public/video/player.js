@@ -30,6 +30,7 @@
   var currentId = null, currentUrl = null;
   var embedFrame = null, embedCloseBtn = null; // 第三方解析器 iframe 嵌入态
   var playNextFn = null, modeBtn = null;            // 连播：下一集回调 / 模式按钮
+  var _loadingToastCleared = false;             // 播放初始化 loading toast 是否已成功关闭
   var hideTimer = null, lastSpeedIdx = 1, lastSaveAt = 0;
   // 起播会话序号：每次起播(open*)/退出(close)递增。用于让在途的异步挂载（HLS/FLV 经
   // hls.js/flv.js 异步加载库与分片）在"用户退出或换片"后失效，避免在后台继续起播（有声无画）。
@@ -272,8 +273,22 @@
     }
   }
 
+  function _closeLoadingToast(msg) {
+    if (_loadingToastCleared) return;
+    _loadingToastCleared = true;
+    try {
+      if (typeof toast === 'function') toast(msg || '加载完成');
+      else if (SFV.online && typeof SFV.online.toast === 'function') SFV.online.toast(msg || '加载完成');
+    } catch (e) {}
+  }
   function wireVideoEvents() {
     videoEl.addEventListener('loadedmetadata', updateTime);
+    // ==== Fix: loadeddata（首帧解码完成）立即替换 loading toast，
+    // 解决 detail-source.js / play-orchestrator 非 Kazumi 路径下 loading toast 永久不消失的问题。
+    videoEl.addEventListener('loadeddata', function () {
+      _closeLoadingToast('影片加载完成');
+      if (global.console) global.console.log('[SFV player] loadeddata, first frame decoded OK for', currentId);
+    });
     videoEl.addEventListener('timeupdate', function () {
       updateTime();
       var now = Date.now();
@@ -285,6 +300,12 @@
       }
       checkPosterAutoCache();
       if (danmakuEngine) danmakuEngine.update(videoEl.currentTime);
+      // ==== Fix: loading toast 兜底关闭（loadeddata 没命中时的保险）。
+      // 某些 MSE/HLS 流在 metadata 阶段无法触发 loadeddata（仅音频轨道时、加密流时），
+      // 只要 currentTime 正常推进 >4 秒就视为播放成功，强制清理 loading 状态。
+      if (!_loadingToastCleared && videoEl && videoEl.currentTime > 4) {
+        _closeLoadingToast('播放开始');
+      }
     });
     videoEl.addEventListener('seeked', function () {
       if (danmakuEngine) danmakuEngine.update(videoEl.currentTime);
@@ -305,8 +326,28 @@
       checkPosterAutoCache();
     });
     videoEl.addEventListener('ended', onMediaEnded);
+    // ==== Fix: MediaError 监听器原来只 console.warn，用户完全不知道哪里错了。
+    // 现在把 MediaError.code 翻译成中文并 toast 提示，方便定位通道问题（防盗链403、SSRF拦截、编码不支持等）。
     videoEl.addEventListener('error', function () {
-      if (global.console) global.console.warn('[SFV player] media error for', currentId);
+      var code = (videoEl && videoEl.error && videoEl.error.code) || 0;
+      var msg = (videoEl && videoEl.error && videoEl.error.message) || '';
+      var label = ({
+        1: 'MEDIA_ERR_ABORTED：视频加载被用户中止',
+        2: 'MEDIA_ERR_NETWORK：网络错误（可能是 CDN 防盗链 403 / 代理拒绝 / 私网 SSRF 拦截）',
+        3: 'MEDIA_ERR_DECODE：视频解码失败（编码不支持 / 分片损坏 / 首帧加密）',
+        4: 'MEDIA_ERR_SRC_NOT_SUPPORTED：视频格式或源地址不受支持（m3u8 原生不支持、协议不匹配）',
+      })[code] || ('未知错误 code=' + code);
+      if (global.console) global.console.warn('[SFV player] media error for', currentId, label, msg);
+      _closeLoadingToast(''); // 先去掉 loading 状态，避免错误 toast 被秒替换
+      try {
+        var errToast = '视频播放失败：' + label + (msg ? '（' + String(msg).slice(0, 100) + '）' : '');
+        if (typeof toast === 'function') toast(errToast);
+        else if (SFV.online && typeof SFV.online.toast === 'function') SFV.online.toast(errToast);
+      } catch (e) {}
+      try {
+        // 把失败的 URL 暴露到控制台，方便 DevTools 直接查看复现
+        if (currentUrl) global.__sfv_failed_url = currentUrl;
+      } catch (ex) {}
     });
   }
 
@@ -376,14 +417,23 @@
       if (!overlay) return;
       var x = e.clientX, y = e.clientY;
       if (e.touches && e.touches[0]) { x = e.touches[0].clientX; y = e.touches[0].clientY; }
-      // 任何指针移动都先显示控制栏；用户要的是「停住不动才淡出」，而不是「非控制栏区完全不点」。
-      // 这样既解决 idle 命中盒错位导致的永久不显示，也对齐主流播放器（任意移动鼠标都重新点亮控制栏）。
+      // =====【修复2026-09-06 17:38】控制条显示改为命中制 =====
+      // 原逻辑：任意 pointermove 都 preemptive 解除 idle + 续 timer（"主流播放器"任意点亮）。
+      // 新需求：仅当鼠标命中控制栏 live rect 或 idle 时的底部 120px 唤醒带，才解除 idle + 续 3s 隐藏计时；
+      //         非控制栏区的移动不再 preemptive 点亮，避免用户在看视频时随便动鼠标就被控制条打扰。
+      // 注意：pointInBar 在 idle 分支已退化到「屏幕底部 120px 唤醒带 ∪ live rect」，
+      // 故不再需要「任意移动都先点亮」的兜底；该兜底只用于解决历史 idle 命中盒错位，已不再相关。
+      var near = pointInBar(x, y);
+      if (!near) {
+        // 非命中区域：不动 idle 状态、不点 armHideTimer。控制条已是 idle → 继续 idle；已是 visible → 保持可见。
+        return;
+      }
       overlay.classList.remove('sfv-idle');
       var b = getDoc().body;
       if (b && b.classList.contains('video-player-active')) b.classList.remove('video-player-idle');
-      // 命中控制栏或底部唤醒带：保持更长的显示时长并续接隐藏计时
-      var near = pointInBar(x, y);
-      armHideTimer(near ? 3000 : 2200);
+      // 命中控制栏或底部唤醒带：续接 3s 隐藏计时
+      armHideTimer(3000);
+      // ===== 修复结束 =====
     };
     // 监听挂到 document：控制栏是 body 直接子元素（非 overlay 后代），
     // 悬停到控制栏上时 mousemove 不会冒泡到 overlay，故必须在 document 捕获。
@@ -401,7 +451,12 @@
     var c = Math.floor(videoEl.currentTime || 0);
     var d = Math.floor(videoEl.duration || 0);
     timeEl.textContent = fmt(c) + ' / ' + fmt(d);
-    var ratio = d ? (c / d) : 0;
+    // 进度条比例必须用未取整的浮点时间：取整会把 4Hz 的 timeupdate 量化成 1Hz，
+    // 进度条每秒才跳一格（肉眼可见的"一跳一跳"）；浮点比例 + CSS transition
+    // （player.css .sfv-progress-fill）才能把相邻两次更新插值成平滑滑动。
+    var ct = videoEl.currentTime || 0;
+    var dur = videoEl.duration || 0;
+    var ratio = (dur > 0 && isFinite(dur)) ? (ct / dur) : 0;
     if (fillEl) fillEl.style.width = (ratio * 100) + '%';
   }
 
@@ -571,23 +626,58 @@
   // 供 HLS 路径复用：hls.js 接管 src 设置。
   function prepareForPlay(id, title) {
     playbackSeq++; // 新会话：使任何在途异步挂载失效
+    console.log('[SFV-FREEZE] M1 prepareForPlay entry id=' + id);
     ensureOverlay();
+    // ==== Fix: 每次播放前强制清理 SR 激活留下的隐藏类/画布，防止上次崩溃/未正确关闭导致
+    // video 元素永久 opacity:0 或残余 canvas display:block 盖在 video 上造成纯黑屏。
+    (function _clearStaleSrState() {
+      try {
+        var d = getDoc();
+        if (videoEl) {
+          videoEl.classList.remove('sfv-sr-source-hidden');
+          videoEl.style.opacity = '';
+          videoEl.style.display = '';
+        }
+        if (d) {
+          var stale = d.getElementById('sfv-sr-canvas');
+          if (stale) stale.style.display = 'none';
+        }
+      } catch (e) { /* 非致命 */ }
+    })();
     if (danmakuEngine) danmakuEngine.load([]); // 换片清空上一部弹幕
+    console.log('[SFV-FREEZE] M2 after clearSr+danmaku-clear');
     playNextFn = null; // 换片默认无下一集；online.js 起播成功后会重新注册
     currentId = id;
+    // 保留上一轮已解析出的海报/系列键：异步起播路径（分享页探测 → 晚到的 openUrl/prepareForPlay）
+    // 会在 play-orchestrator 的 setMeta({ cover }) 之后才走到这里，直接整体重置会把封面丢掉，
+    // 导致底部控制条左侧海报容器永远空白。仅当 id 对得上（同一部片）才继承。
+    var prevMeta = currentMeta || {};
+    var inheritMeta = (prevMeta.id === id || prevMeta.key === id);
     currentMeta = { id: id, seriesKey: id, title: title || id, embed: false };
+    if (inheritMeta) {
+      if (prevMeta.seriesKey) currentMeta.seriesKey = prevMeta.seriesKey;
+      if (prevMeta.cover) currentMeta.cover = prevMeta.cover;
+      if (prevMeta.pic) currentMeta.pic = prevMeta.pic;
+      if (prevMeta.subtitle) currentMeta.subtitle = prevMeta.subtitle;
+    }
+    _loadingToastCleared = false;
     emitPlayerEvent('sfv:player-open', currentMeta); // 所有 URL 播放路径（直链/HLS/FLV）的统一入口
+    console.log('[SFV-FREEZE] M3 after emitPlayerEvent');
     restoreProgress();
+    console.log('[SFV-FREEZE] M4 after restoreProgress');
     var sp = getSettings().speed;
     if (sp) videoEl.playbackRate = sp;
     if (id.indexOf('file:') === 0 || id.indexOf('url:') === 0) {
       SFV.model.addToLibrary({ id: id, title: title || currentUrl || id, source: 'url' });
     }
     SFV.state.setSpace('video');
+    console.log('[SFV-FREEZE] M5a after setSpace');
     overlay.classList.add('sfv-show');
     emitRenderPause(true);
+    console.log('[SFV-FREEZE] M5b after emitRenderPause');
     // 自动加载弹幕：根据视频标题搜弹幕（对齐 Kazumi 行为）
     try { autoLoadDanmaku(title); } catch (e) {}
+    console.log('[SFV-FREEZE] M6 prepareForPlay done');
     return true;
   }
 
@@ -602,8 +692,11 @@
     currentUrl = url;
     prepareForPlay(id, opts.title);
     if (opts.subtitle || opts.cover) setMeta({ subtitle: opts.subtitle || '', cover: opts.cover || '' });
+    console.log('[SFV-FREEZE] M9 openUrl before src, url=' + String(url).slice(0, 160));
     videoEl.src = url;
+    console.log('[SFV-FREEZE] M9b openUrl after src');
     var p = videoEl.play();
+    console.log('[SFV-FREEZE] M9c openUrl after play()');
     if (p && p.catch) p.catch(function () {});
     return true;
   }
@@ -628,6 +721,9 @@
     // 阶段3：关闭时清空线路/选集状态，避免跨片残留
     roads = null; roadFromIndex = -1; roadSwitchFn = null;
     playlistTracks = null; playlistIndex = -1; playEpisodeAtFn = null;
+    if (SFV.detailSource && typeof SFV.detailSource.clearPlaybackSession === 'function') {
+      try { SFV.detailSource.clearPlaybackSession(); } catch (e) {}
+    }
     if (SFV.playerRoadEpisode && typeof SFV.playerRoadEpisode.close === 'function') {
       try { SFV.playerRoadEpisode.close(); } catch (e) {}
     }
@@ -715,6 +811,7 @@
     SFV.state.setSpace('video');
     overlay.classList.add('sfv-show');
     setCurrentMeta({ id: currentId, seriesKey: currentId, title: opts.title || currentId, embed: true });
+    if (opts.cover) setMeta({ cover: opts.cover });
     emitPlayerEvent('sfv:player-open', currentMeta);
     emitRenderPause(true);
     return true;

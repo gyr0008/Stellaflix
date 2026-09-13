@@ -615,7 +615,7 @@ function openTrackDetailModal(type, songOverride) {
       '<div class="detail-chip-row">' +
       '<span class="detail-chip">' + escHtml(songSourceLabel(song)) + '</span>' +
       (isSongLiked(song) ? '<span class="detail-chip">红心喜欢</span>' : '') +
-      (getCustomCoverForSong(song) ? '<span class="detail-chip">自定义封面</span>' : '') +
+      (getGlobalCustomCover() ? '<span class="detail-chip">全局自定义封面</span>' : '') +
       (hasCustomLyricForSong(song) ? '<span class="detail-chip">自定义歌词</span>' : '') +
       '</div>' +
       '<div class="detail-section"><div class="detail-section-head"><div class="detail-section-title">' + detailCommentTitle + '</div></div>' +
@@ -665,26 +665,21 @@ function resolveArtistSongForDetail(song, artist) {
 function setCustomCoverForCurrent(dataUrl, opts) {
   if (!dataUrl) return;
   var song = currentCoverSong();
-  var saved = false;
-  var hasKey = false;
-  if (song) {
-    var key = songCustomCoverKey(song);
-    song.customCover = dataUrl;
-    if (key) {
-      hasKey = true;
-      customCoverMap[key] = dataUrl;
-      saved = saveCustomCoverMap();
-      for (var i = 0; i < playQueue.length; i++) {
-        if (songCustomCoverKey(playQueue[i]) === key) playQueue[i].customCover = dataUrl;
-      }
-      if (currentLocalSong && songCustomCoverKey(currentLocalSong) === key) currentLocalSong.customCover = dataUrl;
-    }
+  if (!song) {
+    showToast('先播放或选择一首歌');
+    return;
   }
+  // 全局自定义封面模式：用户上传的一张图，所有歌曲共用
+  saveGlobalCustomCover(dataUrl).then(function (idbOk) {
+    if (!idbOk) console.info('[CustomCover] Global cover saved via localStorage fallback (IDB unavailable)');
+  });
+  // 当前歌曲对象同步挂载（仅当前实例内存，确保立即显示；全局回退仍覆盖切歌后的新对象）
+  song.customCover = dataUrl;
   applyCoverDataUrl(dataUrl, opts);
   safeRenderQueuePanel('custom-cover-apply', { scrollCurrent: miniQueueOpen });
   safeShelfRebuild('custom-cover-apply');
   updateCustomCoverButton();
-  showToast(song ? (!hasKey ? '封面已应用' : (saved ? '封面已保存' : '封面已应用，存储空间不足')) : '已应用临时封面');
+  showToast('已设为全局封面，所有歌曲将使用此封面');
 }
 function updateCustomCoverButton() {
   var btn = document.getElementById('clear-cover-btn');
@@ -698,31 +693,25 @@ function updateCustomCoverButton() {
 }
 function clearCustomCoverForCurrent() {
   var song = currentCoverSong();
-  if (!song) {
-    showToast('先播放或选择一首歌');
-    updateCustomCoverButton();
-    return;
-  }
-  var custom = getCustomCoverForSong(song);
+  // 全局模式：只需检查全局自定义封面是否存在
+  var custom = getGlobalCustomCover();
   if (!custom) {
     showToast('当前没有自定义封面');
     updateCustomCoverButton();
     return;
   }
-  var key = songCustomCoverKey(song);
-  if (key && customCoverMap[key]) {
-    delete customCoverMap[key];
-    saveCustomCoverMap();
-  }
+  // 清除全局自定义封面（IDB Blob + localStorage 索引 + 内存热缓存）
+  deleteGlobalCustomCover();
+  // 清理渲染缓存（playlistCoverCache 以 dataURL 为 key）
   delete playlistCoverCache[custom];
-  delete song.customCover;
-  if (key) {
-    for (var i = 0; i < playQueue.length; i++) {
-      if (songCustomCoverKey(playQueue[i]) === key) delete playQueue[i].customCover;
-    }
+  // 清理内存中的歌曲对象引用（当前 + 队列 + 本地）
+  if (song) delete song.customCover;
+  for (var i = 0; i < playQueue.length; i++) {
+    delete playQueue[i].customCover;
   }
-  if (key && currentLocalSong && songCustomCoverKey(currentLocalSong) === key) delete currentLocalSong.customCover;
-  if (currentIdx >= 0 && playQueue[currentIdx] && playQueue[currentIdx].cover) loadCoverFromUrl(coverUrlWithSize(playQueue[currentIdx].cover, 400));
+  if (currentLocalSong) delete currentLocalSong.customCover;
+  // 立即恢复显示音乐自身封面（当前歌曲）
+  if (song && song.cover) loadCoverFromUrl(coverUrlWithSize(song.cover, 400));
   else loadCoverFromUrl('');
   safeRenderQueuePanel('custom-cover-clear', { scrollCurrent: miniQueueOpen });
   safeShelfRebuild('custom-cover-clear');
@@ -1628,6 +1617,14 @@ function avatarSrc(url) {
   if (!url) return '';
   return coverProxySrc(url, true);
 }
+
+// index-loader 将所有模块拼进单个 try { } catch 块执行：
+// 普通 function 按 Annex B 3.3 泄漏到全局，async function 为块级绑定不泄漏，
+// 内联 onclick 引用的 async 函数必须显式挂载（与 window.apiJson 同理）。
+window.createPlaylistFromCollect = createPlaylistFromCollect;
+window.addCollectTargetToPlaylist = addCollectTargetToPlaylist;
+window.toggleAlbumCollection = toggleAlbumCollection;
+window.submitDetailComment = submitDetailComment;
 
 // ============================================================
 //  搜索

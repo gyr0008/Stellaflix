@@ -24,12 +24,15 @@
       height: 54px;
       display: grid;
       place-items: center;
-      border: 1px solid rgba(255,255,255,.22);
+      border: 0;
       border-radius: 17px;
-      background: linear-gradient(145deg, rgba(255,255,255,.16), rgba(255,255,255,.035));
-      box-shadow: 0 18px 52px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.17);
-      font-weight: 760;
-      letter-spacing: -.08em;
+      overflow: hidden;
+      box-shadow: 0 18px 52px rgba(0,0,0,.42);
+    }
+    .mark svg {
+      width: 54px;
+      height: 54px;
+      display: block;
     }
     .name { font-size: 18px; font-weight: 650; letter-spacing: .02em; }
     .status { color: rgba(255,255,255,.48); font-size: 12px; letter-spacing: .08em; }
@@ -51,7 +54,15 @@
 </head>
 <body>
   <main class="boot" role="status" aria-live="polite">
-    <div class="mark">MR</div>
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
+        <rect width="300" height="300" rx="64" fill="#F7F4EC"/>
+        <ellipse cx="150" cy="160" rx="128" ry="34" fill="none" stroke="#2E2B26" stroke-width="14" transform="rotate(-16 150 160)"/>
+        <circle cx="150" cy="148" r="70" fill="#5B7A9D"/>
+        <path d="M 45 178 A 128 34 -16 0 0 150 190" fill="none" stroke="#2E2B26" stroke-width="14" stroke-linecap="round"/>
+        <path d="M 232 118 L 246 146 L 232 138 L 218 146 Z" fill="#2E2B26"/>
+      </svg>
+    </div>
     <div class="name">Stellaflix</div>
     <div class="status">正在启动播放器</div>
     <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>

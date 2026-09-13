@@ -22,7 +22,7 @@ function providerName(song) {
 function platformKey(input) {
   const song = unwrapRawSong(input);
   const provider = providerName(song);
-  // Mineradio 官方五平台 + 洛雪脚本常用别名
+  // Stellaflix 官方五平台 + 洛雪脚本常用别名
   if (provider === 'qq' || provider === 'tx') return 'tx';
   if (provider === 'netease' || provider === 'wy') return 'wy';
   if (provider === 'kugou' || provider === 'kugoumusic' || provider === 'kg') return 'kg';
@@ -74,7 +74,7 @@ function toLxMusicInfo(input) {
   const interval = formatSeconds(songDurationSeconds(song, isUnknownSource ? 'wy' : source));
   const cover = song?.cover || song?.picUrl || null;
 
-  // 青听海棠 rid 契约：handleGetMusicUrl(src, info) 用 info.hash ?? info.songmid
+  // 青听音乐 rid 契约：handleGetMusicUrl(src, info) 用 info.hash ?? info.songmid
   // tx 真实线路内部再用 musicInfo.strMediaMid ?? songmid ?? meta.id ?? meta.strMediaMid
   // → 必须把"每个平台最可能用来定位音频的 ID"写进 info.songmid + info.hash 这两个 ?? 短路入口
   const rawHash = String(
@@ -96,10 +96,16 @@ function toLxMusicInfo(input) {
   const txMid = String(song?.mid || song?.songmid || song?.songId || song?.id || '');
   const kuwoRid = String(song?.rid || song?.kuwoRid || song?.musicRid || '');
   const miguRid = String(song?.copyrightId || song?.miguRid || song?.musicId || '');
+  // 补齐各平台真实歌曲 ID 字段：网易云用 songid、咪咕用 cid、部分源用 musicid。
+  // 原链只认 providerSongId/songmid/mid/trackId/id，导致 wy/mg 搜索结果取到空 rid，
+  // toLxMusicInfo 抛 "SOURCE_UNSUPPORTED: Missing song id"，青听解析直接失败 → 播放报"未能开始播放"。
   const genericSongmid = String(
     song?.providerSongId
+    || song?.songid
     || song?.songmid
     || song?.mid
+    || song?.cid
+    || song?.musicid
     || song?.trackId
     || song?.track_id
     || song?.id

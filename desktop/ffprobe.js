@@ -41,6 +41,38 @@ const path = require('path');
 
 let _config = null;
 
+// Bound concurrent ffprobe children: list previews / batch probes can otherwise
+// spawn dozens of remote-read processes and stall disk/CPU on the main machine.
+const MAX_CONCURRENT_PROBES = 3;
+let activeProbes = 0;
+const probeWaiters = [];
+const probeInflight = new Map();
+
+function acquireProbeSlot() {
+  if (activeProbes < MAX_CONCURRENT_PROBES) {
+    activeProbes += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    probeWaiters.push(resolve);
+  });
+}
+
+function releaseProbeSlot() {
+  const next = probeWaiters.shift();
+  if (next) {
+    // Hand the free slot directly to the next waiter.
+    next();
+  } else if (activeProbes > 0) {
+    activeProbes -= 1;
+  }
+}
+
+function inflightKey(input, opts) {
+  const timeoutMs = (opts && opts.timeoutMs) || 15000;
+  return String(input || '') + '|' + timeoutMs;
+}
+
 function setConfig(cfg) {
   _config = cfg;
 }
@@ -75,7 +107,16 @@ function probeRaw(input, opts) {
     let stderr = '';
     const child = spawn(ffprobe, args, { windowsHide: true });
     const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch (e) {}
+      try {
+        if (process.platform === 'win32' && child.pid) {
+          const { spawnSync } = require('child_process');
+          spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 2000 });
+        } else {
+          child.kill('SIGKILL');
+        }
+      } catch (e) {
+        try { child.kill('SIGKILL'); } catch (_) {}
+      }
       reject(new Error('ffprobe timeout'));
     }, timeoutMs);
     child.stdout.setEncoding('utf8');
@@ -147,9 +188,26 @@ function normalize(raw) {
   };
 }
 
-/** 对外主入口：probe(input) → MediaInfo */
+/** 对外主入口：probe(input) → MediaInfo（全局限流 + 同 input inflight 去重） */
 function probe(input, opts) {
-  return probeRaw(input, opts).then(normalize);
+  const key = inflightKey(input, opts);
+  if (probeInflight.has(key)) return probeInflight.get(key);
+
+  const work = (async () => {
+    await acquireProbeSlot();
+    try {
+      const raw = await probeRaw(input, opts);
+      return normalize(raw);
+    } finally {
+      releaseProbeSlot();
+    }
+  })();
+
+  probeInflight.set(key, work);
+  work.finally(() => {
+    if (probeInflight.get(key) === work) probeInflight.delete(key);
+  }).catch(() => {});
+  return work;
 }
 
 /**

@@ -406,3 +406,11 @@ document.addEventListener('click', function (e) {
   e.stopPropagation();
   dismissHomePage({ reason: 'blank-click' });
 }, true);
+
+// 兜底：index-loader 把全部模块源码拼接进一个 try 块执行；
+// 按 ES2017 块级作用域，try 块内的 async function 声明不会泄漏到全局
+// （普通 function 因 Annex B 3.3 宽松提升仍会泄漏，故无需处理）。
+// 显式挂到 window，供首页卡片 onclick / 其他模块跨文件调用。
+window.waitForHomeDiscoverIdle = waitForHomeDiscoverIdle;
+window.playHomeDaily = playHomeDaily;
+window.playHomePrivateRadio = playHomePrivateRadio;

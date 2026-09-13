@@ -9,7 +9,7 @@ const { JSDOM } = require('C:/Users/Administrator/.workbuddy/binaries/node/works
 const fs = require('fs');
 const path = require('path');
 
-const PROJECT = 'C:/Users/Administrator/Desktop/Mineradio-2.1.0';
+const PROJECT = 'C:/Users/Administrator/Desktop/Stellaflix-2.1.0';
 const CSS_PATH = path.join(PROJECT, 'public/css/index.css');
 
 const minimalHTML = `

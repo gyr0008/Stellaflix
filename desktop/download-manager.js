@@ -71,7 +71,12 @@ function start() {
   if (!fs.existsSync(exe)) return Promise.reject(new Error('qBittorrent 不存在: ' + exe));
   return new Promise((resolve, reject) => {
     const args = ['--configuration=qbt-portable', '--relative-fastresume'];
-    _proc = spawn(exe, args, { windowsHide: true, cwd: path.dirname(exe), detached: false });
+    _proc = spawn(exe, args, {
+      windowsHide: true,
+      cwd: path.dirname(exe),
+      detached: false,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
     _proc.on('error', reject);
     _proc.on('exit', code => { _log('qbt exit', code); _proc = null; });
     // 等 Web API 就绪
@@ -85,11 +90,33 @@ function start() {
   });
 }
 
+function killProcessTree(proc) {
+  if (!proc || proc.exitCode !== null) return;
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      const { spawnSync } = require('child_process');
+      spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, timeout: 2000 });
+      return;
+    }
+  } catch (_) {}
+  try { proc.kill('SIGKILL'); } catch (_) {}
+}
+
 function stop() {
   return new Promise(resolve => {
-    if (!_proc || _proc.killed) { resolve(true); return; }
-    _proc.kill('SIGTERM');
-    setTimeout(() => { try { _proc.kill('SIGKILL'); } catch (e) {} resolve(true); }, 1000);
+    if (!_proc || _proc.exitCode !== null) { _proc = null; resolve(true); return; }
+    const proc = _proc;
+    const finish = () => { if (_proc === proc) _proc = null; resolve(true); };
+    proc.once('exit', finish);
+    try { proc.kill('SIGTERM'); } catch (_) {}
+    setTimeout(() => {
+      if (proc.exitCode === null) {
+        killProcessTree(proc);
+        setTimeout(finish, 400);
+      } else {
+        finish();
+      }
+    }, 1000);
   });
 }
 

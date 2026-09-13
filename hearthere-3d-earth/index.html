@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HearThere 3D Earth - 复现实现</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+            background: #0a0a1a;
+        }
+        
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            background: transparent;
+        }
+        
+        /* Three.js 渲染画布（星空背景） */
+        #three-canvas, canvas[id^="three"] {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+        
+        /* DeckGL 地球渲染画布（透明背景） */
+        #deck-canvas {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            z-index: 1;
+            background: transparent !important;
+        }
+        
+        /* 标题覆盖层 */
+        .title-overlay {
+            position: absolute;
+            top: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            color: white;
+            pointer-events: none;
+            z-index: 100;
+        }
+        
+        .title-overlay h1 {
+            font-size: 48px;
+            font-weight: 300;
+            letter-spacing: 8px;
+            text-transform: uppercase;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.5);
+        }
+        
+        .title-overlay .subtitle {
+            font-size: 14px;
+            opacity: 0.7;
+            margin-top: 10px;
+            letter-spacing: 2px;
+        }
+        
+        /* ON AIR 指示器 */
+        .on-air-indicator {
+            position: absolute;
+            top: 40px;
+            right: 40px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #ff4444;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            z-index: 100;
+        }
+        
+        .on-air-dot {
+            width: 10px;
+            height: 10px;
+            background: #ff4444;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.2); }
+        }
+        
+        /* 信息面板 */
+        .info-panel {
+            position: absolute;
+            bottom: 40px;
+            left: 40px;
+            color: white;
+            z-index: 100;
+        }
+        
+        .info-panel .instruction {
+            font-size: 16px;
+            opacity: 0.8;
+            margin-bottom: 10px;
+        }
+        
+        .info-panel .controls {
+            font-size: 12px;
+            opacity: 0.5;
+        }
+        
+        /* 信标详情弹窗 */
+        .beacon-popup {
+            position: absolute;
+            background: rgba(20, 20, 40, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            min-width: 280px;
+            color: white;
+            display: none;
+            z-index: 200;
+            backdrop-filter: blur(10px);
+        }
+        
+        .beacon-popup.active {
+            display: block;
+        }
+        
+        .beacon-popup .beacon-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .beacon-popup .beacon-name {
+            font-size: 18px;
+            font-weight: 500;
+        }
+        
+        .beacon-popup .beacon-status {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            background: rgba(0, 255, 100, 0.2);
+            color: #00ff64;
+        }
+        
+        .beacon-popup .beacon-status.offline {
+            background: rgba(255, 100, 100, 0.2);
+            color: #ff6464;
+        }
+        
+        .beacon-popup .beacon-description {
+            font-size: 14px;
+            opacity: 0.7;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+        
+        .beacon-popup .beacon-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .beacon-popup .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .beacon-popup .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .beacon-popup .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+        
+        .beacon-popup .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        /* 烟花效果容器 */
+        .fireworks-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 50;
+        }
+        
+        /* 加载动画 */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #0a0a1a;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: opacity 0.5s;
+        }
+        
+        .loading-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            color: white;
+            margin-top: 20px;
+            font-size: 14px;
+            letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="deck-canvas"></canvas>
+    </div>
+    
+    <!-- 标题覆盖层 -->
+    <div class="title-overlay">
+        <h1>Hear There</h1>
+        <p class="subtitle">The world is listening</p>
+    </div>
+    
+    <!-- ON AIR 指示器 -->
+    <div class="on-air-indicator">
+        <span class="on-air-dot"></span>
+        <span>ON AIR</span>
+    </div>
+    
+    <!-- 信息面板 -->
+    <div class="info-panel">
+        <p class="instruction">点击地图上的声音信标开始收听</p>
+        <p class="controls">拖拽旋转 · 滚轮缩放 · 点击信标选择</p>
+    </div>
+    
+    <!-- 信标详情弹窗 -->
+    <div class="beacon-popup" id="beaconPopup">
+        <div class="beacon-header">
+            <span class="beacon-name" id="beaconName">灯塔信标</span>
+            <span class="beacon-status" id="beaconStatus">LIVE</span>
+        </div>
+        <p class="beacon-description" id="beaconDesc">正在播放来自世界各地的声音...</p>
+        <div class="beacon-actions">
+            <button class="btn btn-primary" id="btnListen">开始收听</button>
+            <button class="btn btn-secondary" id="btnFavorite">收藏</button>
+        </div>
+    </div>
+    
+    <!-- 烟花效果容器 -->
+    <div class="fireworks-container" id="fireworks"></div>
+    
+    <!-- 加载动画 -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">正在连接声音信标...</p>
+    </div>
+
+    <!-- 引入 deck.gl 和依赖 -->
+    <script src="https://unpkg.com/deck.gl@9.0.0/dist.min.js"></script>
+    <script src="https://unpkg.com/maplibre-gl@3.0.0/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.0.0/dist/maplibre-gl.css" rel="stylesheet" />
+    
+    <script src="./js/earth-renderer.js"></script>
+    <script src="./js/lighthouse-model.js"></script>
+    <script src="./js/interactions.js"></script>
+    <script src="./js/fireworks.js"></script>
+    <script src="./js/app.js"></script>
+</body>
+</html>

@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   updateCheck: () => ipcRenderer.invoke('stellaflix-update-check'),
   updateDownload: () => ipcRenderer.invoke('stellaflix-update-download'),
   updateInstall: () => ipcRenderer.invoke('stellaflix-update-install'),
+  updateStatus: () => ipcRenderer.invoke('stellaflix-update-status'),
   onUpdateEvent: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, payload) => callback(payload || {});
@@ -93,8 +94,10 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   exportJsonFile: (payload) => ipcRenderer.invoke('stellaflix-export-json-file', payload || {}),
   exportLoginCookie: (provider) => ipcRenderer.invoke('stellaflix-export-login-cookie', provider || ''),
   importJsonFile: () => ipcRenderer.invoke('stellaflix-import-json-file'),
-  readCurrentFxAutosaveSync: () => ipcRenderer.sendSync('stellaflix-current-fx-autosave-read-sync'),
-  saveCurrentFxAutosaveSync: (payload) => ipcRenderer.sendSync('stellaflix-current-fx-autosave-save-sync', payload || {}),
+  readCurrentFxAutosave: () => ipcRenderer.invoke('stellaflix-current-fx-autosave-read'),
+  // Legacy names kept so older call sites do not throw; both are async now.
+  readCurrentFxAutosaveSync: () => ipcRenderer.invoke('stellaflix-current-fx-autosave-read'),
+  saveCurrentFxAutosaveSync: (payload) => ipcRenderer.invoke('stellaflix-current-fx-autosave-save', payload || {}),
   saveCurrentFxAutosave: (payload) => ipcRenderer.invoke('stellaflix-current-fx-autosave-save', payload || {}),
   onGlobalHotkey: (callback) => {
     if (typeof callback !== 'function') return () => {};
@@ -150,48 +153,48 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   pickImage: () => ipcRenderer.invoke('stellaflix-pick-media', 'image'),
   pickVideo: () => ipcRenderer.invoke('stellaflix-pick-media', 'video'),
   fileToBlob: (absolutePath) => ipcRenderer.invoke('stellaflix-file-to-blob', String(absolutePath || '')),
-  // ── 第三方音源（custom-source / 青听海棠） ──
+  // ── 第三方音源（custom-source / 青听音乐） ──
   customSource: {
     isSupported: true,
-    getState: () => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_GET_STATE'),
-    listInstalled: () => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_LIST_INSTALLED'),
-    listAvailableBundled: () => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_LIST_AVAILABLE_BUNDLED'),
-    importScriptFromUrl: (url) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_IMPORT_SCRIPT_URL', String(url || '')),
-    importScriptFromText: (text) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_IMPORT_SCRIPT_TEXT', String(text || '')),
-    enable: (pkgId) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_ENABLE', String(pkgId || '')),
-    disable: (pkgId) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_DISABLE', String(pkgId || '')),
-    installBundled: (pkgId) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_INSTALL_BUNDLED', String(pkgId || '')),
-    remove: (pkgId) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_REMOVE', String(pkgId || '')),
-    parsePreviewFromText: (text) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_PARSE_PREVIEW', String(text || '')),
-    getPolicy: () => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_GET_POLICY'),
-    setPolicy: (patch) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_SET_POLICY', patch && typeof patch === 'object' ? patch : {}),
-    checkUpdates: () => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_CHECK_UPDATES'),
-    openScriptDirectory: () => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_OPEN_SCRIPT_DIRECTORY'),
+    getState: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_GET_STATE'),
+    listInstalled: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_LIST_INSTALLED'),
+    listAvailableBundled: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_LIST_AVAILABLE_BUNDLED'),
+    importScriptFromUrl: (url) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_IMPORT_SCRIPT_URL', String(url || '')),
+    importScriptFromText: (text) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_IMPORT_SCRIPT_TEXT', String(text || '')),
+    enable: (pkgId) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_ENABLE', String(pkgId || '')),
+    disable: (pkgId) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_DISABLE', String(pkgId || '')),
+    installBundled: (pkgId) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_INSTALL_BUNDLED', String(pkgId || '')),
+    remove: (pkgId) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_REMOVE', String(pkgId || '')),
+    parsePreviewFromText: (text) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_PARSE_PREVIEW', String(text || '')),
+    getPolicy: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_GET_POLICY'),
+    setPolicy: (patch) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_SET_POLICY', patch && typeof patch === 'object' ? patch : {}),
+    checkUpdates: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_CHECK_UPDATES'),
+    openScriptDirectory: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_OPEN_SCRIPT_DIRECTORY'),
     // 解析后端地址（用户自填的 musicserver 类端点）
-    getBackend: () => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_GET_BACKEND'),
-    setBackend: (patch) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_SET_BACKEND', patch && typeof patch === 'object' ? patch : {}),
-    // 播放链路直通解析（绕开 HTTP 路由，保证 custom-only 模式可用）
-    resolveOnline: (payload) => ipcRenderer.invoke('MINERADIO_CUSTOM_SOURCE_RESOLVE_ONLINE', payload && typeof payload === 'object' ? payload : {}),
+    getBackend: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_GET_BACKEND'),
+    setBackend: (patch) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_SET_BACKEND', patch && typeof patch === 'object' ? patch : {}),
+    // 播放链路直通解析（绕开 HTTP 路由，保证第三方音源模式可用）
+    resolveOnline: (payload) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_RESOLVE_ONLINE', payload && typeof payload === 'object' ? payload : {}),
     onEvent: (callback) => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_e, payload) => callback(payload || {});
-      ipcRenderer.on('MINERADIO_CUSTOM_SOURCE_EVENT', listener);
-      return () => ipcRenderer.removeListener('MINERADIO_CUSTOM_SOURCE_EVENT', listener);
+      ipcRenderer.on('STELLAFLIX_CUSTOM_SOURCE_EVENT', listener);
+      return () => ipcRenderer.removeListener('STELLAFLIX_CUSTOM_SOURCE_EVENT', listener);
     },
     onLog: (callback) => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_e, payload) => callback(payload || {});
-      ipcRenderer.on('MINERADIO_CUSTOM_SOURCE_LOG', listener);
-      return () => ipcRenderer.removeListener('MINERADIO_CUSTOM_SOURCE_LOG', listener);
+      ipcRenderer.on('STELLAFLIX_CUSTOM_SOURCE_LOG', listener);
+      return () => ipcRenderer.removeListener('STELLAFLIX_CUSTOM_SOURCE_LOG', listener);
     },
     onStateChange: (callback) => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_e, payload) => callback(payload || {});
-      ipcRenderer.on('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', listener);
-      ipcRenderer.on('MINERADIO_CUSTOM_SOURCE_REFRESH_ACTIVATION', listener);
+      ipcRenderer.on('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', listener);
+      ipcRenderer.on('STELLAFLIX_CUSTOM_SOURCE_REFRESH_ACTIVATION', listener);
       return () => {
-        ipcRenderer.removeListener('MINERADIO_CUSTOM_SOURCE_STATE_CHANGE', listener);
-        ipcRenderer.removeListener('MINERADIO_CUSTOM_SOURCE_REFRESH_ACTIVATION', listener);
+        ipcRenderer.removeListener('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', listener);
+        ipcRenderer.removeListener('STELLAFLIX_CUSTOM_SOURCE_REFRESH_ACTIVATION', listener);
       };
     },
   },

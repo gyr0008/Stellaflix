@@ -32,18 +32,44 @@
     var doc = d();
     if (!doc || !doc.querySelector) return;
     try {
+      // 启动默认空间=影视时，音乐模块链可能已把 5 卡预写成影视文案。
+      // 此时不能拿当前 DOM 当「音乐基线」，否则切回音乐会还原成影视文案。
+      var startVideo = false;
+      try {
+        startVideo = doc.documentElement.classList.contains('video-space-active')
+          || (doc.body && doc.body.classList.contains('video-space-active'))
+          || (global.localStorage && global.localStorage.getItem('stellaflix-start-space') === 'video');
+      } catch (_se) { }
       var snap = { cards: [], poster: null, posterMedia: null, rail: null };
       var cards = $all('#empty-home .home-grid .home-card');
+      // 与 index.html 静态音乐 home 一致的基线（预写影视壳之前的原文案）
+      var musicHtmlDefaults = [
+        { label: 'CONTINUE', title: '继续播放', sub: '从当前队列或最近播放继续', onclick: 'resumeHomeDashboardPlayback()' },
+        { label: 'LIBRARY', title: '音乐库', sub: '歌单、本地音乐和已登录平台', onclick: 'openHomeDashboardLibrary()' },
+        { label: 'DAILY MIX', title: '每日推荐', sub: '使用当前 Stellaflix 推荐数据', onclick: 'playHomeDaily()' },
+        { label: 'RECENT', title: '最近播放', sub: '播放过的歌曲会出现在这里', onclick: 'playHomeRecent()' },
+        { label: 'Video', title: '影视空间', sub: '搜索 / 播放影片', onclick: "if(window.StellaflixVideo&&StellaflixVideo.state)StellaflixVideo.state.setSpace('video')" }
+      ];
       for (var i = 0; i < cards.length; i++) {
         var l = cards[i].querySelector('.home-card-label');
         var t = cards[i].querySelector('.home-card-title');
         var s = cards[i].querySelector('.home-card-sub');
-        snap.cards.push({
-          label: l ? l.textContent : '',
-          title: t ? t.textContent : '',
-          sub: s ? s.textContent : '',
-          onclick: cards[i].getAttribute('onclick') || '',
-        });
+        if (startVideo && i < musicHtmlDefaults.length) {
+          var md = musicHtmlDefaults[i];
+          snap.cards.push({
+            label: md.label,
+            title: md.title,
+            sub: md.sub,
+            onclick: md.onclick,
+          });
+        } else {
+          snap.cards.push({
+            label: l ? l.textContent : '',
+            title: t ? t.textContent : '',
+            sub: s ? s.textContent : '',
+            onclick: cards[i].getAttribute('onclick') || '',
+          });
+        }
       }
       var posterTitle = doc.querySelector('#empty-home .home-poster-title');
       var posterQuote = doc.getElementById('home-poster-quote');
@@ -65,10 +91,15 @@
       }
       var railTitle = doc.getElementById('home-rail-title');
       var railNote = doc.getElementById('home-rail-note');
-      snap.rail = {
-        title: railTitle ? railTitle.textContent : '',
-        note: railNote ? railNote.textContent : '',
-      };
+      if (startVideo) {
+        // 预写壳已改过 rail 文案，基线用空/音乐默认，切回时由 renderHomeDiscover 重建
+        snap.rail = { title: '', note: '' };
+      } else {
+        snap.rail = {
+          title: railTitle ? railTitle.textContent : '',
+          note: railNote ? railNote.textContent : '',
+        };
+      }
       musicSnap = snap;
       // 暴露给测试 / DevTools 排查
       try { global[MUSIC_SNAP_KEY] = snap; } catch (e) {}
@@ -101,21 +132,47 @@
         cards[i].removeAttribute('data-sfv-key');
         cards[i].removeAttribute('data-sfv-id');
         // 清掉影视态 setCardText 之外的 class 影响
+        var isVideoTile = cards[i].classList.contains('sfv-tile-cover')
+          || cards[i].classList.contains('sfv-continue-tile')
+          || cards[i].classList.contains('sfv-continue-empty');
         cards[i].classList.remove('sfv-tile-cover', 'sfv-continue-tile', 'sfv-continue-empty');
-        // T-隔离：清除影视态 setCardArt 写入的封面（如"心动"海报），
-        // 否则会泄漏到音乐态"继续听/最近播放"卡片。同时清掉音乐态自身的背景缓存，
-        // 强制下方 renderHomeDiscover 重新写入音乐封面。
+        // FIX-v3: 不再盲目清除 5 张卡的所有封面。
+        // 旧逻辑（全清）的致命缺陷：
+        //   ① CONTINUE/LIBRARY/RECENT 等音乐态本就有正确封面的卡片也被一起清 DOM。
+        //   ② 清完后同步帧 renderHomeDashboardQuickCards 立即 patchCard，但
+        //      CONTINUE 依赖 homeDashboardCurrentSong()/recent、LIBRARY 依赖 localSongs、
+        //      RECENT 依赖 recent.cover —— 切态瞬间这些值未必就绪 → cover=''
+        //      → displayCover 走 homeDashboardGeneratedCover → 写入蓝色圆盘 SVG。
+        //   ③ 异步 loadHomeDiscover 返回后，CONTINUE/LIBRARY/RECENT/VIDEO 的 cover
+        //      字段仍然空（它们不来自 homeDiscoverState.songs）→ 再次 patch 依然蓝色圆盘。
+        // 新逻辑（精准清）：只清「有影视态标记」的卡片（sfv-tile-cover / sfv-continue-tile）。
+        //   这些卡片的封面确实是影视态 setCardArt 写入的（如"心动"海报），必须清防泄漏。
+        //   其他音乐态本来就有的卡片，DOM 里保留上一次的真实封面 ——
+        //   即使同步帧 patchCard 再次写入 cover='' 对应的蓝色圆盘，也至少有
+        //   「旧 DOM cover 在 → patchCard 尝试写新值」的竞争。
+        //   更进一步：下方 renderHomeDashboardQuickCards 中已经为 cover 为空的卡
+        //   添加了从 homeDiscoverState.songs 兜底取 cover 的逻辑，双保险。
+        // 双态独立（防串扰）：切回音乐态时，对五张 home-card 无条件失效
+        // 音乐态 homeDashboardSetStableBackgroundImage 的去重守卫字段。
+        // 不清 style.backgroundImage（避免视觉闪烁为蓝色圆盘），仅让守卫失效，
+        // 这样随后 renderHomeDashboardQuickCards 的 patch 能真正写入正确的音乐态封面，
+        // 而不会被 "__homeDashboardRequestedBackground === 音乐cover" 的去重逻辑跳过，
+        // 从而杜绝影视态海报残留在音乐态。
         var cardArt = cards[i].querySelector('.home-card-art');
         if (cardArt) {
-          cardArt.style.backgroundImage = '';
-          cardArt.classList.remove('has-cover');
           try { delete cardArt.__homeDashboardRequestedBackground; delete cardArt.__homeDashboardBackground; } catch (e2) {}
+          // isVideoTile（接着看 tile）才清 style，保留原逻辑；
+          // 五张 home-card 不清 style，留给音乐态 patch 覆盖，避免蓝色圆盘闪烁。
+          if (isVideoTile) {
+            cardArt.style.backgroundImage = '';
+            cardArt.classList.remove('has-cover');
+          }
         }
       }
-      // T-隔离：移除 home-quick-grid，使后续 renderHomeDiscover → renderHomeDashboardQuickCards
-      // 绕过 fingerprint 守卫重新绘制（否则音乐态数据与快照一致会 early-return，残留影视态封面）。
-      var quickGrid = doc.querySelector('#empty-home .home-grid');
-      if (quickGrid) quickGrid.classList.remove('home-quick-grid');
+      // T-隔离：不再移除 home-quick-grid 类，确保 5 列布局不会因切态失效。
+      // 原先设计：移除类使 renderHomeDashboardQuickCards 绕过 fingerprint 守卫重绘。
+      // 副作用：一旦 remove 之后由于时序/守卫条件未重新 add，容器永久回退到 2 列布局。
+      // 替代方案：在 renderHomeDashboardQuickCards 入口自行处理 fingerprint 失效 + 强制确保 home-quick-grid 类。
       // 2) 还原 home-poster-title / home-poster-quote
       if (snap.poster) {
         var posterTitle = doc.querySelector('#empty-home .home-poster-title');

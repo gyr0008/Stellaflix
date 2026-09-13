@@ -63,6 +63,10 @@ function saveLastPlaybackSnapshot(force, reason) {
   } catch (e) { }
 }
 function applyRestoredPlaybackProgressUi(snapshot) {
+  // 影视态下底部进度区已由 player-controller 的视频 onTimeUpdate 接管，
+  // 快照恢复写入会造成与视频进度的互窜（进度条/时长显示跳动），故跳过。
+  // 内联检查（不依赖跨文件函数，避免模块加载顺序影响）。
+  if (typeof document !== 'undefined' && document.body && document.body.classList.contains('video-player-active')) return;
   snapshot = snapshot || {};
   var durationSec = Number(snapshot.duration) || playbackDurationFromSong(snapshot.current) || 0;
   var currentSec = Math.max(0, Number(snapshot.currentTime) || 0);

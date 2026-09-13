@@ -680,6 +680,13 @@ function homeDashboardPatchCard(button, card) {
 }
 
 function renderHomeDashboardQuickCards() {
+  // 双态独立（防串扰）：影视态下五张 home-card 封面归 video/home-cards.js
+  // 的 setCardArt 独占，音乐态 patch 不得覆盖。
+  // 原因：restoreMusic 在 60/400/1500ms 三档 setTimeout 裸调本函数；若用户在
+  //   切到音乐态后极短时间内又切回影视态，这些遗留的定时器会在影视态触发本函数，
+  //   用音乐 cover 覆盖影视态 setCardArt 写入的海报 → 音乐海报出现在影视态。
+  // 守卫只挡影视态；音乐态（含 restoreMusic 的 setTimeout，此时已是音乐态）正常执行。
+  if (getHomeDashboardMode() === 'video') return;
   var grid = document.querySelector('#empty-home .home-grid');
   if (!grid) return;
   var summary = typeof homeListenSummary === 'function' ? homeListenSummary() : {};
@@ -738,7 +745,8 @@ function renderHomeDashboardQuickCards() {
         try {
           var SFV = window.StellaflixVideo;
           if (SFV && SFV.home && typeof SFV.home.getVideoLeftPosterImage === 'function') {
-            return SFV.home.getVideoLeftPosterImage() || '';
+            var vPoster = SFV.home.getVideoLeftPosterImage();
+            if (vPoster) return vPoster;
           }
         } catch (_e) { /* ignore */ }
         return '';
@@ -748,12 +756,73 @@ function renderHomeDashboardQuickCards() {
       className: 'home-card-quick',
     },
   ];
+  // FIX-v3: 为 cover 为空的卡片添加兜底：从已加载的 homeDiscoverState.songs / userPlaylists
+  // / 本地音乐 / 任意有 cover 的数据里取一个真实 URL 填充，避免一律变成蓝色圆盘 SVG。
+  // 背景（蓝色圆盘根因链的最后一环）：
+  //   CONTINUE → cover 来自 current/recent（播放状态依赖，切态瞬间可能空）
+  //   LIBRARY  → cover 来自 localSongs[0]（本地库依赖，空库时空）
+  //   RECENT   → cover 来自 recent.cover（同上）
+  //   VIDEO    → cover 来自 SFV.home.getVideoLeftPosterImage()（快照依赖，没拍时空）
+  //   这些字段一旦为空，即使 loadHomeDiscover 返回了 homeDiscoverState.songs（FOR YOU
+  //   区域有真实封面），顶部 5 张卡也享受不到 —— 因为它们的 cover 字段完全不读 songs。
+  //   于是 patchCard 永远走 homeDashboardGeneratedCover 分支 → 蓝色圆盘永久留存。
+  // 策略：在 cards 定义完毕后、fingerprint 计算之前，对每张卡做「cover 兜底回填」，
+  //   填一个和该卡语义最接近的真实 cover URL（不影响 title/sub/action 文案）。
+  //   这样即使原生数据源为空，也至少能显示一张真实图片，消除蓝色圆盘。
+  (function fallbackFillCardCovers() {
+    // 构造「可用 cover 池」：优先用 songs，其次 userPlaylists，其次 recent
+    var pool = [];
+    if (homeDiscoverState && Array.isArray(homeDiscoverState.songs) && homeDiscoverState.songs.length) {
+      for (var si = 0; si < homeDiscoverState.songs.length; si++) {
+        var _c = homeDashboardSongCover(homeDiscoverState.songs[si], 260);
+        if (_c) pool.push(_c);
+      }
+    }
+    if (!pool.length && Array.isArray(userPlaylists)) {
+      for (var pi = 0; pi < userPlaylists.length; pi++) {
+        if (userPlaylists[pi] && userPlaylists[pi].cover) { pool.push(userPlaylists[pi].cover); break; }
+      }
+    }
+    if (!pool.length && localSongs && localSongs[0]) {
+      var _lc = homeDashboardSongCover(localSongs[0], 260);
+      if (_lc) pool.push(_lc);
+    }
+    if (!pool.length && recent && recent.cover) pool.push(recent.cover);
+    if (!pool.length) return; // 连兜底池都空 → 接受蓝色圆盘
+    var poolAt = function (idx) { return pool[idx % pool.length]; };
+    // 按语义填最贴近的兜底
+    // CONTINUE（第 0 张）：用最可能正在听的 → recent 优先（池第 0 位即 songs[0]）
+    if (!cards[0].cover) cards[0].cover = poolAt(0);
+    // LIBRARY（第 1 张）：本地歌曲 / 歌单 → 池第 1 位
+    if (!cards[1].cover) cards[1].cover = poolAt(1);
+    // DAILY MIX（第 2 张）：songs[0] 就是它自己的 daily，一般不会空；保险兜底
+    if (!cards[2].cover) cards[2].cover = poolAt(0);
+    // RECENT（第 3 张）：近期一首 → 池第 2/0 位
+    if (!cards[3].cover) cards[3].cover = poolAt(2 % pool.length);
+    // VIDEO（第 4 张）：跨态连线没取到时，用池最后一位（避免和前 4 张重复太多）
+    if (!cards[4].cover) cards[4].cover = poolAt(pool.length - 1);
+  })();
   var fingerprint = cards.map(function (card) {
     return [card.title, card.sub, card.cover, card.action].join('|');
   }).join('||');
-  if (fingerprint === homeDashboardQuickFingerprint && grid.classList.contains('home-quick-grid')) return;
-  homeDashboardQuickFingerprint = fingerprint;
-  grid.classList.add('home-quick-grid');
+  // FIX-v2: 彻底拆分「数量变化→重建 innerHTML」与「patch 文字/封面」两个粒度的守卫。
+  // 旧守卫（fingerprint 相同→整体早退）的问题：
+  //   ① applyMusicDefaults 会清 art.style.backgroundImage / has-cover 类（DOM 被改了）
+  //      但内存里 title/sub/cover/action 字段完全没变 → fingerprint 相同 → 早退
+  //      → DOM 清完后不会被 patch 回去，永远是蓝色圆盘/缺 has-cover 类。
+  //   ② 切态同步帧 cover 是空字符串，API 返回后 cover 变成真实 URL，但 sub/title/action 没变
+  //      → fingerprint 中 [card.cover] 字段由 '' → 'https://...' 是真的会变化，
+  //      但若上游 renderHomeDashboard 因为其他守卫没跑则不会触发。
+  // 新策略（更稳、性能损失可忽略）：
+  //   · 先无条件确保 home-quick-grid 布局类就位
+  //   · 只在 5 张卡数量和 DOM children 数量不一致时才 innerHTML 重建（极端场景）
+  //   · patchCard（文字/封面写入）永远执行，不看 fingerprint，不早退
+  //     （5 张卡 × 每次 patch = 5 次 querySelector + 赋值，性能可忽略；
+  //      反而能可靠覆盖 applyMusicDefaults 清 DOM / cover ''→url 微妙过渡等边界场景）
+  //   · fingerprint 仅更新为下一次调用的对比基线，不再当早退开关使用。
+  if (!grid.classList.contains('home-quick-grid')) {
+    grid.classList.add('home-quick-grid');
+  }
   var existingCards = Array.prototype.slice.call(grid.children).filter(function (node) {
     return node && node.classList && node.classList.contains('home-card');
   });
@@ -764,6 +833,7 @@ function renderHomeDashboardQuickCards() {
   cards.forEach(function (card, index) {
     homeDashboardPatchCard(existingCards[index], card);
   });
+  homeDashboardQuickFingerprint = fingerprint;
 }
 
 function resumeHomeDashboardPlayback() {
@@ -981,11 +1051,11 @@ function renderHomeInsightDock() {
     if (artistEl) artistEl.textContent = insight.longestTitle || '等待记录';
     if (streakEl) streakEl.textContent = insight.streak ? ('连续观看 ' + insight.streak + ' 天') : '开始观看后生成';
     if (linkBtn) {
-      linkBtn.textContent = '影视画像';
+      linkBtn.textContent = '查看偏好';
       linkBtn.onclick = function () {
         if (typeof openHomeVideoInsight === 'function') openHomeVideoInsight();
       };
-      linkBtn.setAttribute('aria-label', '影视画像');
+      linkBtn.setAttribute('aria-label', '查看偏好');
     }
     if (card) card.setAttribute('aria-labelledby', 'home-listen-heading');
   } else {
@@ -1101,6 +1171,35 @@ function renderHomeInsightDock() {
       cardN.onclick = playHomeNextFromDock;
     }
   }
+
+  // ────────────── 影视态反转：RADIO MODES 卡片 → Bangumi 周放送表 ──────────────
+  var radioCard = document.querySelector('.home-radio-entry');
+  if (radioCard) {
+    var radioKicker = radioCard.querySelector('.home-insight-kicker');
+    var radioTitle = radioCard.querySelector('.home-ranking-entry-title');
+    var radioSub = radioCard.querySelector('.home-ranking-entry-sub');
+    if (isVideo) {
+      if (radioKicker) radioKicker.textContent = 'BANGUMI · 放送表';
+      if (radioTitle) radioTitle.textContent = '每周新番';
+      if (radioSub) radioSub.textContent = 'Bangumi 本周放送番剧一览';
+      radioCard.setAttribute('aria-label', '打开 Bangumi 每周新番');
+      radioCard.onclick = function () {
+        var innerSFV = (typeof window !== 'undefined' && window.StellaflixVideo) ? window.StellaflixVideo : null;
+        if (innerSFV && innerSFV.online && typeof innerSFV.online.openCalendar === 'function') {
+          innerSFV.online.openCalendar();
+        }
+      };
+    } else {
+      if (radioKicker) radioKicker.textContent = 'RADIO MODES · 场景漫游';
+      if (radioTitle) radioTitle.textContent = '推荐电台 / 歌单';
+      if (radioSub) radioSub.textContent = '私人漫游、热门 DJ、二次元、R&B、游戏与深夜模式';
+      radioCard.setAttribute('aria-label', '打开音乐电台');
+      radioCard.onclick = function () {
+        if (typeof openRadioModes === 'function') openRadioModes('all');
+      };
+    }
+  }
+
   renderHomeDashboardDiscovery();
 }
 

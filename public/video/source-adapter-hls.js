@@ -28,6 +28,9 @@
   var tryNativeFallback = (SFV.source && SFV.source.tryNativeFallback) || function () { return Promise.resolve(false); };
   var showDiagnosticOverlay = (SFV.sourceAdapterDiag && SFV.sourceAdapterDiag.showDiagnosticOverlay) || function () {};
 
+  // hls.js 1.7.1（Apache-2.0），已 vendor 到 public/vendor/hls.min.js，由 server.js 静态路由提供。
+  // 该文件必须存在：缺失时 loadHlsLib() 会失败并降级到原生 <video>，而 Chromium 不原生支持
+  // m3u8，表现为黑屏/卡死。升级版本时请同步替换该文件并更新 NOTICE.md。
   var HLS_LIB_URL = '/vendor/hls.min.js';
   var hlsLibPromise = null;   // 加载中的 Promise，保证只注入一次
   var activeHls = null;       // 当前存活的 Hls 实例，close 时销毁
@@ -48,10 +51,13 @@
     return hlsLibPromise;
   }
 
-  // makeProxyLoader 保留供特殊场景使用（如服务端需审计/记录媒体流量的部署），
-  // 但默认播放路径不再使用——浏览器 <video> 元素对媒体请求 CORS 豁免，
-  // hls.js 可直接向 CDN 拉取 m3u8 清单与分片，无需经 /api/proxy 中转。
-  // 参考：KVideo (KuekHaoYang/KVideo, MIT) 的 useHlsPlayer.ts 采用同样的直连策略。
+  // makeProxyLoader：hls.js 全部 XHR（清单/level/分片）经 /api/proxy 中转，
+  // 由 server.js 伪造目标源 Origin/Referer/UA 防盗链头（localhost 直连会被国内 CDN 拒）。
+  //
+  // 关键不变式：context.url 改写为代理地址仅用于"发请求"；向 hls.js 上报的
+  // response.url 必须恢复为【原始真实 URL】。hls.js 以 response.url 作为清单内
+  // 相对路径的解析基准——若上报代理地址，相对分片会被拼到 /api/... 下，
+  // 二次代理后被 SSRF 私网拦截（曾表现为 levelLoadError 403 全灭）。
   function makeProxyLoader(Hls) {
     var Base = (Hls.DefaultConfig && Hls.DefaultConfig.loader) || global.XMLHttpRequest;
     function ProxyLoader(config) {
@@ -64,7 +70,24 @@
     }
     ProxyLoader.prototype.load = function (context, config, callbacks) {
       if (context && typeof context.url === 'string') {
-        context.url = toProxyUrl(context.url);
+        var originalUrl = context.url;
+        // 已是代理地址 / 非 http(s)（blob、data）→ 不重复包装
+        if (originalUrl.indexOf(SAC.PROXY_PATH) !== 0) {
+          context.url = toProxyUrl(originalUrl);
+          if (callbacks && typeof callbacks.onSuccess === 'function') {
+            var origOnSuccess = callbacks.onSuccess;
+            var wrapped = {};
+            for (var k in callbacks) {
+              if (Object.prototype.hasOwnProperty.call(callbacks, k)) wrapped[k] = callbacks[k];
+            }
+            wrapped.onSuccess = function (response, stats, ctx, xhr) {
+              // 恢复原始 URL：让清单内相对路径以真实 m3u8 地址为 base 解析
+              if (response) response.url = originalUrl;
+              return origOnSuccess.apply(this, arguments);
+            };
+            callbacks = wrapped;
+          }
+        }
       }
       this._sfvBase.prototype.load.call(this, context, config, callbacks);
     };
@@ -136,7 +159,13 @@
       if (activeHls) { try { activeHls.destroy(); } catch (e) {} activeHls = null; }
 
       // 对标 KVideo useHlsPlayer.ts 的成熟配置（缓冲/重试/超时/ABR）
+      //
+      // ==== Fix: 通道问题（防盗链）—— 启用 makeProxyLoader，让 hls.js 的 *所有*
+      // XHR 请求（master.m3u8 / variant.m3u8 / .ts 分片 / init.mp4 等）统一走
+      // Node 侧 /api/proxy 中转。server.js 代理构造的请求会伪造目标源的
+      // Origin、Referer、UA 等防盗链头（localhost 直连会被绝大多数国内 CDN 拒绝）。
       var hls = new Hls({
+        loader: makeProxyLoader(Hls),
         capLevelToPlayerSize: true,
         enableWorker: true,
         maxBufferLength: 120,

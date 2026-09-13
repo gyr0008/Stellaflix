@@ -1,4 +1,4 @@
-// 契约验证：内置音源脚本 bundled/qing_haitang_resolve.js
+// 契约验证：内置音源脚本 bundled/qing_music.js
 //
 // 在 vm 沙箱中真实执行脚本（不联网），校验：
 //   1. inited 时声明的线路集合与音质档位，是否与 QingMusic 官方公开配置一致
@@ -12,7 +12,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { selectLxQuality } = require('../desktop/custom-source/protocol');
 
-const SCRIPT = path.join(__dirname, '..', 'desktop', 'custom-source', 'bundled', 'qing_haitang_resolve.js');
+const SCRIPT = path.join(__dirname, '..', 'desktop', 'custom-source', 'bundled', 'qing_music.js');
 
 // 官方 music.json 中，洛雪四档能表达的 levels（2026-08-29 抓取）
 const OFFICIAL_SUPPORTED = {

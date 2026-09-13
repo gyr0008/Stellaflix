@@ -303,14 +303,31 @@ class LocalMusicLibrary {
     this.mediaToken = crypto.randomBytes(24).toString('hex');
     this.protocolInstalled = false;
     this.mutation = Promise.resolve();
-    this.loadIndex();
+    // Index load is deferred: a large library JSON (up to 16MB) must not block
+    // Electron module init / app.whenReady on the main thread.
+    this._indexLoaded = false;
+    this._indexLoadPromise = null;
   }
 
-  loadIndex() {
+  async ensureIndexLoaded() {
+    if (this._indexLoaded) return;
+    if (this._indexLoadPromise) return this._indexLoadPromise;
+    this._indexLoadPromise = (async () => {
+      try {
+        await this.loadIndexAsync();
+      } finally {
+        this._indexLoaded = true;
+        this._indexLoadPromise = null;
+      }
+    })();
+    return this._indexLoadPromise;
+  }
+
+  async loadIndexAsync() {
     try {
-      const stat = fs.statSync(this.indexPath);
+      const stat = await fs.promises.stat(this.indexPath);
       if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_LIBRARY_INDEX_BYTES) return;
-      const parsed = JSON.parse(fs.readFileSync(this.indexPath, 'utf8'));
+      const parsed = JSON.parse(await fs.promises.readFile(this.indexPath, 'utf8'));
       if (!parsed || parsed.version !== LOCAL_LIBRARY_VERSION || !Array.isArray(parsed.records)) return;
       if (/^[a-f0-9]{48}$/i.test(String(parsed.mediaToken || ''))) this.mediaToken = String(parsed.mediaToken).toLowerCase();
       const nextRecords = new Map();
@@ -346,6 +363,11 @@ class LocalMusicLibrary {
     } catch (_) {}
   }
 
+  // Back-compat alias for any older callers; now async and lazy.
+  loadIndex() {
+    return this.ensureIndexLoaded();
+  }
+
   serializeRecord(record) {
     const coverAvailable = !!record.coverPath;
     return {
@@ -379,6 +401,7 @@ class LocalMusicLibrary {
   }
 
   async listTracks() {
+    await this.ensureIndexLoaded();
     const tracks = [];
     for (let index = 0; index < this.order.length; index += 1) {
       const record = this.records.get(this.order[index]);
@@ -388,7 +411,8 @@ class LocalMusicLibrary {
     return { ok: true, version: LOCAL_LIBRARY_VERSION, count: tracks.length, tracks };
   }
 
-  lyricForTrack(value) {
+  async lyricForTrack(value) {
+    await this.ensureIndexLoaded();
     const id = cleanText(value, '', 64).replace(/^local:/, '').toLowerCase();
     if (!/^[a-f0-9]{24}$/.test(id)) return { ok: false, localFileId: '', lyric: '', lyricSource: '', error: 'LOCAL_TRACK_INVALID' };
     const record = this.records.get(id);
@@ -535,6 +559,7 @@ class LocalMusicLibrary {
     const entries = normalizeImportEntries(input);
     const replace = options.replace === true;
     const operation = async () => {
+      await this.ensureIndexLoaded();
       if (!entries.length) return { ok: false, count: 0, tracks: [], failures: [], error: 'NO_SUPPORTED_LOCAL_AUDIO' };
       const sidecarDirectories = await buildLrcSidecarIndex(entries);
       const parsed = await mapWithConcurrency(entries, METADATA_CONCURRENCY, async (entry) => {
@@ -621,6 +646,7 @@ class LocalMusicLibrary {
       .map((id) => cleanText(id, '', 64).replace(/^local:/, '').toLowerCase())
       .filter((id) => /^[a-f0-9]{24}$/.test(id)));
     const operation = async () => {
+      await this.ensureIndexLoaded();
       if (!requested.size) return this.listTracksSync();
       const nextRecords = new Map(this.records);
       const removed = [];

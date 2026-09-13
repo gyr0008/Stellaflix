@@ -3,7 +3,7 @@ const { EventEmitter } = require('node:events');
 const { CustomSourceStore } = require('./store');
 const { LxSourceRuntime } = require('./runtime');
 const { readBackendConfig, writeBackendConfig } = require('./backend-config');
-const { parseScriptInfo, selectLxQuality, validateActionResponse } = require('./protocol');
+const { parseScriptInfo, selectLxQuality, validateActionResponse, TARGET_QUALITY } = require('./protocol');
 const { toLxMusicInfo } = require('./music-info');
 const { shouldAttemptCustomSource, isCustomFirstMode } = require('./playback-policy');
 const { resolvePublicTarget } = require('./network-policy');
@@ -273,7 +273,7 @@ class CustomSourceManager extends EventEmitter {
 
   async resolveFallback({ song, quality, officialResult, mode, signal } = {}) {
     if (!this.runtime || !this.activeId) return { attempted: false, reason: 'inactive' };
-    // 安全网：custom-first / custom-only 传入的 officialResult 若被前端旧逻辑塞入 url，先强制剥离，
+    // 安全网：custom-first 传入的 officialResult 若被前端旧逻辑塞入 url，先强制剥离，
     // 避免 shouldAttemptCustomSource 因旧进程未重启而误判 policy_blocked。
     let sanitizedOfficial = officialResult;
     if (isCustomFirstMode(mode) && officialResult && typeof officialResult === 'object' && officialResult.url) {
@@ -360,6 +360,77 @@ class CustomSourceManager extends EventEmitter {
     const message = failures.join(' | ') || 'CUSTOM_SOURCE_FAILED';
     if (this.consecutiveFailures >= 3) {
       try { this.store.setStatus(this.activeId, 'warning', `连续解析失败：${failures[0] || message}`, this.sources); } catch {}
+    }
+    return { attempted: true, url: '', reason: 'resolve_failed', error: message };
+  }
+
+  // 聚合解析：candidates 由 server 端按元数据（歌名/歌手/专辑/时长/版本 token）精确匹配产出，
+  // 每个候选自带该平台真实有效的 rid（wy/tx/kg 搜索结果）。
+  // 与 resolveFallback 的差异：按 LX 音质档位从高到低逐档 × 逐候选热切换，
+  // 档位过滤是精确的（不做档内降级），保证"全局可用的最高品质"优先被选中。
+  async resolveAggregate({ candidates, quality, signal } = {}) {
+    if (!this.runtime || !this.activeId) return { attempted: false, reason: 'inactive' };
+    const list = Array.isArray(candidates) ? candidates.slice(0, 6) : [];
+    if (!list.length) return { attempted: false, reason: 'no_candidates' };
+    const prepared = [];
+    for (const cand of list) {
+      try {
+        prepared.push({ lxSong: toLxMusicInfo(cand.song || cand), score: Number(cand.score) || 0 });
+      } catch {
+        // 单个候选转换失败不阻塞其他候选
+      }
+    }
+    if (!prepared.length) {
+      return { attempted: true, url: '', reason: 'source_unsupported', error: 'SOURCE_UNSUPPORTED: no usable aggregate candidate' };
+    }
+    const QUALITY_ORDER = ['flac24bit', 'flac', '320k', '128k'];
+    const desired = TARGET_QUALITY[String(quality || '').toLowerCase()] || 'flac24bit';
+    const startIndex = QUALITY_ORDER.indexOf(desired);
+    const rungs = QUALITY_ORDER.slice(startIndex < 0 ? 0 : startIndex);
+    const failures = [];
+    let attemptedResolve = false;
+    for (const rung of rungs) {
+      for (const cand of prepared) {
+        const source = cand.lxSong.source;
+        const sourceInfo = this.sources[source];
+        if (!sourceInfo?.actions?.includes('musicUrl')) continue;
+        // 精确档位过滤：该线路未声明此音质则跳过（而非降级），把机会让给同档其他线路
+        if (!(sourceInfo.qualitys || []).includes(rung)) continue;
+        attemptedResolve = true;
+        try {
+          const rawUrl = await this.runtime.request({
+            source,
+            action: 'musicUrl',
+            info: { type: rung, musicInfo: { ...cand.lxSong, source } },
+          }, signal);
+          const url = validateActionResponse('musicUrl', rawUrl);
+          await this.validateResolvedUrl(url);
+          this.consecutiveFailures = 0;
+          return {
+            attempted: true,
+            provider: 'lx-custom-source',
+            thirdParty: true,
+            aggregate: true,
+            source,
+            url,
+            level: QUALITY_LEVELS[rung],
+            lxQuality: rung,
+            alternatesTried: failures,
+          };
+        } catch (error) {
+          failures.push(`${source}@${rung}: ${errorMessage(error)}`);
+          if (signal?.aborted) break;
+        }
+      }
+      if (signal?.aborted) break;
+    }
+    if (!attemptedResolve) {
+      return { attempted: true, url: '', reason: 'quality_unsupported', error: 'QUALITY_UNSUPPORTED' };
+    }
+    this.consecutiveFailures += 1;
+    const message = failures.join(' | ') || 'CUSTOM_SOURCE_FAILED';
+    if (this.consecutiveFailures >= 3) {
+      try { this.store.setStatus(this.activeId, 'warning', `连续聚合解析失败：${failures[0] || message}`, this.sources); } catch {}
     }
     return { attempted: true, url: '', reason: 'resolve_failed', error: message };
   }
