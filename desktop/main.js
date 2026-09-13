@@ -9,6 +9,7 @@ const systemMemory = require('./system-memory');
 const videoConfig = require('./video-config');
 const mpvController = require('./mpv-controller');
 const downloadManager = require('./download-manager');
+const offlineDownloadManager = require('./offline-download-manager');
 const { initIpc: initVideoIpc } = require('./ipc-video');
 const {
   WallpaperEngineLibrary,
@@ -5250,24 +5251,19 @@ ipcMain.handle('stellaflix-poster-cache', async (event, action, payload) => {
   }
 });
 
-// 影视态解析页真实媒体直链嗅探：主进程隐藏窗口加载剧集页，从网络层捕获 m3u8/mp4 媒体 URL。
-// 契约（与 kazumi-bridge.js 对齐）：
-//   成功 → { ok:true, best:{url,score,mime}, candidates:[...] }
-//   失败 → { ok:false, error }
-// 旧版只回 {ok,url}，渲染层读 best.url 会把「已命中」当成未命中，导致规则源几乎总跌入 iframe embed。
-// 影视态解析页真实媒体直链嗅探（对齐 Kazumi VideoWebview：常驻 WebView + JS 钩子 + 网络拦截）。
-// 契约：成功 { ok:true, best:{url,score,mime}, candidates } / 失败 { ok:false, error }
-// 为何要 JS 钩子：大量站（含 7sefun）播放页 URL 是 .html，真实 m3u8 由页面 XHR/fetch 拉取，
-// 仅靠 URL 后缀嗅探会永远未命中 → 跌入 iframe embed 或「停止降级」。
+// 影视态解析页真实媒体直链嗅探（对齐 Kazumi VideoWebview：常驻 WebView + JS 钩子 + 网络拦截 + MacCMS 多跳）。
+// 7sefun 类 MacCMS：vodplay 页 player_aaaa.encrypt=2 解出下一级 play 页，再由 player.js 解出真实流。
+// 只加载第一层 HTML、只靠 URL 后缀，永远抓不到 m3u8 → TIMEOUT。
 const SFV_SNIFF_MARK = '[SFV-MEDIA]';
 let sfvSniffWin = null;
 let sfvSniffBusy = false;
-let sfvSniffActive = null; // { settle, candidates, seen, settled }
+let sfvSniffActive = null;
+let sfvSniffIpcBound = false;
 
 function sfvScoreMediaUrl(u, extra) {
   const lower = String(u || '').toLowerCase();
   if (!lower || lower.startsWith('blob:') || lower.startsWith('data:') || lower.startsWith('about:')) return -1;
-  if (/googleads|googlesyndication|adtrafficquality|doubleclick|analytics|beacon|doubleclick|favicon|\.jpg(\?|$)|\.jpeg(\?|$)|\.png(\?|$)|\.webp(\?|$)|\.gif(\?|$)|\.vtt(\?|$)|\.srt(\?|$)|\.css(\?|$)|\.js(\?|$)/i.test(lower)) return -1;
+  if (/googleads|googlesyndication|adtrafficquality|doubleclick|analytics|beacon|favicon|\.jpg(\?|$)|\.jpeg(\?|$)|\.png(\?|$)|\.webp(\?|$)|\.gif(\?|$)|\.vtt(\?|$)|\.srt(\?|$)|\.css(\?|$)|\.js(\?|$)/i.test(lower)) return -1;
   let s = 0;
   if (/\.(m3u8|m3u)(\?|$)/i.test(lower) || /mpegurl/i.test(lower) || (extra && extra.fromExtM3u)) s += 120;
   else if (/\.mp4(\?|$)/i.test(lower) || (extra && extra.fromRange)) s += 90;
@@ -5283,8 +5279,22 @@ function sfvScoreMediaUrl(u, extra) {
   return s;
 }
 
+function sfvDecodedMaccmsUrl(raw, encrypt) {
+  let u = String(raw || '');
+  if (!u) return '';
+  const enc = encrypt | 0;
+  if (enc === 1 || enc === 2) {
+    try { u = Buffer.from(u, 'base64').toString('utf8'); } catch (e) { return ''; }
+  }
+  if (enc === 2) {
+    try { u = decodeURIComponent(u); } catch (e) {}
+  }
+  return u;
+}
+
 function sfvEnsureSniffWindow() {
   if (sfvSniffWin && !sfvSniffWin.isDestroyed()) return sfvSniffWin;
+  const preloadPath = path.join(__dirname, 'media-sniff-preload.js');
   sfvSniffWin = new BrowserWindow({
     width: 960, height: 640,
     show: false,
@@ -5292,11 +5302,10 @@ function sfvEnsureSniffWindow() {
       sandbox: false,
       nodeIntegration: false,
       contextIsolation: true,
-      // 常驻 partition：复用 cookie / 缓存，接近 Kazumi 的 WebView 复用
+      preload: preloadPath,
       partition: 'persist:sfv-media-sniff',
     },
   });
-  // 禁止弹窗抢焦点
   sfvSniffWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   sfvSniffWin.webContents.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
@@ -5320,19 +5329,34 @@ function sfvEnsureSniffWindow() {
     callback({});
   });
 
-  // 页内 JS 钩子结果经 console 回传（对齐 Kazumi VideoBridgeDebug / #EXTM3U 检测）
-  // Electron 42+ 可能传 details 对象；旧版是 (event, level, message, ...)
+  if (!sfvSniffIpcBound) {
+    sfvSniffIpcBound = true;
+    ipcMain.on('sfv-sniff-media', (_e, url, tag) => {
+      const act = sfvSniffActive;
+      if (!act || act.settled) return;
+      const raw = String(url || '').trim();
+      if (!raw || act.seen.has(raw)) return;
+      const tagStr = String(tag || '');
+      const score = sfvScoreMediaUrl(raw, {
+        fromExtM3u: tagStr.indexOf('EXTM3U') >= 0,
+        fromVideoTag: tagStr.indexOf('VIDEO') >= 0,
+        resourceType: 'js-hook'
+      });
+      if (score <= 0) return;
+      act.seen.add(raw);
+      act.candidates.push({ url: raw, score, mime: 'js-hook' });
+      if (score >= 100) sfvSettleSniff(true);
+    });
+  }
+
+  // console 兜底（preload 失败时）
   sfvSniffWin.webContents.on('console-message', (...args) => {
     const act = sfvSniffActive;
     if (!act || act.settled) return;
     let msg = '';
-    if (args && args[0] && typeof args[0] === 'object' && args[0].message != null) {
-      msg = String(args[0].message || '');
-    } else if (typeof args[2] === 'string') {
-      msg = args[2];
-    } else if (typeof args[1] === 'string') {
-      msg = args[1];
-    }
+    if (args && args[0] && typeof args[0] === 'object' && args[0].message != null) msg = String(args[0].message || '');
+    else if (typeof args[2] === 'string') msg = args[2];
+    else if (typeof args[1] === 'string') msg = args[1];
     if (!msg.startsWith(SFV_SNIFF_MARK)) return;
     const raw = msg.slice(SFV_SNIFF_MARK.length).trim();
     if (!raw || act.seen.has(raw)) return;
@@ -5363,29 +5387,27 @@ function sfvSettleSniff(force) {
   return true;
 }
 
-// 对齐 Kazumi onLoadStart/onLoadStop：钩 Response/XHR/#EXTM3U + video/src + iframe
 const SFV_SNIFF_INJECT = `(function () {
   if (window.__sfvSniffHooked) return;
   window.__sfvSniffHooked = true;
-  var MARK = ${JSON.stringify(SFV_SNIFF_MARK)};
   function report(url, tag) {
     try {
       if (!url) return;
       var u = String(url);
       if (u.indexOf('blob:') === 0 || u.indexOf('data:') === 0) return;
       if (/googleads|googlesyndication|adtrafficquality|doubleclick/i.test(u)) return;
-      console.log(MARK + (tag || '') + u);
+      if (window.__sfvSniff && window.__sfvSniff.report) window.__sfvSniff.report(u, tag || '');
+      else console.log(${JSON.stringify(SFV_SNIFF_MARK)} + (tag || '') + u);
     } catch (e) {}
   }
+  window.__sfvSniffReport = report;
   try {
     var _rt = window.Response && window.Response.prototype && window.Response.prototype.text;
     if (_rt) {
       window.Response.prototype.text = function () {
         var self = this;
         return _rt.call(this).then(function (text) {
-          try {
-            if (text && text.trim().indexOf('#EXTM3U') === 0) report(self.url, 'EXTM3U ');
-          } catch (e) {}
+          try { if (text && text.trim().indexOf('#EXTM3U') === 0) report(self.url, 'EXTM3U '); } catch (e) {}
           return text;
         });
       };
@@ -5436,110 +5458,150 @@ const SFV_SNIFF_INJECT = `(function () {
       }
     } catch (e) {}
   }
-  function hookIframe(iframe) {
+  // MacCMS player_aaaa：encrypt 0/1/2 解出下一级 URL（可能是媒体，也可能是下一层 play 页）
+  function decodeMaccms(raw, encrypt) {
+    var u = String(raw || '');
+    if (!u) return '';
+    var enc = encrypt | 0;
+    if (enc === 1 || enc === 2) {
+      try { u = atob(u); } catch (e) { return ''; }
+    }
+    if (enc === 2) {
+      try { u = decodeURIComponent(u); } catch (e) {}
+    }
+    return u;
+  }
+  function scanMaccms() {
     try {
-      if (!iframe) return;
-      // 同源 iframe：直接扫 video；跨域只能靠网络层 webRequest
-      var doc = iframe.contentDocument;
-      if (doc) scanVideo(doc);
+      var cfg = window.player_aaaa;
+      if (!cfg || !cfg.url) return;
+      var u = decodeMaccms(cfg.url, cfg.encrypt);
+      if (!u) return;
+      if (/\\.(m3u8|m3u|mp4|flv|webm)(\\?|$)/i.test(u)) { report(u, 'MACCMS '); return; }
+      // 下一级 play 页：由主进程 hop 跟随，这里只上报信号
+      if (/^https?:\\/\\//i.test(u) && /\\.html?(\\?|$)/i.test(u)) {
+        report(u, 'MACCMS-NEXT ');
+      }
     } catch (e) {}
   }
   function setup() {
     scanVideo(document);
+    scanMaccms();
     try {
-      var obs = new MutationObserver(function (muts) {
-        muts.forEach(function (m) {
-          if (m.addedNodes) {
-            for (var i = 0; i < m.addedNodes.length; i++) {
-              var n = m.addedNodes[i];
-              if (!n || n.nodeType !== 1) continue;
-              if (n.tagName === 'VIDEO' || n.tagName === 'SOURCE') {
-                var src = n.getAttribute && n.getAttribute('src');
-                if (src) report(src, 'VIDEO ');
-              }
-              if (n.tagName === 'IFRAME') hookIframe(n);
-              if (n.querySelectorAll) scanVideo(n);
-            }
-          }
-          if (m.type === 'attributes' && m.target && m.target.tagName === 'VIDEO') {
-            var s2 = m.target.getAttribute('src');
-            if (s2) report(s2, 'VIDEO ');
-          }
-        });
+      var obs = new MutationObserver(function () {
+        scanVideo(document);
+        scanMaccms();
       });
       obs.observe(document.documentElement || document.body, {
         childList: true, subtree: true, attributes: true, attributeFilter: ['src']
       });
     } catch (e) {}
-    document.querySelectorAll('iframe').forEach(hookIframe);
+    var n = 0;
+    var t = setInterval(function () {
+      n++;
+      scanVideo(document);
+      scanMaccms();
+      if (n > 24) clearInterval(t);
+    }, 400);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup);
   else setup();
-  // 轮询兜底（对齐 Kazumi videoParserTimer）
-  var n = 0;
-  var t = setInterval(function () {
-    n++;
-    scanVideo(document);
-    if (n > 20) clearInterval(t);
-  }, 500);
 })();`;
 
 ipcMain.handle('stellaflix-resolve-media-sniff', async (_event, payload = {}) => {
-  // 串行：同一时刻只跑一个嗅探（对齐 Kazumi _resolveTail）
-  if (sfvSniffBusy) {
-    return { ok: false, error: 'BUSY' };
-  }
+  if (sfvSniffBusy) return { ok: false, error: 'BUSY' };
   sfvSniffBusy = true;
   try {
     const url = payload && payload.url;
     if (!url) return { ok: false, error: 'NO_URL' };
-    const timeoutMs = Math.max(4000, (payload && payload.timeoutMs) || 15000);
+    const timeoutMs = Math.max(6000, (payload && payload.timeoutMs) || 18000);
     const win = sfvEnsureSniffWindow();
     if (win.isDestroyed()) return { ok: false, error: 'WIN_DESTROYED' };
 
     let resolveFn;
     const result = new Promise((resolve) => { resolveFn = resolve; });
-    sfvSniffActive = {
-      settled: false,
-      candidates: [],
-      seen: new Set(),
-      resolve: resolveFn,
-    };
+    sfvSniffActive = { settled: false, candidates: [], seen: new Set(), resolve: resolveFn, nextHop: null };
 
     const timer = setTimeout(() => {
       if (sfvSniffActive && !sfvSniffActive.settled) {
         if (!sfvSettleSniff(true)) {
           sfvSniffActive.settled = true;
-          sfvSniffActive.resolve({ ok: false, error: 'TIMEOUT', candidates: sfvSniffActive.candidates.slice(0, 5) });
+          sfvSniffActive.resolve({
+            ok: false,
+            error: 'TIMEOUT',
+            candidates: sfvSniffActive.candidates.slice(0, 5),
+            nextHop: sfvSniffActive.nextHop || null,
+          });
         }
       }
     }, timeoutMs);
 
-    const onNav = () => {
+    const injectAll = () => {
       try { win.webContents.executeJavaScript(SFV_SNIFF_INJECT, true).catch(() => {}); } catch (e) {}
+      try {
+        const frames = win.webContents.mainFrame && win.webContents.mainFrame.frames;
+        if (frames && frames.length) {
+          for (const f of frames) {
+            try { f.executeJavaScript(SFV_SNIFF_INJECT).catch(() => {}); } catch (e) {}
+          }
+        }
+      } catch (e) {}
     };
+    const onNav = () => injectAll();
     win.webContents.on('did-finish-load', onNav);
     win.webContents.on('did-frame-finish-load', onNav);
+    win.webContents.on('did-navigate-in-page', onNav);
 
-    try {
-      await win.loadURL(url);
-    } catch (e) {
-      // load 报错时仍尝试注入 + 收已捕获候选
-      onNav();
+    // MacCMS 多跳：加载后读 player_aaaa，若解出下一级 play 页则继续 load
+    const readNextHop = async () => {
+      try {
+        const info = await win.webContents.executeJavaScript(`(function(){
+          try {
+            var c = window.player_aaaa;
+            if (!c || !c.url) return null;
+            var u = String(c.url); var enc = c.encrypt|0;
+            if (enc===1||enc===2) { try { u = atob(u); } catch(e) { return null; } }
+            if (enc===2) { try { u = decodeURIComponent(u); } catch(e) {} }
+            return { url: u, from: c.from||'' };
+          } catch (e) { return null; }
+        })()`, true);
+        if (info && info.url && /^https?:\/\//i.test(info.url) && /\.html?(\?|$)/i.test(info.url)) {
+          if (sfvSniffActive) sfvSniffActive.nextHop = info.url;
+          return info.url;
+        }
+      } catch (e) {}
+      return null;
+    };
+
+    let hopUrl = url;
+    const maxHops = 3;
+    for (let hop = 0; hop < maxHops && !sfvSniffActive.settled; hop++) {
+      try { await win.loadURL(hopUrl); } catch (e) { injectAll(); }
+      injectAll();
+      // 等页面 JS 跑一会
+      await new Promise((r) => setTimeout(r, Math.min(2200, Math.floor(timeoutMs / (maxHops + 1)))));
+      if (sfvSniffActive.settled) break;
+      const next = await readNextHop();
+      if (!next || next === hopUrl) break;
+      hopUrl = next;
+      if (sfvSniffActive) sfvSniffActive.nextHop = next;
     }
-    // load 后再注入一次（部分站 SPA 迟到）
-    onNav();
-    // 给延迟 XHR / video 挂载留窗口，但高分命中会提前 settle
-    await new Promise((r) => setTimeout(r, Math.min(3000, Math.floor(timeoutMs / 3))));
-    if (sfvSniffActive && !sfvSniffActive.settled) sfvSettleSniff(true);
+
+    // 最后再等一小段，让最后一跳的 player.js / XHR 出流
+    if (sfvSniffActive && !sfvSniffActive.settled) {
+      await new Promise((r) => setTimeout(r, 1500));
+      injectAll();
+      await new Promise((r) => setTimeout(r, 800));
+      sfvSettleSniff(true);
+    }
 
     const r = await result;
     clearTimeout(timer);
     try {
       win.webContents.removeListener('did-finish-load', onNav);
       win.webContents.removeListener('did-frame-finish-load', onNav);
+      win.webContents.removeListener('did-navigate-in-page', onNav);
     } catch (e) {}
-    // 复用窗口：回空白，避免残留页面继续跑
     try { win.loadURL('about:blank'); } catch (e) {}
     return r;
   } catch (e) {
@@ -6416,37 +6478,27 @@ function createWindow() {
 if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
 
 // ------------------------------------------------------------------
-// ==== Fix: 单实例锁失败时不再 silent quit（这是你"npm start 立刻闪退"的根因）
-// 可能原因：上一次渲染进程崩溃后，恢复流程达到上限却没调用 app.quit()，
-// 变成 0 窗口僵尸进程常驻后台，永久占用 requestSingleInstanceLock。
-// 策略：（1）dev 环境可用 STELLAFLIX_NO_SINGLE_INSTANCE=1 直接跳过；
-//       （2）Windows 上先自动用 taskkill 尝试清理同名僵尸进程；
-//       （3）二次请求锁仍失败 → stderr 明确输出 + 弹窗提示用户手动清进程，再 quit。
+// 单实例锁：拿不到锁的进程必须立刻退出，绝不能 taskkill 正在运行的主程序。
+// 旧逻辑在锁失败时 taskkill Stellaflix.exe —— 用户连点图标 2～3 次会把
+// 已启动实例杀掉，表现为「双击能进、连点闪退」。
+// 标准行为：第二个进程静息退出；第一个进程在 second-instance 里聚焦已有窗口。
+// 仅当显式设置 STELLAFLIX_CLEANUP_STALE_LOCK=1 时才尝试清理残留进程（排障用）。
 // ------------------------------------------------------------------
-function _syncSleepMs(ms) {
-  // 启动期锁失败路径专用：简单忙等（非热路径）。避免 Atomics.wait + SharedArrayBuffer 在 Electron 主线程被 V8 安全策略拒绝。
-  const start = Date.now();
-  while (Date.now() - start < ms) { try { require('child_process').execFileSync('ping', ['-n', '1', '-w', String(Math.min(ms, 999)), '127.0.0.1'], { windowsHide: true, timeout: ms + 500 }); } catch (e) { break; } }
-}
-function _releaseLockFromZombies() {
-  if (process.platform !== 'win32') return false;
+function _cleanupStaleInstancesForDiagnostics() {
+  if (process.platform !== 'win32') return { killedAny: false, killList: [] };
   const killList = [];
-  const candidates = ['electron.exe', 'stellaflix.exe'].filter(Boolean);
+  // 只杀开发用 electron.exe，不碰正式安装的 Stellaflix.exe（会误杀在跑的实例）。
   let killedAny = false;
-  for (const name of candidates) {
-    try {
-      const r = require('child_process').spawnSync(
-        'taskkill', ['/F', '/T', '/IM', name],
-        { windowsHide: true, timeout: 8000 }
-      );
-      const out = String((r && r.stdout) || '') + String((r && r.stderr) || '');
-      if (/SUCCESS|已终止|成功终止|终止了进程|ERROR: [^"]+"?[^ ]+被跳过|"没有运行的实例/.test(out) || (r && r.status === 0 && out.length > 0)) {
-        if (!/未找到|"没有运行的实例|没有找到/.test(out)) killedAny = true;
-        killList.push(`${name}: ${out.trim().split('\n')[0] || 'taskkill done'}`);
-      }
-    } catch (e) {
-      killList.push(`${name}: taskkill err ${e.message}`);
-    }
+  try {
+    const r = require('child_process').spawnSync(
+      'taskkill', ['/F', '/T', '/IM', 'electron.exe'],
+      { windowsHide: true, timeout: 5000 }
+    );
+    const out = String((r && r.stdout) || '') + String((r && r.stderr) || '');
+    killList.push('electron.exe: ' + (out.trim().split('\n')[0] || 'done'));
+    if (out && !/未找到|没有运行的实例|没有找到|not found/i.test(out)) killedAny = true;
+  } catch (e) {
+    killList.push('electron.exe: ' + e.message);
   }
   return { killedAny, killList };
 }
@@ -6456,67 +6508,40 @@ if (!_lock && process.env.STELLAFLIX_NO_SINGLE_INSTANCE === '1') {
   process.stderr.write('[CRASH-DIAG] STELLAFLIX_NO_SINGLE_INSTANCE=1: 已绕过单实例锁检查\n');
   _lock = true;
 }
-if (!_lock && process.platform === 'win32') {
-  process.stderr.write('[CRASH-DIAG] 单实例锁失败：尝试用 taskkill 清理后台僵尸进程（electron.exe / stellaflix.exe）…\n');
-  const res = _releaseLockFromZombies();
+if (!_lock && process.env.STELLAFLIX_CLEANUP_STALE_LOCK === '1') {
+  process.stderr.write('[CRASH-DIAG] STELLAFLIX_CLEANUP_STALE_LOCK=1: 尝试清理残留 electron.exe…\n');
+  const res = _cleanupStaleInstancesForDiagnostics();
+  process.stderr.write(`[CRASH-DIAG] cleanup: ${(res.killList || []).join(' | ')}\n`);
   if (res.killedAny) {
-    process.stderr.write(`[CRASH-DIAG] taskkill 输出：${(res.killList || []).join(' | ')}\n`);
-    // 给被杀进程释放锁 1s 窗口（同步等待，锁失败路径只跑一次，对启动无额外影响）
-    _syncSleepMs(1000);
-    // 被杀进程释放锁后：先确保自己不再持有旧引用（如果仍占着），再重新申请
+    const waitStart = Date.now();
+    while (Date.now() - waitStart < 800) { /* brief pause for lock release */ }
     try {
       if (typeof app.releaseSingleInstanceLock === 'function') app.releaseSingleInstanceLock();
     } catch (e) {}
     try { _lock = app.requestSingleInstanceLock(); } catch (e) { _lock = false; }
-    process.stderr.write(`[CRASH-DIAG] 二次请求单实例锁：${_lock ? '成功 → 继续启动' : '仍失败 → 将提示用户手动清理'}\n`);
-  } else {
-    process.stderr.write('[CRASH-DIAG] taskkill 未命中目标进程：已有真实可见窗口在前台运行的可能性较大，请先关闭原窗口再试。\n');
   }
 }
 
 if (!_lock) {
-  const reason = '无法获取单实例锁：系统中已存在 Stellaflix/Electron 进程（可能是上次崩溃残留的后台僵尸进程，或你之前启动的实例尚未完全关闭）。\n\n' +
-    '【立即解决 1（推荐）】打开 PowerShell 执行：\n    taskkill /F /T /IM electron.exe\n    taskkill /F /T /IM Stellaflix.exe\n然后重新 npm start。\n\n' +
-    '【立即解决 2（临时绕过，便于调试）】：\n    $env:STELLAFLIX_NO_SINGLE_INSTANCE=1 ; npm start\n\n' +
-    '【定位说明】单实例锁是防止你在前台播放器崩溃（GPU/渲染进程 crash）后，后台残留 0 窗口僵尸进程永久占用锁，导致每次 npm start 都闪退。\n\n' +
-    `崩溃/诊断日志目录：${(function () { try { return require('path').join(app.getPath('userData'), 'crash-logs'); } catch (e) { return '%APPDATA%\\Stellaflix\\crash-logs'; } })()}\\请在闪退时把日志和 stderr 输出一起发给开发者。`;
-  process.stderr.write('[CRASH-DIAG] ==== SINGLE-INSTANCE-LOCK FAILED ====\n');
-  process.stderr.write('[CRASH-DIAG] ' + reason.split('\n').join('\n[CRASH-DIAG] ') + '\n');
-  try {
-    // 不要等事件循环：同步写日志 + 同步弹框
-    try {
-      const fs = require('fs');
-      const path = require('path');
-      let dir;
-      try { dir = path.join(app.getPath('userData'), 'crash-logs'); }
-      catch (e) { dir = path.join(__dirname, '..', 'crash-logs'); }
-      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
-      const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const logFile = path.join(dir, `stellaflix-single-instance-lock-${ts}.log`);
-      fs.writeFileSync(logFile, reason);
-      process.stderr.write(`[CRASH-DIAG] 单实例锁诊断日志：${logFile}\n`);
-    } catch (_) {}
-    // 只在有 UI 线程时弹框（whenReady 之后），否则会阻塞
-    if (app.isReady()) dialog.showErrorBox('Stellaflix 已在运行（或残留僵尸进程）', reason);
-    else {
-      app.once('ready', () => {
-        try { dialog.showErrorBox('Stellaflix 已在运行（或残留僵尸进程）', reason); } catch (_) {}
-        setTimeout(() => app.quit(), 200);
-      });
-      // 最多等 5s ready，超时直接 quit（避免真的无限挂）
-      setTimeout(() => { try { app.quit(); } catch (_) {} }, 5000);
-      return; // 不立即执行下面那句 quit，等 ready 弹框后 quit
-    }
-  } catch (_) {}
-  app.quit();
+  // 已有实例在跑：静默退出，不要弹框、不要 taskkill。第一实例会通过
+  // second-instance 聚焦/恢复窗口。
+  process.stderr.write('[SingleInstance] lock held by another instance; focusing it and exiting.\n');
+  try { app.quit(); } catch (_) {}
+  try { app.exit(0); } catch (_) {}
 } else {
   writeStartupState('module-loaded', {
     runtimeName: APP_NAME,
     userData: STABLE_USER_DATA_PATH,
     sessionData: (() => { try { return app.getPath('sessionData'); } catch (_) { return ''; } })(),
   });
-  app.on('second-instance', () => {
-    if (startupCompleted && focusMainWindow()) return;
+  app.on('second-instance', (_event, argv, workingDirectory, additionalData) => {
+    console.log('[SingleInstance] second-instance received; focusing main window', {
+      argv: Array.isArray(argv) ? argv.slice(0, 3) : undefined,
+      additionalData,
+    });
+    // 始终尝试把已有窗口拉到前台（即使 startup 尚未完成）。
+    focusMainWindow();
+    if (startupCompleted) return;
     app.whenReady()
       .then(() => createWindow())
       .then(() => focusMainWindow())
@@ -6530,6 +6555,8 @@ if (!_lock) {
       videoConfig.init(appPaths);
       mpvController.setConfig(videoConfig.get());
       downloadManager.setConfig(videoConfig.get());
+      offlineDownloadManager.setConfig(videoConfig.get());
+      offlineDownloadManager.init();
       initVideoIpc();
       initAutoUpdater();
       downloadManager.cleanOrphans();
@@ -6585,6 +6612,7 @@ if (!_lock) {
     if (updaterInstallPending) {
       try { mpvController.shutdown(); } catch (_) {}
       try { downloadManager.shutdown(); } catch (_) {}
+      try { offlineDownloadManager.shutdown(); } catch (_) {}
       return;
     }
     if (appQuitCleanupComplete) return;
@@ -6663,6 +6691,9 @@ if (!_lock) {
         }),
         Promise.resolve().then(() => downloadManager.shutdown()).catch((error) => {
           console.warn('[Shutdown] qbt shutdown failed:', error && error.message || error);
+        }),
+        Promise.resolve().then(() => offlineDownloadManager.shutdown()).catch((error) => {
+          console.warn('[Shutdown] offline-dl shutdown failed:', error && error.message || error);
         }),
       ]);
     })();
