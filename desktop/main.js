@@ -4743,6 +4743,14 @@ let updaterState = 'idle';
 let updaterBusy = false;
 let updaterInstallPending = false;
 let updaterDownloadAttempted = false;
+let updaterLastProgressAt = 0;
+let updaterLastPercent = 0;
+let updaterDownloadWatchdog = null;
+let updaterDownloadStartedAt = 0;
+
+const UPDATER_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const UPDATER_STALL_AT_NEAR_COMPLETE_MS = 90 * 1000;
+const UPDATER_STALL_NO_PROGRESS_MS = 120 * 1000;
 
 function buildUpdaterFeeds() {
   const feeds = [];
@@ -4810,6 +4818,68 @@ function switchUpdaterFeedOrThrow(lastError) {
   return false;
 }
 
+function clearUpdaterDownloadWatchdog() {
+  if (updaterDownloadWatchdog) {
+    clearInterval(updaterDownloadWatchdog);
+    updaterDownloadWatchdog = null;
+  }
+}
+
+function markUpdaterDownloadActivity(percent) {
+  updaterLastProgressAt = Date.now();
+  if (Number.isFinite(percent)) updaterLastPercent = Number(percent);
+}
+
+function beginUpdaterDownloadClock() {
+  updaterDownloadStartedAt = Date.now();
+  markUpdaterDownloadActivity(0);
+  updaterLastPercent = 0;
+}
+
+function failUpdaterDownload(message) {
+  clearUpdaterDownloadWatchdog();
+  updaterBusy = false;
+  updaterState = 'error';
+  postUpdateEvent({ type: 'error', message: String(message || 'UPDATE_DOWNLOAD_STALLED'), fallback: true });
+}
+
+function startUpdaterDownloadAttempt(reason) {
+  console.warn('[AutoUpdate] 开始下载', reason || '', 'feed=', updaterFeeds[updaterFeedIndex] && updaterFeeds[updaterFeedIndex].label);
+  markUpdaterDownloadActivity(0);
+  updaterLastPercent = 0;
+  clearUpdaterDownloadWatchdog();
+  updaterDownloadWatchdog = setInterval(() => {
+    if (updaterState !== 'downloading') return;
+    const now = Date.now();
+    const idleMs = now - (updaterLastProgressAt || now);
+    const nearCompleteStall = updaterLastPercent >= 99 && idleMs > UPDATER_STALL_AT_NEAR_COMPLETE_MS;
+    const hardStall = idleMs > UPDATER_STALL_NO_PROGRESS_MS;
+    const timedOut = (now - (updaterDownloadStartedAt || now)) > UPDATER_DOWNLOAD_TIMEOUT_MS;
+    if (!nearCompleteStall && !hardStall && !timedOut) return;
+    console.warn('[AutoUpdate] 下载疑似卡住', {
+      percent: updaterLastPercent,
+      idleMs,
+      reason: nearCompleteStall ? 'near-complete-stall' : (hardStall ? 'no-progress' : 'timeout'),
+    });
+    // 先换线重试；无线可换则失败并交给外链降级。
+    if (switchUpdaterFeedOrThrow('stall ' + idleMs + 'ms')) {
+      postUpdateEvent({
+        type: 'retrying',
+        feedLabel: (updaterFeeds[updaterFeedIndex] && updaterFeeds[updaterFeedIndex].label) || '',
+        message: '当前线路卡住，已自动切换线路重试',
+      });
+      updaterState = 'available';
+      beginUpdaterDownloadClock();
+      autoUpdater.downloadUpdate().catch((err) => {
+        failUpdaterDownload((err && err.message) || 'UPDATE_DOWNLOAD_RETRY_FAILED');
+      });
+      return;
+    }
+    failUpdaterDownload('下载超时或卡在 ' + Math.round(updaterLastPercent) + '%，请改用网盘下载');
+  }, 15000);
+  return autoUpdater.downloadUpdate();
+}
+
 function initAutoUpdater() {
   updaterFeeds = buildUpdaterFeeds();
   if (!app.isPackaged) {
@@ -4843,16 +4913,22 @@ function initAutoUpdater() {
   });
   autoUpdater.on('download-progress', progress => {
     updaterState = 'downloading';
+    const percent = (progress && progress.percent) || 0;
+    markUpdaterDownloadActivity(percent);
     postUpdateEvent({
       type: 'progress',
-      percent: (progress && progress.percent) || 0,
+      percent,
       transferred: (progress && progress.transferred) || 0,
       total: (progress && progress.total) || 0,
+      // 100% 后 electron-updater 仍可能在校验 sha512，前端提示可区分
+      verifying: percent >= 99.5,
     });
   });
   autoUpdater.on('update-downloaded', info => {
+    clearUpdaterDownloadWatchdog();
     updaterState = 'downloaded';
     updaterBusy = false;
+    console.log('[AutoUpdate] 下载完成并校验通过', (info && info.downloadedFile) || '');
     postUpdateEvent({
       type: 'downloaded',
       version: (info && info.version) || '',
@@ -4861,18 +4937,18 @@ function initAutoUpdater() {
   });
   autoUpdater.on('error', error => {
     const message = String((error && error.message) || error || '');
+    console.warn('[AutoUpdate] error:', message);
     // 下载中失败优先换镜像重试；安装阶段错误直接失败，避免误触发再次下载。
     if (updaterDownloadAttempted && updaterState === 'downloading' && switchUpdaterFeedOrThrow(message)) {
       updaterState = 'available';
       postUpdateEvent({
         type: 'retrying',
         feedLabel: (updaterFeeds[updaterFeedIndex] && updaterFeeds[updaterFeedIndex].label) || '',
+        message: message,
       });
+      markUpdaterDownloadActivity(0);
       autoUpdater.downloadUpdate().catch((retryError) => {
-        console.warn('[AutoUpdate] 镜像重试下载失败:', retryError && retryError.message || retryError);
-        updaterBusy = false;
-        updaterState = 'error';
-        postUpdateEvent({ type: 'error', message: String((retryError && retryError.message) || message), fallback: true });
+        failUpdaterDownload((retryError && retryError.message) || message);
       });
       return;
     }
@@ -4881,6 +4957,7 @@ function initAutoUpdater() {
       autoUpdater.checkForUpdates().catch(() => {});
       return;
     }
+    clearUpdaterDownloadWatchdog();
     updaterBusy = false;
     updaterState = 'error';
     postUpdateEvent({ type: 'error', message, fallback: true });
@@ -4911,15 +4988,24 @@ ipcMain.handle('stellaflix-update-check', async event => {
 ipcMain.handle('stellaflix-update-download', async event => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   if (!app.isPackaged) return { ok: false, error: 'UPDATE_DISABLED_IN_DEV', fallback: true };
-  if (updaterBusy) return { ok: true, alreadyRunning: true };
+  if (updaterBusy || updaterState === 'downloaded') return { ok: true, alreadyRunning: true, state: updaterState };
   // 不前置校验 updaterState：electron-updater 会在 checkForUpdates() resolve 之前派发
   // update-available，此处再判状态会与事件时序形成竞态。直接下载，交由它自己报错。
   try {
     assertEnoughDiskForInstaller();
     updaterBusy = true;
     updaterDownloadAttempted = true;
-    await autoUpdater.downloadUpdate();
-    return { ok: true };
+    updaterState = 'downloading';
+    beginUpdaterDownloadClock();
+    // 不要把 IPC 命令无限卡在 await downloadUpdate() 上：进度/完成/失败都靠事件推送。
+    // 真正完成以 update-downloaded 为准；卡死由 watchdog 切线或失败。
+    startUpdaterDownloadAttempt('ipc-download').then(() => {
+      // downloadUpdate resolve：多数情况已 downloaded；若状态未同步则保持 busy 直到事件。
+      console.log('[AutoUpdate] downloadUpdate() resolved, state=', updaterState);
+    }).catch((error) => {
+      failUpdaterDownload((error && error.message) || 'UPDATE_DOWNLOAD_FAILED');
+    });
+    return { ok: true, started: true };
   } catch (error) {
     updaterBusy = false;
     return { ok: false, error: (error && error.message) || 'UPDATE_DOWNLOAD_FAILED', fallback: true };

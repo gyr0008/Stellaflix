@@ -86,6 +86,7 @@ function handleAutoUpdateEvent(payload) {
     au.percent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
     au.transferred = Number(payload.transferred) || 0;
     au.total = Number(payload.total) || 0;
+    au.verifying = payload.verifying === true || au.percent >= 99.5;
     updateUpdatePreviewProgress(au.percent);
     syncUpdatePreviewStateClass();
     return;
@@ -98,14 +99,20 @@ function handleAutoUpdateEvent(payload) {
   } else if (type === 'retrying') {
     au.phase = 'downloading';
     au.feedLabel = payload.feedLabel || au.feedLabel || '';
+    au.verifying = false;
+    au.percent = 0;
+    updateUpdatePreviewProgress(0);
+    if (payload.message) showToast(payload.message);
   } else if (type === 'not-available') au.phase = 'idle';
   else if (type === 'downloaded') {
     au.phase = 'downloaded';
     au.percent = 100;
+    au.verifying = false;
     updateUpdatePreviewProgress(100);
   } else if (type === 'error') {
     au.phase = 'error';
     au.usable = false;
+    au.verifying = false;
     au.errorReason = payload.message || 'AUTO_UPDATE_FAILED';
   }
   syncUpdatePreviewStateClass();
@@ -340,9 +347,15 @@ function syncUpdatePreviewStateClass() {
   if (label) {
     if (au.phase === 'checking') label.textContent = '正在检查更新';
     else if (au.phase === 'downloading') {
-      label.textContent = au.feedLabel
-        ? ('正在下载 ' + Math.round(au.percent) + '% · ' + au.feedLabel)
-        : ('正在下载 ' + Math.round(au.percent) + '%');
+      if (au.verifying || au.percent >= 99.5) {
+        label.textContent = au.feedLabel
+          ? ('正在校验安装包 · ' + au.feedLabel)
+          : '正在校验安装包';
+      } else {
+        label.textContent = au.feedLabel
+          ? ('正在下载 ' + Math.round(au.percent) + '% · ' + au.feedLabel)
+          : ('正在下载 ' + Math.round(au.percent) + '%');
+      }
     }
     else if (au.phase === 'downloaded') label.textContent = '立即安装并重启';
     else if (au.phase === 'installing') label.textContent = '正在启动安装';
