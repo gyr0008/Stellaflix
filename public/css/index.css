@@ -275,6 +275,12 @@ body {
   -webkit-font-smoothing: antialiased
 }
 
+/* 页面背景 DIY 的 html 实底走变量承接（见 page-bg-diy.js），
+   这样 DWM 透明规则（同为样式表 !important）才能可靠压过它 */
+html {
+  background: var(--page-bg-diy, #000)
+}
+
 body.cursor-hidden,
 body.cursor-hidden * {
   cursor: none !important
@@ -867,6 +873,12 @@ body.wallpaper-engine-dwm-active {
   background: transparent !important;
 }
 
+/* 根画布（html）不透明会挡住 DWM 透视：窗口虽 transparent，但 html 的 #000
+   会铺满整个 canvas，中央屏幕只剩黑底。必须与 body 一起置为透明。 */
+html:has(body.wallpaper-engine-dwm-active) {
+  background: transparent !important;
+}
+
 body.wallpaper-engine-dwm-active #custom-bg,
 body.wallpaper-engine-dwm-active #album-bg,
 body.wallpaper-engine-dwm-active #album-bg-next,
@@ -879,14 +891,6 @@ body.wallpaper-engine-dwm-active #wallpaper-engine-layer {
   opacity: 0 !important;
   visibility: hidden !important;
   transition: none !important
-}
-
-/* When a fallback video stream is attached in DWM mode, keep the main layer visible
-   so the wallpaper renders full-screen while glass sampler still feeds the control bar */
-body.wallpaper-engine-dwm-active #wallpaper-engine-layer.video-ready,
-body.wallpaper-engine-dwm-active #wallpaper-engine-layer.engine-ready {
-  opacity: 1 !important;
-  visibility: visible !important
 }
 
 /* DWM keeps the real WE scene/cursor-parallax path native. This narrowly
@@ -17575,6 +17579,379 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
 #empty-home .home-discovery-empty:focus-visible {
   outline: 1px solid rgba(var(--fc-accent-rgb), .82);
   outline-offset: 2px
+}
+
+/* 本地音乐卡：与 FOR YOU 容器同款视觉，仅作语义区分 */
+#empty-home .home-local-strip {
+  background: linear-gradient(120deg, rgba(16, 20, 27, .55), rgba(7, 9, 13, .66));
+}
+
+#empty-home .home-local-strip .home-discovery-song:hover {
+  border-color: rgba(var(--fc-accent-rgb), .32);
+  background: rgba(var(--fc-accent-rgb), .07);
+}
+
+#empty-home .home-local-strip .home-discovery-empty {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, .12);
+}
+
+#empty-home .home-local-music-more {
+  min-width: 0;
+  height: 78px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 5px;
+  border: 1px dashed rgba(255, 255, 255, .12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .025);
+  color: rgba(255, 255, 255, .82);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform .18s, border-color .18s, background .18s;
+}
+
+#empty-home .home-local-music-more:hover {
+  transform: translateY(-2px);
+  border-color: rgba(var(--fc-accent-rgb), .32);
+  background: rgba(var(--fc-accent-rgb), .07);
+  color: #fff;
+}
+
+#empty-home .home-local-music-more strong {
+  font-size: 12px;
+  font-weight: 760;
+}
+
+#empty-home .home-local-music-more span {
+  font-size: 9.5px;
+  color: rgba(255, 255, 255, .43);
+}
+
+#empty-home .home-local-music-more:focus-visible {
+  outline: 1px solid rgba(var(--fc-accent-rgb), .82);
+  outline-offset: 2px;
+}
+
+/* 本地音乐入口图标位（无封面时） */
+#empty-home .home-local-entry-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-style: normal;
+  color: rgba(255, 255, 255, .78);
+  background: linear-gradient(135deg, rgba(var(--fc-accent-rgb), .28), rgba(36, 66, 255, .22), rgba(8, 10, 14, .86));
+}
+
+/* 本地音乐库弹窗：主从布局（左歌单栏 + 右歌曲列表），配色沿用暗色主题 */
+.local-library-modal {
+  width: min(1080px, calc(100vw - 48px));
+  height: min(900px, calc(100vh - 64px));
+  max-width: none;
+  max-height: none;
+}
+
+.local-library-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.local-library-rail {
+  flex: 0 0 260px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.local-library-rail::-webkit-scrollbar { width: 8px; }
+.local-library-rail::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 4px; }
+
+.local-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(235, 240, 255, 0.85);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s;
+}
+.local-rail-item:hover { background: rgba(255, 255, 255, 0.06); }
+.local-rail-item.active { background: rgba(255, 255, 255, 0.11); }
+
+.local-rail-cover {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.local-rail-cover img { width: 100%; height: 100%; object-fit: cover; }
+.local-rail-icon { font-style: normal; color: rgba(255, 255, 255, 0.7); }
+
+.local-rail-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.local-rail-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #f0f3ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.local-rail-sub {
+  font-size: 11.5px;
+  color: rgba(235, 240, 255, 0.5);
+}
+
+.local-rail-more {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: rgba(235, 240, 255, 0.6);
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.16s, background 0.16s;
+}
+.local-rail-item:hover .local-rail-more,
+.local-rail-item:focus-within .local-rail-more { opacity: 1; }
+.local-rail-more:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+
+.local-rail-heading {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: rgba(235, 240, 255, 0.42);
+  padding: 14px 8px 6px;
+}
+
+.local-rail-new {
+  margin-top: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: rgba(235, 240, 255, 0.7);
+  font-size: 12.5px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s;
+}
+.local-rail-new:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+
+.local-rail-create { padding: 4px 0; }
+
+.local-rail-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.35);
+  color: #f0f3ff;
+  font-size: 13px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  outline: none;
+}
+.local-rail-input:focus { border-color: rgba(var(--fc-accent-rgb, 74, 215, 255), 0.65); }
+
+.local-library-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.local-library-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.local-library-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 320px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f0f3ff;
+  font-size: 12.5px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  outline: none;
+}
+.local-library-search::placeholder { color: rgba(235, 240, 255, 0.38); }
+.local-library-search:focus { border-color: rgba(var(--fc-accent-rgb, 74, 215, 255), 0.55); }
+
+.local-library-count {
+  font-size: 12.5px;
+  color: rgba(235, 240, 255, 0.55);
+  min-width: 34px;
+}
+
+.local-library-tool-btn {
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(235, 240, 255, 0.78);
+  font-size: 12px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s;
+  white-space: nowrap;
+}
+.local-library-tool-btn:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
+
+.local-library-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+.local-library-list::-webkit-scrollbar { width: 8px; }
+.local-library-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 4px; }
+
+.local-track-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.14s;
+}
+.local-track-row:hover { background: rgba(255, 255, 255, 0.06); }
+.local-track-row:focus-visible { outline: 1px solid rgba(var(--fc-accent-rgb, 74, 215, 255), 0.6); }
+
+.local-track-cover {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.6);
+}
+.local-track-cover img { width: 100%; height: 100%; object-fit: cover; }
+
+.local-track-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.local-track-title {
+  font-size: 14px;
+  color: #f0f3ff;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.local-track-sub {
+  font-size: 12px;
+  color: rgba(235, 240, 255, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.local-track-add,
+.local-track-more {
+  border: 0;
+  background: transparent;
+  color: rgba(235, 240, 255, 0.65);
+  font-size: 15px;
+  line-height: 1;
+  padding: 7px;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s, background 0.14s, color 0.14s;
+}
+.local-track-row:hover .local-track-add,
+.local-track-row:hover .local-track-more,
+.local-track-row:focus-within .local-track-add,
+.local-track-row:focus-within .local-track-more { opacity: 1; }
+.local-track-add:hover,
+.local-track-more:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+
+.local-library-empty {
+  padding: 48px 24px;
+  text-align: center;
+  color: rgba(235, 240, 255, 0.55);
+  font-size: 13.5px;
+  line-height: 1.9;
+}
+.local-library-empty span { font-size: 12px; color: rgba(235, 240, 255, 0.4); }
+
+.local-library-menu {
+  position: absolute;
+  z-index: 6;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #1b1e26;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+}
+.local-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: rgba(235, 240, 255, 0.85);
+  font-size: 12.5px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.local-menu-item:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.local-menu-item.danger { color: #ff7b7b; }
+.local-menu-item.danger:hover { background: rgba(255, 90, 90, 0.12); color: #ff9c9c; }
+
+@media (max-width: 1100px) {
+  .local-library-rail { flex-basis: 200px; }
+}
+
+@media (max-width: 860px) {
+  .local-library-body { flex-direction: column; }
+  .local-library-rail {
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: 168px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
 }
 
 #empty-home .home-legacy-rail {

@@ -291,6 +291,15 @@
               <span class="home-radio-entry-art" aria-hidden="true"><i></i><i></i></span>
               <span class="home-next-arrow" aria-hidden="true">›</span>
             </button>
+
+            <section id="home-local-music-strip" class="home-discovery-strip home-local-strip" aria-label="本地音乐">
+              <div class="home-discovery-copy">
+                <span class="home-insight-kicker">LOCAL · 本地音乐</span>
+                <span class="home-discovery-title">你的本地曲库</span>
+                <span class="home-discovery-sub">导入的文件会保存在本机，重启后仍可播放</span>
+              </div>
+              <div id="home-local-music-list" class="home-discovery-list" aria-live="polite"></div>
+            </section>
           </div>
 
           <div class="home-legacy-rail" aria-hidden="true">
@@ -352,6 +361,33 @@
           <button class="radio-refresh-btn" type="button" onclick="refreshRadioModes()">换一批顺序</button>
         </div>
         <div id="radio-mode-grid" class="radio-mode-grid" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <div id="home-local-modes-mask" class="modal-mask" role="dialog" aria-modal="true" aria-hidden="true"
+      aria-labelledby="home-local-modes-title">
+      <div class="modal home-radio-modes-modal local-library-modal">
+        <div class="home-radio-modes-head">
+          <div>
+            <h2 id="home-local-modes-title">全部本地音乐</h2>
+            <p id="home-local-modes-sub">浏览本机已保存的曲目；文件仍在磁盘上，不会上传。</p>
+          </div>
+          <button id="home-local-modes-close" class="home-radio-modes-close" type="button" aria-label="关闭本地音乐">×</button>
+        </div>
+        <div id="home-local-modes-grid" class="local-library-body" aria-live="polite">
+          <aside id="local-library-rail" class="local-library-rail" aria-label="本地歌单"></aside>
+          <section class="local-library-main">
+            <div class="local-library-toolbar">
+              <input id="local-library-search" class="local-library-search" type="search" placeholder="搜索歌曲、歌手或专辑" aria-label="搜索本地音乐" autocomplete="off">
+              <span id="local-library-count" class="local-library-count">0</span>
+              <button id="local-library-shuffle" class="local-library-tool-btn" type="button" title="随机播放当前列表" onclick="shuffleHomeLocalView()">⇄ 随机</button>
+              <button id="local-library-sort" class="local-library-tool-btn" type="button" title="切换排序" onclick="cycleHomeLocalSort()">↕ 默认</button>
+              <button class="local-library-tool-btn" type="button" title="导入更多本地音乐" onclick="openHomeLocalImport()">＋ 导入</button>
+            </div>
+            <div id="local-library-list" class="local-library-list"></div>
+          </section>
+        </div>
+        <div id="local-library-menu" class="local-library-menu" hidden></div>
       </div>
     </div>
 
@@ -1472,7 +1508,7 @@
               </div>
             </div>
           </div>
-          <button id="controls-hide-btn" class="ctrl-btn active" onclick="toggleControlsAutoHide()" title="控制条自动隐藏"><svg
+          <button id="controls-hide-btn" class="ctrl-btn" onclick="toggleControlsAutoHide()" title="控制条自动隐藏"><svg
               width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path d="M5 8h14" />
               <path d="M8 12h8" />

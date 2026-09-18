@@ -1021,6 +1021,608 @@ function playHomeDashboardDiscoverySong(index) {
   })).catch(function (error) { console.warn('[HomeDashboardDiscovery]', error); });
 }
 
+var homeDashboardLocalMusicFingerprint = '';
+var homeDashboardLocalMusicCache = [];
+var localMusicViewState = { view: 'tracks', previousFocus: null, playlistId: '', query: '', sort: 'default', renamingId: '', creating: false };
+var homeLocalViewTracksCache = [];
+var LOCAL_SORT_MODES = ['default', 'title', 'artist', 'duration'];
+var LOCAL_SORT_LABELS = { default: '默认', title: '标题', artist: '歌手', duration: '时长' };
+
+function homeDashboardLocalTracks() {
+  if (typeof persistentLocalLibraryTracks === 'undefined' || !Array.isArray(persistentLocalLibraryTracks)) return [];
+  return persistentLocalLibraryTracks.filter(function (song) {
+    return song && (song.localUrl || song.localFileId || song.localKey);
+  });
+}
+
+function homeDashboardLocalPlaylists() {
+  if (typeof window.localPlaylistStore !== 'undefined' && window.localPlaylistStore) {
+    try { return window.localPlaylistStore.list(); } catch (e) { }
+  }
+  var source = (typeof userPlaylists !== 'undefined' && Array.isArray(userPlaylists)) ? userPlaylists : [];
+  var local = source.filter(function (pl) {
+    return pl && pl.localUserPlaylist;
+  });
+  if (local.length) return local;
+  try {
+    var raw = localStorage.getItem('stellaflix-user-playlists');
+    if (!raw) return [];
+    var parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(function (pl) { return pl && pl.localUserPlaylist; });
+  } catch (e) {
+    return [];
+  }
+}
+
+function findHomeLocalPlaylist(id) {
+  var playlists = homeDashboardLocalPlaylists();
+  id = String(id == null ? '' : id);
+  for (var i = 0; i < playlists.length; i++) {
+    if (String(playlists[i].id) === id) return playlists[i];
+  }
+  return null;
+}
+
+function homeLocalPlaylistTracks(pl) {
+  var library = homeDashboardLocalTracks();
+  if (typeof window.localPlaylistStore !== 'undefined' && window.localPlaylistStore) {
+    try { return window.localPlaylistStore.resolveSongs(pl, library).songs; } catch (e) { }
+  }
+  return (pl && Array.isArray(pl.songs)) ? pl.songs.filter(function (s) { return s && typeof s === 'object'; }) : [];
+}
+
+function filterHomeLocalTracks(tracks, query) {
+  var list = Array.isArray(tracks) ? tracks.slice() : [];
+  var q = String(query == null ? '' : query).trim().toLowerCase();
+  if (!q) return list;
+  return list.filter(function (song) {
+    if (!song) return false;
+    var hay = [song.name, song.title, song.artist, song.singer, song.album]
+      .filter(Boolean).join(' ').toLowerCase();
+    return hay.indexOf(q) !== -1;
+  });
+}
+
+function sortHomeLocalTracks(tracks, mode) {
+  var list = Array.isArray(tracks) ? tracks.slice() : [];
+  if (mode !== 'title' && mode !== 'artist' && mode !== 'duration') return list;
+  list.sort(function (a, b) {
+    if (mode === 'duration') return (Number(a && a.duration) || 0) - (Number(b && b.duration) || 0);
+    var pick = mode === 'title'
+      ? function (s) { return String((s && (s.name || s.title)) || ''); }
+      : function (s) { return String((s && (s.artist || s.singer)) || ''); };
+    return pick(a).localeCompare(pick(b), 'zh-Hans-CN');
+  });
+  return list;
+}
+
+function homeLocalCurrentTracks() {
+  var base;
+  if (localMusicViewState.playlistId) {
+    var pl = findHomeLocalPlaylist(localMusicViewState.playlistId);
+    base = pl ? homeLocalPlaylistTracks(pl) : [];
+  } else {
+    base = homeDashboardLocalTracks();
+  }
+  homeLocalViewTracksCache = sortHomeLocalTracks(filterHomeLocalTracks(base, localMusicViewState.query), localMusicViewState.sort);
+  return homeLocalViewTracksCache;
+}
+
+function homeDashboardLocalContinueLabel() {
+  var tracks = homeDashboardLocalTracks();
+  if (!tracks.length) return { title: '继续播放', sub: '先导入本地音乐' };
+  if (typeof currentLocalSong !== 'undefined' && currentLocalSong) {
+    var name = currentLocalSong.name || currentLocalSong.title || '本地音乐';
+    return { title: '继续播放', sub: name };
+  }
+  if (typeof playQueue !== 'undefined' && Array.isArray(playQueue) && typeof currentIdx === 'number' && currentIdx >= 0 && playQueue[currentIdx]) {
+    var cur = playQueue[currentIdx];
+    if (cur && (cur.localUrl || cur.localFileId || cur.localKey || cur.type === 'local')) {
+      return { title: '继续播放', sub: cur.name || cur.title || '本地音乐' };
+    }
+  }
+  return { title: '继续播放', sub: '从上次位置接着听 · 共 ' + tracks.length + ' 首' };
+}
+
+function renderHomeDashboardLocalMusic() {
+  var root = document.getElementById('home-local-music-list');
+  var strip = document.getElementById('home-local-music-strip');
+  if (!root) return;
+  var isVideo = !!(document.body && document.body.classList.contains('video-space-active'));
+  if (strip) strip.style.display = isVideo ? 'none' : '';
+  if (isVideo) {
+    homeDashboardLocalMusicCache = [];
+    homeDashboardLocalMusicFingerprint = '';
+    return;
+  }
+
+  homeDashboardLocalMusicCache = homeDashboardLocalTracks();
+  var trackCount = homeDashboardLocalMusicCache.length;
+  var playlistCount = homeDashboardLocalPlaylists().length;
+  var cont = homeDashboardLocalContinueLabel();
+  var fingerprint = [trackCount, playlistCount, cont.sub].join('|');
+  if (fingerprint === homeDashboardLocalMusicFingerprint) return;
+  homeDashboardLocalMusicFingerprint = fingerprint;
+
+  root.classList.remove('is-empty');
+  root.innerHTML =
+    '<button class="home-discovery-song" type="button" onclick="openHomeLocalMusicModal(\'tracks\')" aria-label="打开全部本地音乐">' +
+    '<span class="home-discovery-cover home-local-entry-icon" aria-hidden="true">♫</span>' +
+    '<span class="home-discovery-song-copy">' +
+    '<span class="home-discovery-song-name">全部本地音乐</span>' +
+    '<span class="home-discovery-song-artist">' + (trackCount ? (trackCount + ' 首已保存') : '点击导入文件') + '</span>' +
+    '</span></button>' +
+    '<button class="home-discovery-song" type="button" onclick="openHomeLocalMusicModal(\'playlists\')" aria-label="打开本地歌单">' +
+    '<span class="home-discovery-cover home-local-entry-icon" aria-hidden="true">☰</span>' +
+    '<span class="home-discovery-song-copy">' +
+    '<span class="home-discovery-song-name">本地歌单</span>' +
+    '<span class="home-discovery-song-artist">' + (playlistCount ? (playlistCount + ' 个歌单') : '收藏整理本地与在线歌曲') + '</span>' +
+    '</span></button>' +
+    '<button class="home-discovery-song" type="button" onclick="continueHomeLocalPlayback()" aria-label="继续播放本地音乐">' +
+    '<span class="home-discovery-cover home-local-entry-icon" aria-hidden="true">▶</span>' +
+    '<span class="home-discovery-song-copy">' +
+    '<span class="home-discovery-song-name">继续播放</span>' +
+    '<span class="home-discovery-song-artist">' + escHtml(cont.sub) + '</span>' +
+    '</span></button>';
+}
+
+function openHomeLocalMusicModal(view) {
+  var mask = document.getElementById('home-local-modes-mask');
+  if (!mask) return;
+  selectLocalMusicPlaylist(view === 'playlists' ? ((homeDashboardLocalPlaylists()[0] || {}).id || '') : '', true);
+  localMusicViewState.previousFocus = document.activeElement;
+  mask.classList.add('show');
+  mask.setAttribute('aria-hidden', 'false');
+  renderHomeLocalModes();
+}
+
+function selectLocalMusicView(view) {
+  if (view !== 'tracks' && view !== 'playlists') return;
+  selectLocalMusicPlaylist(view === 'playlists' ? ((homeDashboardLocalPlaylists()[0] || {}).id || '') : '');
+}
+
+function selectHomeLocalPlaylist(id) {
+  selectLocalMusicPlaylist(id);
+}
+
+function selectLocalMusicPlaylist(id, keepQuery) {
+  localMusicViewState.playlistId = id ? String(id) : '';
+  localMusicViewState.view = localMusicViewState.playlistId ? 'playlists' : 'tracks';
+  if (!keepQuery) {
+    localMusicViewState.renamingId = '';
+    localMusicViewState.creating = false;
+  }
+  renderHomeLocalModes();
+}
+
+function closeHomeLocalMusicModal() {
+  var mask = document.getElementById('home-local-modes-mask');
+  if (!mask) return;
+  closeHomeLocalMenu();
+  localMusicViewState.renamingId = '';
+  localMusicViewState.creating = false;
+  mask.classList.remove('show');
+  mask.setAttribute('aria-hidden', 'true');
+  var previous = localMusicViewState.previousFocus;
+  if (previous && typeof previous.focus === 'function') {
+    try { previous.focus(); } catch (e) { }
+  }
+  localMusicViewState.previousFocus = null;
+}
+
+function bindHomeLocalMusicModalControls() {
+  var mask = document.getElementById('home-local-modes-mask');
+  if (!mask) return;
+  var closeBtn = mask.querySelector('#home-local-modes-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeHomeLocalMusicModal);
+  mask.addEventListener('click', function (event) {
+    if (event.target === mask) closeHomeLocalMusicModal();
+  });
+  var search = mask.querySelector('#local-library-search');
+  if (search) search.addEventListener('input', function () {
+    localMusicViewState.query = search.value || '';
+    renderHomeLocalTrackList();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (!mask.classList.contains('show')) return;
+    if (event.key === 'Escape') {
+      var menu = document.getElementById('local-library-menu');
+      if (menu && !menu.hidden) { closeHomeLocalMenu(); return; }
+      closeHomeLocalMusicModal();
+    }
+  });
+  document.addEventListener('click', function (event) {
+    var menu = document.getElementById('local-library-menu');
+    if (menu && !menu.hidden && !menu.contains(event.target)) closeHomeLocalMenu();
+  });
+}
+
+var homeLocalMenuItems = [];
+
+function openHomeLocalMenu(anchorEvent, items) {
+  var menu = document.getElementById('local-library-menu');
+  if (!menu) return;
+  homeLocalMenuItems = items;
+  menu.innerHTML = items.map(function (item, i) {
+    return '<button class="local-menu-item' + (item.danger ? ' danger' : '') + '" type="button" onclick="runHomeLocalMenuItem(' + i + ')">' + escHtml(item.label) + '</button>';
+  }).join('');
+  var anchor = anchorEvent && anchorEvent.currentTarget ? anchorEvent.currentTarget : null;
+  var host = menu.parentElement;
+  if (anchor && host && typeof anchor.getBoundingClientRect === 'function') {
+    var ar = anchor.getBoundingClientRect();
+    var hr = host.getBoundingClientRect();
+    menu.style.top = Math.max(8, Math.min(ar.bottom - hr.top + 4, hr.height - items.length * 40 - 20)) + 'px';
+    menu.style.left = Math.max(8, Math.min(ar.left - hr.left - 130, hr.width - 190)) + 'px';
+  }
+  menu.hidden = false;
+}
+
+function runHomeLocalMenuItem(index) {
+  var item = homeLocalMenuItems[Number(index)];
+  closeHomeLocalMenu();
+  if (item && typeof item.action === 'function') item.action();
+}
+
+function closeHomeLocalMenu() {
+  var menu = document.getElementById('local-library-menu');
+  if (menu) {
+    menu.hidden = true;
+    menu.innerHTML = '';
+  }
+  homeLocalMenuItems = [];
+}
+
+function renderHomeLocalModes() {
+  var root = document.getElementById('home-local-modes-grid');
+  var rail = document.getElementById('local-library-rail');
+  var titleEl = document.getElementById('home-local-modes-title');
+  var subEl = document.getElementById('home-local-modes-sub');
+  if (!root || !rail) return;
+  var playlists = homeDashboardLocalPlaylists();
+  if (localMusicViewState.playlistId && !findHomeLocalPlaylist(localMusicViewState.playlistId)) {
+    localMusicViewState.playlistId = '';
+  }
+  var selectedPl = localMusicViewState.playlistId ? findHomeLocalPlaylist(localMusicViewState.playlistId) : null;
+  var trackCount = homeDashboardLocalTracks().length;
+
+  var html = '<button class="local-rail-item' + (!localMusicViewState.playlistId ? ' active' : '') + '" type="button" onclick="selectHomeLocalPlaylist(\'\')" aria-label="显示全部本地音乐">' +
+    '<span class="local-rail-cover local-rail-icon" aria-hidden="true">♫</span>' +
+    '<span class="local-rail-copy"><span class="local-rail-title">全部歌曲</span>' +
+    '<span class="local-rail-sub">' + trackCount + ' 首</span></span></button>';
+  html += '<div class="local-rail-heading">' + (playlists.length ? '本地歌单 · ' + playlists.length : '本地歌单') + '</div>';
+  playlists.forEach(function (pl) {
+    var id = String(pl.id);
+    var count = Array.isArray(pl.songs) ? pl.songs.length : (Number(pl.trackCount) || 0);
+    var coverSrc = homeDashboardSongCover({ cover: pl.cover }, 88);
+    var coverHtml = coverSrc ? '<img src="' + escHtml(coverSrc) + '" alt="" loading="lazy">' : '<span aria-hidden="true">☰</span>';
+    var titleHtml = localMusicViewState.renamingId === id
+      ? '<input id="local-playlist-rename-input" class="local-rail-input" value="' + escHtml(pl.name || '') + '" onkeydown="homeLocalPlaylistRenameKey(event, \'' + id + '\')" onblur="commitHomeLocalPlaylistRename(\'' + id + '\')">'
+      : '<span class="local-rail-title">' + escHtml(pl.name || '本地歌单') + '</span>';
+    html += '<div class="local-rail-item' + (localMusicViewState.playlistId === id ? ' active' : '') + '" role="button" tabindex="0" onclick="selectHomeLocalPlaylist(\'' + id + '\')" aria-label="打开本地歌单 ' + escHtml(pl.name || '') + '">' +
+      '<span class="local-rail-cover" aria-hidden="true">' + coverHtml + '</span>' +
+      '<span class="local-rail-copy">' + titleHtml + '<span class="local-rail-sub">' + count + ' 首</span></span>' +
+      '<button class="local-rail-more" type="button" title="歌单操作" aria-label="歌单操作" onclick="event.stopPropagation();openHomeLocalPlaylistMenu(event, \'' + id + '\')">⋮</button>' +
+      '</div>';
+  });
+  html += localMusicViewState.creating
+    ? '<div class="local-rail-create"><input id="local-playlist-create-input" class="local-rail-input" placeholder="歌单名，回车确认" onkeydown="homeLocalPlaylistCreateKey(event)" onblur="commitHomeLocalPlaylistCreate()"></div>'
+    : '<button class="local-rail-new" type="button" onclick="startHomeLocalPlaylistCreate()">＋ 新建歌单</button>';
+  rail.innerHTML = html;
+  if (localMusicViewState.creating) {
+    setTimeout(function () {
+      var input = document.getElementById('local-playlist-create-input');
+      if (input) input.focus();
+    }, 0);
+  } else if (localMusicViewState.renamingId) {
+    setTimeout(function () {
+      var input = document.getElementById('local-playlist-rename-input');
+      if (input) { input.focus(); input.select(); }
+    }, 0);
+  }
+
+  if (titleEl) titleEl.textContent = selectedPl ? (selectedPl.name || '本地歌单') : '全部本地音乐';
+  if (subEl) subEl.textContent = selectedPl ? '本地歌单 · 曲目来自本机曲库' : '浏览本机已保存的曲目；文件仍在磁盘上，不会上传。';
+  var sortBtn = document.getElementById('local-library-sort');
+  if (sortBtn) sortBtn.textContent = '↕ ' + (LOCAL_SORT_LABELS[localMusicViewState.sort] || '默认');
+  renderHomeLocalTrackList();
+}
+
+function renderHomeLocalTrackList() {
+  var listEl = document.getElementById('local-library-list');
+  if (!listEl) return;
+  var tracks = homeLocalCurrentTracks();
+  var countEl = document.getElementById('local-library-count');
+  if (countEl) countEl.textContent = tracks.length;
+  if (!tracks.length) {
+    if (localMusicViewState.query) {
+      listEl.innerHTML = '<div class="local-library-empty">没有找到与「' + escHtml(localMusicViewState.query) + '」匹配的曲目</div>';
+    } else if (localMusicViewState.playlistId) {
+      listEl.innerHTML = '<div class="local-library-empty">这个歌单还是空的<br><span>在歌曲行点 ＋ 右侧 ⋮ → 收藏到歌单，把曲目放进来</span></div>';
+    } else {
+      listEl.innerHTML = '<button class="home-discovery-empty" type="button" onclick="closeHomeLocalMusicModal();openHomeLocalImport()">' +
+        '<strong>还没有本地音乐</strong><span>点击导入 MP3 / FLAC 等文件，保存到本机曲库</span></button>';
+    }
+    return;
+  }
+  listEl.innerHTML = tracks.map(function (song, index) {
+    var coverSrc = homeDashboardSongCover(song, 88);
+    var coverHtml = coverSrc ? '<img src="' + escHtml(coverSrc) + '" alt="" loading="lazy">' : '<span aria-hidden="true">♫</span>';
+    var title = song.name || song.title || '本地音乐';
+    var subParts = [];
+    var artist = song.artist || song.singer || '';
+    if (artist) subParts.push(artist);
+    if (song.album) subParts.push('– ' + song.album);
+    var dur = (typeof songDurationLabel === 'function') ? songDurationLabel(song) : '';
+    if (dur && dur !== '0:00') subParts.push('· ' + dur);
+    return '<div class="local-track-row" role="button" tabindex="0" onclick="playHomeLocalTrackAt(' + index + ')" onkeydown="if(event.key===\'Enter\'){event.preventDefault();playHomeLocalTrackAt(' + index + ');}" aria-label="播放 ' + escHtml(title) + '">' +
+      '<span class="local-track-cover" aria-hidden="true">' + coverHtml + '</span>' +
+      '<span class="local-track-copy">' +
+      '<span class="local-track-title">' + escHtml(title) + '</span>' +
+      '<span class="local-track-sub">' + escHtml(subParts.join(' ')) + '</span>' +
+      '</span>' +
+      '<button class="local-track-add" type="button" title="下一首播放" aria-label="下一首播放" onclick="event.stopPropagation();queueHomeLocalTrackAt(' + index + ')">＋</button>' +
+      '<button class="local-track-more" type="button" title="更多操作" aria-label="更多操作" onclick="event.stopPropagation();openHomeLocalTrackMenu(event, ' + index + ')">⋮</button>' +
+      '</div>';
+  }).join('');
+}
+
+function startHomeLocalPlaylistCreate() {
+  localMusicViewState.creating = true;
+  localMusicViewState.renamingId = '';
+  renderHomeLocalModes();
+}
+
+function homeLocalPlaylistCreateKey(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    commitHomeLocalPlaylistCreate();
+  } else if (event.key === 'Escape') {
+    event.stopPropagation();
+    localMusicViewState.creating = false;
+    renderHomeLocalModes();
+  }
+}
+
+function commitHomeLocalPlaylistCreate() {
+  if (!localMusicViewState.creating) return;
+  var input = document.getElementById('local-playlist-create-input');
+  var name = input ? String(input.value || '').trim() : '';
+  localMusicViewState.creating = false;
+  if (!name) {
+    renderHomeLocalModes();
+    return;
+  }
+  var result = (typeof window.localPlaylistStore !== 'undefined' && window.localPlaylistStore)
+    ? window.localPlaylistStore.create(name)
+    : { ok: false, message: '本地歌单模块未就绪' };
+  if (result && result.ok) {
+    localMusicViewState.playlistId = String(result.playlist.id);
+    localMusicViewState.view = 'playlists';
+    if (result.created && typeof showToast === 'function') showToast('已创建歌单“' + name + '”');
+  } else if (typeof showToast === 'function') {
+    showToast((result && result.message) || '新建歌单失败');
+  }
+  renderHomeLocalModes();
+  refreshHomeDashboardLocalMusic(true);
+}
+
+function startHomeLocalPlaylistRename(id) {
+  localMusicViewState.renamingId = String(id);
+  localMusicViewState.creating = false;
+  renderHomeLocalModes();
+}
+
+function homeLocalPlaylistRenameKey(event, id) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    commitHomeLocalPlaylistRename(id);
+  } else if (event.key === 'Escape') {
+    event.stopPropagation();
+    localMusicViewState.renamingId = '';
+    renderHomeLocalModes();
+  }
+}
+
+function commitHomeLocalPlaylistRename(id) {
+  if (localMusicViewState.renamingId !== String(id)) return;
+  var input = document.getElementById('local-playlist-rename-input');
+  var name = input ? String(input.value || '').trim() : '';
+  localMusicViewState.renamingId = '';
+  var pl = findHomeLocalPlaylist(id);
+  if (pl && name && name !== pl.name) {
+    var result = (typeof window.localPlaylistStore !== 'undefined' && window.localPlaylistStore)
+      ? window.localPlaylistStore.rename(id, name)
+      : { ok: false, message: '本地歌单模块未就绪' };
+    if (result && !result.ok && typeof showToast === 'function') showToast(result.message || '重命名失败');
+  }
+  renderHomeLocalModes();
+  refreshHomeDashboardLocalMusic(true);
+}
+
+function deleteHomeLocalPlaylist(id) {
+  var pl = findHomeLocalPlaylist(id);
+  if (!pl) return;
+  if (!window.confirm('删除歌单“' + (pl.name || '') + '”？曲库中的歌曲不会被删除。')) return;
+  var result = (typeof window.localPlaylistStore !== 'undefined' && window.localPlaylistStore)
+    ? window.localPlaylistStore.remove(id)
+    : { ok: false, message: '本地歌单模块未就绪' };
+  if (result && result.ok) {
+    if (localMusicViewState.playlistId === String(id)) localMusicViewState.playlistId = '';
+    if (typeof showToast === 'function') showToast('已删除歌单');
+  } else if (typeof showToast === 'function') {
+    showToast((result && result.message) || '删除失败');
+  }
+  renderHomeLocalModes();
+  refreshHomeDashboardLocalMusic(true);
+}
+
+function openHomeLocalTrackMenu(event, index) {
+  var song = homeLocalViewTracksCache[index];
+  if (!song) return;
+  openHomeLocalMenu(event, [
+    { label: '下一首播放', action: function () { queueHomeLocalTrackAt(index); } },
+    { label: '收藏到歌单', action: function () { if (typeof openCollectModal === 'function') openCollectModal(song); } },
+    { label: '从本地曲库移除', danger: true, action: function () { removeHomeLocalTrackAt(index); } },
+  ]);
+}
+
+function openHomeLocalPlaylistMenu(event, id) {
+  openHomeLocalMenu(event, [
+    { label: '播放全部', action: function () { playHomeLocalPlaylistById(id); } },
+    { label: '重命名歌单', action: function () { startHomeLocalPlaylistRename(id); } },
+    { label: '删除歌单', danger: true, action: function () { deleteHomeLocalPlaylist(id); } },
+  ]);
+}
+
+function startHomeLocalPlayback(list, startIndex, playlistName) {
+  if (!Array.isArray(list) || !list.length) return false;
+  closeHomeLocalMusicModal();
+  playQueue = list.map(function (song) { return cloneSong(song); });
+  currentIdx = Math.max(0, Math.min(playQueue.length - 1, Number(startIndex) || 0));
+  homeForcedOpen = false;
+  homeSuppressed = false;
+  if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false);
+  if (typeof safeRenderQueuePanel === 'function') safeRenderQueuePanel('home-local-modal', { scrollCurrent: true });
+  if (typeof safeShelfRebuild === 'function') safeShelfRebuild('home-local-modal', true);
+  if (typeof forcePlaybackControlsInteractive === 'function') forcePlaybackControlsInteractive();
+  Promise.resolve(playQueueAt(currentIdx, {
+    manual: true,
+    context: { type: 'home-local', playlistName: playlistName || '本地音乐' },
+  })).catch(function (error) { console.warn('[HomeLocalModal]', error); });
+  return true;
+}
+
+function homeLocalViewPlaylistName() {
+  var pl = localMusicViewState.playlistId ? findHomeLocalPlaylist(localMusicViewState.playlistId) : null;
+  return pl ? (pl.name || '本地歌单') : '本地音乐';
+}
+
+function playHomeLocalTrackAt(index) {
+  var tracks = homeLocalCurrentTracks();
+  if (!tracks.length) {
+    closeHomeLocalMusicModal();
+    openHomeLocalImport();
+    return;
+  }
+  startHomeLocalPlayback(tracks, index, homeLocalViewPlaylistName());
+}
+
+function queueHomeLocalTrackAt(index) {
+  var song = homeLocalViewTracksCache[index];
+  if (!song) return;
+  if (typeof queueSongNext !== 'function') return;
+  queueSongNext(cloneSong(song));
+  if (typeof showToast === 'function') showToast('已设为下一首: ' + (song.name || song.title || ''));
+}
+
+function removeHomeLocalTrackAt(index) {
+  var song = homeLocalViewTracksCache[index];
+  if (!song) return;
+  if (!window.confirm('从本地曲库移除“' + (song.name || song.title || '这首歌') + '”？磁盘上的文件不会被删除。')) return;
+  if (typeof removeLocalTrackFromLibraryAndQueue !== 'function') return;
+  Promise.resolve(removeLocalTrackFromLibraryAndQueue(song)).then(function () {
+    refreshHomeDashboardLocalMusic(true);
+    renderHomeLocalModes();
+  });
+}
+
+function playHomeLocalPlaylistAt(index) {
+  var playlists = homeDashboardLocalPlaylists();
+  var pl = playlists[Math.max(0, Number(index) || 0)];
+  if (!pl) {
+    if (typeof showToast === 'function') showToast('没有找到这个歌单');
+    return;
+  }
+  playHomeLocalPlaylistById(pl.id);
+}
+
+function playHomeLocalPlaylistById(id) {
+  var pl = findHomeLocalPlaylist(id);
+  if (!pl) return;
+  var songs = homeLocalPlaylistTracks(pl);
+  if (!songs.length) {
+    if (typeof showToast === 'function') showToast('这个本地歌单还是空的');
+    return;
+  }
+  startHomeLocalPlayback(songs, 0, pl.name || '本地歌单');
+}
+
+function shuffleHomeLocalView() {
+  var tracks = homeLocalCurrentTracks().slice();
+  if (!tracks.length) {
+    openHomeLocalImport();
+    return;
+  }
+  for (var i = tracks.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var tmp = tracks[i];
+    tracks[i] = tracks[j];
+    tracks[j] = tmp;
+  }
+  startHomeLocalPlayback(tracks, 0, '随机播放 · ' + homeLocalViewPlaylistName());
+}
+
+function cycleHomeLocalSort() {
+  var i = LOCAL_SORT_MODES.indexOf(localMusicViewState.sort);
+  localMusicViewState.sort = LOCAL_SORT_MODES[(i + 1) % LOCAL_SORT_MODES.length];
+  renderHomeLocalModes();
+}
+
+function continueHomeLocalPlayback() {
+  var tracks = homeDashboardLocalTracks();
+  if (!tracks.length) {
+    openHomeLocalImport();
+    return;
+  }
+  if (typeof currentLocalSong !== 'undefined' && currentLocalSong && currentLocalSong.localUrl) {
+    homeForcedOpen = false;
+    homeSuppressed = false;
+    if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false);
+    if (typeof forcePlaybackControlsInteractive === 'function') forcePlaybackControlsInteractive();
+    if (audio && !audio.paused) {
+      showToast('本地音乐正在播放');
+      return;
+    }
+    if (audio && audio.src && typeof playAudio === 'function') {
+      Promise.resolve(playAudio({ manual: true })).catch(function () { });
+      return;
+    }
+  }
+  if (Array.isArray(playQueue) && playQueue.length && typeof currentIdx === 'number' && currentIdx >= 0 && playQueue[currentIdx]) {
+    var cur = playQueue[currentIdx];
+    if (cur && (cur.localUrl || cur.localFileId || cur.localKey)) {
+      homeForcedOpen = false;
+      homeSuppressed = false;
+      if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false);
+      if (typeof forcePlaybackControlsInteractive === 'function') forcePlaybackControlsInteractive();
+      Promise.resolve(playQueueAt(currentIdx, {
+        manual: true,
+        context: { type: 'home-local', playlistName: '继续播放' },
+      })).catch(function () { });
+      return;
+    }
+  }
+  playHomeLocalTrackAt(0);
+}
+
+function playHomeDashboardLocalMusicSong(index) {
+  playHomeLocalTrackAt(index);
+}
+
+function playHomeDashboardLocalMusicAll() {
+  playHomeLocalTrackAt(0);
+}
+
+function refreshHomeDashboardLocalMusic(force) {
+  if (force) homeDashboardLocalMusicFingerprint = '';
+  renderHomeDashboardLocalMusic();
+  var mask = document.getElementById('home-local-modes-mask');
+  if (mask && mask.classList.contains('show')) renderHomeLocalModes();
+}
+
+bindHomeLocalMusicModalControls();
+
 function renderHomeInsightDock() {
   if (!document.getElementById('home-insight-dock')) return;
   var doc = document;
@@ -1201,6 +1803,7 @@ function renderHomeInsightDock() {
   }
 
   renderHomeDashboardDiscovery();
+  renderHomeDashboardLocalMusic();
 }
 
 function playHomeNextFromDock() {

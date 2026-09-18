@@ -460,25 +460,25 @@
   //  数据管理类 — 组合实现
   // ============================================================
 
-  window.ensureLocalUserPlaylistsLoaded = function () {
-    if (typeof window.ensureLocalUserPlaylistsLoaded === 'function') {
-      return window.ensureLocalUserPlaylistsLoaded();
+  // 03b-local-playlist-store.js 加载时会用真实实现覆盖这两个入口；
+  // 这里只保留调用时委托 + 非递归降级，避免加载顺序差异导致自递归栈溢出
+  window.ensureLocalUserPlaylistsLoaded = function (force) {
+    if (window.localPlaylistStore && typeof window.localPlaylistStore.load === 'function') {
+      try { return window.localPlaylistStore.load(!!force) && { ok: true, loaded: window.localPlaylistStore.list().length }; } catch (e) { }
     }
-    if (window.userPlaylists !== undefined) {
-      return { ok: true, loaded: window.userPlaylists.length };
-    }
-    return { ok: true, loaded: 0 };
+    return { ok: true, loaded: (window.userPlaylists || []).filter(function (pl) { return pl && pl.localUserPlaylist; }).length };
   };
 
   window.saveLocalUserPlaylists = function () {
-    if (typeof window.saveLocalUserPlaylists === 'function') {
-      return window.saveLocalUserPlaylists();
+    if (window.localPlaylistStore && typeof window.localPlaylistStore.save === 'function') {
+      try { return !!window.localPlaylistStore.save(); } catch (e) { return false; }
     }
     try {
-      localStorage.setItem('stellaflix-user-playlists', JSON.stringify(window.userPlaylists || []));
-      return { ok: true };
+      var locals = (window.userPlaylists || []).filter(function (pl) { return pl && pl.localUserPlaylist; });
+      localStorage.setItem('stellaflix-local-playlists', JSON.stringify(locals));
+      return true;
     } catch (e) {
-      return toolError('SAVE_FAILED', '保存失败: ' + e.message);
+      return false;
     }
   };
 

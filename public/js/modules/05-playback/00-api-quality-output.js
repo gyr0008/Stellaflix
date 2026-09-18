@@ -82,6 +82,104 @@ function getPlaybackQualityForSong(song) {
   var provider = normalizePlaybackProvider(songProviderKey(song));
   return getProviderPlaybackQuality(provider);
 }
+function isLocalPlaybackSong(song) {
+  return !!(song && (song.type === 'local' || song.source === 'local' || song.localUrl));
+}
+function isLocalOriginPlaybackSong(song) {
+  return isLocalPlaybackSong(song) || !!(song && song.localOriginKey);
+}
+function localOriginKeyOfSong(song) {
+  if (!song) return '';
+  return String((isLocalPlaybackSong(song) ? (song.localKey || song.localFileId) : song.localOriginKey) || '');
+}
+function localOnlineMatchEntryForSong(song) {
+  if (!isLocalOriginPlaybackSong(song) || !window.localOnlineMatchStore) return null;
+  try {
+    return window.localOnlineMatchStore.get(localOriginKeyOfSong(song));
+  } catch (e) {
+    return null;
+  }
+}
+function localQualityProviderForSong(song, fallbackProvider) {
+  var entry = localOnlineMatchEntryForSong(song);
+  return entry && entry.provider ? normalizePlaybackProvider(entry.provider) : normalizePlaybackProvider(fallbackProvider);
+}
+function localFileQualityOptionHtml(active) {
+  return '<button class="quality-option local-file' + (active ? ' active' : '') + '" data-quality="local" title="播放本机文件，无需联网" onclick="setPlaybackQuality(\'local\')"><span>本地文件</span><small>优先 · 本机音质</small></button>';
+}
+function playbackQualityOptionsHtml(provider, runtimeCapQuality, canUseSvip, displayQuality) {
+  return playbackQualityOptions(provider).map(function (item) {
+    var capLocked = playbackQualityAboveCap(item.key, provider, runtimeCapQuality);
+    var locked = !!(item.svip && !canUseSvip) || capLocked;
+    return '<button class="quality-option' + (item.svip ? ' svip-only' : '') + (capLocked ? ' cap-locked' : '') + (locked ? ' locked' : '') + '" data-quality="' + item.key + '" data-svip="' + (item.svip ? '1' : '0') + '" ' + (locked ? 'disabled ' : '') + 'onclick="setPlaybackQuality(\'' + item.key + '\')"><span>' + escHtml(item.title) + '</span><small>' + escHtml(capLocked ? ('当前最高 ' + playbackQualityLabel(runtimeCapQuality, provider)) : item.sub) + '</small></button>';
+  }).join('');
+}
+function switchLocalQualityPlaybackTo(targetQuality) {
+  var idx = currentIdx;
+  var song = idx >= 0 && idx < playQueue.length ? playQueue[idx] : null;
+  if (!song) return Promise.resolve(false);
+  var resumeAt = audio && isFinite(audio.currentTime) ? audio.currentTime : 0;
+  function closePanel() {
+    var wrap = document.getElementById('quality-control');
+    if (wrap) wrap.classList.remove('open');
+  }
+  function replay(qualityOverride) {
+    var opts = { qualitySwitch: true, resumeAt: resumeAt, preserveHomeState: true };
+    if (qualityOverride) opts.qualityOverride = qualityOverride;
+    return Promise.resolve(playQueueAt(idx, opts));
+  }
+  closePanel();
+  if (targetQuality === 'local') {
+    if (isLocalPlaybackSong(song)) {
+      showToast('当前正在播放本地文件');
+      return Promise.resolve(false);
+    }
+    var origin = song.localOriginSong || null;
+    if (!origin || !origin.localUrl) {
+      showToast('本地文件信息已失效，请重新导入');
+      return Promise.resolve(false);
+    }
+    playQueue[idx] = origin;
+    showToast('正在切回本地文件');
+    return replay('').catch(function (e) {
+      console.warn('[LocalQualitySwitch]', e);
+      playQueue[idx] = song;
+      showToast('切回本地文件失败');
+    }).finally(function () {
+      updatePlaybackQualityUi();
+      forcePlaybackControlsInteractive();
+    });
+  }
+  var localSong = isLocalPlaybackSong(song) ? song : song.localOriginSong;
+  if (!localSong) {
+    showToast('本地文件信息已失效，请重新导入');
+    return Promise.resolve(false);
+  }
+  if (!window.localOnlineMatchStore) {
+    showToast('在线音质组件未就绪，继续播放本地文件');
+    return Promise.resolve(false);
+  }
+  showToast('正在匹配在线音源...');
+  return Promise.resolve(window.localOnlineMatchStore.matchLocalSong(localSong)).then(function (matched) {
+    if (!matched) {
+      showToast('未匹配到在线音源或网络不可用，继续播放本地文件');
+      return false;
+    }
+    matched.localOriginSong = localSong;
+    playQueue[idx] = matched;
+    var matchedProvider = normalizePlaybackProvider(matched.provider || matched.source);
+    setProviderPlaybackQuality(matchedProvider, targetQuality);
+    return replay(targetQuality).then(function () { return true; });
+  }).catch(function (e) {
+    console.warn('[LocalQualitySwitch]', e);
+    playQueue[idx] = localSong;
+    showToast('音质切换失败，已保留本地播放');
+    return false;
+  }).finally(function () {
+    updatePlaybackQualityUi();
+    forcePlaybackControlsInteractive();
+  });
+}
 function playbackQualityLabel(value, provider) {
   provider = normalizePlaybackProvider(provider || currentPlaybackQualityProvider());
   value = normalizePlaybackQualityForProvider(value, provider);
@@ -246,6 +344,9 @@ function savePlaybackQualityPreference() {
 function updatePlaybackQualityUi() {
   var provider = currentPlaybackQualityProvider();
   var currentSong = Array.isArray(playQueue) && currentIdx >= 0 && currentIdx < playQueue.length ? playQueue[currentIdx] : null;
+  var localOriginMode = isLocalOriginPlaybackSong(currentSong);
+  var localFileActive = isLocalPlaybackSong(currentSong);
+  if (localOriginMode) provider = localQualityProviderForSong(currentSong, provider);
   var currentQuality = getProviderPlaybackQuality(provider);
   var runtimeCapQuality = playbackQualityCapValue(currentSong, provider);
   var effectiveQuality = effectivePlaybackQualityForSong(currentSong, provider, currentQuality);
@@ -255,19 +356,18 @@ function updatePlaybackQualityUi() {
   var list = document.getElementById('quality-option-list');
   var canUseSvip = provider === 'netease' && hasProviderSvip('netease', loginStatus);
   var displayQuality = provider === 'netease' && effectiveQuality === 'jymaster' && !canUseSvip ? 'hires' : effectiveQuality;
-  if (label) label.textContent = playbackQualityShortLabel(displayQuality, provider);
+  if (label) label.textContent = localFileActive ? '本地' : playbackQualityShortLabel(displayQuality, provider);
   var qualityProviderTitle = provider === 'spotify' ? 'Spotify 匹配源: ' : (provider === 'qishui' ? '汽水音质: ' : (provider === 'qq' ? 'QQ 音质: ' : (provider === 'kugou' ? '酷狗音质: ' : '网易云音质: ')));
   if (btn) btn.title = qualityProviderTitle + playbackQualityLabel(displayQuality, provider) +
     (provider === 'netease' && currentQuality === 'jymaster' && !canUseSvip ? ' · 超清母带需网易云 SVIP' : '');
   if (btn && runtimeCapQuality) btn.title += ' | 当前歌曲最高: ' + playbackQualityLabel(runtimeCapQuality, provider);
   if (list) {
-    list.innerHTML = playbackQualityOptions(provider).map(function (item) {
-      var capLocked = playbackQualityAboveCap(item.key, provider, runtimeCapQuality);
-      var locked = !!(item.svip && !canUseSvip) || capLocked;
-      return '<button class="quality-option' + (item.svip ? ' svip-only' : '') + (capLocked ? ' cap-locked' : '') + (locked ? ' locked' : '') + '" data-quality="' + item.key + '" data-svip="' + (item.svip ? '1' : '0') + '" ' + (locked ? 'disabled ' : '') + 'onclick="setPlaybackQuality(\'' + item.key + '\')"><span>' + escHtml(item.title) + '</span><small>' + escHtml(capLocked ? ('当前最高 ' + playbackQualityLabel(runtimeCapQuality, provider)) : item.sub) + '</small></button>';
-    }).join('');
+    var optionsHtml = playbackQualityOptionsHtml(provider, runtimeCapQuality, canUseSvip, displayQuality);
+    if (localOriginMode) optionsHtml = localFileQualityOptionHtml(localFileActive) + optionsHtml;
+    list.innerHTML = optionsHtml;
   }
   document.querySelectorAll('.quality-option').forEach(function (option) {
+    if (option.dataset && option.dataset.quality === 'local') return;
     var q = normalizePlaybackQualityForProvider(option.dataset.quality, provider);
     var capLocked = playbackQualityAboveCap(q, provider, runtimeCapQuality);
     var locked = (option.dataset.svip === '1' && !canUseSvip) || capLocked;
@@ -287,6 +387,14 @@ function updatePlaybackQualityUi() {
 function setPlaybackQuality(value) {
   var provider = currentPlaybackQualityProvider();
   var currentSong = Array.isArray(playQueue) && currentIdx >= 0 && currentIdx < playQueue.length ? playQueue[currentIdx] : null;
+  if (String(value) === 'local' && isLocalOriginPlaybackSong(currentSong)) {
+    switchLocalQualityPlaybackTo('local');
+    return;
+  }
+  if (isLocalPlaybackSong(currentSong)) {
+    switchLocalQualityPlaybackTo(normalizePlaybackQualityForProvider(value, localQualityProviderForSong(currentSong, provider)));
+    return;
+  }
   var next = normalizePlaybackQualityForProvider(value, provider);
   var cap = playbackQualityCapValue(currentSong, provider);
   if (playbackQualityAboveCap(next, provider, cap)) {

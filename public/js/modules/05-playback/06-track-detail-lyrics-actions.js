@@ -437,6 +437,20 @@ function closeTrackDetailModal() {
     detailCommentSubmitBusy = false;
   });
 }
+function songCompletedPlayCount(song) {
+  if (!song) return 0;
+  var stats = (typeof listenStatsState !== 'undefined' && listenStatsState && listenStatsState.songs) || {};
+  var key = queueItemKey(song);
+  var count = (stats[key] && Number(stats[key].completed)) || 0;
+  // 本地歌合并计数：经 03c 匹配缓存把在线档播放的完播次数并回本地键（仅本地文件本体，克隆不重复加）
+  if (song.type === 'local' && song.localKey && window.localOnlineMatchStore) {
+    try {
+      var entry = window.localOnlineMatchStore.get(song.localKey);
+      if (entry && entry.key && stats[entry.key]) count += (Number(stats[entry.key].completed) || 0);
+    } catch (e) { }
+  }
+  return count;
+}
 function openTrackDetailModal(type, songOverride) {
   var song = songOverride || currentCoverSong();
   if (!song) { showToast('先播放或选择一首歌'); return; }
@@ -476,6 +490,7 @@ function openTrackDetailModal(type, songOverride) {
       detailRow('专辑', albumTitle) +
       detailRow('歌手', song.artist || '未知歌手') +
       detailRow('来源', songSourceLabel(song)) +
+      detailRow('播放次数', String(songCompletedPlayCount(song))) +
       '</div>' +
       '<div class="detail-chip-row">' +
       '<span class="detail-chip">' + escHtml(songSourceLabel(song)) + '</span>' +
@@ -618,9 +633,25 @@ function openTrackDetailModal(type, songOverride) {
       (getGlobalCustomCover() ? '<span class="detail-chip">全局自定义封面</span>' : '') +
       (hasCustomLyricForSong(song) ? '<span class="detail-chip">自定义歌词</span>' : '') +
       '</div>' +
+      (isRemovablePersistentLocalSong(song)
+        ? '<div class="detail-chip-row" style="margin-top:10px">' +
+          '<button type="button" id="detail-remove-local-btn" class="upload-choice" style="width:100%">' +
+          '<span><strong>从本地曲库移除</strong><small>删除索引与封面缓存，不删除磁盘源文件</small></span>' +
+          '</button></div>'
+        : '') +
       '<div class="detail-section"><div class="detail-section-head"><div class="detail-section-title">' + detailCommentTitle + '</div></div>' +
       renderDetailCommentComposer(commentConfig) +
       '<div id="song-comments">' + (detailCanLoadComments ? '<div class="detail-loading">正在载入评论...</div>' : '<div class="detail-empty">' + detailEmptyText + '</div>') + '</div></div>';
+    var removeLocalBtn = document.getElementById('detail-remove-local-btn');
+    if (removeLocalBtn) {
+      removeLocalBtn.addEventListener('click', function () {
+        removeLocalBtn.disabled = true;
+        removeLocalTrackFromLibraryAndQueue(song).then(function (ok) {
+          if (ok) closeGsapModal(document.getElementById('track-detail-modal'));
+          else removeLocalBtn.disabled = false;
+        });
+      });
+    }
     if (detailCanLoadComments) {
       loadDetailComments(song, seq);
     }
@@ -1173,6 +1204,14 @@ var SONG_ACCOUNT_ACTION_ADAPTERS = {
     collect: false,
     createPlaylist: false,
     readOnly: true
+  },
+  local: {
+    provider: 'local',
+    label: '本地歌单',
+    like: false,
+    collect: true,
+    createPlaylist: true,
+    localOnly: true
   }
 };
 function songAccountProvider(song) {
@@ -1430,15 +1469,24 @@ function toggleLikeDetailSong(song) { toggleLikeSong(song); }
 function openCollectModal(song) {
   var provider = songAccountProvider(song);
   var adapter = songAccountAdapter(provider);
-  if (!adapter || !adapter.collect || !adapter.playlistAddUrl) {
+  var isLocalCollect = provider === 'local';
+  if (isLocalCollect) {
+    if (typeof localPlaylistStore === 'undefined' || !localPlaylistStore) {
+      showToast('本地歌单尚未初始化');
+      return;
+    }
+    if (typeof ensureLocalUserPlaylistsLoaded === 'function') ensureLocalUserPlaylistsLoaded();
+  } else if (!adapter || !adapter.collect || !adapter.playlistAddUrl) {
     showToast(songAccountUnsupportedMessage(provider, 'collect'));
     return;
   }
-  if (!ensureLoggedInForAction(provider)) return;
+  if (!isLocalCollect && !ensureLoggedInForAction(provider)) return;
   collectTargetSong = song;
   renderCollectModal();
   openGsapModal(document.getElementById('collect-modal'));
-  refreshUserPlaylists(true).then(function () { renderCollectModal(); }).catch(function () { renderCollectModal(); });
+  if (!isLocalCollect) {
+    refreshUserPlaylists(true).then(function () { renderCollectModal(); }).catch(function () { renderCollectModal(); });
+  }
 }
 function openCollectModalForCurrent() { openCollectModal(currentCoverSong()); }
 function collectSearchResult(i) { if (playlist[i]) openCollectModal(playlist[i]); }
@@ -1463,6 +1511,22 @@ function renderCollectModal() {
   var adapter = songAccountAdapter(provider);
   if (!adapter || !adapter.collect) {
     list.innerHTML = '<div class="collect-empty">' + escHtml(songAccountUnsupportedMessage(provider, 'collect')) + '</div>';
+    return;
+  }
+  if (provider === 'local') {
+    var locals = (typeof localPlaylistStore !== 'undefined' && localPlaylistStore) ? localPlaylistStore.list() : [];
+    if (!locals.length) {
+      list.innerHTML = '<div class="collect-empty">还没有本地歌单，输入名称先建一个</div>';
+      return;
+    }
+    list.innerHTML = locals.map(function (pl) {
+      var thumb = pl.cover ? coverUrlWithSize(pl.cover, 80) : '';
+      return '<div class="collect-item" data-collect-pid="' + escHtml(String(pl.id || '')) + '" onclick="addCollectTargetToPlaylist(this.getAttribute(\'data-collect-pid\'))">' +
+        (thumb ? '<img src="' + thumb + '" alt="">' : '<div class="cover-placeholder"></div>') +
+        '<div style="min-width:0"><div class="collect-title">' + escHtml(pl.name || '') + '</div><div class="collect-sub">' + (Array.isArray(pl.songs) ? pl.songs.length : (pl.trackCount || 0)) + ' 首 · 本地</div></div>' +
+        '</div>';
+    }).join('');
+    if (window.gsap) animateListItems(list, '.collect-item', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 18 });
     return;
   }
   if (!isSongAccountLoggedIn(provider)) {
@@ -1499,6 +1563,27 @@ function setCollectBusyPid(pid, busy) {
 async function createPlaylistFromCollect() {
   var provider = songAccountProvider(collectTargetSong);
   var adapter = songAccountAdapter(provider);
+  if (provider === 'local') {
+    if (typeof localPlaylistStore === 'undefined' || !localPlaylistStore) {
+      showToast('本地歌单尚未初始化');
+      return;
+    }
+    var localInput = document.getElementById('collect-new-name');
+    var localName = localInput ? localInput.value.trim() : '';
+    if (!localName) { showToast('先输入歌单名称'); return; }
+    var localCreate = localPlaylistStore.create(localName);
+    if (!localCreate || !localCreate.ok) {
+      showToast((localCreate && localCreate.message) || '新建歌单失败');
+      return;
+    }
+    if (localInput) localInput.value = '';
+    if (collectTargetSong && typeof addCollectTargetToPlaylist === 'function') {
+      await addCollectTargetToPlaylist(localCreate.playlist.id);
+    } else {
+      showToast('歌单已创建');
+    }
+    return;
+  }
   if (!adapter || !adapter.createPlaylist || !adapter.playlistCreateUrl) {
     showToast((adapter && adapter.label || '当前平台') + '暂不支持在 Stellaflix 内新建歌单');
     return;
@@ -1577,6 +1662,18 @@ async function addCollectTargetToPlaylist(pid) {
   if (collectBusy || !collectTargetSong || !pid) return;
   var targetSong = collectTargetSong;
   var provider = songAccountProvider(targetSong);
+  var localPl = (typeof localPlaylistStore !== 'undefined' && localPlaylistStore && localPlaylistStore.get) ? localPlaylistStore.get(pid) : null;
+  if (localPl) {
+    var localResult = localPlaylistStore.addSong(pid, targetSong);
+    if (localResult && localResult.ok) {
+      showToast(localResult.duplicate ? '歌曲已在歌单中' : '已收藏到本地歌单');
+      if (!localResult.duplicate && typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
+      closeCollectModal();
+    } else {
+      showToast((localResult && localResult.message) || '收藏失败');
+    }
+    return;
+  }
   var adapter = songAccountAdapter(provider);
   if (!adapter || !adapter.collect || !adapter.playlistAddUrl) {
     showToast(songAccountUnsupportedMessage(provider, 'collect'));
