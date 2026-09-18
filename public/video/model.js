@@ -152,6 +152,18 @@
     writeJSON(KEY_PROGRESS, all);
   }
 
+  // 按前缀清除进度（观看历史聚合卡删除时连带清整部番各集进度）；返回删除条数。
+  function clearProgressByPrefix(prefix) {
+    if (!prefix) return 0;
+    var all = readJSON(KEY_PROGRESS, {});
+    var n = 0;
+    Object.keys(all).forEach(function (k) {
+      if (k.indexOf(prefix) === 0) { delete all[k]; n++; }
+    });
+    if (n) writeJSON(KEY_PROGRESS, all);
+    return n;
+  }
+
   // ---- 片库 ----
   function getLibrary() {
     return readJSON(KEY_LIBRARY, []);
@@ -388,6 +400,7 @@
     getProgress: getProgress,
     setProgress: setProgress,
     clearProgress: clearProgress,
+    clearProgressByPrefix: clearProgressByPrefix,
     getLibrary: getLibrary,
     addToLibrary: addToLibrary,
     removeFromLibrary: removeFromLibrary,
