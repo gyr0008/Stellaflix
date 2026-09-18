@@ -27,8 +27,9 @@
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
   var doc = global.document;
   var LS = global.localStorage;
-  var KEY = 'stellaflix-watch-history-v1';
-  var CAP = 500;
+  var KEY = 'stellaflix-watch-history-v2';   // 聚合模型：一部番一条
+  var KEY_V1 = 'stellaflix-watch-history-v1'; // 旧流水键：只读，保留回滚
+  var CAP = 500; // 语义：最多 500 部
 
   // ---------------------------------------------------------------- 工具
   function el(tag, cls, text) {
@@ -38,53 +39,87 @@
     return n;
   }
 
+  // 集级 key（'<sourceId>:<vodId>:<epIdx>'）→ 片级 seriesKey；sourceId 可含 ':'（kazumi:），
+  // 只能剥最后一段。尾段非数字或无冒号 → 非法，返回 ''。
+  function seriesKeyOf(key) {
+    if (!key || typeof key !== 'string') return '';
+    var i = key.lastIndexOf(':');
+    return i > 0 ? key.slice(0, i) : '';
+  }
+  function episodeIndexOf(key) {
+    if (!key || typeof key !== 'string') return null;
+    var i = key.lastIndexOf(':');
+    if (i < 0) return null;
+    var n = parseInt(key.slice(i + 1), 10);
+    return isNaN(n) ? null : n;
+  }
+  function dayKey(ts) {
+    var d = new Date(ts == null ? Date.now() : ts);
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+  }
+
   // ---------------------------------------------------------------- 存储层
-  // model.js 历史键（粗粒度，按片聚合，不含进度）；watch-history.js 只读自己的细粒度键。
-  // 当自身键为空但 model 有数据时，执行一次性格式迁移，保证旧版本升级用户也能看到历史。
+  // model.js 历史键（粗粒度，按片聚合，不含进度）；v1 流水键不存在时的迁移兜底来源。
   var MODEL_KEY = 'stellaflix-video-history';
 
-  function migrateFromModelIfEmpty() {
+  // v2 键为空时的一次性聚合迁移：优先 v1 流水键，其次 model 粗粒度键。
+  // 旧键都不删除（回滚用）；产出按 ts 降序的 v2 数组。
+  function migrateToV2IfEmpty() {
     try {
-      // 只有当自身键为空时才迁移（幂等，迁过一次就不再触发）
       if (LS.getItem(KEY)) return;
-      var raw = LS.getItem(MODEL_KEY);
-      if (!raw) return;
-      var modelArr = JSON.parse(raw);
-      if (!Array.isArray(modelArr) || !modelArr.length) return;
-      // 格式转换：model 粗粒度 → watch-history 细粒度（缺进度字段用默认值）
-      var converted = [];
-      for (var i = 0; i < modelArr.length; i++) {
-        var m = modelArr[i];
-        if (!m || !m.key) continue;
-        converted.push({
-          key: m.key,
-          title: m.title || '',
-          sub: (m.year ? (m.year + ' 年') : ''),
-          img: m.pic || '',
-          progress: 0,
-          cur: '00:00',
-          total: '',
-          ts: m.ts || Date.now(),
-          finished: false,
-          sourceId: m.sourceId || '',
-          vodId: m.vodId || '',
-          pic: m.pic || '',
-          watchedSec: 0
-        });
-      }
-      if (converted.length) {
-        writeAll(converted);
-        // 调试日志：仅首次迁移时输出一次
-        if (typeof console !== 'undefined' && console.info) {
-          console.info('[SFV watch-history] 从 model.js 迁移了 ' + converted.length + ' 条历史记录到 ' + KEY);
+      var src = [];
+      var raw1 = LS.getItem(KEY_V1);
+      if (raw1) { var p1 = JSON.parse(raw1); if (Array.isArray(p1)) src = p1; }
+      if (!src.length) {
+        var rawM = LS.getItem(MODEL_KEY);
+        if (rawM) {
+          var pm = JSON.parse(rawM);
+          if (Array.isArray(pm)) {
+            for (var i = 0; i < pm.length; i++) {
+              var m = pm[i];
+              if (!m || !m.key) continue;
+              src.push({
+                key: m.key, title: m.title || '', sub: (m.year ? (m.year + ' 年') : ''),
+                img: m.pic || '', pic: m.pic || '', progress: 0, cur: '00:00', total: '',
+                ts: m.ts || Date.now(), finished: false, watchedSec: 0,
+                sourceId: m.sourceId || '', vodId: m.vodId,
+              });
+            }
+          }
         }
       }
-    } catch (e) { /* 迁移失败不阻断正常读取 */ }
+      if (!src.length) return;
+      var best = {};
+      src.forEach(function (r) {
+        if (!r || !r.key) return;
+        var s = seriesKeyOf(r.key);
+        if (!s) return;
+        if (!best[s] || (Number(r.ts) || 0) > (Number(best[s].ts) || 0)) best[s] = r;
+      });
+      var today = dayKey(Date.now());
+      var arr = Object.keys(best).map(function (s) {
+        var r = best[s];
+        var isToday = dayKey(Number(r.ts) || 0) === today;
+        return normalize(Object.assign({}, r, {
+          seriesKey: s,
+          watchedDay: isToday ? today : '',
+          daySec: isToday ? (Number(r.watchedSec) || 0) : 0,
+          epSec: isToday ? (Number(r.watchedSec) || 0) : 0,
+        }));
+      });
+      arr.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+      if (arr.length > CAP) arr = arr.slice(0, CAP);
+      writeAll(arr);
+      if (typeof console !== 'undefined' && console.info) {
+        console.info('[SFV watch-history] 聚合迁移 →v2：' + src.length + ' 条流水 → ' + arr.length + ' 部');
+      }
+    } catch (e) { /* 迁移失败不阻断读取 */ }
   }
 
   function readAll() {
     try {
-      migrateFromModelIfEmpty();  // 先尝试一次性迁移（自身键为空才迁）
+      migrateToV2IfEmpty();  // 先尝试一次性迁移（自身键为空才迁）
       var raw = LS.getItem(KEY);
       if (!raw) return [];
       var p = JSON.parse(raw);
@@ -100,8 +135,12 @@
   function normalize(rec) {
     var prog = (typeof rec.progress === 'number') ? rec.progress : (rec.finished ? 1 : 0);
     if (prog < 0) prog = 0; if (prog > 1) prog = 1;
+    var key = rec.key || '';
     return {
-      key: rec.key,
+      key: key,
+      seriesKey: rec.seriesKey || seriesKeyOf(key),
+      episodeIndex: (typeof rec.episodeIndex === 'number') ? rec.episodeIndex : episodeIndexOf(key),
+      episodeName: rec.episodeName || rec.sub || '',
       title: rec.title || '',
       sub: rec.sub || '',
       img: rec.img || '',
@@ -114,6 +153,9 @@
       vodId: rec.vodId != null ? rec.vodId : '',
       pic: rec.pic || '',
       watchedSec: Math.max(0, Number(rec.watchedSec) || 0),
+      watchedDay: rec.watchedDay || '',
+      daySec: Math.max(0, Number(rec.daySec) || 0),
+      epSec: Math.max(0, Number(rec.epSec) || 0),
       // 最近一次播放使用的片源（供 smartResumePlay 直用）
       lastSourceId: rec.lastSourceId || '',
       lastVodId: rec.lastVodId != null ? rec.lastVodId : '',
@@ -156,15 +198,45 @@
     var d = new Date(ts);
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   }
+  // 聚合写入：一部番恒一条。换集 → 进度字段重置、移到头部；
+  // 同集重开 → 只刷新元信息与 ts（进度保留）；epSec（本会话已计秒基线）一律清零。
   function add(rec) {
     if (!rec || !rec.key) return readAll();
+    var sKey = seriesKeyOf(rec.key);
+    if (!sKey) return readAll();
     var a = readAll();
-    var todayStart = _dayStart(Date.now());
-    // 只过滤「同一天 + 同 key」的旧记录；跨天的保留，形成独立历史条目
-    a = a.filter(function (r) {
-      return !(r.key === rec.key && _dayStart(r.ts || 0) === todayStart);
-    });
-    a.unshift(normalize(rec));
+    var now = Date.now();
+    var today = dayKey(now);
+    var idx = -1;
+    for (var i = 0; i < a.length; i++) { if (a[i].seriesKey === sKey) { idx = i; break; } }
+    var next;
+    if (idx >= 0) {
+      var old = a[idx];
+      if (old.key === rec.key) {
+        next = normalize(Object.assign({}, old, {
+          title: rec.title || old.title,
+          img: rec.img || old.img,
+          pic: rec.pic || old.pic,
+          sub: rec.sub != null ? rec.sub : old.sub,
+          ts: now,
+          watchedDay: today,
+          daySec: old.watchedDay === today ? (old.daySec || 0) : 0,
+          epSec: 0,
+        }));
+      } else {
+        next = normalize(Object.assign({}, rec, {
+          seriesKey: sKey, ts: now,
+          progress: 0, cur: '00:00', total: '', finished: false, watchedSec: 0,
+          watchedDay: today,
+          daySec: old.watchedDay === today ? (old.daySec || 0) : 0,
+          epSec: 0,
+        }));
+      }
+      a.splice(idx, 1);
+    } else {
+      next = normalize(Object.assign({}, rec, { seriesKey: sKey, watchedDay: today, daySec: 0, epSec: 0 }));
+    }
+    a.unshift(next);
     if (a.length > CAP) a = a.slice(0, CAP);
     writeAll(a); return a;
   }
