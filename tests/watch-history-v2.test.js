@@ -226,3 +226,23 @@ test('getTodayInsight：daySec 汇总今日观看秒', () => {
   assert.strictEqual(ins.watchMs, 150 * 1000);
   assert.strictEqual(ins.watchCount, 2);
 });
+
+test('remove：删整片记录并联动 clearProgressByPrefix(前缀)', () => {
+  const { store, window } = loadHistory();
+  const calls = [];
+  window.StellaflixVideo.model = { clearProgressByPrefix: (p) => { calls.push(p); return 2; } };
+  store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });
+  store.add({ key: 'cms:s1:100:1', title: '片A', ts: Date.now() });
+  store.add({ key: 'cms:s2:200:0', title: '片B', ts: Date.now() });
+  const rest = store.remove('cms:s1:100:1', 123); // ts 兼容位：忽略
+  assert.strictEqual(rest.length, 1);
+  assert.strictEqual(rest[0].seriesKey, 'cms:s2:200');
+  assert.deepStrictEqual(calls, ['cms:s1:100:']);
+});
+
+test('remove：SFV.model 未就绪时不抛错，仍删记录', () => {
+  const { store } = loadHistory();
+  store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });
+  const rest = store.remove('cms:s1:100:0');
+  assert.strictEqual(rest.length, 0);
+});

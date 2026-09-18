@@ -199,12 +199,18 @@
     return n;
   }
   function remove(key, ts) {
-    // 支持两种调用：remove(key) 全局删除（兼容旧 API），remove(key, ts) 精确删除跨天重复记录
-    var a;
-    if (ts != null) {
-      a = readAll().filter(function (r) { return !(r.key === key && r.ts === ts); });
-    } else {
-      a = readAll().filter(function (r) { return r.key !== key; });
+    // 聚合模型：一部番一条，ts 兼容位忽略。传集级 key 或 seriesKey 均可删整片。
+    var a = readAll();
+    var sKey = seriesKeyOf(key || '') || key;
+    var hit = null;
+    a = a.filter(function (r) {
+      var drop = !!key && (r.seriesKey === sKey || r.key === key);
+      if (drop && !hit) hit = r;
+      return !drop;
+    });
+    // 删历史 = 删进度：清掉该剧所有集的 position，避免详情页幽灵进度
+    if (hit && SFV.model && typeof SFV.model.clearProgressByPrefix === 'function') {
+      try { SFV.model.clearProgressByPrefix((hit.seriesKey || sKey) + ':'); } catch (e) { /* 非致命 */ }
     }
     writeAll(a); return a;
   }
