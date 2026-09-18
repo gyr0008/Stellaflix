@@ -260,3 +260,32 @@ test('remove：传裸 seriesKey（非集级 key）也能删整片并落盘', () 
   assert.deepStrictEqual(calls, ['cms:s1:100:']);
   assert.strictEqual(JSON.parse(localStorage.getItem(V2)).length, 1); // 持久化真的被清掉
 });
+
+// 卡片状态行渲染：走假 DOM 树找 .sfv-wh-card__status-text 节点的文案
+function collectStatusTexts(host) {
+  const texts = [];
+  (function walk(n) {
+    if (n.className === 'sfv-wh-card__status-text') texts.push(n.textContent);
+    (n.children || []).forEach(walk);
+  })(host);
+  return texts;
+}
+
+test('卡片状态行：有 episodeIndex 时显示「第 N 话 · 看到 …」', () => {
+  const { store } = loadHistory();
+  store.add({ key: 'cms:s1:100:3', title: '片A', sub: '第4话', ts: Date.now() });
+  store.update('cms:s1:100:3', { progress: 0.3, cur: '06:00', total: '20:00' });
+  const host = makeNode('div');
+  store.render(host, store.getAll());
+  const texts = collectStatusTexts(host);
+  assert.ok(texts.some((t) => t.indexOf('第 4 话 · 看到 06:00') === 0), JSON.stringify(texts));
+});
+
+test('卡片状态行：无集号（异常旧数据）退回「看到 …」', () => {
+  const { store, localStorage } = loadHistory();
+  localStorage.setItem(V2, JSON.stringify([{ key: 'weird', seriesKey: '', title: '无集', ts: Date.now(), cur: '01:00', total: '02:00' }]));
+  const host = makeNode('div');
+  store.render(host, store.getAll());
+  const texts = collectStatusTexts(host);
+  assert.ok(texts.some((t) => t.indexOf('看到 01:00') === 0 && t.indexOf('话') === -1), JSON.stringify(texts));
+});

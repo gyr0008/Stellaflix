@@ -2,10 +2,18 @@
  * Stellaflix 影视模块 — 观看历史页 (router page id = 'history')
  *
  * 职责：
- *   - 独立 localStorage 存储 stellaflix-watch-history-v1，schema 对齐接入约定：
- *       { key, title, sub, img, progress(0~1), cur, total, ts, finished,
- *         sourceId, vodId, pic }   // sourceId/vodId/pic 供卡片点击重开详情（activate）
- *     key 作为去重 / 移除主键（播放器回写时由调用方提供稳定 key）。
+ *   - 独立 localStorage 存储 stellaflix-watch-history-v2（聚合模型：一部番一条），schema：
+ *       { seriesKey, key, episodeIndex, episodeName, title, sub, img, progress(0~1),
+ *         cur, total, ts, finished, sourceId, vodId, pic,
+ *         watchedSec, watchedDay, daySec, epSec,
+ *         lastSourceId, lastVodId, lastSourceName, lastPlayFromIndex, lastPlayEpisodeIndex }
+ *     seriesKey 为聚合主键（'<sourceId>:<vodId>'，一部番恒一条记录）；
+ *     key = 最近观看那一集的集级键 '<sourceId>:<vodId>:<epIdx>'（播放器回写方提供，
+ *       亦为 add/update/remove 的入参），episodeIndex = 该集号（0 起，不可推导则 null）；
+ *     daySec/epSec 为「今日观看秒」记账：daySec 今日累计、epSec 本会话已计秒基线
+ *       （跨天/重开/换集清零）；sourceId/vodId/pic 供卡片点击重开详情（activate）。
+ *   - v1 流水键 stellaflix-watch-history-v1 与 model 键 stellaflix-video-history 的一次性
+ *     聚合迁移：幂等，仅当 v2 键为空时触发；旧键一律保留以供回滚。
  *   - 渲染：无顶部标题条，仅保留纯净竖向历史足迹
  *     → 按天分组（今天 / 昨天 / 本周内星期几 / 更早 M月D日），每组日期标题 + 当天条数
  *     → 同日横向 rail（flex row + 隐藏滚动条 + hover 左右箭头）
@@ -497,7 +505,9 @@
       status.appendChild(el('span', 'sfv-wh-card__dot'));
       status.appendChild(el('span', 'sfv-wh-card__status-text', '观看完成'));
     } else {
-      status.appendChild(el('span', 'sfv-wh-card__status-text', '看到 ' + (rec.cur || '00:00') + ' / 总时长 · ' + (rec.total || '00:00')));
+      var epPrefix = (typeof rec.episodeIndex === 'number') ? ('第 ' + (rec.episodeIndex + 1) + ' 话 · ') : '';
+      status.appendChild(el('span', 'sfv-wh-card__status-text',
+        epPrefix + '看到 ' + (rec.cur || '00:00') + ' / 总时长 · ' + (rec.total || '00:00')));
     }
     info.appendChild(status);
     thumb.appendChild(info);
