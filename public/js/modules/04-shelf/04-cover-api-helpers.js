@@ -29,7 +29,9 @@ function requestPlaylistCover(url, cb) {
   if (rec && rec.loading) { if (cb) rec.waiters.push(cb); return; }
   rec = playlistCoverCache[url] = { loaded: false, loading: true, waiters: cb ? [cb] : [], img: null, failed: false };
   var img = new Image();
-  if (!isInlineCoverSrc(url)) img.crossOrigin = 'anonymous';
+  // stellaflix-local:// 是独立特权 scheme（相对 http://127.0.0.1 页面即跨源），
+  // 不设 crossOrigin 会污染书架 canvas，THREE.CanvasTexture 上传抛 Tainted canvases
+  if (!/^(data|blob):/i.test(url)) img.crossOrigin = 'anonymous';
   img.onload = function () {
     rec.loaded = true; rec.loading = false; rec.img = img;
     rec.waiters.splice(0).forEach(function (fn) { setTimeout(function () { fn(img); }, 0); });
