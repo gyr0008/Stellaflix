@@ -85,6 +85,15 @@
       });
     }
 
+    // 跨片源续播：切换前若旧 video 仍在播，抓 currentTime（必须先声明，否则 doPlay 内 ReferenceError 全盘起播失败）
+    var resumeAt = 0;
+    try {
+      if (SFV.player && typeof SFV.player.getVideoEl === 'function') {
+        var prevEl = SFV.player.getVideoEl();
+        if (prevEl && prevEl.currentTime > 5 && !prevEl.paused) resumeAt = prevEl.currentTime;
+      }
+    } catch (e) { resumeAt = 0; }
+
     // 直链播放：经 source-adapter 跨域直链走 /api/proxy；进度键锚定 站点:vod:集数
     var doPlay = function (playUrl) {
       dep('toast')('正在加载影片…');
@@ -95,8 +104,18 @@
       var sourceName = (view.source && view.source.name) ? view.source.name : ((view.source && view.source.id) ? view.source.id : '');
       var coverUrl = dep('resolvePic')(view);
       var meta = { url: playUrl, title: title, id: id };
-      if (SFV.source) SFV.source.open(meta);
-      else if (SFV.player) SFV.player.openUrl(playUrl, meta);
+      if (resumeAt > 0) meta.resumeAt = resumeAt;
+      // source.open：同步 true / 异步 Promise 都算已接管；仅同步 false 才回退 openUrl
+      var opened = false;
+      if (SFV.source) {
+        try { opened = SFV.source.open(meta); } catch (e) { opened = false; }
+      }
+      var openedSync = (opened === true) || (opened && typeof opened.then === 'function');
+      if (!openedSync && SFV.player && SFV.player.openUrl) {
+        SFV.player.openUrl(playUrl, meta);
+      } else if (!openedSync && !SFV.player) {
+        dep('toast')('播放器不可用');
+      }
       console.log('[SFV-FREEZE] M10 doPlay after source.open, url=' + String(playUrl).slice(0, 160));
       // 封面/站点名晚到：open 已同步 setCurrentMeta，这里合并（emit sfv:player-meta → 底部控制器刷新）
       if (SFV.player && SFV.player.setMeta) SFV.player.setMeta({ key: id, seriesKey: view.key, cover: coverUrl, subtitle: sourceName });
@@ -163,6 +182,33 @@
           try { SFV.detailSource.confirmPlaybackSwitch(); } catch (e) {}
         }
         SFV.player.openEmbed(embedUrl, { id: embedId, title: embedTitle, cover: dep('resolvePic')(view), subtitle: sourceName });
+        // embed 也要注入剧集导航：否则多集规则源在 iframe 模式下切集无反应
+        if (SFV.player.setPlaylist) {
+          if (play && play.episodes && play.episodes.length) {
+            SFV.player.setPlaylist(play.episodes, ep.index);
+            if (SFV.player.setPlayEpisodeAt) {
+              SFV.player.setPlayEpisodeAt(function (i, e) {
+                play(view, e, play, { plays: plays, fromIndex: fromIndex });
+              });
+            }
+          } else {
+            SFV.player.setPlaylist(null, -1);
+            if (SFV.player.setPlayEpisodeAt) SFV.player.setPlayEpisodeAt(null);
+          }
+        }
+        if (SFV.player.setRoads) {
+          if (plays && (plays.length > 1 || ((plays[fromIndex] || {}).episodes || []).length > 1)) {
+            SFV.player.setRoads(plays, fromIndex, function (toIdx, epIdx) {
+              var targetPlay = plays[toIdx];
+              var targetEp = (targetPlay && targetPlay.episodes && targetPlay.episodes[epIdx]) || null;
+              if (!targetEp) { dep('toast')('该线路无对应集'); return; }
+              play(view, targetEp, targetPlay, { plays: plays, fromIndex: toIdx });
+            });
+          } else {
+            SFV.player.setRoads(null, -1, null);
+          }
+        }
+        registerNextEpisode(view, ep, play);
         dep('close')(); // 关闭浏览层，露出带 iframe 的播放器弹层
       } else {
         doPlay(embedUrl); // 无嵌入能力时降级为原始地址直连
