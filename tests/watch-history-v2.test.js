@@ -200,6 +200,22 @@ test('daySec：watchedDay 不是今天时先清零再记账', () => {
   assert.strictEqual(rec.daySec, 10);
 });
 
+test('update：coarse 两段 key 记录（model 迁移产物）可被 smartResumePlay 回写', () => {
+  const { store, localStorage } = loadHistory();
+  // 手工塞入一条 model 迁移形态的 coarse 记录：rec.key === rec.seriesKey === 's1:1048'
+  localStorage.setItem(V2, JSON.stringify([
+    { key: 's1:1048', seriesKey: 's1:1048', title: '旧A', ts: Date.now() },
+  ]));
+  // 先折片级会得 's1' 命中不了 → 必须靠精确 key 匹配（fix 前返回 null）
+  const rec = store.update('s1:1048', { lastSourceId: 's9', lastVodId: 5, ts: Date.now() });
+  assert.ok(rec, 'coarse 记录应被命中而非 null');
+  const saved = find(store.getAll(), 's1:1048');
+  assert.strictEqual(saved.lastSourceId, 's9');
+  assert.strictEqual(saved.lastVodId, 5);
+  // 无冒号且无对应记录 → 仍返回 null
+  assert.strictEqual(store.update('nocolon-x', { lastSourceId: 'zz' }), null);
+});
+
 test('getTodayInsight：daySec 汇总今日观看秒', () => {
   const { store } = loadHistory();
   store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });

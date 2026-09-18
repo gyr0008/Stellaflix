@@ -278,11 +278,12 @@
   function update(key, patch) {
     if (!key) return null;
     var sKey = seriesKeyOf(key);
-    if (!sKey) return null;
     var a = readAll();
     var idx = -1;
+    // 兜底精确匹配：model 迁移产物是 coarse 两段键（rec.key === rec.seriesKey，如 's1:1048'），
+    // 折片级会得 's1' 命中不了，必须再按 key 精确比对；sKey 为空（无冒号）时只跳折叠、仍扫精确键。
     for (var i = 0; i < a.length; i++) {
-      if (a[i].seriesKey === sKey) { idx = i; break; }
+      if ((sKey && a[i].seriesKey === sKey) || a[i].key === key) { idx = i; break; }
     }
     if (idx < 0) return null;
     var rec = a[idx];
