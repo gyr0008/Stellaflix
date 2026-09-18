@@ -204,7 +204,7 @@
     var sKey = seriesKeyOf(key || '') || key;
     var hit = null;
     a = a.filter(function (r) {
-      var drop = !!key && (r.seriesKey === sKey || r.key === key);
+      var drop = !!key && (r.seriesKey === sKey || r.seriesKey === key || r.key === key);
       if (drop && !hit) hit = r;
       return !drop;
     });

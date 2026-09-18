@@ -246,3 +246,17 @@ test('remove：SFV.model 未就绪时不抛错，仍删记录', () => {
   const rest = store.remove('cms:s1:100:0');
   assert.strictEqual(rest.length, 0);
 });
+
+test('remove：传裸 seriesKey（非集级 key）也能删整片并落盘', () => {
+  const { store, window, localStorage } = loadHistory();
+  const calls = [];
+  window.StellaflixVideo.model = { clearProgressByPrefix: (p) => { calls.push(p); return 2; } };
+  store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });
+  store.add({ key: 'cms:s1:100:1', title: '片A', ts: Date.now() });
+  store.add({ key: 'cms:s2:200:0', title: '片B', ts: Date.now() });
+  const rest = store.remove('cms:s1:100'); // 记录 key 是 'cms:s1:100:1'，只能按 seriesKey 字段命中
+  assert.strictEqual(rest.length, 1);
+  assert.strictEqual(rest[0].seriesKey, 'cms:s2:200');
+  assert.deepStrictEqual(calls, ['cms:s1:100:']);
+  assert.strictEqual(JSON.parse(localStorage.getItem(V2)).length, 1); // 持久化真的被清掉
+});
