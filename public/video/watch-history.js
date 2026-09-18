@@ -39,18 +39,19 @@
     return n;
   }
 
-  // 集级 key（'<sourceId>:<vodId>:<epIdx>'）→ 片级 seriesKey；sourceId 可含 ':'（kazumi:），
-  // 只能剥最后一段。尾段非数字或无冒号 → 非法，返回 ''。
+  // 集级 key（'<sourceId>:<vodId>:<epIdx>'）→ 片级 seriesKey：剥掉最后一个 ':' 之后的尾段；
+  // sourceId 可含 ':'（kazumi:），故只能剥尾段。无冒号 → 返回 ''（非法，由调用方拒绝）。
   function seriesKeyOf(key) {
     if (!key || typeof key !== 'string') return '';
     var i = key.lastIndexOf(':');
     return i > 0 ? key.slice(0, i) : '';
   }
-  function episodeIndexOf(key) {
-    if (!key || typeof key !== 'string') return null;
-    var i = key.lastIndexOf(':');
-    if (i < 0) return null;
-    var n = parseInt(key.slice(i + 1), 10);
+  // 集号推导（normalize 与迁移共用，唯一口径）：仅当 key 形如 '<seriesKey>:<数字>' 才取尾段数字，
+  // 否则 null —— model 粗粒度两段 vodKey（'s1:1048'，见 model.js:191）key === seriesKey，不得当集号。
+  function deriveEpisodeIndex(key, seriesKey) {
+    if (!key || typeof key !== 'string' || !seriesKey) return null;
+    if (key.indexOf(seriesKey + ':') !== 0) return null;
+    var n = parseInt(key.slice(seriesKey.length + 1), 10);
     return isNaN(n) ? null : n;
   }
   function dayKey(ts) {
@@ -62,6 +63,18 @@
   // ---------------------------------------------------------------- 存储层
   // model.js 历史键（粗粒度，按片聚合，不含进度）；v1 流水键不存在时的迁移兜底来源。
   var MODEL_KEY = 'stellaflix-video-history';
+
+  // 迁移专用：优先用显式 sourceId+vodId 组片级键（model 粗粒度记录是两段 vodKey，
+  // 不能按尾段剥集号）；缺字段、或 key 与该 vodKey 不同源（显式字段与 key 前缀对不上）时
+  // 退回 seriesKeyOf(key)。真实 v1 key 恒为 sourceId:vodId:epIdx（play-orchestrator.js:85），
+  // 故此处对 v1 与 model 两分支同口径。
+  function migrateSeriesKey(r) {
+    if (typeof r.key === 'string' && r.sourceId != null && r.sourceId !== '' && r.vodId != null && r.vodId !== '') {
+      var vk = r.sourceId + ':' + r.vodId;
+      if (r.key === vk || r.key.indexOf(vk + ':') === 0) return vk;
+    }
+    return seriesKeyOf(r.key);
+  }
 
   // v2 键为空时的一次性聚合迁移：优先 v1 流水键，其次 model 粗粒度键。
   // 旧键都不删除（回滚用）；产出按 ts 降序的 v2 数组。
@@ -93,7 +106,7 @@
       var best = {};
       src.forEach(function (r) {
         if (!r || !r.key) return;
-        var s = seriesKeyOf(r.key);
+        var s = migrateSeriesKey(r);
         if (!s) return;
         if (!best[s] || (Number(r.ts) || 0) > (Number(best[s].ts) || 0)) best[s] = r;
       });
@@ -103,6 +116,7 @@
         var isToday = dayKey(Number(r.ts) || 0) === today;
         return normalize(Object.assign({}, r, {
           seriesKey: s,
+          episodeIndex: deriveEpisodeIndex(r.key, s),
           watchedDay: isToday ? today : '',
           daySec: isToday ? (Number(r.watchedSec) || 0) : 0,
           epSec: isToday ? (Number(r.watchedSec) || 0) : 0,
@@ -136,10 +150,11 @@
     var prog = (typeof rec.progress === 'number') ? rec.progress : (rec.finished ? 1 : 0);
     if (prog < 0) prog = 0; if (prog > 1) prog = 1;
     var key = rec.key || '';
+    var sKey = rec.seriesKey || seriesKeyOf(key);
     return {
       key: key,
-      seriesKey: rec.seriesKey || seriesKeyOf(key),
-      episodeIndex: (typeof rec.episodeIndex === 'number') ? rec.episodeIndex : episodeIndexOf(key),
+      seriesKey: sKey,
+      episodeIndex: (typeof rec.episodeIndex === 'number') ? rec.episodeIndex : deriveEpisodeIndex(key, sKey),
       episodeName: rec.episodeName || rec.sub || '',
       title: rec.title || '',
       sub: rec.sub || '',

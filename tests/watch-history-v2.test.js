@@ -121,3 +121,29 @@ test('迁移：v1 为空时从 model 粗粒度键聚合，sourceId 含冒号拆�
   assert.strictEqual(all[0].seriesKey, 'kazumi:abc:77');
   assert.strictEqual(all[0].episodeIndex, 1);
 });
+
+test('迁移：model 粗粒度两段 vodKey 不被剥集号，episodeIndex 为 null', () => {
+  const init = {
+    'stellaflix-video-history': JSON.stringify([
+      { key: 's1:1048', title: '旧A', pic: '', ts: Date.now(), sourceId: 's1', vodId: 1048 },
+      { key: 's1:9', title: '旧B', pic: '', ts: Date.now() - 100, sourceId: 's1', vodId: 9 },
+    ]),
+  };
+  const { store } = loadHistory(init);
+  const all = store.getAll();
+  assert.strictEqual(all.length, 2);                      // 不塌缩成一条
+  assert.ok(find(all, 's1:1048'));
+  assert.strictEqual(find(all, 's1:1048').episodeIndex, null);
+  assert.strictEqual(find(all, 's1:9').episodeIndex, null);
+});
+
+test('normalize：三段集级 key 正常解析集号，两段 vodKey 得 null', () => {
+  const { store, localStorage } = loadHistory();
+  localStorage.setItem('stellaflix-watch-history-v2', JSON.stringify([
+    { key: 'cms:s1:100:5', seriesKey: 'cms:s1:100', title: 'X', ts: Date.now() },
+    { key: 's2:77', seriesKey: 's2:77', title: 'Y', ts: Date.now() },
+  ]));
+  const all = store.getAll();
+  assert.strictEqual(find(all, 'cms:s1:100').episodeIndex, 5);
+  assert.strictEqual(find(all, 's2:77').episodeIndex, null);
+});
