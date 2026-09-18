@@ -88,3 +88,6 @@ tmp/
 *.png.tmp
 verification/
 screenshots/
+
+# git worktrees (SDD 隔离工作区)
+.worktrees/
