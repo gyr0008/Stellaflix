@@ -60,6 +60,11 @@ yarn-error.log*
 public/index.*.html
 !public/index.html
 
+# Stale `_1` snapshot copies (whole-project duplicate: main_1.js, README_1.md,
+# build/icon_1.png, tests/x.test_1.js, ...). Not referenced, not run, not tracked.
+# Only `_1` immediately before the extension matches; *_10.js / data_1_2.js stay tracked.
+*_1.*
+
 # Proprietary third-party runtime (not redistributable)
 # ByteDance/Qishui web security runtime and the Qishui audio decryptor remain the
 # property of their respective rights holders (declared in NOTICE.md), so they are
@@ -78,6 +83,7 @@ qishui-audio-decryptor/
 # Screenshots and transient verification artifacts
 .playwright-cli/
 output/
+outputs/
 tmp/
 *.png.tmp
 verification/

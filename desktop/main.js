@@ -4729,7 +4729,7 @@ ipcMain.handle('stellaflix-open-update-page', async (event, value) => {
 // ============================================================
 // electron-updater：应用内热更新主路径（下载 NSIS + 静默安装）。
 // 网盘 / GitHub Release 外链仅作失败降级。
-// feed：GitHub 直连优先，失败回退 package.json stellaflix.update.mirrors。
+// feed：镜像优先，GitHub 直连排最后兜底；镜像取自 package.json stellaflix.update.mirrors。
 // ============================================================
 const UPDATE_OWNER = (APP_METADATA.update && APP_METADATA.update.owner) || '';
 const UPDATE_REPO = (APP_METADATA.update && APP_METADATA.update.repo) || '';
@@ -4755,11 +4755,9 @@ const UPDATER_STALL_NO_PROGRESS_MS = 120 * 1000;
 function buildUpdaterFeeds() {
   const feeds = [];
   if (!UPDATE_OWNER || !UPDATE_REPO) return feeds;
-  feeds.push({
-    label: 'GitHub 直连',
-    options: { provider: 'github', owner: UPDATE_OWNER, repo: UPDATE_REPO },
-  });
   const releasePath = UPDATE_OWNER + '/' + UPDATE_REPO + '/releases/latest/download';
+  // 2026-09-17 拍板：镜像优先（国内网络下高效），GitHub 直连排最后兜底。
+  // 无镜像配置时 feeds 仍含 GitHub 直连，更新能力不受影响。
   UPDATE_MIRRORS.forEach((mirror, index) => {
     const trimmed = String(mirror || '').trim().replace(/\/+$/, '');
     if (!trimmed) return;
@@ -4773,6 +4771,10 @@ function buildUpdaterFeeds() {
       label: '国内加速 ' + (index + 1),
       options: { provider: 'generic', url: genericUrl },
     });
+  });
+  feeds.push({
+    label: 'GitHub 直连兜底',
+    options: { provider: 'github', owner: UPDATE_OWNER, repo: UPDATE_REPO },
   });
   return feeds;
 }

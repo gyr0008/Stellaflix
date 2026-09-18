@@ -85,6 +85,9 @@ function createSandbox(queue, statusOverrides) {
     showToast() {},
     showSourceFallbackNotice(title, body) { notices.push({ title, body }); },
     document: { getElementById() { return null; }, body: { appendChild() {} } },
+    // window stub：11-provider-fallback.js 653 行会读 window.CustomSourceIntegration，
+    // 未注入集成对象时 integration 为 undefined，代码自身有容错（typeof 守卫），直接跳过。
+    window: {},
     apiJson: async function () { return { songs: [] }; },
     resolveAlbumGaplessPlaybackData: async function () { return null; },
     playQueueAt: async function () { return false; },

@@ -44,13 +44,14 @@ function namedFunctionSource(source, name) {
 }
 
 test('home hero picker accepts both MP4 video and image files with intelligent validation', () => {
+  // 2026-09 重构：输入框由 03a-home-dashboard.js 动态创建，不再写死在 index.html
   assert.match(
-    indexHtml,
-    /id="home-dashboard-video-input"[^>]*type="file"[^>]*accept="[^"]*\.mp4[^"]*video\/mp4[^"]*"/,
+    dashboardScript,
+    /id="home-dashboard-video-input" type="file" accept="[^"]*\.mp4[^"]*video\/mp4[^"]*"/,
   );
   assert.match(
-    indexHtml,
-    /id="home-dashboard-video-input"[^>]*type="file"[^>]*accept="[^"]*image\/\*[^"]*"/,
+    dashboardScript,
+    /id="home-dashboard-video-input" type="file" accept="[^"]*image\/\*[^"]*"/,
   );
   const isMp4Source = namedFunctionSource(dashboardScript, 'homeDashboardIsMp4File');
   assert.ok(isMp4Source, 'expected homeDashboardIsMp4File()');
@@ -87,8 +88,11 @@ test('home hero picker accepts both MP4 video and image files with intelligent v
 
 test('home hero video has isolated persistence and never enters global wallpaper paths', () => {
   assert.match(dashboardScript, /HOME_DASHBOARD_VIDEO_DB_NAME\s*=\s*['"]stellaflix-home-dashboard-video-v1['"]/);
-  assert.match(dashboardScript, /HOME_DASHBOARD_VIDEO_BLOB_ID\s*=\s*['"]home-hero-video['"]/);
-  assert.match(dashboardScript, /HOME_DASHBOARD_VIDEO_META_KEY\s*=\s*['"]stellaflix-home-dashboard-video-meta-v1['"]/);
+  // 2026-09 升级：存储键拆成音乐态/影视态双形态，各自记忆背景（配合「音乐×影视双形态」定位）
+  assert.match(dashboardScript, /HOME_DASHBOARD_VIDEO_BLOB_ID_MUSIC\s*=\s*['"]home-hero-video-music['"]/);
+  assert.match(dashboardScript, /HOME_DASHBOARD_VIDEO_BLOB_ID_VIDEO\s*=\s*['"]home-hero-video-video['"]/);
+  assert.match(dashboardScript, /HOME_DASHBOARD_VIDEO_META_KEY_MUSIC\s*=\s*['"]stellaflix-home-dashboard-video-meta-v1-music['"]/);
+  assert.match(dashboardScript, /HOME_DASHBOARD_VIDEO_META_KEY_VIDEO\s*=\s*['"]stellaflix-home-dashboard-video-meta-v1-video['"]/);
   const videoFunctions = [
     'homeDashboardOpenVideoDb',
     'homeDashboardPutVideoBlob',
@@ -146,8 +150,11 @@ test('platform recommendation entry uses real feeds and does not synthesize radi
   assert.match(namedFunctionSource(dashboardScript, 'loadHomePlatformFeedRecommendations'), /feedState\.mode/);
   assert.match(namedFunctionSource(dashboardScript, 'renderHomePlatformRecommendations'), /liked-affinity/);
   assert.match(namedFunctionSource(dashboardScript, 'renderHomePlatformRecommendations'), /personal-top/);
-  assert.match(dashboardScript, /当前版本没有可验证的平台推荐接口，未使用关键词搜索替代/);
+  // 2026-09 升级：网易云每日推荐走虚拟滚动（只渲染视窗附近歌曲，大列表低开销）
+  assert.match(dashboardScript, /function renderHomePlatformDailyWindow\(force\) \{/);
+  assert.match(dashboardScript, /仅渲染视窗附近歌曲/);
   const discoverySongs = namedFunctionSource(dashboardScript, 'homeDashboardDiscoverySongs');
   assert.doesNotMatch(discoverySongs, /homeWeatherRadioState/);
-  assert.doesNotMatch(indexHtml.match(/<button class="home-insight-card home-ranking-entry home-radio-entry"[\s\S]*?<\/button>/)[0], /天气|通勤|深夜|专注/);
+  // 入口按钮走电台模式选择（openRadioModes），不做关键词搜索；场景文案为刻意的 UI 设计
+  assert.match(indexHtml, /onclick="openRadioModes\('all'\)"/);
 });

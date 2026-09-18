@@ -37,21 +37,33 @@ test('main process initialises autoUpdater with packaging guard', () => {
   assert.match(mainText, /autoUpdater\.autoInstallOnAppQuit = false;/);
 });
 
-test('feed list prefers GitHub direct then falls back to configured mirrors', () => {
+test('feed list prefers mirrors, GitHub direct stays as final fallback', () => {
   assert.match(mainText, /function buildUpdaterFeeds\(\) \{/);
+  // 2026-09-17 拍板：镜像优先（国内网络下高效），GitHub 直连排最后兜底。
+  const mirrorLoop = mainText.indexOf('UPDATE_MIRRORS.forEach');
+  const githubPush = mainText.indexOf("label: 'GitHub 直连兜底'");
+  assert.ok(mirrorLoop !== -1 && githubPush !== -1 && githubPush > mirrorLoop,
+    '镜像 push 必须在 GitHub 直连 push 之前（镜像优先，直连兜底）');
   assert.match(mainText, /provider: 'github', owner: UPDATE_OWNER, repo: UPDATE_REPO/);
-  assert.match(mainText, /provider: 'generic', url: trimmed \+ '\/' \+ base/);
+  // 兼容两种国内加速前缀（A: 代理前缀拼接 releasePath；B: 已含 github.com 的镜像直拼）
+  assert.match(mainText, /const genericUrl = \/github\\\.com\/i\.test\(trimmed\)/);
+  assert.match(mainText, /provider: 'generic', url: genericUrl/);
   // owner/repo/mirrors 一律取自 package.json，避免两处配置漂移
   assert.match(mainText, /const UPDATE_OWNER = \(APP_METADATA\.update && APP_METADATA\.update\.owner\)/);
   assert.match(mainText, /const UPDATE_MIRRORS = \(APP_METADATA\.update && Array\.isArray\(APP_METADATA\.update\.mirrors\)\)/);
 });
 
-test('error event rotates to the next feed before giving up', () => {
-  assert.match(mainText, /autoUpdater\.on\('error', error => \{/);
-  assert.match(mainText, /updaterFeedIndex \+= 1;/);
-  assert.match(mainText, /autoUpdater\.setFeedURL\(updaterFeeds\[updaterFeedIndex\]\.options\);/);
-  // 轮换条件必须是「还有下一条」，防止越界
+test('feed rotation is centralized in switchUpdaterFeedOrThrow and wired to error + stall watchdog', () => {
+  // 2026-09 重构：轮换收敛到 switchUpdaterFeedOrThrow()，error 事件与下载 stall 看门狗共用一条换源路径
+  assert.match(mainText, /function switchUpdaterFeedOrThrow\(lastError\) \{/);
+  // 轮换条件必须是「还有下一条」，防止越界；换源后重新 setFeedURL 并触发检查
   assert.match(mainText, /if \(updaterFeedIndex < updaterFeeds\.length - 1\) \{/);
+  assert.match(mainText, /updaterFeedIndex \+= 1;/);
+  assert.match(mainText, /autoUpdater\.setFeedURL\(next\.options\);/);
+  // error 事件必须接入轮换（未下载时）；下载中卡死由 watchdog 走同一函数切线
+  assert.match(mainText, /autoUpdater\.on\('error', error => \{/);
+  assert.match(mainText, /if \(!updaterDownloadAttempted && switchUpdaterFeedOrThrow\(message\)\) \{/);
+  assert.match(mainText, /switchUpdaterFeedOrThrow\('stall ' \+ idleMs \+ 'ms'\)/);
 });
 
 test('update IPC handlers are registered and sender-trusted', () => {
@@ -75,8 +87,13 @@ test('download handler does not pre-check updaterState (avoids event race)', () 
   const end = mainText.indexOf("ipcMain.handle('stellaflix-update-install'");
   const body = mainText.slice(start, end);
   assert.ok(start !== -1 && end !== -1 && end > start);
+  // 防竞态契约保留：electron-updater 会在 checkForUpdates resolve 之前派发 update-available，
+  // handler 内不得校验 updaterState !== 'available'（会与事件时序形成竞态）
   assert.doesNotMatch(body, /updaterState !== 'available'/);
-  assert.match(body, /await autoUpdater\.downloadUpdate\(\);/);
+  // 2026-09 重构：下载改为 startUpdaterDownloadAttempt 异步封装（watchdog/stall 检测在函数内），
+  // handler 不再直接 await downloadUpdate()，避免 IPC 无限悬挂；实际调用在封装函数内
+  assert.match(body, /startUpdaterDownloadAttempt\('ipc-download'\)/);
+  assert.match(mainText, /autoUpdater\.downloadUpdate\(\)/);
 });
 
 test('progress and status events are forwarded to the renderer', () => {
