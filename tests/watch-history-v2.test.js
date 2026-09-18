@@ -147,3 +147,66 @@ test('normalize：三段集级 key 正常解析集号，两段 vodKey 得 null',
   assert.strictEqual(find(all, 'cms:s1:100').episodeIndex, 5);
   assert.strictEqual(find(all, 's2:77').episodeIndex, null);
 });
+
+test('update：集级 key 命中片级记录；旧集回写被忽略（stale）', () => {
+  const { store } = loadHistory();
+  store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });
+  store.add({ key: 'cms:s1:100:1', title: '片A', ts: Date.now() }); // 换到第2集
+  const stale = store.update('cms:s1:100:0', { progress: 0.9, cur: '18:00' });
+  const rec = find(store.getAll(), 'cms:s1:100');
+  assert.strictEqual(rec.progress, 0);            // 未被旧集回写污染
+  assert.ok(stale);                               // 返回记录本身而非 null
+  store.update('cms:s1:100:1', { progress: 0.3, cur: '06:00', total: '20:00', finished: false });
+  assert.strictEqual(find(store.getAll(), 'cms:s1:100').progress, 0.3);
+});
+
+test('update：无对应记录返回 null（embed/url 不入历史的现状不变）', () => {
+  const { store } = loadHistory();
+  assert.strictEqual(store.update('url:whatever:0', { progress: 0.5 }), null);
+});
+
+test('daySec：同集多会话/跨集累加，跨天清零，回写抖动不虚增', () => {
+  const { store } = loadHistory();
+  // 会话1：ep0 看了 100s
+  store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });
+  store.update('cms:s1:100:0', { watchedSec: 40, progress: 0.2 });
+  store.update('cms:s1:100:0', { watchedSec: 100, progress: 0.5 });
+  let rec = find(store.getAll(), 'cms:s1:100');
+  assert.strictEqual(rec.daySec, 100);
+  // 会话2：重开 ep0（add 清基线），又看 30s → 今日累计 130
+  store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });
+  store.update('cms:s1:100:0', { watchedSec: 30, progress: 0.6 });
+  rec = find(store.getAll(), 'cms:s1:100');
+  assert.strictEqual(rec.daySec, 130);
+  // 换 ep1：累计保留 130，基线清零
+  store.add({ key: 'cms:s1:100:1', title: '片A', ts: Date.now() });
+  store.update('cms:s1:100:1', { watchedSec: 20, progress: 0.1 });
+  rec = find(store.getAll(), 'cms:s1:100');
+  assert.strictEqual(rec.daySec, 150);
+  // 乱序回写（10 < 20）不重复计数也不倒退
+  store.update('cms:s1:100:1', { watchedSec: 10 });
+  assert.strictEqual(find(store.getAll(), 'cms:s1:100').daySec, 150);
+});
+
+test('daySec：watchedDay 不是今天时先清零再记账', () => {
+  const { store, localStorage } = loadHistory();
+  store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });
+  store.update('cms:s1:100:0', { watchedSec: 100 });
+  const saved = JSON.parse(localStorage.getItem(V2));
+  saved[0].watchedDay = '2000-01-01';
+  localStorage.setItem(V2, JSON.stringify(saved));
+  store.update('cms:s1:100:0', { watchedSec: 10 }); // 新的一天，会话已计 10s
+  const rec = find(store.getAll(), 'cms:s1:100');
+  assert.strictEqual(rec.daySec, 10);
+});
+
+test('getTodayInsight：daySec 汇总今日观看秒', () => {
+  const { store } = loadHistory();
+  store.add({ key: 'cms:s1:100:0', title: '片A', ts: Date.now() });
+  store.update('cms:s1:100:0', { watchedSec: 120 });
+  store.add({ key: 'cms:s2:200:0', title: '片B', ts: Date.now() });
+  store.update('cms:s2:200:0', { watchedSec: 30 });
+  const ins = store.getTodayInsight();
+  assert.strictEqual(ins.watchMs, 150 * 1000);
+  assert.strictEqual(ins.watchCount, 2);
+});

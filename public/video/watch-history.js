@@ -272,47 +272,46 @@
     return parts.join(':');
   }
 
-  // 增量更新指定 key 的进度/时长/完成态/最近片源，不移动该条在历史列表中的位置，
-  // 供播放器 timeupdate/pause/ended 时回写真实观影数据。
-  // 优先匹配「当天 + 同 key」的记录，确保跨天重复观看时不会误更新到旧记录。
+  // 播放器/续播回写：入参仍是集级 key。先折成 seriesKey 定位聚合记录；
+  // 若记录已被更新的一集接管（rec.key !== key）则忽略本次回写（stale 防串写）。
+  // watchedSec 按「本会话单调递增」语义做增量记账：daySec += incoming - epSec 基线。
   function update(key, patch) {
     if (!key) return null;
+    var sKey = seriesKeyOf(key);
+    if (!sKey) return null;
     var a = readAll();
-    var todayStart = _dayStart(Date.now());
     var idx = -1;
-    // 优先找「同一天 + 同 key」的记录
     for (var i = 0; i < a.length; i++) {
-      if (a[i].key === key && _dayStart(a[i].ts || 0) === todayStart) {
-        idx = i; break;
-      }
-    }
-    // 回退：当天没有则全局按 key 匹配（兼容首次 add 前的极端时序）
-    if (idx < 0) {
-      for (var j = 0; j < a.length; j++) {
-        if (a[j].key === key) { idx = j; break; }
-      }
+      if (a[i].seriesKey === sKey) { idx = i; break; }
     }
     if (idx < 0) return null;
     var rec = a[idx];
+    if (rec.key !== key) return rec; // 旧集会播/已被新集接管：不改记录
     if (patch) {
-      if (typeof patch.progress === 'number') rec.progress = patch.progress;
+      var today = dayKey(Date.now());
+      if (rec.watchedDay !== today) { rec.watchedDay = today; rec.daySec = 0; rec.epSec = 0; }
+      if (typeof patch.watchedSec === 'number') {
+        var incoming = Math.max(0, Number(patch.watchedSec) || 0);
+        var base = Math.max(0, Number(rec.epSec) || 0);
+        rec.daySec = (Math.max(0, Number(rec.daySec) || 0)) + Math.max(0, incoming - base);
+        rec.epSec = Math.max(base, incoming);
+        rec.watchedSec = incoming;
+      }
+      if (typeof patch.progress === 'number') rec.progress = Math.max(0, Math.min(1, patch.progress));
       if (patch.cur != null) rec.cur = patch.cur;
       if (patch.total != null) rec.total = patch.total;
       if (typeof patch.finished === 'boolean') rec.finished = patch.finished;
       if (patch.ts) rec.ts = patch.ts;
-      if (typeof patch.watchedSec === 'number') {
-        // 取较大值：确保会话内累计不会倒退（pause 重复调用 / timeupdate 时序抖动）
-        var incoming = Math.max(0, Number(patch.watchedSec) || 0);
-        rec.watchedSec = Math.max(Number(rec.watchedSec) || 0, incoming);
-      }
-      // 最近一次播放使用的片源（供下次点击「接着看 / 历史」直用）
       if (patch.lastSourceId != null) rec.lastSourceId = patch.lastSourceId;
       if (patch.lastVodId != null) rec.lastVodId = patch.lastVodId;
       if (patch.lastSourceName != null) rec.lastSourceName = patch.lastSourceName;
       if (typeof patch.lastPlayFromIndex === 'number') rec.lastPlayFromIndex = patch.lastPlayFromIndex;
       if (typeof patch.lastPlayEpisodeIndex === 'number') rec.lastPlayEpisodeIndex = patch.lastPlayEpisodeIndex;
     }
-    writeAll(a); return rec;
+    var arr2 = a.slice();
+    arr2.splice(idx, 1);
+    arr2.unshift(rec); // 最近观看移到头部
+    writeAll(arr2); return rec;
   }
 
   // ---------------------------------------------------------------- 日期分组
@@ -562,7 +561,8 @@
     var unitMap = Object.create(null);  // unitKey -> { title, watchedSec, vodId }
     var watchedTotalSec = 0;
     todayRecords.forEach(function (r) {
-      var sec = Number(r.watchedSec) || 0;
+      var sec = Number(r.daySec) || 0;
+      if (sec <= 0) sec = Number(r.watchedSec) || 0;
       if (sec <= 0) {
         // 旧记录兜底：progress × 总时长解析秒（>=0，不会虚增负数）
         sec = Math.max(0, Math.floor((Number(r.progress) || 0) * parseDuration(r.total)));
