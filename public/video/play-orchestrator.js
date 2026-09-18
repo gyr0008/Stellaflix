@@ -29,6 +29,27 @@
   }
 
   /**
+   * 关闭浏览层，但仅在播放器已可见之后。
+   * 防御：任何让播放器「晚现形」的异步起播分支（如分享页探测）都会先暴露影视首页
+   * （星空页）空窗。播放器 z-index(2147483000) 高于浏览层(2147482000)，先显示再关层即无空窗。
+   * 兜底超时防止 sfv:player-open 永不派发时浏览层挂死。
+   */
+  function closeBrowseBehindPlayer() {
+    var done = false;
+    function onOpen() { finish(); }
+    function finish() {
+      if (done) return;
+      done = true;
+      try { global.removeEventListener('sfv:player-open', onOpen); } catch (e) {}
+      dep('close')();
+    }
+    if (!SFV.player || typeof SFV.player.isOpen !== 'function') { finish(); return; } // 无播放器：立即关，行为同旧版
+    if (SFV.player.isOpen()) { finish(); return; }
+    try { global.addEventListener('sfv:player-open', onOpen); } catch (e) {}
+    setTimeout(finish, 12000);
+  }
+
+  /**
    * 下一集连播钩子（仅 play 管道使用）。
    */
   function registerNextEpisode(view, ep, play) {
@@ -168,7 +189,7 @@
       }
       registerNextEpisode(view, ep, play); // 必须在 open 之后：open 会清空 playNext 钩子
       console.log('[SFV-FREEZE] M11 doPlay before close');
-      dep('close')();                       // 关闭浏览层，露出播放器全屏弹层
+      closeBrowseBehindPlayer();           // 播放器已可见后关闭浏览层，杜绝首页星空空窗
       console.log('[SFV-FREEZE] M12 doPlay done');
     };
 
@@ -209,7 +230,7 @@
           }
         }
         registerNextEpisode(view, ep, play);
-        dep('close')(); // 关闭浏览层，露出带 iframe 的播放器弹层
+        closeBrowseBehindPlayer(); // 播放器（含 iframe）已可见后关闭浏览层
       } else {
         doPlay(embedUrl); // 无嵌入能力时降级为原始地址直连
       }

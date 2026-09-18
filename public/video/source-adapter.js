@@ -491,7 +491,11 @@
     // 直链（含原生可播 HLS）：直接交给 player
     // ==== Fix: 无扩展名直链（reason='unknown-extension'）先探测是否为分享页 ====
     // /share/<hash> 这类链接实为 HTML 播放页，内含真实流地址；带扩展名的链接零成本跳过。
+    // 探测最长 8s：必须先同步点亮播放器（黑底 loading），否则编排器关闭浏览层后、
+    // 探测完成前会暴露影视首页（星空页）空窗（2026-09-18 实测，见 playback-browse-close-order.test.js）。
     if (r.reason === 'unknown-extension' && !(input && typeof input === 'object' && input.__shareResolved)) {
+      if (SFV.player.setCurrentUrl) SFV.player.setCurrentUrl(r.rawUrl);
+      SFV.player.prepareForPlay(pid, r.title);
       return probeSharePageAndOpen(r, pid);
     }
     return SFV.player.openUrl(r.playUrl, { id: pid, title: r.title });
