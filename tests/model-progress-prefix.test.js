@@ -49,6 +49,18 @@ test('clearProgressByPrefix 空参数/无命中均安全返回 0', () => {
   assert.strictEqual(model.clearProgressByPrefix('zzz:'), 0);
 });
 
+test('前缀不以冒号结尾时拒绝删除（自身契约守卫），返回 0 且进度全留', () => {
+  const init = { [KP]: JSON.stringify({
+    'cms:s1:100:0': { position: 10, duration: 100, updatedAt: 1 },
+    'cms:s1:100:1': { position: 20, duration: 100, updatedAt: 1 },
+  }) };
+  const { model, localStorage } = loadModel(init);
+  assert.strictEqual(model.clearProgressByPrefix('cms:s1:100'), 0);
+  assert.strictEqual(model.clearProgressByPrefix('cms'), 0);
+  assert.deepStrictEqual(Object.keys(JSON.parse(localStorage.getItem(KP))),
+    ['cms:s1:100:0', 'cms:s1:100:1']);
+});
+
 test('kazumi 源含冒号的 key 按完整 seriesKey 前缀删除', () => {
   const init = { [KP]: JSON.stringify({
     'kazumi:abc:77:2': { position: 5 },

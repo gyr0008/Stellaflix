@@ -153,8 +153,10 @@
   }
 
   // 按前缀清除进度（观看历史聚合卡删除时连带清整部番各集进度）；返回删除条数。
+  // 契约：prefix 必须是集级键的片级前缀（以 ':' 结尾）；否则一律不动，避免退化成裸 sourceId 时跨片误删。
   function clearProgressByPrefix(prefix) {
     if (!prefix) return 0;
+    if (String(prefix).slice(-1) !== ':') return 0;
     var all = readJSON(KEY_PROGRESS, {});
     var n = 0;
     Object.keys(all).forEach(function (k) {

@@ -9,9 +9,10 @@
  *         lastSourceId, lastVodId, lastSourceName, lastPlayFromIndex, lastPlayEpisodeIndex }
  *     seriesKey 为聚合主键（'<sourceId>:<vodId>'，一部番恒一条记录）；
  *     key = 最近观看那一集的集级键 '<sourceId>:<vodId>:<epIdx>'（播放器回写方提供，
- *       亦为 add/update/remove 的入参），episodeIndex = 该集号（0 起，不可推导则 null）；
- *     daySec/epSec 为「今日观看秒」记账：daySec 今日累计、epSec 本会话已计秒基线
- *       （跨天/重开/换集清零）；sourceId/vodId/pic 供卡片点击重开详情（activate）。
+ *       亦为 add/update/remove 的入参；remove 亦可传裸 seriesKey 删整片），
+ *       episodeIndex = 该集号（0 起，不可推导则 null）；
+ *     daySec/epSec 为「今日观看秒」记账：daySec 今日累计（仅跨天清零）、
+ *       epSec 本会话已计秒基线（重开/换集一律清零）；sourceId/vodId/pic 供卡片点击重开详情（activate）。
  *   - v1 流水键 stellaflix-watch-history-v1 与 model 键 stellaflix-video-history 的一次性
  *     聚合迁移：幂等，仅当 v2 键为空时触发；旧键一律保留以供回滚。
  *   - 渲染：无顶部标题条，仅保留纯净竖向历史足迹
@@ -73,14 +74,18 @@
   var MODEL_KEY = 'stellaflix-video-history';
 
   // 迁移专用：优先用显式 sourceId+vodId 组片级键（model 粗粒度记录是两段 vodKey，
-  // 不能按尾段剥集号）；缺字段、或 key 与该 vodKey 不同源（显式字段与 key 前缀对不上）时
-  // 退回 seriesKeyOf(key)。真实 v1 key 恒为 sourceId:vodId:epIdx（play-orchestrator.js:85），
-  // 故此处对 v1 与 model 两分支同口径。
-  function migrateSeriesKey(r) {
+  // 不能按尾段剥集号）；缺字段、或 key 与该 vodKey 不同源（显式字段与 key 前缀对不上）时：
+  //   - KEY_V1 分支：真实 v1 key 恒为 sourceId:vodId:epIdx（play-orchestrator.js:85），剥尾段
+  //     安全，继续 seriesKeyOf —— 这是聚合的本意，不能退化成粗粒度。
+  //   - model 分支：两段 key 已是完整 vodKey，seriesKeyOf 会把它塌成裸 sourceId（'s1:1048' → 's1'，
+  //     于是集号被误标 1048、remove 会误清 s1 下所有片的进度），故整键保留为粗粒度 seriesKey
+  //     （seriesKey === key；deriveEpisodeIndex 对这种形态返回 null，卡片走无集号文案）。
+  function migrateSeriesKey(r, fromModel) {
     if (typeof r.key === 'string' && r.sourceId != null && r.sourceId !== '' && r.vodId != null && r.vodId !== '') {
       var vk = r.sourceId + ':' + r.vodId;
       if (r.key === vk || r.key.indexOf(vk + ':') === 0) return vk;
     }
+    if (fromModel) return typeof r.key === 'string' ? r.key : '';
     return seriesKeyOf(r.key);
   }
 
@@ -90,6 +95,7 @@
     try {
       if (LS.getItem(KEY)) return;
       var src = [];
+      var fromModel = false; // src 来源分支：v1 流水键 or model 粗粒度键（迁移键拆分口径不同）
       var raw1 = LS.getItem(KEY_V1);
       if (raw1) { var p1 = JSON.parse(raw1); if (Array.isArray(p1)) src = p1; }
       if (!src.length) {
@@ -97,6 +103,7 @@
         if (rawM) {
           var pm = JSON.parse(rawM);
           if (Array.isArray(pm)) {
+            fromModel = true;
             for (var i = 0; i < pm.length; i++) {
               var m = pm[i];
               if (!m || !m.key) continue;
@@ -114,7 +121,7 @@
       var best = {};
       src.forEach(function (r) {
         if (!r || !r.key) return;
-        var s = migrateSeriesKey(r);
+        var s = migrateSeriesKey(r, fromModel);
         if (!s) return;
         if (!best[s] || (Number(r.ts) || 0) > (Number(best[s].ts) || 0)) best[s] = r;
       });
@@ -206,19 +213,34 @@
     for (var i = 0; i < a.length; i++) if (!a[i].finished) n++;
     return n;
   }
+  // remove 连带清进度的守卫：只有「结构上证明只覆盖一部番」的 seriesKey 才拿去当前缀 ——
+  // 完整片级键（sourceId+vodId 且 seriesKey 正是两者拼成）或粗粒度一致（seriesKey === key）。
+  // 修复前的迁移把 model 两段键塌成过裸 sourceId（'s1'），这类前缀会跨片误删，必须跳过。
+  function isSeriesScoped(r) {
+    if (!r || !r.seriesKey) return false;
+    if (r.seriesKey === r.key) return true;
+    return !!(r.sourceId && r.vodId !== undefined && r.vodId !== null && r.vodId !== '' &&
+      r.seriesKey === r.sourceId + ':' + r.vodId);
+  }
   function remove(key, ts) {
     // 聚合模型：一部番一条，ts 兼容位忽略。传集级 key 或 seriesKey 均可删整片。
     var a = readAll();
     var sKey = seriesKeyOf(key || '') || key;
-    var hit = null;
+    var seen = {};
+    var prefixes = [];
     a = a.filter(function (r) {
       var drop = !!key && (r.seriesKey === sKey || r.seriesKey === key || r.key === key);
-      if (drop && !hit) hit = r;
+      if (drop && isSeriesScoped(r)) {
+        var p = r.seriesKey + ':';
+        if (!seen[p]) { seen[p] = 1; prefixes.push(p); } // 一次删除可能命中多条不同片：逐片各清一次
+      }
       return !drop;
     });
     // 删历史 = 删进度：清掉该剧所有集的 position，避免详情页幽灵进度
-    if (hit && SFV.model && typeof SFV.model.clearProgressByPrefix === 'function') {
-      try { SFV.model.clearProgressByPrefix((hit.seriesKey || sKey) + ':'); } catch (e) { /* 非致命 */ }
+    if (prefixes.length && SFV.model && typeof SFV.model.clearProgressByPrefix === 'function') {
+      for (var i = 0; i < prefixes.length; i++) {
+        try { SFV.model.clearProgressByPrefix(prefixes[i]); } catch (e) { /* 非致命 */ }
+      }
     }
     writeAll(a); return a;
   }
