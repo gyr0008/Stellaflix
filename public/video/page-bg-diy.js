@@ -89,18 +89,20 @@
     return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + alpha + ')';
   }
   function setPageBgColor(color, host) {
-    // 同步 host 实底（.sfv-browse 或 #sfv-search-page）、html 兜底背景（填满 clip-path 圆角裁切区）
+    // 同步 host 实底（.sfv-browse 或 #sfv-search-page）、html 兜底背景（填满 clip-path 圆角裁切区）。
+    // html 走 --page-bg-diy 变量由样式表承接，不能用内联 background !important：
+    // 内联 important 会压过 wallpaper-engine 的 DWM 透明规则，导致原生引擎壁纸中央黑屏。
     if (host) host.style.setProperty('--sfv-cat-bg', color);
     if (S.overlay) S.overlay.style.setProperty('--sfv-cat-bg', color);
     if (typeof document !== 'undefined' && document.documentElement) {
-      document.documentElement.style.setProperty('background', color, 'important');
+      document.documentElement.style.setProperty('--page-bg-diy', color);
     }
   }
   function clearPageBgColor(host) {
     if (host) host.style.removeProperty('--sfv-cat-bg');
     if (S.overlay) S.overlay.style.removeProperty('--sfv-cat-bg');
     if (typeof document !== 'undefined' && document.documentElement) {
-      document.documentElement.style.removeProperty('background');
+      document.documentElement.style.removeProperty('--page-bg-diy');
     }
   }
 

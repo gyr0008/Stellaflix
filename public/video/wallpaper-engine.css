@@ -23,6 +23,11 @@ body.wallpaper-engine-dwm-active {
   background: transparent !important;
 }
 
+/* html 根画布不透明会挡住 DWM 透视，须与 body 一起置为透明 */
+html:has(body.wallpaper-engine-dwm-active) {
+  background: transparent !important;
+}
+
 body.wallpaper-engine-dwm-active #custom-bg,
 body.wallpaper-engine-dwm-active #album-bg,
 body.wallpaper-engine-dwm-active #album-bg-next,
@@ -34,11 +39,6 @@ body.wallpaper-engine-dwm-active #canvas-container {
 body.wallpaper-engine-dwm-active #wallpaper-engine-layer { opacity: 0 !important;
   visibility: hidden !important;
   transition: none !important }
-
-/* Fallback video stream visibility in DWM mode */
-body.wallpaper-engine-dwm-active #wallpaper-engine-layer.video-ready,
-body.wallpaper-engine-dwm-active #wallpaper-engine-layer.engine-ready { opacity: 1 !important;
-  visibility: visible !important }
 
 /* DWM keeps the real WE scene/cursor-parallax path native. This narrowly
    clipped compositor copy exists only so the saved bottom-bar SVG backdrop

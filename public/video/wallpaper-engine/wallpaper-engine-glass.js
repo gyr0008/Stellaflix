@@ -268,45 +268,7 @@ async function startWallpaperEngineNativeBackground(item, token) {
       wallpaperEngineLayerFailed(item, 'engine', token);
       return;
     }
-    // DWM mode success — also attempt video stream fallback for full-screen display.
-    // The native WE surface renders behind the transparent BrowserWindow via DWM composition,
-    // but if the window lacks transparency or an opaque DOM layer covers it, the user sees only black.
-    // Attaching a capturable stream to #wallpaper-engine-video guarantees visible output.
-    var fallbackStream = takeWallpaperEnginePreparedCaptureStream(sessionId);
-    var fallbackVideo = document.getElementById('wallpaper-engine-video');
-    if (fallbackStream && fallbackVideo && wallpaperEngineNativeStartIsCurrent(item, token)
-        && wallpaperEngineNativeSessionId === sessionId) {
-      stopWallpaperEngineCaptureStream(true);
-      wallpaperEngineCaptureStream = fallbackStream;
-      fallbackVideo.muted = true;
-      fallbackVideo.loop = false;
-      fallbackVideo.playsInline = true;
-      fallbackVideo.onloadedmetadata = function () {
-        if (token !== wallpaperEngineLayerToken) return;
-        calibrateWallpaperEngineCaptureViewport(fallbackVideo, result);
-        requestWallpaperEngineVideoPlayback(fallbackVideo, item, 'engine', token, false, 0);
-      };
-      fallbackVideo.srcObject = fallbackStream;
-      waitForWallpaperEngineVideoFirstFrame(fallbackVideo, item, token, sessionId, result);
-      var fbTrack = fallbackStream.getVideoTracks && fallbackStream.getVideoTracks()[0];
-      if (fbTrack) {
-        try { fbTrack.contentHint = 'motion'; } catch (_e) { }
-        fbTrack.addEventListener('ended', function () {
-          if (token !== wallpaperEngineLayerToken || wallpaperEngineNativeHostUnavailable()) return;
-          wallpaperEngineLayerFailed(item, 'engine', token);
-        }, { once: true });
-      }
-      fallbackVideo.onerror = function () { /* DWM glass sampler still active; don't fail the session */ };
-      requestWallpaperEngineVideoPlayback(fallbackVideo, item, 'engine', token, false, 0);
-    }
     wallpaperEngineLayerReady('dwm', token);
-    // Re-apply video-ready classes if fallback stream is attached (the 'dwm' call above
-    // removes all ready classes at playback.js:101, but our CSS override needs them to
-    // keep the main layer visible alongside the DWM glass sampler)
-    if (fallbackStream && fallbackVideo) {
-      var dwmLayer = document.getElementById('wallpaper-engine-layer');
-      if (dwmLayer) dwmLayer.classList.add('video-ready', 'engine-ready', 'ready');
-    }
     clearWallpaperEngineFreezeFrame(false);
     return;
   }
