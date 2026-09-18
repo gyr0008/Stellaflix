@@ -2,10 +2,19 @@
  * Stellaflix 影视模块 — 观看历史页 (router page id = 'history')
  *
  * 职责：
- *   - 独立 localStorage 存储 stellaflix-watch-history-v1，schema 对齐接入约定：
- *       { key, title, sub, img, progress(0~1), cur, total, ts, finished,
- *         sourceId, vodId, pic }   // sourceId/vodId/pic 供卡片点击重开详情（activate）
- *     key 作为去重 / 移除主键（播放器回写时由调用方提供稳定 key）。
+ *   - 独立 localStorage 存储 stellaflix-watch-history-v2（聚合模型：一部番一条），schema：
+ *       { seriesKey, key, episodeIndex, episodeName, title, sub, img, progress(0~1),
+ *         cur, total, ts, finished, sourceId, vodId, pic,
+ *         watchedSec, watchedDay, daySec, epSec,
+ *         lastSourceId, lastVodId, lastSourceName, lastPlayFromIndex, lastPlayEpisodeIndex }
+ *     seriesKey 为聚合主键（'<sourceId>:<vodId>'，一部番恒一条记录）；
+ *     key = 最近观看那一集的集级键 '<sourceId>:<vodId>:<epIdx>'（播放器回写方提供，
+ *       亦为 add/update/remove 的入参；remove 亦可传裸 seriesKey 删整片），
+ *       episodeIndex = 该集号（0 起，不可推导则 null）；
+ *     daySec/epSec 为「今日观看秒」记账：daySec 今日累计（仅跨天清零）、
+ *       epSec 本会话已计秒基线（重开/换集一律清零）；sourceId/vodId/pic 供卡片点击重开详情（activate）。
+ *   - v1 流水键 stellaflix-watch-history-v1 与 model 键 stellaflix-video-history 的一次性
+ *     聚合迁移：幂等，仅当 v2 键为空时触发；旧键一律保留以供回滚。
  *   - 渲染：无顶部标题条，仅保留纯净竖向历史足迹
  *     → 按天分组（今天 / 昨天 / 本周内星期几 / 更早 M月D日），每组日期标题 + 当天条数
  *     → 同日横向 rail（flex row + 隐藏滚动条 + hover 左右箭头）
@@ -27,8 +36,9 @@
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
   var doc = global.document;
   var LS = global.localStorage;
-  var KEY = 'stellaflix-watch-history-v1';
-  var CAP = 500;
+  var KEY = 'stellaflix-watch-history-v2';   // 聚合模型：一部番一条
+  var KEY_V1 = 'stellaflix-watch-history-v1'; // 旧流水键：只读，保留回滚
+  var CAP = 500; // 语义：最多 500 部
 
   // ---------------------------------------------------------------- 工具
   function el(tag, cls, text) {
@@ -38,53 +48,107 @@
     return n;
   }
 
+  // 集级 key（'<sourceId>:<vodId>:<epIdx>'）→ 片级 seriesKey：剥掉最后一个 ':' 之后的尾段；
+  // sourceId 可含 ':'（kazumi:），故只能剥尾段。无冒号 → 返回 ''（非法，由调用方拒绝）。
+  function seriesKeyOf(key) {
+    if (!key || typeof key !== 'string') return '';
+    var i = key.lastIndexOf(':');
+    return i > 0 ? key.slice(0, i) : '';
+  }
+  // 集号推导（normalize 与迁移共用，唯一口径）：仅当 key 形如 '<seriesKey>:<数字>' 才取尾段数字，
+  // 否则 null —— model 粗粒度两段 vodKey（'s1:1048'，见 model.js:191）key === seriesKey，不得当集号。
+  function deriveEpisodeIndex(key, seriesKey) {
+    if (!key || typeof key !== 'string' || !seriesKey) return null;
+    if (key.indexOf(seriesKey + ':') !== 0) return null;
+    var n = parseInt(key.slice(seriesKey.length + 1), 10);
+    return isNaN(n) ? null : n;
+  }
+  function dayKey(ts) {
+    var d = new Date(ts == null ? Date.now() : ts);
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+  }
+
   // ---------------------------------------------------------------- 存储层
-  // model.js 历史键（粗粒度，按片聚合，不含进度）；watch-history.js 只读自己的细粒度键。
-  // 当自身键为空但 model 有数据时，执行一次性格式迁移，保证旧版本升级用户也能看到历史。
+  // model.js 历史键（粗粒度，按片聚合，不含进度）；v1 流水键不存在时的迁移兜底来源。
   var MODEL_KEY = 'stellaflix-video-history';
 
-  function migrateFromModelIfEmpty() {
+  // 迁移专用：优先用显式 sourceId+vodId 组片级键（model 粗粒度记录是两段 vodKey，
+  // 不能按尾段剥集号）；缺字段、或 key 与该 vodKey 不同源（显式字段与 key 前缀对不上）时：
+  //   - KEY_V1 分支：真实 v1 key 恒为 sourceId:vodId:epIdx（play-orchestrator.js:85），剥尾段
+  //     安全，继续 seriesKeyOf —— 这是聚合的本意，不能退化成粗粒度。
+  //   - model 分支：两段 key 已是完整 vodKey，seriesKeyOf 会把它塌成裸 sourceId（'s1:1048' → 's1'，
+  //     于是集号被误标 1048、remove 会误清 s1 下所有片的进度），故整键保留为粗粒度 seriesKey
+  //     （seriesKey === key；deriveEpisodeIndex 对这种形态返回 null，卡片走无集号文案）。
+  function migrateSeriesKey(r, fromModel) {
+    if (typeof r.key === 'string' && r.sourceId != null && r.sourceId !== '' && r.vodId != null && r.vodId !== '') {
+      var vk = r.sourceId + ':' + r.vodId;
+      if (r.key === vk || r.key.indexOf(vk + ':') === 0) return vk;
+    }
+    if (fromModel) return typeof r.key === 'string' ? r.key : '';
+    return seriesKeyOf(r.key);
+  }
+
+  // v2 键为空时的一次性聚合迁移：优先 v1 流水键，其次 model 粗粒度键。
+  // 旧键都不删除（回滚用）；产出按 ts 降序的 v2 数组。
+  function migrateToV2IfEmpty() {
     try {
-      // 只有当自身键为空时才迁移（幂等，迁过一次就不再触发）
       if (LS.getItem(KEY)) return;
-      var raw = LS.getItem(MODEL_KEY);
-      if (!raw) return;
-      var modelArr = JSON.parse(raw);
-      if (!Array.isArray(modelArr) || !modelArr.length) return;
-      // 格式转换：model 粗粒度 → watch-history 细粒度（缺进度字段用默认值）
-      var converted = [];
-      for (var i = 0; i < modelArr.length; i++) {
-        var m = modelArr[i];
-        if (!m || !m.key) continue;
-        converted.push({
-          key: m.key,
-          title: m.title || '',
-          sub: (m.year ? (m.year + ' 年') : ''),
-          img: m.pic || '',
-          progress: 0,
-          cur: '00:00',
-          total: '',
-          ts: m.ts || Date.now(),
-          finished: false,
-          sourceId: m.sourceId || '',
-          vodId: m.vodId || '',
-          pic: m.pic || '',
-          watchedSec: 0
-        });
-      }
-      if (converted.length) {
-        writeAll(converted);
-        // 调试日志：仅首次迁移时输出一次
-        if (typeof console !== 'undefined' && console.info) {
-          console.info('[SFV watch-history] 从 model.js 迁移了 ' + converted.length + ' 条历史记录到 ' + KEY);
+      var src = [];
+      var fromModel = false; // src 来源分支：v1 流水键 or model 粗粒度键（迁移键拆分口径不同）
+      var raw1 = LS.getItem(KEY_V1);
+      if (raw1) { var p1 = JSON.parse(raw1); if (Array.isArray(p1)) src = p1; }
+      if (!src.length) {
+        var rawM = LS.getItem(MODEL_KEY);
+        if (rawM) {
+          var pm = JSON.parse(rawM);
+          if (Array.isArray(pm)) {
+            fromModel = true;
+            for (var i = 0; i < pm.length; i++) {
+              var m = pm[i];
+              if (!m || !m.key) continue;
+              src.push({
+                key: m.key, title: m.title || '', sub: (m.year ? (m.year + ' 年') : ''),
+                img: m.pic || '', pic: m.pic || '', progress: 0, cur: '00:00', total: '',
+                ts: m.ts || Date.now(), finished: false, watchedSec: 0,
+                sourceId: m.sourceId || '', vodId: m.vodId,
+              });
+            }
+          }
         }
       }
-    } catch (e) { /* 迁移失败不阻断正常读取 */ }
+      if (!src.length) return;
+      var best = {};
+      src.forEach(function (r) {
+        if (!r || !r.key) return;
+        var s = migrateSeriesKey(r, fromModel);
+        if (!s) return;
+        if (!best[s] || (Number(r.ts) || 0) > (Number(best[s].ts) || 0)) best[s] = r;
+      });
+      var today = dayKey(Date.now());
+      var arr = Object.keys(best).map(function (s) {
+        var r = best[s];
+        var isToday = dayKey(Number(r.ts) || 0) === today;
+        return normalize(Object.assign({}, r, {
+          seriesKey: s,
+          episodeIndex: deriveEpisodeIndex(r.key, s),
+          watchedDay: isToday ? today : '',
+          daySec: isToday ? (Number(r.watchedSec) || 0) : 0,
+          epSec: isToday ? (Number(r.watchedSec) || 0) : 0,
+        }));
+      });
+      arr.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+      if (arr.length > CAP) arr = arr.slice(0, CAP);
+      writeAll(arr);
+      if (typeof console !== 'undefined' && console.info) {
+        console.info('[SFV watch-history] 聚合迁移 →v2：' + src.length + ' 条流水 → ' + arr.length + ' 部');
+      }
+    } catch (e) { /* 迁移失败不阻断读取 */ }
   }
 
   function readAll() {
     try {
-      migrateFromModelIfEmpty();  // 先尝试一次性迁移（自身键为空才迁）
+      migrateToV2IfEmpty();  // 先尝试一次性迁移（自身键为空才迁）
       var raw = LS.getItem(KEY);
       if (!raw) return [];
       var p = JSON.parse(raw);
@@ -100,8 +164,13 @@
   function normalize(rec) {
     var prog = (typeof rec.progress === 'number') ? rec.progress : (rec.finished ? 1 : 0);
     if (prog < 0) prog = 0; if (prog > 1) prog = 1;
+    var key = rec.key || '';
+    var sKey = rec.seriesKey || seriesKeyOf(key);
     return {
-      key: rec.key,
+      key: key,
+      seriesKey: sKey,
+      episodeIndex: (typeof rec.episodeIndex === 'number') ? rec.episodeIndex : deriveEpisodeIndex(key, sKey),
+      episodeName: rec.episodeName || rec.sub || '',
       title: rec.title || '',
       sub: rec.sub || '',
       img: rec.img || '',
@@ -114,6 +183,9 @@
       vodId: rec.vodId != null ? rec.vodId : '',
       pic: rec.pic || '',
       watchedSec: Math.max(0, Number(rec.watchedSec) || 0),
+      watchedDay: rec.watchedDay || '',
+      daySec: Math.max(0, Number(rec.daySec) || 0),
+      epSec: Math.max(0, Number(rec.epSec) || 0),
       // 最近一次播放使用的片源（供 smartResumePlay 直用）
       lastSourceId: rec.lastSourceId || '',
       lastVodId: rec.lastVodId != null ? rec.lastVodId : '',
@@ -141,13 +213,34 @@
     for (var i = 0; i < a.length; i++) if (!a[i].finished) n++;
     return n;
   }
+  // remove 连带清进度的守卫：只有「结构上证明只覆盖一部番」的 seriesKey 才拿去当前缀 ——
+  // 完整片级键（sourceId+vodId 且 seriesKey 正是两者拼成）或粗粒度一致（seriesKey === key）。
+  // 修复前的迁移把 model 两段键塌成过裸 sourceId（'s1'），这类前缀会跨片误删，必须跳过。
+  function isSeriesScoped(r) {
+    if (!r || !r.seriesKey) return false;
+    if (r.seriesKey === r.key) return true;
+    return !!(r.sourceId && r.vodId !== undefined && r.vodId !== null && r.vodId !== '' &&
+      r.seriesKey === r.sourceId + ':' + r.vodId);
+  }
   function remove(key, ts) {
-    // 支持两种调用：remove(key) 全局删除（兼容旧 API），remove(key, ts) 精确删除跨天重复记录
-    var a;
-    if (ts != null) {
-      a = readAll().filter(function (r) { return !(r.key === key && r.ts === ts); });
-    } else {
-      a = readAll().filter(function (r) { return r.key !== key; });
+    // 聚合模型：一部番一条，ts 兼容位忽略。传集级 key 或 seriesKey 均可删整片。
+    var a = readAll();
+    var sKey = seriesKeyOf(key || '') || key;
+    var seen = {};
+    var prefixes = [];
+    a = a.filter(function (r) {
+      var drop = !!key && (r.seriesKey === sKey || r.seriesKey === key || r.key === key);
+      if (drop && isSeriesScoped(r)) {
+        var p = r.seriesKey + ':';
+        if (!seen[p]) { seen[p] = 1; prefixes.push(p); } // 一次删除可能命中多条不同片：逐片各清一次
+      }
+      return !drop;
+    });
+    // 删历史 = 删进度：清掉该剧所有集的 position，避免详情页幽灵进度
+    if (prefixes.length && SFV.model && typeof SFV.model.clearProgressByPrefix === 'function') {
+      for (var i = 0; i < prefixes.length; i++) {
+        try { SFV.model.clearProgressByPrefix(prefixes[i]); } catch (e) { /* 非致命 */ }
+      }
     }
     writeAll(a); return a;
   }
@@ -156,15 +249,45 @@
     var d = new Date(ts);
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   }
+  // 聚合写入：一部番恒一条。换集 → 进度字段重置、移到头部；
+  // 同集重开 → 只刷新元信息与 ts（进度保留）；epSec（本会话已计秒基线）一律清零。
   function add(rec) {
     if (!rec || !rec.key) return readAll();
+    var sKey = seriesKeyOf(rec.key);
+    if (!sKey) return readAll();
     var a = readAll();
-    var todayStart = _dayStart(Date.now());
-    // 只过滤「同一天 + 同 key」的旧记录；跨天的保留，形成独立历史条目
-    a = a.filter(function (r) {
-      return !(r.key === rec.key && _dayStart(r.ts || 0) === todayStart);
-    });
-    a.unshift(normalize(rec));
+    var now = Date.now();
+    var today = dayKey(now);
+    var idx = -1;
+    for (var i = 0; i < a.length; i++) { if (a[i].seriesKey === sKey) { idx = i; break; } }
+    var next;
+    if (idx >= 0) {
+      var old = a[idx];
+      if (old.key === rec.key) {
+        next = normalize(Object.assign({}, old, {
+          title: rec.title || old.title,
+          img: rec.img || old.img,
+          pic: rec.pic || old.pic,
+          sub: rec.sub != null ? rec.sub : old.sub,
+          ts: now,
+          watchedDay: today,
+          daySec: old.watchedDay === today ? (old.daySec || 0) : 0,
+          epSec: 0,
+        }));
+      } else {
+        next = normalize(Object.assign({}, rec, {
+          seriesKey: sKey, ts: now,
+          progress: 0, cur: '00:00', total: '', finished: false, watchedSec: 0,
+          watchedDay: today,
+          daySec: old.watchedDay === today ? (old.daySec || 0) : 0,
+          epSec: 0,
+        }));
+      }
+      a.splice(idx, 1);
+    } else {
+      next = normalize(Object.assign({}, rec, { seriesKey: sKey, watchedDay: today, daySec: 0, epSec: 0 }));
+    }
+    a.unshift(next);
     if (a.length > CAP) a = a.slice(0, CAP);
     writeAll(a); return a;
   }
@@ -185,47 +308,47 @@
     return parts.join(':');
   }
 
-  // 增量更新指定 key 的进度/时长/完成态/最近片源，不移动该条在历史列表中的位置，
-  // 供播放器 timeupdate/pause/ended 时回写真实观影数据。
-  // 优先匹配「当天 + 同 key」的记录，确保跨天重复观看时不会误更新到旧记录。
+  // 播放器/续播回写：入参仍是集级 key。先折成 seriesKey 定位聚合记录；
+  // 若记录已被更新的一集接管（rec.key !== key）则忽略本次回写（stale 防串写）。
+  // watchedSec 按「本会话单调递增」语义做增量记账：daySec += incoming - epSec 基线。
   function update(key, patch) {
     if (!key) return null;
+    var sKey = seriesKeyOf(key);
     var a = readAll();
-    var todayStart = _dayStart(Date.now());
     var idx = -1;
-    // 优先找「同一天 + 同 key」的记录
+    // 兜底精确匹配：model 迁移产物是 coarse 两段键（rec.key === rec.seriesKey，如 's1:1048'），
+    // 折片级会得 's1' 命中不了，必须再按 key 精确比对；sKey 为空（无冒号）时只跳折叠、仍扫精确键。
     for (var i = 0; i < a.length; i++) {
-      if (a[i].key === key && _dayStart(a[i].ts || 0) === todayStart) {
-        idx = i; break;
-      }
-    }
-    // 回退：当天没有则全局按 key 匹配（兼容首次 add 前的极端时序）
-    if (idx < 0) {
-      for (var j = 0; j < a.length; j++) {
-        if (a[j].key === key) { idx = j; break; }
-      }
+      if ((sKey && a[i].seriesKey === sKey) || a[i].key === key) { idx = i; break; }
     }
     if (idx < 0) return null;
     var rec = a[idx];
+    if (rec.key !== key) return rec; // 旧集会播/已被新集接管：不改记录
     if (patch) {
-      if (typeof patch.progress === 'number') rec.progress = patch.progress;
+      var today = dayKey(Date.now());
+      if (rec.watchedDay !== today) { rec.watchedDay = today; rec.daySec = 0; rec.epSec = 0; }
+      if (typeof patch.watchedSec === 'number') {
+        var incoming = Math.max(0, Number(patch.watchedSec) || 0);
+        var base = Math.max(0, Number(rec.epSec) || 0);
+        rec.daySec = (Math.max(0, Number(rec.daySec) || 0)) + Math.max(0, incoming - base);
+        rec.epSec = Math.max(base, incoming);
+        rec.watchedSec = incoming;
+      }
+      if (typeof patch.progress === 'number') rec.progress = Math.max(0, Math.min(1, patch.progress));
       if (patch.cur != null) rec.cur = patch.cur;
       if (patch.total != null) rec.total = patch.total;
       if (typeof patch.finished === 'boolean') rec.finished = patch.finished;
       if (patch.ts) rec.ts = patch.ts;
-      if (typeof patch.watchedSec === 'number') {
-        // 取较大值：确保会话内累计不会倒退（pause 重复调用 / timeupdate 时序抖动）
-        var incoming = Math.max(0, Number(patch.watchedSec) || 0);
-        rec.watchedSec = Math.max(Number(rec.watchedSec) || 0, incoming);
-      }
-      // 最近一次播放使用的片源（供下次点击「接着看 / 历史」直用）
       if (patch.lastSourceId != null) rec.lastSourceId = patch.lastSourceId;
       if (patch.lastVodId != null) rec.lastVodId = patch.lastVodId;
       if (patch.lastSourceName != null) rec.lastSourceName = patch.lastSourceName;
       if (typeof patch.lastPlayFromIndex === 'number') rec.lastPlayFromIndex = patch.lastPlayFromIndex;
       if (typeof patch.lastPlayEpisodeIndex === 'number') rec.lastPlayEpisodeIndex = patch.lastPlayEpisodeIndex;
     }
-    writeAll(a); return rec;
+    var arr2 = a.slice();
+    arr2.splice(idx, 1);
+    arr2.unshift(rec); // 最近观看移到头部
+    writeAll(arr2); return rec;
   }
 
   // ---------------------------------------------------------------- 日期分组
@@ -404,7 +527,9 @@
       status.appendChild(el('span', 'sfv-wh-card__dot'));
       status.appendChild(el('span', 'sfv-wh-card__status-text', '观看完成'));
     } else {
-      status.appendChild(el('span', 'sfv-wh-card__status-text', '看到 ' + (rec.cur || '00:00') + ' / 总时长 · ' + (rec.total || '00:00')));
+      var epPrefix = (typeof rec.episodeIndex === 'number') ? ('第 ' + (rec.episodeIndex + 1) + ' 话 · ') : '';
+      status.appendChild(el('span', 'sfv-wh-card__status-text',
+        epPrefix + '看到 ' + (rec.cur || '00:00') + ' / 总时长 · ' + (rec.total || '00:00')));
     }
     info.appendChild(status);
     thumb.appendChild(info);
@@ -475,7 +600,8 @@
     var unitMap = Object.create(null);  // unitKey -> { title, watchedSec, vodId }
     var watchedTotalSec = 0;
     todayRecords.forEach(function (r) {
-      var sec = Number(r.watchedSec) || 0;
+      var sec = Number(r.daySec) || 0;
+      if (sec <= 0) sec = Number(r.watchedSec) || 0;
       if (sec <= 0) {
         // 旧记录兜底：progress × 总时长解析秒（>=0，不会虚增负数）
         sec = Math.max(0, Math.floor((Number(r.progress) || 0) * parseDuration(r.total)));
