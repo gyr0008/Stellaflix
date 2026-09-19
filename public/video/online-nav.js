@@ -189,6 +189,12 @@
   function unlockBodyScroll() {
     var b = document.body;
     if (!b) return;
+    // 幂等守卫：body 不处于锁定态时直接返回，避免误触 scrollTo(0,0) 重置底层滚动
+    if (b.style.position !== 'fixed' || !b.style.top) {
+      _savedBodyOverflow = '';
+      _savedBodyPos = '';
+      return;
+    }
     b.style.overflow = _savedBodyOverflow;
     b.style.position = _savedBodyPos;
     var sy = parseInt(b.style.top || '0', 10) || 0;

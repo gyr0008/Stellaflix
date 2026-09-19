@@ -39,6 +39,9 @@
       // T156：打开搜索页前，先关闭浏览覆盖层（.sfv-browse），使搜索页与浏览层互斥，
       // 避免两者全屏层叠加（如片单页打开时右下角残留筛选 FAB）。
       if (S.closeOverlayAnimated) S.closeOverlayAnimated();
+      // 与 restoreSearchPage 对齐：closeOverlayAnimated 只收层不解锁，
+      // 缺这句会把 body 永久钉在 position:fixed; top:-scrollY（整页上移、底部露透明带）
+      if (S.unlockBodyScroll) S.unlockBodyScroll();
       // T157：离开浏览分页（搜索页为独立全屏层，z-index 高于 #top-right 覆盖其上），
       // 撤销 sfv-browse-active 作用域（closeOverlayAnimated 的 done 也会清，这里兜底）
       if (doc.body) doc.body.classList.remove('sfv-browse-active');
