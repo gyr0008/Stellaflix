@@ -1,5 +1,20 @@
+function localTrackFromListenRecord(record) {
+  var key = String(record.key || '');
+  var localKey = key.indexOf('local:') === 0 ? key.slice(6) : String(record.id || '').replace(/^local:/, '');
+  if (!localKey) return null;
+  var tracks = (typeof persistentLocalLibraryTracks !== 'undefined' && persistentLocalLibraryTracks) || [];
+  for (var i = 0; i < tracks.length; i++) {
+    var track = tracks[i];
+    if (track && (track.localKey === localKey || track.localFileId === localKey || track.id === record.id)) return track;
+  }
+  return null;
+}
 function songFromListenRecord(record) {
   if (!record) return null;
+  if (/^local:/.test(String(record.key || '')) || record.type === 'local' || record.sourceKey === 'local') {
+    var localTrack = localTrackFromListenRecord(record);
+    return localTrack ? Object.assign({}, localTrack) : null;
+  }
   var provider = record.sourceKey || '';
   if (!provider && record.type === 'qq') provider = 'qq';
   if (!provider) provider = record.mid ? 'qq' : 'netease';

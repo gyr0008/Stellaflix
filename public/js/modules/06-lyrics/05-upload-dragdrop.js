@@ -47,6 +47,88 @@ function canUsePersistentLocalMusicLibrary() {
     typeof window.desktopWindow.importLocalMusicFiles === 'function'
   );
 }
+function canRemovePersistentLocalTracks() {
+  return !!(
+    window.desktopWindow &&
+    typeof window.desktopWindow.removeLocalMusicTracks === 'function'
+  );
+}
+function normalizeLocalTrackId(value) {
+  return String(value || '').replace(/^local:/, '').toLowerCase();
+}
+function applyPersistentLocalLibraryTracks(result) {
+  var tracks = result && Array.isArray(result.tracks) ? result.tracks : [];
+  persistentLocalLibraryTracks = tracks.map(function (song) {
+    var copy = hydrateCustomCover(Object.assign({}, song));
+    copy.localMissing = false;
+    return copy;
+  }).filter(function (song) {
+    return song && song.localUrl && song.localKey;
+  }).map(cloneSong);
+  if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
+  return persistentLocalLibraryTracks;
+}
+async function removePersistentLocalTracks(ids) {
+  if (!canRemovePersistentLocalTracks()) return null;
+  var list = (Array.isArray(ids) ? ids : [ids])
+    .map(normalizeLocalTrackId)
+    .filter(function (id) { return /^[a-f0-9]{24}$/.test(id); });
+  if (!list.length) return null;
+  var result = await window.desktopWindow.removeLocalMusicTracks(list);
+  if (!result || result.ok !== true) {
+    throw new Error(result && result.error || 'LOCAL_LIBRARY_REMOVE_FAILED');
+  }
+  applyPersistentLocalLibraryTracks(result);
+  return result;
+}
+function removeLocalTrackFromLibraryAndQueue(song) {
+  if (!song) return Promise.resolve(false);
+  var localId = normalizeLocalTrackId(song.localFileId || song.localKey);
+  if (!/^[a-f0-9]{24}$/.test(localId)) {
+    showToast('这首歌不在持久化本地曲库中');
+    return Promise.resolve(false);
+  }
+  if (!canRemovePersistentLocalTracks()) {
+    showToast('当前环境无法删除本地曲库');
+    return Promise.resolve(false);
+  }
+  return removePersistentLocalTracks([localId]).then(function (result) {
+    if (!result) return false;
+    var queueKey = queueItemKey(song);
+    var idx = -1;
+    for (var i = 0; i < playQueue.length; i++) {
+      if (queueItemKey(playQueue[i]) === queueKey) { idx = i; break; }
+    }
+    var wasCurrent = currentIdx === idx || (!!currentLocalSong && queueItemKey(currentLocalSong) === queueKey);
+    if (idx >= 0) playQueue.splice(idx, 1);
+    if (wasCurrent) {
+      try {
+        if (audio) {
+          audio.pause();
+          audio.removeAttribute('src');
+          audio.load();
+        }
+      } catch (e) { }
+      currentLocalSong = null;
+      if (currentIdx >= playQueue.length) currentIdx = playQueue.length - 1;
+      playing = false;
+      if (typeof setPlayIcon === 'function') setPlayIcon(false);
+      if (typeof hideLoading === 'function') hideLoading();
+    } else if (idx >= 0 && currentIdx > idx) {
+      currentIdx -= 1;
+    }
+    safeRenderQueuePanel('remove-local-track');
+    safeShelfRebuild('remove-local-track', true);
+    updateCustomCoverButton();
+    updateEmptyHomeVisibility({ forceLoad: false });
+    showToast('已从本地曲库移除');
+    return true;
+  }).catch(function (e) {
+    console.warn('[LocalLibraryRemove]', e);
+    showToast('移除本地曲库失败');
+    return false;
+  });
+}
 async function importPersistentLocalAudioFiles(files) {
   if (!canUsePersistentLocalMusicLibrary()) return null;
   var selectedFiles = Array.prototype.slice.call(files || []);
@@ -60,6 +142,11 @@ async function importPersistentLocalAudioFiles(files) {
 function isLocalPlaybackSnapshot(snapshot) {
   var song = snapshot && snapshot.current;
   return !!(song && (song.type === 'local' || song.source === 'local' || song.localKey || song.localFileId));
+}
+function isRemovablePersistentLocalSong(song) {
+  if (!song || !canRemovePersistentLocalTracks()) return false;
+  if (!(song.type === 'local' || song.source === 'local' || song.localKey || song.localFileId)) return false;
+  return /^[a-f0-9]{24}$/.test(normalizeLocalTrackId(song.localFileId || song.localKey));
 }
 function restoredLocalTrackIndex(tracks, snapshot) {
   var current = snapshot && snapshot.current || {};
@@ -89,6 +176,7 @@ async function restorePersistedLocalLibrary() {
     return copy;
   }).filter(function (song) { return song && song.localUrl && song.localKey; });
   persistentLocalLibraryTracks = tracks.map(cloneSong);
+  if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
   var snapshot = snapshotAtRequest;
   if (snapshot && !isLocalPlaybackSnapshot(snapshot)) return false;
   if (
@@ -121,6 +209,7 @@ async function restorePersistedLocalLibrary() {
   if (!snapshot) {
     safeRenderQueuePanel('local-library-restore');
     updateEmptyHomeVisibility({ forceLoad: false });
+    if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
     return false;
   }
   var current = playQueue[currentIdx];
@@ -233,6 +322,33 @@ function finishUploadFilePicker(closePanel) {
   disarmUploadFilePickerFocus();
   if (closePanel) closeUploadPanel({ keepPicker: true });
 }
+function ensureUploadLibraryChoice() {
+  var panel = document.getElementById('upload-panel');
+  if (!panel) return;
+  var count = Array.isArray(persistentLocalLibraryTracks) ? persistentLocalLibraryTracks.length : 0;
+  var existing = document.getElementById('upload-play-library-btn');
+  if (!count) {
+    if (existing) existing.remove();
+    return;
+  }
+  var btn = existing;
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'upload-play-library-btn';
+    btn.type = 'button';
+    btn.className = 'upload-choice';
+    btn.onclick = function () {
+      closeUploadPanel();
+      if (typeof loadPersistedLocalLibraryIntoQueue === 'function') loadPersistedLocalLibraryIntoQueue();
+    };
+    panel.insertBefore(btn, panel.firstChild);
+  }
+  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2">' +
+    '<path d="M9 18V5l12-2v13"/>' +
+    '<circle cx="6" cy="18" r="3"/>' +
+    '<circle cx="18" cy="16" r="3"/>' +
+    '</svg><span><strong>播放本地曲库</strong><small>' + count + ' 首已保存，点此装入队列</small></span>';
+}
 function openUploadPanel() {
   closeUploadTip(false);
   var actions = document.getElementById('upload-actions');
@@ -243,6 +359,7 @@ function openUploadPanel() {
   }
   // 先保证面板的父容器可见（setPeek 把搜索区打开；simple-mode 的 !important 兜底）
   ensureUploadActionsVisibleForPanel();
+  ensureUploadLibraryChoice();
   panel.classList.add('show');
   pinUploadSearchArea();
   // 如果兜底后 actions 仍然不可见（极少见），给用户明确提示（而不是静默）
@@ -362,6 +479,7 @@ async function handleFiles(files, opts) {
         songs = persisted && persisted.tracks;
         if (!songs || !songs.length) throw new Error('LOCAL_LIBRARY_IMPORT_EMPTY');
         persistentLocalLibraryTracks = songs.map(cloneSong);
+        if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
         if (persisted && Array.isArray(persisted.failures) && persisted.failures.length) {
           setTimeout(function () { showToast('有 ' + persisted.failures.length + ' 个文件无法读取，其余歌曲已保存'); }, 900);
         }

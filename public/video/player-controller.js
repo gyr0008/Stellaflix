@@ -94,11 +94,20 @@
   }
   function sanitizeBar(bar) {
     if (!bar) return;
-    // ==== Fix(播放卡死根因): 条件写入 —— Blink 中 classList 无效写入（加已有类/删没有的类）
-    // 也会产生 MutationRecord。本函数会被 bar 自身 class 的 MutationObserver 回调调用，
-    // 无条件写入会形成 MO→写入→MO 的指数级自激环路，故仅在状态确实不符时才写。
+    // 影视态淡出只认 body.video-player-idle，soft-hidden 是音乐态残留，
+    // 一律清掉，避免其 CSS 中和规则以更高特异性压住 idle（三横线高亮却藏不掉）。
     if (bar.classList.contains('soft-hidden')) bar.classList.remove('soft-hidden');
-    if (!bar.classList.contains('visible')) bar.classList.add('visible');
+    // 自动隐藏关闭（三横线未高亮）：强制常驻。
+    // 自动隐藏开启：只补 visible（防 music.js 摘掉导致命中失效），不碰 video-player-idle。
+    var autoHideOn = (typeof controlsAutoHide !== 'undefined') ? !!controlsAutoHide : false;
+    if (!autoHideOn) {
+      if (!bar.classList.contains('visible')) bar.classList.add('visible');
+      if (doc.body && doc.body.classList.contains('video-player-idle')) {
+        doc.body.classList.remove('video-player-idle');
+      }
+    } else if (!bar.classList.contains('visible')) {
+      bar.classList.add('visible');
+    }
     // 清除任何可能被 music.js 设的 inline pointer-events:none
     if (bar.style && bar.style.pointerEvents === 'none') bar.style.pointerEvents = '';
     // 如果 music.js 在我们的 reparent 之后又把 bar 搬回 desktop-window-shell，
@@ -162,6 +171,18 @@
     swapControlTrackHandlers(true); // 左侧海报/标题/歌手点击改为打开视频详情
     applyMeta(meta);
     updateNavButtons();
+    // 按持久化偏好决定影视态控制条是否空闲淡出：
+    //   controlsAutoHide=true  → 起播后 3s 进入 video-player-idle
+    //   controlsAutoHide=false → 强制清 idle，控制条常驻（三横线未高亮）
+    if (typeof controlsAutoHide !== 'undefined' && !controlsAutoHide) {
+      if (SFV.player && typeof SFV.player.forceControlsVisible === 'function') {
+        SFV.player.forceControlsVisible();
+      } else if (doc.body) {
+        doc.body.classList.remove('video-player-idle');
+      }
+    } else if (SFV.player && typeof SFV.player.armHideTimer === 'function') {
+      SFV.player.armHideTimer(3000);
+    }
     // [#11] 影视态下把 ⓘ 信息按钮的 tooltip 改为「视频详情」（退出时还原）
     var tdb = doc.getElementById && doc.getElementById('track-detail-btn');
     if (tdb) { tdb.title = '视频详情'; tdb.setAttribute('aria-label', '视频详情'); }
@@ -608,7 +629,15 @@
           label: (ep && ep.name) ? ep.name : ('第' + (i + 1) + '集'),
           current: (i === curIdx),
           onClick: function () {
-            if (SFV.player && typeof SFV.player.playEpisodeAt === 'function') SFV.player.playEpisodeAt(i);
+            if (i === curIdx) {
+              toast('已在播放该集');
+              return;
+            }
+            if (switching) { toast('正在切换片源，请稍候'); return; }
+            var ok = SFV.player && typeof SFV.player.playEpisodeAt === 'function'
+              ? SFV.player.playEpisodeAt(i) : false;
+            if (!ok) toast('切换剧集失败');
+            else toast('正在切换剧集…');
           }
         };
       });

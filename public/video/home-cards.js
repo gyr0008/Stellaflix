@@ -36,25 +36,33 @@
   }
 
   // ---- 影视态五卡（对齐音乐态 LIBRARY/DAILY/SONG/CONTINUE/VIDEO 布局）：
-  //   label 英文（LIKED / LISTS / TRACKING / HISTORY / MUSIC），title 保留中文（心动/片单/追片/历史/音乐空间）
+  //   label 英文（LIKED / LIBRARY / TRACKING / HISTORY / MUSIC），title（心动/片库/追片/历史/音乐空间）
   //   顺序对应 DOM 中前 5 张 .home-card（index.html L2301~2330）。
   //   本地影片 / 网络地址 / 片源管理 入口迁移至 SFV.online 浏览层，首页不再承载（#19）。
   //   T112/T118：第 5 张固定为"音乐空间/返回音乐空间"入口（label=MUSIC），不与第 5 张 home-card 数据耦合。
+  //   片库：原「片单」卡改名；点击进入 router id='library' 占位页（Folia 海报墙落点）。
+  //         （2026-09-19：片单页与用户片单夹已删除，精选片单走首页 DISCOVER 卡弹窗。）
+  // 连线：片库蜂窝墙最近一次聚焦提交的卡片（hex-wall.js publishFocusedPoster 写入）
+  function getLibraryFocus() {
+    try {
+      var raw = global.localStorage && global.localStorage.getItem('stellaflix:library:lastPoster');
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && parsed.poster) return parsed;
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
   function cardDefs() {
     var M = SFV.model || {};
     var count = function (arr) { return (arr && arr.length) || 0; };
     var likedN = M.getKeysByFlag ? count(M.getKeysByFlag('liked')) : 0;
-    // 片单数量以新的自建片单夹（SFV.collections）为准，与点击后打开的片单页一致
-    var listN = 0;
-    try {
-      if (SFV.collections && SFV.collections.listUserFolders) {
-        SFV.collections.listUserFolders().forEach(function (f) { listN += (f.items && f.items.length) || 0; });
-      } else if (M.getKeysByFlag) {
-        listN = count(M.getKeysByFlag('inList'));
-      }
-    } catch (e) { listN = M.getKeysByFlag ? count(M.getKeysByFlag('inList')) : 0; }
+    // 片库角标数量：inList 遗留标记（model.js）；墙接入后可改为片库条目总数
+    var listN = M.getKeysByFlag ? count(M.getKeysByFlag('inList')) : 0;
     var trackN = M.getTrackCount ? count(M.getTrackCount()) : 0;
     var histN = (SFV.watchHistory && SFV.watchHistory.getCount) ? SFV.watchHistory.getCount() : (M.getHistory ? count(M.getHistory()) : 0);
+    var libFocus = getLibraryFocus();
 
     return [
       {
@@ -63,9 +71,13 @@
         action: function () { if (SFV.hall) SFV.hall.enter(); },
       },
       {
-        label: 'LISTS', title: '片单', sub: listN ? ('片单 ' + listN + ' 部') : '想看的全放进来',
+        label: 'LIBRARY', title: '片库',
+        sub: (libFocus && libFocus.title) ? libFocus.title
+          : (listN ? ('片库 ' + listN + ' 部 · 海报墙筹备中') : '海报墙筹备中'),
         flag: 'lists',
-        action: function () { if (SFV.online && SFV.online.openCollections) SFV.online.openCollections(); },
+        action: function () {
+          if (SFV.online && typeof SFV.online.openLibrary === 'function') SFV.online.openLibrary();
+        },
       },
       {
         label: 'TRACKING', title: '追片', sub: trackN ? ('在追 ' + trackN + ' 部') : '标记想看的片子',
@@ -184,31 +196,23 @@
         } catch (e2) {}
       }
     } else if (flag === 'lists') {
-      // 连线：片单卡右侧展示用户片单夹中最新加入的影片海报
-      try {
-        if (SFV.collections && SFV.collections.listUserFolders) {
-          var folders = SFV.collections.listUserFolders();
-          var bestItem = null;
-          // 以 addedAt 取最新加入（新数据）；无 addedAt 的旧数据回退到"最后文件夹的最后一个 item"
-          folders.forEach(function (f) {
-            var items = f.items || [];
-            items.forEach(function (it) {
-              if (!it || !it.poster) return;
-              if (!bestItem || (it.addedAt || 0) > (bestItem.addedAt || 0)) bestItem = it;
-            });
-          });
-          // 无 addedAt 时兜底：取最后一个非空文件夹的最后一张 poster
-          if (!bestItem) {
-            for (var fi = folders.length - 1; fi >= 0; fi--) {
-              var items = folders[fi].items || [];
-              for (var ii = items.length - 1; ii >= 0; ii--) {
-                if (items[ii] && items[ii].poster) { bestItem = items[ii]; break; }
-              }
-              if (bestItem) break;
-            }
+      // 片库卡封面：优先蜂窝墙最近聚焦卡；否则 inList 标记（遗留 flag）最近入列海报
+      var libFocus = getLibraryFocus();
+      if (libFocus) pic = libFocus.poster;
+      if (!pic) try {
+        var lkeys = (SFV.model.getKeysByFlag && SFV.model.getKeysByFlag('inList')) || [];
+        var lpool = [];
+        var lhist = (SFV.model.getHistory && SFV.model.getHistory()) || [];
+        lkeys.forEach(function (k) {
+          var m = SFV.model.getMeta && SFV.model.getMeta(k);
+          if (m && m.pic) {
+            var lts = 0;
+            for (var lj = 0; lj < lhist.length; lj++) if (lhist[lj].key === k) { lts = lhist[lj].ts || 0; break; }
+            lpool.push({ ts: lts, pic: m.pic });
           }
-          if (bestItem) pic = bestItem.poster;
-        }
+        });
+        lpool.sort(function (a, b) { return b.ts - a.ts; });
+        if (lpool.length) pic = lpool[0].pic;
       } catch (e) {}
     } else if (SFV.model && flag) {
       try {

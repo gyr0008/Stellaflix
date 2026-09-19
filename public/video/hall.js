@@ -154,14 +154,15 @@
     followBtn.addEventListener('click', onFollowClick);
     dockEl.appendChild(followBtn);
 
-    // ＋ 收藏（全面复制播放器底部控制栏 collect-btn：打开「收藏到片单」弹窗）
+    // ＋ 收藏：片单夹功能已删除，保留不可点图标占位（与详情页一致，用户 2026-09-19 裁定）
     var list = doc.createElement('button');
     list.type = 'button';
     list.className = 'sfv-hall-dock-btn sfv-hall-collect';
-    list.title = '收藏到片单';
-    list.setAttribute('aria-label', '收藏到片单');
+    list.title = '收藏功能已下线';
+    list.setAttribute('aria-label', '收藏功能已下线');
+    list.setAttribute('aria-disabled', 'true');
+    list.disabled = true;
     list.innerHTML = ICON_ADD;
-    list.addEventListener('click', onCollectClick);
     dockEl.appendChild(list);
     listBtn = list;
 
@@ -348,19 +349,6 @@
     toast('已设为：' + label);
   }
 
-  // 收藏：打开与播放器底部控制栏完全相同的「收藏到片单」弹窗
-  function onCollectClick(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    if (!curItem) return;
-    if (SFV.playerCollect && typeof SFV.playerCollect.open === 'function') {
-      SFV.playerCollect.open(curItem);
-    } else if (global.openCollectModalForCurrent) {
-      global.openCollectModalForCurrent();
-    } else {
-      toast('收藏功能不可用');
-    }
-  }
-
   // ---- 进入 / 退出 ----
   function enter() {
     if (active) return;
@@ -388,10 +376,8 @@
     keyHandler = function (e) {
       if (!e) return;
       if (e.key === 'Escape' || e.keyCode === 27) {
-        // 优先关闭已打开的弹窗：收藏面板 > 多源选择面板，最后才退厅
-        if (SFV.playerCollect && typeof SFV.playerCollect.isOpen === 'function' && SFV.playerCollect.isOpen()) {
-          SFV.playerCollect.close();
-        } else if (SFV.sourcePicker && SFV.sourcePicker.isOpen && SFV.sourcePicker.isOpen()) {
+        // 优先关闭已打开的弹窗：多源选择面板 > 退厅
+        if (SFV.sourcePicker && SFV.sourcePicker.isOpen && SFV.sourcePicker.isOpen()) {
           SFV.sourcePicker.close();
         } else {
           exit();

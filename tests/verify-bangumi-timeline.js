@@ -230,6 +230,53 @@ ok('openCalendar() 优先调用 openPopup()（popup=1,page=0）',
   'popup=' + popupCalls.join(',') + ' page=' + pageCalls.join(','));
 
 // ============================================================
+console.log('\n== H. 点击卡片：关弹窗并进入项目通用详情页（openDetailFromMeta）==');
+const detailMetaCalls = [];
+SFV.onlineShared.openDetailFromMeta = function (meta) { detailMetaCalls.push(meta); };
+
+realOpenPopup();
+st.data = data;
+st.activeDay = DAY;
+SFV.bangumiTimeline.refresh();
+ok('弹窗已挂载到 body', !!win.document.querySelector('.sfv-bgm-modal-overlay'));
+const popupCard = win.document.querySelector('.sfv-bgm-modal .sfv-bgm-tl-card');
+ok('弹窗内渲染出卡片', !!popupCard);
+popupCard.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+ok('点击后弹窗已从 body 移除', !win.document.querySelector('.sfv-bgm-modal-overlay'));
+ok('点击后调用 openDetailFromMeta', detailMetaCalls.length === 1, 'calls=' + detailMetaCalls.length);
+const m0 = detailMetaCalls[0] || {};
+ok('meta.key = bangumi:<id>（与追番身份一致）', /^bangumi:(10|20|30)$/.test(m0.key || ''), m0.key);
+ok('meta.title 为番剧标题', ['甲', '乙', '丙'].includes(m0.title), m0.title);
+ok('meta.year 取 airDate 前 4 位', m0.year === '2026', m0.year);
+ok('meta.mediaType = tv', m0.mediaType === 'tv', m0.mediaType);
+
+// 整页模式：无弹窗时点击同样进通用详情页，不应报错
+const pageHost = win.document.createElement('div');
+win.document.body.appendChild(pageHost);
+SFV.bangumiTimeline.mount(pageHost);
+SFV.bangumiTimeline.refresh();
+pageHost.querySelector('.sfv-bgm-tl-card').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+ok('整页模式点击卡片正常跳转（共 2 次，无弹窗残留）',
+  detailMetaCalls.length === 2 && !win.document.querySelector('.sfv-bgm-modal-overlay'));
+pageHost.parentNode.removeChild(pageHost);
+
+// 通用详情页不可用时降级 bangumiInfo.open
+detailMetaCalls.length = 0;
+const infoOpenCalls = [];
+SFV.bangumiInfo.open = function (item) { infoOpenCalls.push(item); };
+const savedOpenDetailFromMeta = SFV.onlineShared.openDetailFromMeta;
+SFV.onlineShared.openDetailFromMeta = undefined;
+const pageHost2 = win.document.createElement('div');
+win.document.body.appendChild(pageHost2);
+SFV.bangumiTimeline.mount(pageHost2);
+SFV.bangumiTimeline.refresh();
+pageHost2.querySelector('.sfv-bgm-tl-card').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+ok('openDetailFromMeta 缺失时降级 bangumiInfo.open',
+  detailMetaCalls.length === 0 && infoOpenCalls.length === 1);
+SFV.onlineShared.openDetailFromMeta = savedOpenDetailFromMeta;
+pageHost2.parentNode.removeChild(pageHost2);
+
+// ============================================================
 console.log('\n==================================================');
 console.log('结果: ' + pass + ' passed, ' + fail + ' failed (共 ' + (pass + fail) + ' 项)');
 if (fail) {

@@ -604,7 +604,6 @@
       '<div class="sfv-glass-panel" role="dialog" aria-modal="true" aria-label="Kazumi 规则仓库">' +
         '<div class="sfv-glass-head">' +
           '<div class="sfv-glass-title">' +
-            '<span class="sfv-glass-title-icon">📦</span>' +
             '<strong>Kazumi 规则仓库</strong>' +
             '<small class="sfv-glass-title-hint">Predidit/KazumiRules</small>' +
           '</div>' +

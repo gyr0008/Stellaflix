@@ -96,13 +96,11 @@
     playEpisode: playEpisode,
     openDetailFromMeta: openDetailFromMeta,
     applyGridDiyToBody: applyGridDiyToBody,
-    openCollections: S.openCollections,
+    openLibrary: S.openLibrary,
     openCalendar: S.openCalendar,
     openBangumiInfo: function (item) { if (SFV.bangumiInfo && typeof SFV.bangumiInfo.open === 'function') return SFV.bangumiInfo.open(item); },
-    reopenCollections: S.reopenCollections,
     openCollectionItems: S.openCollectionItems,
     tryPicBackfill: tryPicBackfill,
-    showPickFolderDialog: S.showPickFolderDialog,
     renderDetail: renderDetail,
     capturePlayerReturn: capturePlayerReturn,
     returnFromPlayer: returnFromPlayer
@@ -218,8 +216,8 @@
   // 注：S.openSearchPage / S.toggleSearchPage / S.doInlineSearch / S.closeSearchPage /
   //     S.restoreSearchPage / S.clearResultArea / S.showSearchStatus / S.renderInlineResults /
   //     S.bindCapsuleSearchBtn 由 online-search.js 注册；
-  //     S.openCollections / S.openCollectionItems / S.reopenCollections /
-  //     S.renderCollectionItems / S.showPickFolderDialog 由 online-collections.js 注册；
+  //     S.openLibrary / S.openCalendar / S.openCollectionItems /
+  //     S.renderCollectionItems 由 online-collections.js 注册；
   //     S.renderTrackPage / S.paintTrackStatus / S.openTrackMenu 等由 online-track.js 注册。
 
   console.log('[SFV-DIAG] online.js 协调器已加载，SFV.online 门面装配完成');

@@ -9,7 +9,6 @@ const systemMemory = require('./system-memory');
 const videoConfig = require('./video-config');
 const mpvController = require('./mpv-controller');
 const downloadManager = require('./download-manager');
-const offlineDownloadManager = require('./offline-download-manager');
 const { initIpc: initVideoIpc } = require('./ipc-video');
 const {
   WallpaperEngineLibrary,
@@ -4546,6 +4545,16 @@ ipcMain.handle('stellaflix-local-library-import', async (event, payload = {}) =>
   }
 });
 
+ipcMain.handle('stellaflix-local-library-remove', async (event, payload = {}) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, count: 0, tracks: [], error: 'UNTRUSTED_SENDER' };
+  try {
+    const ids = Array.isArray(payload && payload.ids) ? payload.ids.slice(0, 5000) : [];
+    return await localMusicLibrary.removeTracks(ids);
+  } catch (error) {
+    return { ok: false, count: 0, tracks: [], error: error.code || error.message || 'LOCAL_LIBRARY_REMOVE_FAILED' };
+  }
+});
+
 ipcMain.handle('stellaflix-cache-read-lyric', async (_event, key) => {
   try {
     const file = lyricCacheFilePath(key);
@@ -6643,8 +6652,6 @@ if (!_lock) {
       videoConfig.init(appPaths);
       mpvController.setConfig(videoConfig.get());
       downloadManager.setConfig(videoConfig.get());
-      offlineDownloadManager.setConfig(videoConfig.get());
-      offlineDownloadManager.init();
       initVideoIpc();
       initAutoUpdater();
       downloadManager.cleanOrphans();
@@ -6700,7 +6707,6 @@ if (!_lock) {
     if (updaterInstallPending) {
       try { mpvController.shutdown(); } catch (_) {}
       try { downloadManager.shutdown(); } catch (_) {}
-      try { offlineDownloadManager.shutdown(); } catch (_) {}
       return;
     }
     if (appQuitCleanupComplete) return;
@@ -6779,9 +6785,6 @@ if (!_lock) {
         }),
         Promise.resolve().then(() => downloadManager.shutdown()).catch((error) => {
           console.warn('[Shutdown] qbt shutdown failed:', error && error.message || error);
-        }),
-        Promise.resolve().then(() => offlineDownloadManager.shutdown()).catch((error) => {
-          console.warn('[Shutdown] offline-dl shutdown failed:', error && error.message || error);
         }),
       ]);
     })();

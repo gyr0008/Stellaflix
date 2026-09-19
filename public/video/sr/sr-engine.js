@@ -110,7 +110,31 @@
     var core = SFV.srCore.createCore(c);
     if (!core) { state.status = 'unsupported'; state.reason = 'WebGL2 不可用'; return null; }
     state.core = core;
+    attachGlContextGuard(c);
     return core;
+  }
+
+  // ---- GPU 上下文丢失守卫 ----
+  // Windows 驱动重置/显卡切换时 WebGL context 会丢失：GL 调用静默变 no-op，
+  // canvas 永久黑屏但 JS 不抛异常。lost 时主动回退原生；restored 后重建 core 自动恢复。
+  function attachGlContextGuard(c) {
+    if (!c || !c.addEventListener || c._sfvSrCtxGuard) return;
+    c._sfvSrCtxGuard = true;
+    c.addEventListener('webglcontextlost', function (e) {
+      try { if (e && e.preventDefault) e.preventDefault(); } catch (_) {}
+      if (state.running) {
+        try { if (SFV.srUi && SFV.srUi.toast) SFV.srUi.toast('GPU 渲染上下文丢失，已回退原生播放'); } catch (_) {}
+        stop('context-lost');
+      }
+      // 旧 core 的 program/纹理缓存随上下文一起失效，丢弃待 restored 后重建
+      state.core = null;
+      state.parsed = null; state.sig = ''; state.activePlan = null;
+    });
+    c.addEventListener('webglcontextrestored', function () {
+      if (state.preset && state.preset.id !== 'off' && !state.running && !state.embed) {
+        try { start(); } catch (e) {}
+      }
+    });
   }
 
   function resizeCanvas() {
@@ -367,6 +391,17 @@
     // 兼容旧 state：清掉可能残留的 rVFC/RAF 兜底 id（虽新版本不再使用）
     if (state.rafFallbackId) { try { global.cancelAnimationFrame(state.rafFallbackId); } catch (e) {} state.rafFallbackId = 0; }
   }
+  // 视频源出帧进度：rVFC 静默有两种原因——SR 真挂死，或源本身暂停/缓冲/后台不出帧。
+  // 判挂死前必须先确认源在推进，否则切字幕/切清晰度/暂停都会误报「渲染挂死」。
+  function sourceProgress() {
+    var v = state.videoEl;
+    var frames = 0, time = 0;
+    if (v) {
+      try { if (v.getVideoPlaybackQuality) frames = v.getVideoPlaybackQuality().totalVideoFrames || 0; } catch (e) {}
+      try { time = v.currentTime || 0; } catch (e) {}
+    }
+    return { frames: frames, time: time };
+  }
   function startWatchdog() {
     clearWatchdog();
     // 3 秒内 canvas 仍未成功绘制首帧 → 判定渲染失败，自动降级关闭 SR 恢复原生 video
@@ -380,18 +415,27 @@
         stop('watchdog-no-render');
         return;
       }
-      // 已有首帧：启动"续跑模式"看门狗 —— 每 2s 检查一次 paintedFrames 是否增长，若卡死则降级
+      // 已有首帧：启动"续跑模式"看门狗 —— 每 2s 检查一次；
+      // 仅当「视频源在持续出帧（播放中、前台、有当前数据）而 canvas 零更新」才判挂死。
       var lastCount = state.paintedFrames;
+      var lastSrc = sourceProgress();
       state.watchdogTimer = _gSetTimeout(function _srStallCheck() {
         state.watchdogTimer = 0;
         if (!state.running) return;
-        if (state.paintedFrames <= lastCount) {
-          try { console.warn('[SFV SR] 渲染挂死（2s 内无新帧），自动降级'); } catch (e) {}
+        var v = state.videoEl;
+        var src = sourceProgress();
+        var srcAdvanced = src.frames > lastSrc.frames || src.time > lastSrc.time;
+        var sourceLive = !!v && !v.paused && !DOC.hidden && v.readyState >= 2;
+        if (state.paintedFrames > lastCount) {
+          lastCount = state.paintedFrames;
+        } else if (srcAdvanced && sourceLive) {
+          try { console.warn('[SFV SR] 渲染挂死（源持续出帧但 canvas 2s 无更新），自动降级'); } catch (e) {}
           try { if (SFV.srUi && SFV.srUi.toast) SFV.srUi.toast('画质增强渲染挂死，已回退原生播放'); } catch (e) {}
           stop('watchdog-stall');
           return;
         }
-        lastCount = state.paintedFrames;
+        // 其余情形（暂停/seek 缓冲/后台标签页）：源未出帧属正常，重置基线继续观察
+        lastSrc = src;
         state.watchdogTimer = _gSetTimeout(_srStallCheck, 2000);
       }, 2000);
     }, 3000);
@@ -433,8 +477,15 @@
   // ---- 循环 ----
   function tick(now, meta) {
     if (!state.running) return;
-    renderFrame();
-    schedule();
+    // 单帧异常（GL 编译/显存分配失败等）不能断裂调度链：
+    // 否则一次异常 = 渲染永久停止，2s 后被看门狗误判为挂死。
+    try {
+      renderFrame();
+    } catch (e) {
+      try { console.warn('[SFV SR] 帧渲染异常，跳过本帧：', e && e.message); } catch (_) {}
+    } finally {
+      schedule();
+    }
   }
   function schedule() {
     var v = state.videoEl;

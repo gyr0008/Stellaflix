@@ -594,8 +594,10 @@ box.innerHTML = '<div class="custom-source-hint">还没有安装第三方音源�
     // 官方接口仅作兜底（预解析未命中后官方结果可用则直接使用，不重复跑聚合）。
     if (mode === 'aggregate') {
       if (!customEnabled) return { override: false, reason: 'bridge-missing' };
-      if (context.preResolve === true) return resolveAggregateViaHttp(song, context);
+      // 已有可用解析结果（含 AI 助手委托传入的 ticket URL）时直接复用，
+      // 不得再跑 24s 聚合 HTTP 解析，否则切歌会被重复解析卡住。
       if (officialResult && officialResult.url && !officialResult.trial) return { override: false, reason: 'fallback-to-official' };
+      if (context.preResolve === true) return resolveAggregateViaHttp(song, context);
       return { override: false, reason: 'aggregate-already-tried' };
     }
     // 自定义优先：先尝试第三方，失败且官方可用则再用官方

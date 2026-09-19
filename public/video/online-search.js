@@ -51,6 +51,9 @@
       S.renderHistoryDrop();
       S.clearResultArea();
       S._currentSearchView = null;
+      S._lastSearchCards = null;
+      // 新开会话：丢掉上次搜索的季族缓存（closeSearchPage 不清——点卡进详情要用「同系列」）
+      S._lastSearchCards = null;
       S.ensureFilterUi(); // 挂载筛选 FAB + 渲染已应用筛选条
       if (S.searchInput) {
         S.searchInput.value = '';
@@ -130,6 +133,7 @@
       var merged = (arr[0].items || []).concat(arr[1].items || []);
       if (!merged.length) {
         console.log('[SFV-DEBUG] merged empty, showing not-found status');
+        S._lastSearchCards = null;
         S.showSearchStatus('没有找到「' + S.esc(kw) + '」的相关结果。');
         return;
       }
@@ -139,7 +143,8 @@
       console.log('[SFV-DEBUG] aggregated count=' + aggregated.length);
       var tmdbEnabled = !!(SFV.tmdb && typeof SFV.tmdb.hasKey === 'function' && SFV.tmdb.hasKey() &&
                            typeof SFV.tmdb.bestMatch === 'function');
-      S.showSearchStatus('正在聚合结果…');
+      // 分层：身份卡在 aggregate 已定；TMDB 只补海报/评分，不合并分季卡
+      S.showSearchStatus(tmdbEnabled ? '正在补全元数据…' : '正在整理结果…');
       var pId = tmdbEnabled ? S.enrichIdentity(aggregated) : Promise.resolve(aggregated);
       pId.then(function (afterId) {
         if (S._currentSearchView !== viewToken) return;
@@ -157,10 +162,30 @@
           console.log('[SFV-DEBUG] filtered count=' + filtered.length);
           var ranked = (SFV.SearchFilterCore && SFV.SearchFilterCore.rankSearchResults)
             ? SFV.SearchFilterCore.rankSearchResults(filtered, kw) : filtered;
+          // 兜底：raw 命中里同 base 的季/版若未进身份卡（命名过怪/被过滤），提升为兄弟卡
+          var familyCards = [];
+          if (SFV.SearchFilterCore && SFV.SearchFilterCore.collectSeasonFamilyHits) {
+            familyCards = SFV.SearchFilterCore.collectSeasonFamilyHits(merged, ranked, kw) || [];
+            if (familyCards.length) {
+              console.log('[SFV-DEBUG] season-family fallback cards=' + familyCards.length);
+              ranked = ranked.concat(familyCards);
+            }
+          }
           console.log('[SFV-DEBUG] ranked count=' + ranked.length);
           if (ranked.length) {
+            // 供详情页「同系列」横滑使用（身份卡，含分季/完结季）
+            S._lastSearchCards = ranked;
             S.renderInlineResults(ranked, kw);
+            // 季族兜底卡未走 enrichIdentity，异步补海报/评分后重绘（viewToken 防串台）
+            if (familyCards.length && tmdbEnabled && typeof S.enrichIdentity === 'function') {
+              S.enrichIdentity(familyCards).then(function () {
+                if (S._currentSearchView !== viewToken) return;
+                S._lastSearchCards = ranked;
+                S.renderInlineResults(ranked, kw);
+              })['catch'](function () {});
+            }
           } else {
+            S._lastSearchCards = null;
             S.showSearchStatus('没有找到「' + S.esc(kw) + '」的相关结果。');
           }
         });

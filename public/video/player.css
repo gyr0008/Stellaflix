@@ -72,6 +72,38 @@ body.video-player-active > .modal-mask {
   z-index: 2147483500;
 }
 
+/* 登录弹窗同款「点外即关、背后不穿透」套到每周新番 / 多源面板 / 搜索筛选：
+   这三层默认 z-index 在顶栏(#sfv-nav 2147482100)之下，点顶栏/账号会穿透激活背后按钮。
+   与 .modal-mask 抬到 2147483500 同级，确保点任何暗区（含顶栏）都命中遮罩并关闭面板。 */
+body.video-space-active > .sfv-bgm-modal-overlay,
+body.video-player-active > .sfv-bgm-modal-overlay,
+body.video-space-active > .sf-filter-layer,
+body.video-player-active > .sf-filter-layer,
+body.video-space-active > .sfv-picker-backdrop,
+body.video-player-active > .sfv-picker-backdrop {
+  z-index: 2147483500;
+}
+/* 多源面板本体是遮罩的兄弟节点，须再高 1 级，避免与遮罩同层后被吃掉点击 */
+body.video-space-active > .sfv-picker,
+body.video-player-active > .sfv-picker {
+  z-index: 2147483501;
+}
+/* 第三方音源面板（custom-source-modal-overlay 默认 z-index:9990）
+   影视态下同样低于顶栏，点顶栏会穿透；抬到登录弹窗同级。 */
+body.video-space-active > .custom-source-modal-overlay,
+body.video-player-active > .custom-source-modal-overlay {
+  z-index: 2147483500;
+}
+/* 多源面板内二级弹层（别名/手动检索、验证码）同样低于顶栏，一并抬升 */
+body.video-space-active > .sfv-picker-modal-backdrop,
+body.video-player-active > .sfv-picker-modal-backdrop {
+  z-index: 2147483502;
+}
+body.video-space-active > .sfv-picker-captcha-backdrop,
+body.video-player-active > .sfv-picker-captcha-backdrop {
+  z-index: 2147483503;
+}
+
 /* 影视态豁免：index.html:980-981 的 body.immersive-mode .modal-mask{display:none!important}
    会在用户主动进入沉浸模式时连视频详情弹窗一并屏蔽。影视态下「视频详情」仍应浮于视频之上正常弹出，
    故在 video-space-active / video-player-active 且弹窗处于 .show（已打开）时，
@@ -887,8 +919,21 @@ html:fullscreen body.video-space-active #sfv-search-page {
   font-weight: 700;
   letter-spacing: .3px;
   border-radius: 8px;
-  text-shadow: 0 1px 2px rgba(0,0,0,.6);
-  pointer-events: none;
+}
+/* 季/版徽章：左下角，与右上评分对位；标识完结季/S2 等身份 */
+.sfv-search-result-area .sfv-card-season {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 3;
+  padding: 3px 8px;
+  background: rgba(20, 120, 90, .88);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  border-radius: 8px;
+  text-shadow: 0 1px 2px rgba(0,0,0,.5);
 }
 /* 防御：enrichTmdb 异步补全可能往 .sfv-card-sub prepend .sfv-tmdb-vote，
    sub 内的 vote 视觉隐藏（与右上角徽章不重复显示）。 */
@@ -1998,7 +2043,6 @@ body.sfv-plex-immersive .sfv-browse-body {
 .sfv-track-status-opt:hover { border-color: rgba(var(--fc-accent-rgb), .5); }
 .sfv-track-status-opt.on { background: rgb(var(--fc-accent-rgb)); color: #04121a; border-color: transparent; font-weight: 800; }
 
-/* 详情页「加入我的片单」按钮 */
 .sfv-tmdb-attrib {
   margin-top: 14px; font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.4);
   max-width: 540px; letter-spacing: .2px;
@@ -2406,15 +2450,20 @@ body.video-player-active .lyrics-toggle-btn {
   display: none !important;
 }
 
-/* 播放态：中和音乐态 .soft-hidden 的影响，确保底部条仅由 video-player-idle 驱动隐藏 */
+/* 播放态：中和音乐态 .soft-hidden 的影响（影视态淡出不走 soft-hidden）。
+   idle 态由下方更高特异性规则压过，避免音乐态注入 soft-hidden 后藏不掉。 */
 body.video-player-active #bottom-bar.soft-hidden {
   opacity: 1 !important;
   pointer-events: auto !important;
   transform: translateX(-50%) translateY(0) scale(1) !important;
 }
 
-/* 空闲淡出（复用覆盖层 wireIdle 切换的 body.video-player-idle） */
-body.video-player-idle #bottom-bar {
+/* 空闲淡出（wireIdle → body.video-player-idle）。
+   特异性必须 ≥ video-player-active 强制显示 与 soft-hidden 中和规则。 */
+body.video-player-idle #bottom-bar,
+body.video-player-active.video-player-idle #bottom-bar,
+body.video-player-active.video-player-idle #bottom-bar.soft-hidden,
+body.video-player-active.video-player-idle #bottom-bar.visible {
   opacity: 0 !important;
   pointer-events: none !important;
   transform: translateX(-50%) translateY(88px) scale(.972) !important;
@@ -2581,177 +2630,123 @@ body.video-space-active .home-poster-media::after {
   -webkit-overflow-scrolling: touch; /* 移动端惯性滚动 */
 }
 
-/* ---- 片单子 Tab + 卡片网格（全屏模式下渲染进 bodyEl 内部）----
-   子 Tab 现复用追片页 .sfv-track-tabs / .sfv-track-tab / .sfv-track-indicator 样式，
-   背景透明、与页面底色一体，并保留液体下划线流体动画。 */
-
-/* 片单页内容视图：tab 下方容纳多个分类横向 rail 区块 */
-.sfv-collections-view {
-  padding: 16px 0 32px;
-}
-
-/* 片单页分类区块：左上角标题 + 下方「类似影片」横向 rail */
-.sfv-collection-section {
-  margin-bottom: 28px;
-}
-.sfv-collection-section:last-child {
-  margin-bottom: 0;
-}
-.sfv-collection-section__head {
-  display: flex; align-items: center; gap: 12px;
-  padding: 0 16px;
-  margin-bottom: 12px;
-}
-.sfv-collection-section__title {
-  margin: 0;
-  font-size: 18px; font-weight: 800;
-  color: #1a1a1a;
-  line-height: 1.3;
-}
-.sfv-collection-section__action {
-  margin-left: auto;
-  padding: 6px 12px;
-  border-radius: 20px;
-  border: 1px solid rgba(0,0,0,.12);
-  background: transparent;
-  color: #555;
-  font-size: 13px; font-weight: 600;
-  cursor: pointer;
-  transition: background .15s ease;
-}
-.sfv-collection-section__action:hover {
-  background: rgba(0,0,0,.06);
-}
-.sfv-collection-section__loading,
-.sfv-collection-section__empty {
-  padding: 24px 16px;
-  color: #777;
-  font-size: 14px;
-}
-.sfv-collection-section__empty {
-  text-align: center;
-}
-.sfv-collection-section__hint-btn {
-  margin-top: 10px;
-  padding: 8px 16px;
-  border-radius: 20px;
-  border: 0;
-  background: rgba(var(--fc-accent-rgb), .9);
-  color: #000;
-  font-size: 13px; font-weight: 700;
-  cursor: pointer;
-}
-
-/* 我的片单 · 管理视图 */
-.sfv-mine-manage-list {
-  padding: 0 16px;
-}
-.sfv-mine-folder-row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: rgba(0,0,0,.03);
-  margin-bottom: 10px;
-}
-.sfv-mine-folder-name {
-  font-size: 15px; font-weight: 700; color: #1a1a1a;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.sfv-mine-folder-count {
-  font-size: 13px; color: #999; flex: 0 0 auto;
-}
-.sfv-mine-folder-acts {
-  margin-left: auto; flex: 0 0 auto;
-  display: flex; gap: 8px;
-}
-.sfv-mine-folder-btn {
-  padding: 6px 12px;
-  border-radius: 18px;
-  border: 1px solid rgba(0,0,0,.12);
-  background: transparent;
-  color: #555;
-  font-size: 13px; font-weight: 600;
-  cursor: pointer;
-  transition: background .15s ease;
-}
-.sfv-mine-folder-btn:hover { background: rgba(0,0,0,.06); }
-.sfv-mine-folder-btn--danger {
-  border-color: rgba(217,72,72,.4);
-  color: #d94848;
-}
-.sfv-mine-folder-btn--danger:hover { background: rgba(217,72,72,.1); }
-
-/* 片单夹 section 标题行内联操作按钮（重命名/删除，右对齐） */
-.sfv-mine-folder-acts-inline {
-  margin-left: auto; flex: 0 0 auto;
-  display: flex; gap: 8px;
-}
-
-/* 「我的片单」底部：居中新建按钮 */
-.sfv-collections-footer {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 20px;
-  margin-top: 8px;
-}
-.sfv-collections-footer__add {
-  width: 150px; height: 40px;
-  border-radius: 20px;
-  /* 搜索框玻璃质感：复用 --glass-* 变量 */
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(34px) saturate(1.34);
-  -webkit-backdrop-filter: blur(34px) saturate(1.34);
-  color: #fff;
-  font-size: 14px; font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
-}
-.sfv-collections-footer__add:hover {
-  border-color: rgba(255,255,255,.35);
-  box-shadow: var(--glass-shadow), 0 4px 16px rgba(0,0,0,.25);
-}
-
-/* 片单页（浅色背景）对详情页 rail 组件的本地化覆盖 */
-.sfv-collections-view .sfv-plex-rail__arrow {
-  color: #1a1a1a;
-}
-.sfv-collections-view .sfv-plex-rail__arrow svg {
-  filter: drop-shadow(0 1px 3px rgba(255,255,255,.6));
-}
-.sfv-collections-view .sfv-plex-card {
-  width: 360px;
-  box-sizing: border-box; /* 让 360px 包含 1px border，避免 offsetWidth 变成 362 */
-  border-color: rgba(0,0,0,.08);
-  box-shadow: 0 6px 18px rgba(0,0,0,.12);
-}
-.sfv-collections-view .sfv-plex-card:hover {
-  box-shadow: 0 14px 34px rgba(0,0,0,.22);
-}
-/* 片单页 rail 容器：每排只完整显示 5 张 360px 卡片（含 4 个 19px gap），
-   右侧超出用「padding-right 小间隙 + clip 可见区域」管理，不再对 rail-wrap 加
-   overflow:hidden —— 这样首/尾卡片 hover 放大 1.05 时不会被 wrap 的裁切边界
-   切掉圆角/阴影。需要第 6 张不露缝隙时由 rail 本身 scrollbar + rail 的
-   overflow-x:auto 承担横向裁切。 */
-.sfv-collections-view .sfv-plex-rail-wrap {
-  max-width: 1876px;
-  margin: 0 auto;
-  overflow: visible;
-  padding: 12px 4px 4px; /* 上下/左右各留 4~12px 呼吸位，放大卡片阴影+圆角不全被裁 */
-}
-.sfv-collections-view .sfv-plex-rail { width: 100%; }
-
-/* 具体片单二级视图：左上角片单名 + 下方「类似影片」横向 rail */
+/* 具体片单二级视图：左上角片单名 + 下方「类似影片」横向 rail
+   （2026-09-19：片单页 .sfv-collections-view / 「我的片单」管理视图样式已随功能删除） */
 .sfv-collection-items-view { padding: 0 16px; }
 .sfv-collection-items-head {
   font-size: 20px; font-weight: 800; color: #1a1a1a;
   letter-spacing: .02em; padding: 18px 0 10px;
 }
+
+/* ===== 片库占位页（原首页「片单」卡改名入口 · Folia 海报墙落点）=====
+   深色影院语境，区别于片单页乳白底；全屏 chrome 类 sfv-library-chrome 由 online-nav 切换。
+   poster-wall.css 会以 !important 覆盖同路径背景，防止被 .sfv-browse--fullscreen 乳白底盖住。 */
+.sfv-library-chrome.sfv-browse--fullscreen {
+  background:
+    radial-gradient(circle at 14% 12%, rgba(253, 92, 71, 0.14), transparent 29%),
+    radial-gradient(circle at 86% 82%, rgba(106, 72, 255, 0.16), transparent 32%),
+    #070707;
+  color: #f7f4ee;
+}
+.sfv-library-chrome.sfv-browse--fullscreen .sfv-browse-head {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+.sfv-library-chrome.sfv-browse--fullscreen .sfv-browse-title,
+.sfv-library-chrome.sfv-browse--fullscreen .sfv-browse-back,
+.sfv-library-chrome.sfv-browse--fullscreen .sfv-browse-close {
+  color: #f7f4ee;
+}
+.sfv-library-host {
+  min-height: 100%;
+  color: #f7f4ee;
+}
+.sfv-library-page-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 100%;
+  padding: 28px 28px 36px;
+  box-sizing: border-box;
+}
+.sfv-library-eyebrow {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: rgba(247, 244, 238, 0.55);
+  margin-bottom: 8px;
+}
+.sfv-library-title {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #f7f4ee;
+}
+.sfv-library-sub {
+  margin: 10px 0 0;
+  max-width: 520px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: rgba(247, 244, 238, 0.62);
+}
+.sfv-library-wall-host {
+  flex: 1;
+  min-height: 320px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 42%),
+    rgba(10, 10, 12, 0.72);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.sfv-library-wall-placeholder {
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+  padding: 24px;
+}
+.sfv-library-wall-icon {
+  font-size: 56px;
+  line-height: 1;
+  opacity: 0.45;
+  margin-bottom: 16px;
+  color: rgba(247, 244, 238, 0.8);
+}
+.sfv-library-wall-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: rgba(247, 244, 238, 0.88);
+  margin-bottom: 8px;
+}
+.sfv-library-wall-hint {
+  font-size: 12px;
+  color: rgba(247, 244, 238, 0.45);
+  letter-spacing: 0.04em;
+}
+.sfv-library-foot {
+  display: flex;
+  justify-content: flex-start;
+}
+.sfv-library-link {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f7f4ee;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
+}
+.sfv-library-link:hover { background: rgba(255, 255, 255, 0.12); }
+.sfv-library-link:active { transform: scale(0.97); }
+
 
 /* ===== 来源失效标记面板（openDetailFromMeta / loadDetail 自动修复失败后的兜底 UI）=====
    自包含暗色玻璃卡片：在详情页（亮/暗 body 均可）保证可读；保留原始信息 + 手动打开/重试。 */
@@ -2807,68 +2802,6 @@ body.video-space-active .home-poster-media::after {
 }
 .sfv-expired-btn--primary:hover { filter: brightness(1.08); background: linear-gradient(135deg, rgba(244, 210, 138, 0.96), rgba(244, 210, 138, 0.70)); }
 
-
-/* 新建片单夹弹窗 */
-.sfv-folder-dialog-mask {
-  position: fixed; inset: 0; z-index: 9999;
-  background: rgba(0,0,0,.5);
-  display: flex; align-items: center; justify-content: center;
-  /* T142：全屏遮罩层裁圆角，避免透明窗口四角露出矩形暗边。 */
-  clip-path: inset(0 round 34px) !important;
-  -webkit-clip-path: inset(0 round 34px) !important;
-  border-radius: 22px !important;
-}
-.sfv-folder-dialog {
-  background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 18px;
-  padding: 24px; width: 320px; max-width: 86vw; color: #fff;
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(34px) saturate(1.34); -webkit-backdrop-filter: blur(34px) saturate(1.34);
-}
-.sfv-folder-dialog h3 { margin: 0 0 16px; font-size: 16px; color: #fff; }
-.sfv-folder-dialog input {
-  width: 100%; height: 40px; padding: 0 12px; border-radius: 10px;
-  border: 1px solid rgba(255,255,255,.20); background: rgba(255,255,255,.10);
-  color: #fff; font-size: 14px; outline: none;
-  box-sizing: border-box; margin-bottom: 16px;
-}
-.sfv-folder-dialog input::placeholder { color: rgba(255,255,255,.45); }
-.sfv-folder-dialog input:focus { border-color: rgba(var(--fc-accent-rgb), .7); }
-.sfv-folder-dialog-btns { display: flex; gap: 10px; justify-content: flex-end; }
-.sfv-folder-dialog-btns button {
-  padding: 9px 18px; border-radius: 10px; border: none; cursor: pointer; font-size: 13px;
-}
-.sfv-folder-btn-cancel { background: rgba(255,255,255,.12); color: #fff; }
-.sfv-folder-btn-ok { background: rgba(var(--fc-accent-rgb), .92); color: #04121a; font-weight: 600; }
-
-/* 加入我的片单：选择片单夹弹窗 */
-.sfv-pick-dialog-mask {
-  position: fixed; inset: 0; z-index: 9999;
-  background: rgba(0,0,0,.5);
-  display: flex; align-items: center; justify-content: center;
-  /* T142：全屏遮罩层裁圆角，避免透明窗口四角露出矩形暗边。 */
-  clip-path: inset(0 round 34px) !important;
-  -webkit-clip-path: inset(0 round 34px) !important;
-  border-radius: 22px !important;
-}
-.sfv-pick-dialog {
-  background: #fff; border-radius: 16px; padding: 20px;
-  width: 340px; max-width: 88vw; max-height: 70vh; overflow-y: auto;
-  box-shadow: 0 20px 60px rgba(0,0,0,.3);
-}
-.sfv-pick-dialog h3 { margin: 0 0 14px; font-size: 16px; color: #1a1a1a; }
-.sfv-pick-item {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 11px 12px; border-radius: 10px; cursor: pointer;
-  transition: background .15s;
-}
-.sfv-pick-item:hover { background: rgba(0,0,0,.05); }
-.sfv-pick-item-name { font-size: 14px; color: #1a1a1a; }
-.sfv-pick-item-count { font-size: 12px; color: #888; }
-.sfv-pick-item.add-new {
-  border: 1px dashed rgba(var(--fc-accent-rgb), .5);
-  justify-content: center; color: rgba(var(--fc-accent-rgb), .85); font-weight: 500;
-  margin-top: 8px;
-}
 
 /* ====================================================================
  * T134 电影页面筛选器组件 (.sfv-mfilter)
@@ -3556,21 +3489,6 @@ body.sfv-plex-immersive #sfv-nav { display: none !important; }
 .sfv-plex-pill--play:hover { background: #fff; }
 .sfv-plex-pill--play svg { width: 24px; height: 24px; }
 
-.sfv-coll-popover {
-  position: absolute; top: calc(100% + 8px); left: 0; z-index: 30;
-  box-sizing: border-box;
-  padding: 8px; border-radius: 14px;
-  /* 收藏面板材质/玻璃效果：与播放器底部控制栏「画质」面板（.sfv-sr-popover）一致 */
-  background: var(--saved-panel-glass-bg);
-  border: 0;
-  box-shadow: var(--saved-panel-glass-shadow);
-  backdrop-filter: var(--saved-panel-glass-filter);
-  -webkit-backdrop-filter: var(--saved-panel-glass-filter);
-  display: none;
-}
-/* svg-ok 玻璃模式下与画质面板保持一致（blur(12px)→svg 滤镜） */
-html.control-glass-svg-ok .sfv-coll-popover { backdrop-filter: var(--saved-panel-glass-svg-filter); -webkit-backdrop-filter: var(--saved-panel-glass-svg-filter); }
-.sfv-coll-popover.open { display: block; }
 .sfv-plex-track-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 9px 12px; border: 0; background: transparent; color: #fff;
@@ -3580,26 +3498,6 @@ html.control-glass-svg-ok .sfv-coll-popover { backdrop-filter: var(--saved-panel
 .sfv-plex-track-item.active { color: #01b4e4; }
 .sfv-plex-track-item svg { width: 18px; height: 18px; flex: 0 0 auto; display: block; }
 .sfv-plex-track-item .lbl { flex: 1 1 auto; }
-
-/* ---- ＋收藏 面板（用户自建片单夹分类列表）---- */
-.sfv-coll-popover { min-width: 220px; }
-.sfv-coll-head { padding: 9px 12px 6px; font-size: 12px; font-weight: 700; color: rgba(255,255,255,.6); letter-spacing: .3px; }
-.sfv-coll-list { max-height: 240px; overflow-y: auto; }
-.sfv-coll-list .sfv-plex-track-item .cnt { margin-left: auto; padding-left: 8px; font-size: 11px; color: rgba(255,255,255,.4); }
-.sfv-coll-empty { padding: 14px 12px; font-size: 12.5px; line-height: 1.5; color: rgba(255,255,255,.5); text-align: center; }
-.sfv-coll-create {
-  display: flex; align-items: center; gap: 6px; width: 100%;
-  margin-top: 4px; padding: 10px 12px;
-  border: 0; border-top: 1px solid rgba(255,255,255,.12);
-  background: transparent; color: rgb(0,245,212);
-  font-size: 13px; font-weight: 700; border-radius: 0 0 9px 9px; cursor: pointer; text-align: left;
-}
-.sfv-coll-create:hover { background: rgba(0,245,212,.10); }
-/* 触发器：已收藏态（状态及时更新）*/
-.sfv-plex-pill.collected {
-  color: rgb(0,245,212); border-color: rgba(0,245,212,.5);
-  background: rgba(0,245,212,.14);
-}
 
 .sfv-plex-overview {
   max-width: 760px; margin-top: 26px;
@@ -4078,13 +3976,7 @@ body.desktop-shell.desktop-fullscreen .sfv-plex-bg,
 html:fullscreen body.desktop-shell .sfv-plex-bg,
 body.desktop-shell.desktop-maximized .sfv-tmdb-settings-overlay,
 body.desktop-shell.desktop-fullscreen .sfv-tmdb-settings-overlay,
-html:fullscreen body.desktop-shell .sfv-tmdb-settings-overlay,
-body.desktop-shell.desktop-maximized .sfv-folder-dialog-mask,
-body.desktop-shell.desktop-fullscreen .sfv-folder-dialog-mask,
-html:fullscreen body.desktop-shell .sfv-folder-dialog-mask,
-body.desktop-shell.desktop-maximized .sfv-pick-dialog-mask,
-body.desktop-shell.desktop-fullscreen .sfv-pick-dialog-mask,
-html:fullscreen body.desktop-shell .sfv-pick-dialog-mask {
+html:fullscreen body.desktop-shell .sfv-tmdb-settings-overlay {
   clip-path: none !important;
   -webkit-clip-path: none !important;
   border-radius: 0 !important;
@@ -4202,125 +4094,6 @@ html.control-glass-svg-ok .sfv-page-bg-layer {
   -webkit-backdrop-filter: none !important;
 }
 
-/* ============================================================
- * 影视态「收藏到片单」弹窗（player-collect.js）
- * ============================================================ */
-.sfv-collect-modal-mask .modal.sfv-collect-modal {
-  width: min(460px, 92vw);
-  max-width: min(460px, 92vw);
-  padding: 24px;
-  text-align: left;
-}
-.sfv-collect-modal h2 {
-  text-align: center;
-  margin: 0 0 16px;
-  font-size: 18px;
-  font-weight: 700;
-}
-.sfv-collect-current {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 12px;
-  background: rgba(255, 255, 255, .06);
-  border-radius: 12px;
-}
-.sfv-collect-cover {
-  width: 48px;
-  height: 72px;
-  flex-shrink: 0;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, .08) center / cover no-repeat;
-}
-.sfv-collect-meta { min-width: 0; }
-.sfv-collect-title {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sfv-collect-sub {
-  font-size: 12px;
-  opacity: .7;
-  margin-top: 4px;
-}
-.sfv-collect-new {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-.sfv-collect-new-input {
-  flex: 1;
-  min-width: 0;
-  padding: 9px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, .18);
-  background: rgba(0, 0, 0, .26);
-  color: #fff;
-  font-size: 14px;
-}
-.sfv-collect-new-input:focus {
-  outline: none;
-  border-color: rgba(0, 245, 212, .65);
-}
-.sfv-collect-create-btn { white-space: nowrap; }
-.sfv-collect-list {
-  max-height: 260px;
-  overflow-y: auto;
-  margin-bottom: 16px;
-}
-.sfv-collect-empty {
-  padding: 24px;
-  text-align: center;
-  opacity: .6;
-  font-size: 14px;
-}
-.sfv-collect-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: background .15s ease;
-}
-.sfv-collect-item:hover { background: rgba(255, 255, 255, .08); }
-.sfv-collect-checkbox {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  accent-color: rgb(0, 245, 212);
-  cursor: pointer;
-}
-.sfv-collect-item-name {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sfv-collect-item-count {
-  font-size: 12px;
-  opacity: .6;
-  flex-shrink: 0;
-}
-
-@media (max-width: 640px) {
-  .sfv-collect-modal-mask .modal.sfv-collect-modal {
-    width: 94vw;
-    padding: 18px;
-  }
-  .sfv-collect-list { max-height: 42vh; }
-  .sfv-collect-new { flex-direction: column; }
-  .sfv-collect-create-btn { width: 100%; }
-}
-
-@media (max-width: 380px) {
-  .sfv-collect-modal h2 { font-size: 16px; }
-  .sfv-collect-cover { width: 40px; height: 60px; }
-}
-
 
 /* ============================================================
  * 内置规则仓库 Glass 面板 - 对齐 Kazumi 设计风格
@@ -4377,7 +4150,6 @@ html.control-glass-svg-ok .sfv-page-bg-layer {
   border-bottom: 1px solid rgba(255, 255, 255, .06);
 }
 .sfv-glass-title { display: flex; align-items: center; gap: 8px; }
-.sfv-glass-title-icon { font-size: 22px; line-height: 1; }
 .sfv-glass-title strong {
   font-size: 16px; font-weight: 700; color: rgba(255, 255, 255, .95);
   letter-spacing: .3px;
@@ -4449,7 +4221,8 @@ html.control-glass-svg-ok .sfv-page-bg-layer {
 }
 
 /* 列表区 */
-.sfv-glass-body { flex: 1; overflow-y: auto; padding: 8px 20px 4px; }
+.sfv-glass-body { flex: 1; overflow-y: auto; padding: 8px 20px 4px; scrollbar-width: none; -ms-overflow-style: none; }
+.sfv-glass-body::-webkit-scrollbar { display: none; }
 .sfv-glass-status {
   padding: 20px 0; text-align: center;
   font-size: 13px; color: rgba(255, 255, 255, .55);
@@ -4535,10 +4308,6 @@ html.control-glass-svg-ok .sfv-page-bg-layer {
   border-top: 1px solid rgba(255, 255, 255, .04);
 }
 .sfv-glass-footer-hint { font-size: 10px; color: rgba(255, 255, 255, .30); }
-
-/* 规则仓库按钮高亮 */
-.sfv-rule-repo-btn::before { content: "🌐"; font-size: 12px; margin-right: 1px; }
-
 
 /* ===== Startup default space = video: early home shell from music module chain (body.sfv-home-boot) =====
    Music 3D / particles / login / dashboard still fully init. This only keeps splash reveal on a video home skeleton. */

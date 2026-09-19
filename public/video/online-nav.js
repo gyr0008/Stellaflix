@@ -75,18 +75,18 @@
         if (!isOpen()) return;
         if (ev && (ev.key === 'Escape' || ev.keyCode === 27)) {
           if (SFV.SearchFilter && SFV.SearchFilter.isOpen && SFV.SearchFilter.isOpen()) return;
+          // 多源选择面板打开时，Esc 优先关面板（详情页/浏览厅均适用），再按一次才退出页面
+          if (SFV.sourcePicker && SFV.sourcePicker.isOpen && SFV.sourcePicker.isOpen()) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            SFV.sourcePicker.close();
+            return;
+          }
           // T152：背景 DIY 面板打开时，Esc 优先关闭面板，再按一次才退出页面
           if (SFV.pageBgDiy && SFV.pageBgDiy.isModalOpen && SFV.pageBgDiy.isModalOpen()) {
             ev.preventDefault();
             ev.stopPropagation();
             SFV.pageBgDiy.closeModal();
-            return;
-          }
-          // T156c：片单页「新建/重命名片单夹」对话框打开时，Esc 优先关闭对话框而非退出整个片单页
-          if (SFV.pageCollections && SFV.pageCollections.isFolderDialogOpen && SFV.pageCollections.isFolderDialogOpen()) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            if (SFV.pageCollections.closeFolderDialog) SFV.pageCollections.closeFolderDialog();
             return;
           }
           ev.preventDefault();
@@ -217,14 +217,16 @@
 
     if (SFV.nav && typeof SFV.nav.paintActive === 'function') SFV.nav.paintActive(key);
 
-    if (key === 'collections') {
+    if (key === 'library') {
       S.overlay.classList.add('sfv-show');
       S.overlay.classList.remove('sfv-browse--page');
       S.overlay.classList.add('sfv-browse--fullscreen');
       S.overlay.classList.remove('sfv-browse--category');
       S.overlay.style.top = '';
       S.overlay.style.left = '';
-      S.titleEl.textContent = '片单';
+      // 片库 = Folia 海报墙占位页（原「片单」页已随功能删除）
+      S.titleEl.textContent = '片库';
+      S.overlay.classList.toggle('sfv-library-chrome', key === 'library');
       // 与追片页 category 模式统一：返回按钮使用 SVG 箭头图标，而非文字 ←
       S.backBtn.innerHTML = '<svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>';
       S.backBtn.setAttribute('aria-label', '返回');
@@ -239,6 +241,7 @@
       S.overlay.classList.add('sfv-browse--page');
       S.overlay.classList.remove('sfv-browse--fullscreen');
       S.overlay.classList.remove('sfv-browse--collections');
+      S.overlay.classList.remove('sfv-library-chrome');
       S.overlay.style.top = '0';
       // T157→重审：page 模式（历史/汇联/世界）下同样通过 body.sfv-browse-active 标记浏览分页态；
       // 搜索入口保留在 #top-right 胶囊内，不再隐藏全局胶囊。
@@ -270,6 +273,7 @@
     S.overlay.classList.add('sfv-browse--page');
     S.overlay.classList.remove('sfv-browse--fullscreen');
     S.overlay.classList.remove('sfv-browse--collections');
+    S.overlay.classList.remove('sfv-library-chrome');
     S.overlay.style.top = '0';
     S.titleEl.textContent = title || '';
     if (SFV.router) SFV.router.go(id);
@@ -330,7 +334,7 @@
   function closeOverlayAnimated() {
     if (!S.overlay) return;
     if (!S.overlay.classList.contains('sfv-show')) {
-      S.overlay.classList.remove('sfv-browse--closing', 'sfv-browse--page', 'sfv-browse--fullscreen', 'sfv-browse--collections', 'sfv-browse--category', 'sfv-history-page');
+      S.overlay.classList.remove('sfv-browse--closing', 'sfv-browse--page', 'sfv-browse--fullscreen', 'sfv-browse--collections', 'sfv-browse--category', 'sfv-history-page', 'sfv-library-chrome');
       S.overlay.style.top = '';
       try { if (doc && doc.body) { doc.body.classList.remove('sfv-plex-immersive'); doc.body.classList.remove('sfv-browse-active'); } } catch (e) {}
       // T158：覆盖层未激活即退出时，仍强制回收残留跨页浮层
@@ -341,7 +345,7 @@
     S.overlay.classList.add('sfv-browse--closing');
     var done = function () {
       S.overlay.removeEventListener('animationend', done);
-      S.overlay.classList.remove('sfv-browse--closing', 'sfv-browse--page', 'sfv-browse--fullscreen', 'sfv-browse--collections', 'sfv-browse--category', 'sfv-history-page');
+      S.overlay.classList.remove('sfv-browse--closing', 'sfv-browse--page', 'sfv-browse--fullscreen', 'sfv-browse--collections', 'sfv-browse--category', 'sfv-history-page', 'sfv-library-chrome');
       S.overlay.style.top = '';
       try { if (doc && doc.body) { doc.body.classList.remove('sfv-plex-immersive'); doc.body.classList.remove('sfv-browse-active'); } } catch (e) {}
       // T158：覆盖层退出动画完成时，强制回收残留跨页浮层
@@ -384,6 +388,9 @@
   var playerReturn = null;
   function capturePlayerReturn(view) {
     if (!view) { playerReturn = null; return; }
+    // 首页「接着看」/NEXT UP 续播（_origin==='continue'，由 home-continue-watching 打标透传）
+    // → 不记录返回目标，退出播放器维持默认行为（回 home），不重建该视频详情页
+    if (view._origin === 'continue') { playerReturn = null; return; }
     // 详情 view 含 _origin==='history'（历史卡片点击时标记） → 返回历史分类页；否则返回详情页
     playerReturn = { view: view, fromHistory: (view._origin === 'history') };
   }
@@ -418,7 +425,7 @@
     var _prevUiMode = S.uiMode;
     if (!S.overlay.classList.contains('sfv-show')) S.overlay.classList.add('sfv-show');
     S.uiMode = 'view';
-    S.overlay.classList.remove('sfv-browse--page', 'sfv-browse--category', 'sfv-browse--fullscreen', 'sfv-browse--collections');
+    S.overlay.classList.remove('sfv-browse--page', 'sfv-browse--category', 'sfv-browse--fullscreen', 'sfv-browse--collections', 'sfv-library-chrome');
     // D5 修复：进入详情前若处于页面 tab 模式（uiMode==='page'），记录发起页 id，
     // 供 goBack 经 goToNav 返回该页面而非整层关闭回首页；非 page 模式（legacy/搜索）清空，防残留误触发。
     if (_prevUiMode === 'page' && SFV.router && typeof SFV.router.currentId === 'function') {

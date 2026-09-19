@@ -29,6 +29,7 @@ win-unpacked/
 spotify-credentials.json
 .spotify-token.json
 spotify-token.json
+subsonic-servers.json*
 listen-sync-journal.json
 login-easter-egg.json
 login-easter-egg-state.json

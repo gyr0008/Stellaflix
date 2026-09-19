@@ -140,7 +140,9 @@
         overview: r.overview || '',
         poster: posterUrl(r.poster_path, 'w500'),
         backdrop: posterUrl(r.backdrop_path, 'w780'),
-        rating: r.vote_average || 0
+        rating: r.vote_average || 0,
+        genres: (r.genres || []).map(function (g) { return g.name; }),
+        originalLanguage: r.original_language || ''
       };
     });
   }
@@ -280,7 +282,8 @@
         voteCount: r.vote_count || 0,
         popularity: r.popularity || 0,
         adult: !!r.adult,
-        genreIds: r.genre_ids || []
+        genreIds: r.genre_ids || [],
+        originalLanguage: r.original_language || ''
       };
     });
   }
@@ -335,7 +338,8 @@
             poster: posterUrl(p.poster_path),
             backdrop: posterUrl(p.backdrop_path, 'w780'),
             rating: p.vote_average || 0,
-            genreIds: p.genre_ids || []
+            genreIds: p.genre_ids || [],
+            originalLanguage: p.original_language || ''
           };
         })
       };
@@ -401,6 +405,18 @@
       var collection = r.belongs_to_collection
         ? { id: r.belongs_to_collection.id, name: r.belongs_to_collection.name || '', poster: posterUrl(r.belongs_to_collection.poster_path, 'w342') }
         : null;
+      // TV 分季（排除 specials season_number===0）：详情页「分季」入口用
+      var seasons = (r.seasons || []).filter(function (s) {
+        return s && s.season_number > 0;
+      }).map(function (s) {
+        return {
+          seasonNumber: s.season_number,
+          name: s.name || ('第' + s.season_number + '季'),
+          episodeCount: s.episode_count || 0,
+          poster: posterUrl(s.poster_path, 'w342'),
+          airDate: s.air_date || ''
+        };
+      });
       return {
         // 详情页 HEADER / 标题所需（2026-08-06 重设计接入）
         title: r.title || r.name || '',
@@ -414,6 +430,7 @@
         genres: genres,
         cast: cast,
         similar: similar,
+        seasons: seasons,
         // logos: 透明 PNG 标题矢量图（zh > en > null > others 排序在 detail.js 做）
         // 这里只做原始数据透传，让 detail.js 按当前语言/评分策略挑选
         images: {
@@ -484,6 +501,30 @@
     });
   }
 
+  // ---- 片单二级页元数据字典（零额外请求：列表响应自带 genre_ids/original_language）----
+  // TMDB movie+tv 类型 ID → 中文（language=zh-CN 下的官方译名）
+  var GENRE_NAMES = {
+    28: '动作', 12: '冒险', 16: '动画', 35: '喜剧', 80: '犯罪', 99: '纪录片',
+    18: '剧情', 10751: '家庭', 14: '奇幻', 36: '历史', 27: '恐怖', 10402: '音乐',
+    9648: '悬疑', 10749: '爱情', 878: '科幻', 10770: '电视电影', 53: '惊悚',
+    10752: '战争', 37: '西部', 10759: '冒险', 10762: '少儿', 10763: '新闻',
+    10764: '真人秀', 10765: '科幻', 10766: '肥皂剧', 10767: '脱口秀', 10768: '政治'
+  };
+  // original_language（ISO 639-1）→ 中文地区近似（列表级只有语言没有国家，片单场景够用）
+  var LANG_REGION = {
+    zh: '内地', en: '美国', ja: '日本', ko: '韩国', fr: '法国', de: '德国',
+    es: '西班牙', ru: '俄罗斯', it: '意大利', th: '泰国', hi: '印度', sv: '瑞典',
+    da: '丹麦', pt: '葡萄牙', nl: '荷兰', pl: '波兰', cs: '捷克', id: '印尼',
+    ta: '印度', tr: '土耳其', ar: '阿拉伯'
+  };
+  function genreNames(ids) {
+    return (ids || []).map(function (g) { return GENRE_NAMES[g]; }).filter(Boolean).join('、');
+  }
+  function regionLabel(lang) {
+    var key = String(lang || '').split('-')[0].toLowerCase();
+    return LANG_REGION[key] || '';
+  }
+
   var tmdb = {
     configure: function (o) {
       if (!o) return;
@@ -509,7 +550,9 @@
     getDetailBundle: getDetailBundle,
     getMovieLogos: getMovieLogos,
     getExternalIds: getExternalIds,
-    getReviews: getReviews
+    getReviews: getReviews,
+    genreNames: genreNames,
+    regionLabel: regionLabel
   };
 
   SFV.tmdb = tmdb;

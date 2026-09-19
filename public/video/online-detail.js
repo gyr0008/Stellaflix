@@ -111,7 +111,9 @@
     }).catch(function () { });
   }
 
-  // ---- 方案 A：TMDB 身份归一 ----
+  // ---- TMDB 仅补全元数据（海报/评分/id），不再按 tmdbId 合并卡片 ----
+  // 分层原则：搜索页身份由 aggregateByLocalKey（L0 标题/季）决定；
+  // TMDB 多季常共享 series id，若在此二次 merge 会吞掉完结季等分卡。
   function enrichIdentity(aggs) {
     if (!aggs || !aggs.length) return Promise.resolve(aggs);
     if (!SFV.tmdb || typeof SFV.tmdb.hasKey !== 'function' || !SFV.tmdb.hasKey() ||
@@ -136,40 +138,17 @@
           if (m.rating != null) item.tmdbRating = m.rating;
           if (m.poster) item.pic = m.poster;
         }
+        // isKazumi 语义保持：仅当全部 variant 都是规则源
+        item.isKazumi = (item.variants || []).length > 0 &&
+          item.variants.every(function (v) { return v && v.isKazumi; });
+        delete item._localKey;
         return worker();
       });
     }
     var ps = [];
     for (var i = 0; i < CONC; i++) ps.push(worker());
     return Promise.all(ps).then(function () {
-      var tmap = {}; var torder = [];
-      aggs.forEach(function (a) {
-        var markers = '';
-        if (SFV.SearchFilterCore && SFV.SearchFilterCore.extractIdentityMarkers) {
-          markers = SFV.SearchFilterCore.extractIdentityMarkers(a.title || '');
-        }
-        var tk = (a._tmdb && a._tmdb.id != null)
-          ? (a._tmdb.id + '|' + a._tmdb.mediaType + '|' + markers)
-          : ('local:' + a._localKey);
-        if (!tmap[tk]) { tmap[tk] = a; torder.push(tk); return; }
-        var prev = tmap[tk];
-        prev.cmsVars = (prev.cmsVars || []).concat(a.cmsVars || []);
-        prev.kzVars = (prev.kzVars || []).concat(a.kzVars || []);
-        prev.variants = (prev.variants || []).concat(a.variants || []);
-        if (!prev.pic && a.pic) prev.pic = a.pic;
-        if (!prev.playUrl && a.playUrl) prev.playUrl = a.playUrl;
-        if (!prev.year && a.year) prev.year = a.year;
-        if (!prev.typeName && a.typeName) prev.typeName = a.typeName;
-        if (!prev.content && a.content) prev.content = a.content;
-        if (prev.tmdbRating == null && a.tmdbRating != null) prev.tmdbRating = a.tmdbRating;
-      });
-      return torder.map(function (tk) {
-        var a = tmap[tk];
-        a.isKazumi = (a.variants || []).length > 0 &&
-          a.variants.every(function (v) { return v && v.isKazumi; });
-        delete a._localKey;
-        return a;
-      });
+      return aggs;
     });
   }
 

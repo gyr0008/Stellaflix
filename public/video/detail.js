@@ -3,7 +3,7 @@
  * ----------------------------------------------------------------
  * 设计契约见 player.css .sfv-detail-plex 注释 + 2026-08-06 协同设计决议：
  *   整页海报 fixed 铺满 + 仅底部 50% 暗渐变；左上圆形返回 + 右上 Plex 胶囊(-□×)；
- *   白色标题(甲:优先海报扣取,回退 TMDB 文字)；药丸操作组(播放/追片6态/收藏/下载)；
+ *   白色标题(甲:优先海报扣取,回退 TMDB 文字)；药丸操作组(播放/追片6态/收藏)；
  *   HEADER 元数据只读 4 字段(字段间 | 分隔,多类型间 / 分隔)；演员⌀70 + 相似/剧照卡(默认无独立标题文字)；
  *   8px TMDB 署名(G4-A)。剧集/选源冻结(等 Kazumi 讨论)。仅影视态可见(双态隔离)。
  *
@@ -39,7 +39,6 @@
     heart:    svg('<path d="M12 20.5C12 20.5 4.5 15.6 4.5 9.8 4.5 7.2 6.4 5.4 8.9 5.4c1.7 0 3.1 1 3.6 2.3.5-1.3 1.9-2.3 3.6-2.3 2.5 0 4.4 1.8 4.4 4.4 0 5.8-7.5 10.7-7.5 10.7z"/>'),
     edit:     svg('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>'),
     audio:    svg('<path d="M4 6h16M4 12h16M4 18h16"/>'),
-    download: svg('<path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/>'),
     add:      svg('<path d="M12 5v14M5 12h14"/>'),
     // Plex 窗口控制专用图标 —— 差异②：放大到 20px 并加粗 stroke，
     // 让 − □ × 在窄胶囊里也清晰(参照左侧参考图粗体图标)
@@ -47,10 +46,6 @@
     max:      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5" stroke="currentColor" stroke-width="2.4"/></svg>',
     close:    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>'
   };
-
-  // 收藏面板内联图标（勾选 / 小加号），与 ICON 同源 stroke 风格
-  var CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5 10 17.5 19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  var PLUS_SM_SVG = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
 
   // 追片 6 态（未追=null + model.js 的 5 态枚举）
   var TRACK_MENU = [
@@ -138,131 +133,6 @@
     toast('已设为：' + trackLabel(next));
   }
 
-  // ---- ＋收藏：片单夹面板（列出用户自建片单分类，点击切换加入/移出）----
-  var _collectTriggerBtn = null;
-
-  // 当前内容是否已在该片单夹（按 view.key 身份判定）
-  function isCollectedIn(folder, view) {
-    var id = view && view.key;
-    if (!id || !folder || !folder.items) return false;
-    for (var i = 0; i < folder.items.length; i++) {
-      if (folder.items[i].id === id) return true;
-    }
-    return false;
-  }
-  function collectedFolderCount(folders, view) {
-    var n = 0;
-    for (var i = 0; i < folders.length; i++) if (isCollectedIn(folders[i], view)) n++;
-    return n;
-  }
-  // 刷新触发器：反映「已收藏」状态（状态及时更新）
-  function refreshCollectBtn(view) {
-    if (!_collectTriggerBtn) return;
-    var folders = (SFV.collections && SFV.collections.listUserFolders) ? SFV.collections.listUserFolders() : [];
-    var n = collectedFolderCount(folders, view);
-    if (n > 0) {
-      _collectTriggerBtn.classList.add('collected');
-      _collectTriggerBtn.setAttribute('aria-label', '已收藏，加入 ' + n + ' 个片单');
-      _collectTriggerBtn.title = '已收藏（' + n + ' 个片单）';
-    } else {
-      _collectTriggerBtn.classList.remove('collected');
-      _collectTriggerBtn.setAttribute('aria-label', '收藏到片单');
-      _collectTriggerBtn.title = '收藏到片单';
-    }
-  }
-  function collectItemPayload(view) {
-    return {
-      id: view.key,
-      mediaType: view.mediaType || 'movie',
-      title: view.title || '',
-      // FIX: 兼容 pic / poster 两种字段，避免某些入口只传了 poster 时片单丢失海报
-      poster: view.pic || view.poster || '',
-      year: view.year || '',
-      key: view.key
-    };
-  }
-
-  function openCollectPanel(anchorBtn, view) {
-    if (!SFV.collections) { toast('片单功能未就绪'); return; }
-    var menu = anchorBtn.querySelector('.sfv-coll-popover');
-    // 已打开则收回（再次点击按钮关闭）
-    if (menu && menu.classList.contains('open')) {
-      menu.classList.remove('open');
-      return;
-    }
-    if (!menu) { menu = el('div', 'sfv-coll-popover'); anchorBtn.appendChild(menu); }
-    // 影视模块无登录体系：片单为本地 localStorage；此处仅做存储可用性边界
-    var LS = (typeof global !== 'undefined' && global.localStorage) ? global.localStorage : null;
-    if (!LS) {
-      menu.innerHTML = '';
-      menu.appendChild(el('div', 'sfv-coll-empty', '当前环境无法保存片单（无本地存储）'));
-      menu.classList.add('open');
-      return;
-    }
-    renderCollectPanel(menu, anchorBtn, view);
-    menu.classList.add('open');
-  }
-
-  function renderCollectPanel(menu, anchorBtn, view) {
-    menu.innerHTML = '';
-    var folders = SFV.collections.listUserFolders();
-
-    menu.appendChild(el('div', 'sfv-coll-head', '收藏到片单'));
-
-    if (!folders.length) {
-      menu.appendChild(el('div', 'sfv-coll-empty', '还没有片单夹，先建一个吧'));
-    } else {
-      var list = el('div', 'sfv-coll-list');
-      folders.forEach(function (f) {
-        var inF = isCollectedIn(f, view);
-        var item = el('button', 'sfv-plex-track-item' + (inF ? ' active' : ''));
-        item.type = 'button';
-        item.innerHTML = (inF ? CHECK_SVG : PLUS_SM_SVG) +
-          '<span class="lbl">' + esc(f.name || '片单') + '</span>' +
-          '<span class="cnt">' + (f.items ? f.items.length : 0) + '</span>';
-        item.addEventListener('click', function (e) {
-          e.stopPropagation();
-          toggleCollect(f.id, inF, view);
-          renderCollectPanel(menu, anchorBtn, view); // 就地刷新：勾选状态及时更新
-        });
-        list.appendChild(item);
-      });
-      menu.appendChild(list);
-    }
-
-    var create = el('button', 'sfv-coll-create', '＋ 新建片单夹');
-    create.type = 'button';
-    create.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var name = (global.prompt ? global.prompt('片单夹名称', '我的片单') : '') || '';
-      name = name.trim();
-      if (!name) return;
-      // createUserFolder 返回 folderId（修正旧版把它当对象取 .id 的 bug）
-      var fid = SFV.collections.createUserFolder(name);
-      if (fid) SFV.collections.addUserItem(fid, collectItemPayload(view));
-      toast('已新建并加入「' + name + '」');
-      renderCollectPanel(menu, anchorBtn, view);
-      refreshCollectBtn(view);
-    });
-    menu.appendChild(create);
-  }
-
-  function toggleCollect(folderId, currentlyIn, view) {
-    if (!folderId || !SFV.collections) return;
-    var folders = SFV.collections.listUserFolders();
-    var f = null;
-    for (var i = 0; i < folders.length; i++) if (folders[i].id === folderId) { f = folders[i]; break; }
-    if (!f) return;
-    if (currentlyIn) {
-      SFV.collections.removeUserItem(folderId, view.key); // 按 id 移出
-      toast('已移出「' + (f.name || '片单') + '」');
-    } else {
-      SFV.collections.addUserItem(folderId, collectItemPayload(view)); // 按 id 去重
-      toast('已加入片单「' + (f.name || '片单') + '」');
-    }
-    refreshCollectBtn(view);
-  }
-
   // 模块级：收集轮播 resize 监听，便于 destroy 时清理，避免详情页反复打开导致全局监听器堆积
   var __railResizeHandlers = [];
 
@@ -286,13 +156,16 @@
         // 类似影片：hover 左下角淡入展示 TMDB title logo（透明 PNG 矢量标题）。
         // 有 logo 优先显示 logo；无 logo / 加载失败则回退 original_title 文字。
         // 幕后剧照(kind 缺失)不注入，保持纯净。
-        if (m.kind === 'similar') {
+        if (m.kind === 'similar' || m.onClick) {
           var cap = el('div', 'sfv-plex-card__cap');
           card.appendChild(cap);
-          loadSimilarLogo(m, cap);
-          // 点击整张卡片跳转该影片详情页
+          if (m.kind === 'similar') loadSimilarLogo(m, cap);
+          else if (m.ot) cap.textContent = m.ot;
           card.style.cursor = 'pointer';
-          card.addEventListener('click', function () { openSimilarDetail(m); });
+          card.addEventListener('click', function () {
+            if (typeof m.onClick === 'function') m.onClick();
+            else openSimilarDetail(m);
+          });
         }
       }
       rail.appendChild(card);
@@ -371,6 +244,34 @@
     });
   }
 
+  // 搜索会话内的同系列季/版（本体 ↔ 完结季 ↔ S2…），点进对应身份卡详情
+  function openSeasonSiblingCard(card) {
+    if (!card) return;
+    if (card.isKazumi && SFV.openKazumiDetail) { SFV.openKazumiDetail(card); return; }
+    if (SFV.openDetail) { SFV.openDetail(card); return; }
+    if (SFV.onlineDetail && SFV.onlineDetail.openDetail) { SFV.onlineDetail.openDetail(card); return; }
+    toast('详情导航未就绪');
+  }
+
+  function renderSearchSeasonSiblings(sections, view) {
+    var shared = SFV.onlineShared;
+    var cards = shared && shared._lastSearchCards;
+    if (!cards || !cards.length || !SFV.SearchFilterCore) return;
+    var core = SFV.SearchFilterCore;
+    if (typeof core.filterSeasonSiblings !== 'function') return;
+    var siblings = core.filterSeasonSiblings(cards, (view && view.title) || '');
+    if (!siblings.length) return;
+    renderRail(sections, '同系列', siblings, function (s) {
+      var label = core.labelIdentityMarkers(core.extractIdentityMarkers(s.title || ''));
+      return {
+        img: s.pic || '',
+        name: label || s.title,
+        ot: label || s.title,
+        onClick: function () { openSeasonSiblingCard(s); }
+      };
+    });
+  }
+
   // 点击「类似影片」卡片 → 跳转该影片详情页
   function openSimilarDetail(m) {
     if (!m || !m.id) return;
@@ -399,8 +300,15 @@
       })
       .then(function (b) {
         if (!b) return; // 基础渲染已显示 view.title/pic，静默保留
-        // 背景替换为 TMDB backdrop
-        if (b.backdrop) bg.style.backgroundImage = 'url("' + esc(b.backdrop) + '")';
+        // 背景替换为 TMDB backdrop —— 先 Image 探测，加载成功才替换；
+        // 失败（404/超时/无 key）保留 build 时设置的条目自带海报 view.pic
+        if (b.backdrop) {
+          var backdropProbe = new Image();
+          backdropProbe.onload = function () {
+            bg.style.backgroundImage = 'url("' + esc(b.backdrop) + '")';
+          };
+          backdropProbe.src = b.backdrop;
+        }
         // 详情页已抓到 TMDB 海报（w500）：回写 view.pic + 落本地缓存，
         // 让底部控制条左侧海报容器直接复用这张已经下载好的图。
         if (b.poster) rememberPoster(view, b.poster);
@@ -471,6 +379,30 @@
           renderRail(sections, '类似影片', b.similar.slice(0, 10), function (m) {
             return { img: SFV.tmdb.posterUrl(m.posterPath, 'w500'), name: m.title, ot: m.originalTitle, id: m.id, mediaType: m.mediaType, year: m.year, kind: 'similar' };
           }, false);
+        }
+        // TMDB 分季入口（对齐 Kazumi relations 的「季切换」意图）：
+        // 点某一季 → 用「剧名 第N季」走 searchAndPick 本地源搜，不离开详情结构。
+        if (b.seasons && b.seasons.length > 1 && SFV.detailSource &&
+            typeof SFV.detailSource.searchAndPick === 'function') {
+          renderRail(sections, '分季', b.seasons.slice(0, 12), function (s) {
+            var seasonTitle = (view.title || b.title || '') + ' 第' + s.seasonNumber + '季';
+            return {
+              img: s.poster || b.poster || '',
+              name: '第' + s.seasonNumber + '季',
+              ot: s.name || seasonTitle,
+              onClick: function () {
+                var seasonView = Object.assign({}, view, {
+                  title: seasonTitle,
+                  pic: s.poster || view.pic || b.poster || ''
+                });
+                try {
+                  SFV.detailSource.searchAndPick(seasonView, sections);
+                } catch (e) {
+                  toast('分季选源失败');
+                }
+              }
+            };
+          });
         }
       })
       .catch(function () { /* 静默降级：基础渲染已显示 */ });
@@ -587,18 +519,17 @@
     actions.appendChild(btnTrack);
 
     var btnColl = mkPill('', ICON.add, '');
-    _collectTriggerBtn = btnColl;
-    btnColl.title = '收藏到片单';
+    // 收藏（片单夹）功能已删除：保留不可点图标占位（用户 2026-09-19 裁定）
+    btnColl.disabled = true;
+    btnColl.title = '收藏功能已下线';
+    btnColl.setAttribute('aria-disabled', 'true');
     actions.appendChild(btnColl);
-
-    var btnDl = mkPill('', ICON.download, '');
-    btnDl.title = '下载';
-    btnDl.addEventListener('click', function () { toast('下载功能开发中'); });
-    actions.appendChild(btnDl);
 
     // 章节容器（演员/相似/剧照）—— 副信息，滚动下滑才看到
     var sections = el('div', 'sfv-plex-sections');
     content.appendChild(sections);
+    // 搜索来的会话：立刻挂「同系列」（不依赖 TMDB enrich）
+    try { renderSearchSeasonSiblings(sections, view); } catch (e) {}
 
     // TMDB 署名（G4-A: 8px rgba(255,255,255,.25)）
     var attrib = el('div', 'sfv-plex-attrib', 'Data provided by The Movie Database');
@@ -619,21 +550,17 @@
       cycleTrackStatus(view);
     });
 
-    // ＋收藏：打开片单夹面板（影视态无登录，片单为本地 localStorage）
-    refreshCollectBtn(view);
-    btnColl.addEventListener('click', function (e) {
-      e.stopPropagation();
-      openCollectPanel(btnColl, view);
-    });
-    doc.addEventListener('click', closeCollectMenu);
-    function closeCollectMenu() {
-      var m = _collectTriggerBtn && _collectTriggerBtn.querySelector('.sfv-coll-popover');
-      if (m && m.classList.contains('open')) m.classList.remove('open');
-    }
-
     // ESC 返回（G6：不误触播放器全屏 ESC，详情页无播放器）
     function escHandler(e) {
       if (e && (e.key === 'Escape' || e.keyCode === 27)) {
+        // 多源面板打开时 Esc 先关面板，不退出详情页
+        if (typeof StellaflixVideo !== 'undefined' && StellaflixVideo.sourcePicker &&
+            StellaflixVideo.sourcePicker.isOpen && StellaflixVideo.sourcePicker.isOpen()) {
+          e.preventDefault();
+          e.stopPropagation();
+          StellaflixVideo.sourcePicker.close();
+          return;
+        }
         e.stopPropagation();
         destroy(); onBack();
       }
@@ -643,7 +570,6 @@
     function destroy() {
       doc.body.classList.remove('sfv-plex-immersive');
       doc.removeEventListener('keydown', escHandler);
-      doc.removeEventListener('click', closeCollectMenu);
       // 清理轮播 resize 监听，避免详情页反复打开导致全局监听器堆积
       for (var i = 0; i < __railResizeHandlers.length; i++) {
         global.removeEventListener('resize', __railResizeHandlers[i]);

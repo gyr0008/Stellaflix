@@ -114,12 +114,15 @@ test('FLAC tags, embedded cover and same-name LRC survive a full library reload'
   assert.equal(imported.tracks[0].hasLyric, true);
   assert.equal(imported.tracks[0].lyricSource, 'sidecar');
   assert.equal(Object.hasOwn(imported.tracks[0], 'lyric'), false);
-  assert.match(library.lyricForTrack(imported.tracks[0].localFileId).lyric, /\[00:02\.500\]第二句/);
+  const lyricResult = await library.lyricForTrack(imported.tracks[0].localFileId);
+  assert.equal(lyricResult.ok, true);
+  assert.match(lyricResult.lyric, /\[00:02\.500\]第二句/);
 
-  const restored = new LocalMusicLibrary({
+  const restoredLibrary = new LocalMusicLibrary({
     userDataPath: path.join(root, 'profile'),
     parseMetadata: async () => { throw new Error('reload must use the persisted manifest'); },
-  }).listTracksSync();
+  });
+  const restored = await restoredLibrary.listTracks();
   assert.equal(restored.ok, true);
   assert.equal(restored.count, 1);
   assert.deepEqual(restored.tracks[0], imported.tracks[0]);
@@ -240,6 +243,35 @@ test('embedded cover budget rejects oversized pixel dimensions on low-spec devic
   assert.equal(coverWithinBudget(Buffer.alloc(1024 * 1024 + 1), 'image/webp'), false);
 });
 
+test('removeTracks drops index entries and cover files from the persistent library', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stellaflix-local-library-remove-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const audioPath = path.join(root, 'RemoveMe.flac');
+  fs.writeFileSync(audioPath, Buffer.from('audio'));
+  const profile = path.join(root, 'profile');
+  const library = new LocalMusicLibrary({
+    userDataPath: profile,
+    parseMetadata: async () => ({
+      common: { title: 'RemoveMe', picture: [{ format: 'image/png', data: ONE_PIXEL_PNG }] },
+      format: { duration: 1 },
+    }),
+  });
+  const imported = await library.importFiles([{ path: audioPath }]);
+  assert.equal(imported.ok, true);
+  const track = imported.tracks[0];
+  const record = library.records.get(track.localFileId);
+  assert.equal(fs.existsSync(record.coverPath), true);
+
+  const removed = await library.removeTracks([track.localFileId]);
+  assert.equal(removed.ok, true);
+  assert.equal(removed.count, 0);
+  assert.equal(removed.tracks.length, 0);
+  assert.equal(fs.existsSync(record.coverPath), false);
+
+  const reloaded = await new LocalMusicLibrary({ userDataPath: profile }).listTracks();
+  assert.equal(reloaded.count, 0);
+});
+
 test('renderer and Electron wiring restore persistent tracks instead of blob-only missing records', () => {
   const appRoot = path.join(__dirname, '..');
   const main = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
@@ -267,13 +299,37 @@ test('renderer and Electron wiring restore persistent tracks instead of blob-onl
   assert.match(preload, /listLocalMusicLibrary/);
   assert.match(preload, /readLocalMusicLyric/);
   assert.doesNotMatch(preload, /getPathForLocalFile:/);
-  assert.doesNotMatch(preload, /stellaflix-local-library-remove/);
+  assert.match(preload, /removeLocalMusicTracks/);
+  assert.match(main, /stellaflix-local-library-remove/);
+  assert.match(main, /await localMusicLibrary\.removeTracks\(/);
   assert.match(upload, /importPersistentLocalAudioFiles/);
+  assert.match(upload, /removePersistentLocalTracks/);
+  assert.match(upload, /removeLocalTrackFromLibraryAndQueue/);
   assert.match(upload, /copy\.localMissing = false/);
   assert.match(upload, /persistentLocalLibraryTracks = tracks\.map\(cloneSong\)/);
   assert.match(upload, /仅本次可用，重启后不会保留/);
+  assert.match(upload, /播放本地曲库/);
+  assert.match(homeLocal, /openHomeLocalImport/);
+  assert.doesNotMatch(homeLocal, /loadPersistedLocalLibraryIntoQueue\(\)\) return/);
+  const trackDetail = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '06-track-detail-lyrics-actions.js'), 'utf8');
+  assert.match(trackDetail, /detail-remove-local-btn/);
+  assert.match(trackDetail, /isRemovablePersistentLocalSong/);
+  const indexHtml = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
+  assert.match(indexHtml, /home-local-music-strip/);
+  assert.match(indexHtml, /home-local-music-list/);
+  assert.match(indexHtml, /LOCAL · 本地音乐/);
+  const dashboard = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '03a-home-dashboard.js'), 'utf8');
+  assert.match(dashboard, /renderHomeDashboardLocalMusic/);
+  assert.match(dashboard, /openHomeLocalMusicModal/);
+  assert.match(dashboard, /continueHomeLocalPlayback/);
+  assert.match(dashboard, /playHomeLocalPlaylistAt/);
+  assert.match(dashboard, /home-local-modes-grid/);
+  assert.match(indexHtml, /home-local-modes-mask/);
+  assert.match(indexHtml, /全部本地音乐/);
+  assert.match(indexHtml, /本地歌单/);
+  assert.match(indexHtml, /继续播放/);
   assert.match(coreState, /var persistentLocalLibraryTracks = \[\]/);
-  assert.match(homeLocal, /loadPersistedLocalLibraryIntoQueue/);
+  assert.match(upload, /loadPersistedLocalLibraryIntoQueue/);
   assert.doesNotMatch(playerControls, /forgetPersistentLocalTracks/);
   assert.match(startup, /persistedLocalLibraryRestorePromise/);
   assert.match(startup, /Promise\.all\([\s\S]*persistedLocalLibraryRestorePromise/);

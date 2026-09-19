@@ -401,9 +401,27 @@
     return false;
   }
 
+  // 控制条自动隐藏总开关（与 #controls-hide-btn / 04-bottom-controls-cursor 同一全局偏好）
+  // 默认 false：三横线未高亮 = 控制条常驻（与 07-ui-playback-runtime 初始值一致）
+  function isControlsAutoHideOn() {
+    return typeof controlsAutoHide === 'undefined' ? false : !!controlsAutoHide;
+  }
+  function forceControlsVisible() {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+    if (overlay) overlay.classList.remove('sfv-idle');
+    var b = getDoc().body;
+    if (b) b.classList.remove('video-player-idle');
+  }
   function armHideTimer(delayMs) {
+    // 自动隐藏关闭：控制条常驻，不得进入 idle
+    if (!isControlsAutoHideOn()) {
+      forceControlsVisible();
+      return;
+    }
     clearTimeout(hideTimer);
     hideTimer = setTimeout(function () {
+      if (!isControlsAutoHideOn()) return;
       if (overlay && SFV.state && SFV.state.getSpace() === 'video') {
         overlay.classList.add('sfv-idle');
         var bb = getDoc().body;
@@ -425,13 +443,17 @@
       // 故不再需要「任意移动都先点亮」的兜底；该兜底只用于解决历史 idle 命中盒错位，已不再相关。
       var near = pointInBar(x, y);
       if (!near) {
-        // 非命中区域：不动 idle 状态、不点 armHideTimer。控制条已是 idle → 继续 idle；已是 visible → 保持可见。
+        // 自动隐藏关闭：即使指针离开控制栏也保持常驻（防残留 idle）
+        if (!isControlsAutoHideOn()) {
+          forceControlsVisible();
+        }
+        // 自动隐藏开启：非命中区不动 idle（已是 idle → 继续；已是 visible → 保持到 arm 到期）
         return;
       }
       overlay.classList.remove('sfv-idle');
       var b = getDoc().body;
-      if (b && b.classList.contains('video-player-active')) b.classList.remove('video-player-idle');
-      // 命中控制栏或底部唤醒带：续接 3s 隐藏计时
+      if (b && b.classList.contains('video-player-idle')) b.classList.remove('video-player-idle');
+      // 命中控制栏或底部唤醒带：自动隐藏开启时续接 3s 计时；关闭时仅保持显示
       armHideTimer(3000);
       // ===== 修复结束 =====
     };
@@ -502,16 +524,36 @@
   }
   function setPlayEpisodeAt(fn) { playEpisodeAtFn = (typeof fn === 'function') ? fn : null; }
   function playEpisodeAt(i) {
-    if (!playlistTracks || i < 0 || i >= playlistTracks.length) return false;
-    if (typeof playEpisodeAtFn !== 'function') return false;
-    playlistIndex = i;
-    if (currentMeta) setCurrentMeta(currentMeta);
-    emitPlayerEvent('sfv:player-meta', currentMeta);
-    // 阶段3：同步播放器侧选集高亮
-    if (SFV.playerRoadEpisode && typeof SFV.playerRoadEpisode.setCurrentEpisode === 'function') {
-      try { SFV.playerRoadEpisode.setCurrentEpisode(i); } catch (e) {}
+    if (!playlistTracks || i < 0 || i >= playlistTracks.length) {
+      console.warn('[SFV player] playEpisodeAt 无效索引', i, playlistTracks && playlistTracks.length);
+      if (SFV.online && SFV.online.toast) SFV.online.toast('该集不可用');
+      return false;
     }
-    try { playEpisodeAtFn(i, playlistTracks[i]); return true; } catch (e) { return false; }
+    if (typeof playEpisodeAtFn !== 'function') {
+      console.warn('[SFV player] playEpisodeAtFn 未注册（embed 起播或列表未注入）');
+      if (SFV.online && SFV.online.toast) SFV.online.toast('当前无法切换剧集');
+      return false;
+    }
+    var target = playlistTracks[i];
+    if (!target || !target.url) {
+      if (SFV.online && SFV.online.toast) SFV.online.toast('该集无播放地址');
+      return false;
+    }
+    // 先不要急着改 playlistIndex：异步起播失败时高亮会指错集。
+    // 真正起播成功后由 doPlay 的 setPlaylist(play.episodes, ep.index) 回写。
+    try {
+      var ok = playEpisodeAtFn(i, target);
+      // 回调同步抛错才算失败；异步失败由编排器 toast
+      if (ok === false) {
+        if (SFV.online && SFV.online.toast) SFV.online.toast('切换剧集失败');
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error('[SFV player] playEpisodeAt 回调异常', e);
+      if (SFV.online && SFV.online.toast) SFV.online.toast('切换剧集失败');
+      return false;
+    }
   }
   function playPrevEpisode() { return playEpisodeAt(playlistIndex - 1); }
   function playNextEpisode() { return playEpisodeAt(playlistIndex + 1); }
@@ -976,6 +1018,7 @@
   reg('checkPosterAutoCache', checkPosterAutoCache); reg('resetWatchTracker', resetWatchTracker);
   reg('wireVideoEvents', wireVideoEvents); reg('wireUnmuteOnInteraction', wireUnmuteOnInteraction);
   reg('wireIdle', wireIdle); reg('pointInBar', pointInBar); reg('armHideTimer', armHideTimer);
+  reg('forceControlsVisible', forceControlsVisible);
   reg('setPlayIcon', setPlayIcon); reg('updateTime', updateTime);
   reg('ensureOverlay', ensureOverlay);
   reg('getPlayMode', getPlayMode); reg('setPlayMode', setPlayMode); reg('cyclePlayMode', cyclePlayMode);
@@ -1082,7 +1125,10 @@
     danmaku: PB.danmaku,
     // 起播会话序号 / 失效判定：供 source-adapter 在异步挂载完成后判断是否已被退出/换片
     getPlaybackSeq: function () { return playbackSeq; },
-    isStaleSeq: function (seq) { return seq !== playbackSeq; }
+    isStaleSeq: function (seq) { return seq !== playbackSeq; },
+    // 供 #controls-hide-btn（04-bottom-controls-cursor）即时切换影视态控制条显隐
+    armHideTimer: bridgeFn('armHideTimer'),
+    forceControlsVisible: bridgeFn('forceControlsVisible')
   };
 
   // 音乐态底部控制栏原生按钮的 inline onclick="toggleFullscreen()" 依赖全局符号；

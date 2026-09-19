@@ -30,6 +30,7 @@
   var currentTitle = '';  // 当前影片标题（B1 验证码搜索页 URL 用）
   var pillEls = {};       // sourceKey -> Tab DOM
   var sectionEls = {};    // sourceKey -> 源内条目容器 DOM
+  var onEsc = null;       // Esc 关闭（捕获阶段，优先于详情页/浏览层）
 
   function d() { return global.document; }
   function esc(s) {
@@ -52,6 +53,10 @@
     backdrop = null; root = null; onPick = null; current = null;
     groups = []; statusMap = {}; activeKey = null; pillEls = {}; sectionEls = {};
     groupRefs = {}; aliasesByKey = {}; currentTitle = '';
+    if (onEsc && global.document) {
+      try { global.document.removeEventListener('keydown', onEsc, true); } catch (e) {}
+    }
+    onEsc = null;
     if (global.document && global.document.body) {
       global.document.body.classList.remove('sfv-picker-open');
     }
@@ -126,7 +131,9 @@
     backdrop = doc.createElement('div');
     backdrop.className = 'sfv-picker-backdrop';
     backdrop.addEventListener('click', function (e) {
-      if (e.target === backdrop) close();
+      if (e.target !== backdrop) return;
+      e.stopPropagation();
+      close();
     });
 
     root = doc.createElement('div');
@@ -217,6 +224,16 @@
     (doc.body || doc.documentElement).appendChild(backdrop);
     (doc.body || doc.documentElement).appendChild(root);
     doc.body.classList.add('sfv-picker-open');
+
+    // Esc 关闭：捕获阶段 + stopPropagation，确保详情页/浏览层不再抢这次按键
+    onEsc = function (ev) {
+      if (ev.key === 'Escape' || ev.keyCode === 27) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        close();
+      }
+    };
+    doc.addEventListener('keydown', onEsc, true);
 
     // 入场动画（轻量，不用 GSAP）
     requestAnimationFrame(function () {

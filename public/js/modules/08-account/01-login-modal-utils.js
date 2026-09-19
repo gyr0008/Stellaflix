@@ -66,7 +66,10 @@ function bindModalBackdropClose() {
     if (!mask || mask.__backdropCloseBound) return;
     mask.__backdropCloseBound = true;
     mask.addEventListener('click', function (e) {
-      if (e.target === mask) close();
+      if (e.target !== mask) return;
+      // 与每周新番/多源/筛选/音源面板对齐：拦住文档级捕获，避免点遮罩穿透到背后 Home
+      e.stopPropagation();
+      close();
     });
   });
 }

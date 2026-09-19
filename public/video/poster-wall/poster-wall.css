@@ -1,0 +1,248 @@
+/* Stellaflix 影视片库 — 蜂窝卡片墙视觉（深色 · 拖拽平移 + 中心聚焦 · Folia GridView 氛围） */
+
+.sfv-library-wall-host {
+  position: relative;
+  flex: 1;
+  min-height: 360px;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    radial-gradient(circle at 14% 10%, rgba(253, 92, 71, 0.13), transparent 32%),
+    radial-gradient(circle at 86% 84%, rgba(106, 72, 255, 0.15), transparent 36%),
+    #070707;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+/* 强制片库页深色，避免被乳白全屏样式盖住 */
+.sfv-library-chrome.sfv-browse--fullscreen,
+.sfv-library-chrome.sfv-browse--fullscreen.sfv-browse--fullscreen {
+  background:
+    radial-gradient(circle at 14% 10%, rgba(253, 92, 71, 0.13), transparent 32%),
+    radial-gradient(circle at 86% 84%, rgba(106, 72, 255, 0.15), transparent 36%),
+    #070707 !important;
+  color: #f7f4ee !important;
+  clip-path: inset(0 round 34px) !important;
+}
+
+/* 片库页整屏：隐藏顶部浏览条（返回走 Esc，用户 2026-09-19 裁定） */
+.sfv-library-chrome.sfv-browse--fullscreen .sfv-browse-head {
+  display: none !important;
+}
+
+.sfv-library-chrome .sfv-browse-body,
+.sfv-library-host {
+  color: #f7f4ee !important;
+  background: transparent !important;
+}
+
+.sfv-library-page-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100%;
+  height: 100%;
+  padding: 20px 20px 24px;
+  box-sizing: border-box;
+}
+
+.sfv-library-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.sfv-library-link {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f7f4ee;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sfv-library-link:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* ---------- 蜂窝墙 ---------- */
+
+.sfv-hex-field {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  outline: none;
+}
+.sfv-hex-field:active { cursor: grabbing; }
+
+.sfv-hex-world {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+
+.sfv-hex-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  color: #f7f4ee;
+  background: #121014;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  will-change: transform, opacity;
+  transform-origin: center center;
+}
+
+.sfv-hex-card.is-focused {
+  box-shadow: 0 36px 90px rgba(0, 0, 0, 0.72);
+}
+
+.sfv-hex-card.is-focused::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border: 2px solid rgba(253, 92, 71, 0.85);
+  border-radius: 12px;
+  pointer-events: none;
+}
+
+.sfv-hex-art {
+  position: absolute;
+  inset: 0;
+  background-color: #1a1520;
+  background-position: center top;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.sfv-hex-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.05) 40%,
+    rgba(0, 0, 0, 0.35) 68%,
+    rgba(0, 0, 0, 0.88) 100%
+  );
+  pointer-events: none;
+}
+
+.sfv-hex-copy {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.sfv-hex-copy strong {
+  font-size: clamp(12px, 1.1vw, 15px);
+  line-height: 1.15;
+  font-weight: 700;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.65);
+}
+
+/* 元信息 + 操作条仅中心卡显示 */
+.sfv-hex-chrome {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  z-index: 5;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sfv-hex-card.is-focused .sfv-hex-chrome { display: flex; }
+.sfv-hex-card.is-focused .sfv-hex-copy { bottom: 84px; }
+.sfv-hex-card.is-focused .sfv-hex-copy strong {
+  font-size: clamp(16px, 1.8vw, 24px);
+  -webkit-line-clamp: 3;
+}
+
+.sfv-hex-meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(247, 244, 238, 0.8);
+}
+
+.sfv-hex-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sfv-hex-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(20, 18, 24, 0.72);
+  color: #f7f4ee;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sfv-hex-btn--primary {
+  background: rgba(253, 92, 71, 0.92);
+  border-color: transparent;
+  color: #fff;
+}
+
+.sfv-hex-btn:hover { filter: brightness(1.08); }
+
+.sfv-hex-empty,
+.sfv-hex-loading {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  min-height: 280px;
+  padding: 32px;
+  text-align: center;
+  color: rgba(247, 244, 238, 0.72);
+}
+
+.sfv-hex-empty-title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: rgba(247, 244, 238, 0.92);
+}
+
+.sfv-hex-empty-sub {
+  font-size: 13px;
+  max-width: 420px;
+  line-height: 1.65;
+  color: rgba(247, 244, 238, 0.5);
+}
+
+.sfv-hex-loading {
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  color: rgba(247, 244, 238, 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sfv-hex-card { transition: none; }
+}

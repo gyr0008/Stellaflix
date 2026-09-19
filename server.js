@@ -129,6 +129,7 @@ const {
   handleQishuiSongUrl,
 } = require('./qishui-api');
 const qishuiQrLogin = require('./qishui-qr-login');
+const subsonicApi = require('./subsonic-api.js');
 const {
   getSpotifyConfig,
   clearSpotifyToken,
@@ -153,6 +154,7 @@ const {
 const { planCuefieldTransitionFromCache } = require('./cuefield/stellaflix-bridge');
 const agentApi = require('./agent-api');
 const { setupGlobalProxy } = require('./desktop/global-proxy');
+const hlsAdFilter = require('./desktop/hls-ad-filter');
 
 // 全局出口代理：若本机运行着 Clash / V2Ray 等代理并在环境变量中暴露
 // HTTP_PROXY / HTTPS_PROXY，则 server 侧所有出站 fetch 自动经其转发（详见 desktop/global-proxy.js）。
@@ -171,7 +173,7 @@ const { setupGlobalProxy } = require('./desktop/global-proxy');
 let customSourceBridge = null;
 
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || '127.0.0.1';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const DEFAULT_COOKIE_FILE = path.join(__dirname, '.cookie');
 const DEFAULT_QQ_COOKIE_FILE = path.join(__dirname, '.qq-cookie');
@@ -482,10 +484,34 @@ function serveStatic(res, filePath) {
     res.end(data);
   });
 }
+// ---------- 跨站请求防护 ----------
+// 合法调用方只有播放器自己的窗口（均从 http://127.0.0.1:<PORT> 加载）。
+// Chromium 强制为浏览器请求附加 Origin / Sec-Fetch-Site，网页脚本无法伪造；
+// 两者皆无的请求视为本机非浏览器流量（Electron 主进程 / curl）放行。
+// 注意：Spotify OAuth 回调由 desktop/main.js 的独立回调服务器处理，不经过这里。
+const ALLOWED_ORIGINS = new Set([
+  `http://127.0.0.1:${PORT}`,
+  `http://localhost:${PORT}`,
+]);
+function corsHeadersFor(req) {
+  const origin = String(req.headers.origin || '');
+  if (ALLOWED_ORIGINS.has(origin)) {
+    return { 'Access-Control-Allow-Origin': origin, 'Vary': 'Origin' };
+  }
+  return {};
+}
+function isCrossSiteWrite(req) {
+  if (req.method === 'GET' || req.method === 'HEAD') return false;
+  const origin = String(req.headers.origin || '');
+  if (origin && !ALLOWED_ORIGINS.has(origin)) return true;
+  const site = String(req.headers['sec-fetch-site'] || '');
+  if (site && site !== 'same-origin' && site !== 'none') return true;
+  return false;
+}
 function sendJSON(res, data, status) {
   res.writeHead(status || 200, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
+    ...(res._cors || {}),
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
     'Pragma': 'no-cache',
     'Expires': '0',
@@ -3294,7 +3320,7 @@ function sendAudioBuffer(res, buffer, contentType, range) {
     }
     res.writeHead(206, {
       'Content-Type': contentType || 'audio/mp4',
-      'Access-Control-Allow-Origin': '*',
+      ...(res._cors || {}),
       'Accept-Ranges': 'bytes',
       'Content-Length': end - start + 1,
       'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
@@ -3304,7 +3330,7 @@ function sendAudioBuffer(res, buffer, contentType, range) {
   }
   res.writeHead(200, {
     'Content-Type': contentType || 'audio/mp4',
-    'Access-Control-Allow-Origin': '*',
+    ...(res._cors || {}),
     'Accept-Ranges': 'bytes',
     'Content-Length': total,
   });
@@ -5043,6 +5069,12 @@ const server = http.createServer(async (req, res) => {
   refreshConfiguredCookieStores(false);
   const url = new URL(req.url, 'http://localhost:' + PORT);
   const pn = url.pathname;
+  res._cors = corsHeadersFor(req);
+  if (pn.startsWith('/api/') && isCrossSiteWrite(req)) {
+    console.warn('[Origin-Guard] blocked', req.method, pn, 'origin=' + (req.headers.origin || '-'), 'sec-fetch-site=' + (req.headers['sec-fetch-site'] || '-'));
+    sendJSON(res, { error: 'FORBIDDEN_ORIGIN', message: 'Cross-site write to local API is not allowed' }, 403);
+    return;
+  }
 
   if (pn === '/api/app/version') {
     sendJSON(res, {
@@ -7131,7 +7163,7 @@ const server = http.createServer(async (req, res) => {
       const coverUrl = url.searchParams.get('url');
       // URL 校验: 必须是 http(s) 开头, 否则直接 404 (不要让 fetch 抛错)
       if (!coverUrl || !/^https?:\/\//i.test(coverUrl)) {
-        res.writeHead(400, { 'Access-Control-Allow-Origin': '*' });
+        res.writeHead(400, res._cors || {});
         res.end('Invalid cover url');
         return;
       }
@@ -7150,7 +7182,7 @@ const server = http.createServer(async (req, res) => {
       } catch (fetchErr) {
         // 连接类错误（UND_ERR_CONNECT_TIMEOUT / ECONNREFUSED / ETIMEDOUT）包装为 502
         console.error('[Cover] fetch failed:', fetchErr.message, coverUrl);
-        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', ...(res._cors || {}) });
         res.end('Cover fetch failed: ' + fetchErr.message);
         return;
       }
@@ -7158,8 +7190,8 @@ const server = http.createServer(async (req, res) => {
       const cl  = resp.headers.get('content-length');
       const hdr = {
         'Content-Type': ct,
-        'Access-Control-Allow-Origin': '*',
-        'Cross-Origin-Resource-Policy': 'cross-origin',
+        ...(res._cors || {}),
+        'Cross-Origin-Resource-Policy': 'same-origin',
         'Cache-Control': 'public, max-age=86400',
       };
       if (cl) hdr['Content-Length'] = cl;
@@ -7241,7 +7273,7 @@ const server = http.createServer(async (req, res) => {
       } catch (fetchErr) {
         clearTimeout(timer);
         console.error('[Proxy] fetch failed:', fetchErr.message, target);
-        try { res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); } catch (e) {}
+        try { res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', ...(res._cors || {}) }); } catch (e) {}
         res.end('Proxy upstream connect failed: ' + fetchErr.message);
         return;
       }
@@ -7266,9 +7298,48 @@ const server = http.createServer(async (req, res) => {
           ct = 'application/octet-stream';
         }
       }
+
+      // ---- HLS 广告过滤（discontinuity 分组启发式）----
+      // 仅处理完整 playlist（无 Range）；分片/图片仍走流式透传。
+      // 关闭：请求加 &ad=0。master 原样返回，由 hls.js 再拉 media 时过滤。
+      const adFilterOff = url.searchParams.get('ad') === '0';
+      const maybePlaylist = !upstreamIsImage && !range && up.ok && (
+        hlsAdFilter.looksLikeM3u8Url(lower) ||
+        (ct && /mpegurl|m3u8/i.test(ct))
+      );
+      if (!adFilterOff && maybePlaylist && up.body) {
+        let rawText;
+        try {
+          rawText = await up.text();
+        } catch (readErr) {
+          console.warn('[Proxy] m3u8 read failed:', readErr.message, target);
+          try { res.writeHead(502); } catch (e) {}
+          res.end('m3u8 read failed');
+          return;
+        }
+        let bodyText = rawText;
+        if (hlsAdFilter.looksLikeM3u8Text(rawText)) {
+          const filtered = hlsAdFilter.filterHlsAds(rawText, target);
+          if (filtered.changed) {
+            bodyText = filtered.content;
+            console.log('[HLS-AdFilter]', 'removed=' + filtered.removed, target);
+          }
+        }
+        const buf = Buffer.from(bodyText, 'utf8');
+        const playlistOut = {
+          'Content-Type': 'application/vnd.apple.mpegurl',
+          ...(res._cors || {}),
+          'Content-Length': String(buf.length),
+          'Cache-Control': 'no-store',
+        };
+        res.writeHead(up.status, playlistOut);
+        res.end(buf);
+        return;
+      }
+
       const out = {
         'Content-Type': ct,
-        'Access-Control-Allow-Origin': '*',
+        ...(res._cors || {}),
         'Accept-Ranges': 'bytes',
       };
       // 关键修复：undici fetch 会按上游 content-encoding 自动解压 body，但 headers 里的
@@ -7366,10 +7437,53 @@ const server = http.createServer(async (req, res) => {
       const text = await up.text();
       res.writeHead(up.status, {
         'Content-Type': up.headers.get('content-type') || 'application/json',
-        'Access-Control-Allow-Origin': '*',
+        ...(res._cors || {}),
       });
       res.end(text);
     } catch (err) { console.error('[BangumiSearch]', err); res.writeHead(502); res.end(); }
+    return;
+  }
+
+  // ---------- Subsonic / Navidrome 远程音乐库 ----------
+  if (pn === '/api/subsonic/config') {
+    if (req.method === 'GET') { sendJSON(res, { servers: subsonicApi.listServersPublic() }); return; }
+    if (req.method === 'POST') {
+      try {
+        const body = await readRequestBody(req);
+        if (body && body.action === 'delete') {
+          const okDel = subsonicApi.deleteServer(body.id);
+          sendJSON(res, { ok: !!okDel, servers: subsonicApi.listServersPublic() }, okDel ? 200 : 404);
+          return;
+        }
+        if (body && body.id && !subsonicApi.getServer(body.id)) {
+          sendJSON(res, { error: 'SUBSONIC_SERVER_NOT_FOUND' }, 404);
+          return;
+        }
+        const saved = subsonicApi.saveServer(body || {});
+        sendJSON(res, { ok: true, server: saved, servers: subsonicApi.listServersPublic() });
+      } catch (err) {
+        console.error('[SubsonicConfig]', err.message);
+        sendJSON(res, { error: err.message || 'SUBSONIC_CONFIG_FAILED' }, 400);
+      }
+      return;
+    }
+    sendJSON(res, { error: 'METHOD_NOT_ALLOWED' }, 405);
+    return;
+  }
+  if (pn.startsWith('/api/subsonic/')) {
+    const sid = url.searchParams.get('server') || '';
+    try {
+      if (!subsonicApi.getServer(sid)) { sendJSON(res, { error: 'SUBSONIC_SERVER_NOT_FOUND' }, 404); return; }
+      if (pn === '/api/subsonic/artists') { sendJSON(res, await subsonicApi.browseArtists(sid)); return; }
+      if (pn === '/api/subsonic/artist') { sendJSON(res, await subsonicApi.browseArtist(sid, url.searchParams.get('id') || '')); return; }
+      if (pn === '/api/subsonic/album') { sendJSON(res, await subsonicApi.browseAlbum(sid, url.searchParams.get('id') || '')); return; }
+      if (pn === '/api/subsonic/playlists') { sendJSON(res, await subsonicApi.browsePlaylists(sid)); return; }
+      if (pn === '/api/subsonic/playlist') { sendJSON(res, await subsonicApi.browsePlaylist(sid, url.searchParams.get('id') || '')); return; }
+      sendJSON(res, { error: 'SUBSONIC_UNKNOWN_ENDPOINT' }, 404);
+    } catch (err) {
+      console.error('[Subsonic]', err.message);
+      sendJSON(res, { error: err.message || 'SUBSONIC_REQUEST_FAILED' }, err.notFound ? 404 : 502);
+    }
     return;
   }
 
@@ -7390,7 +7504,7 @@ const server = http.createServer(async (req, res) => {
       const up = await fetchWithTimeout(audioUrl, { headers: hdr }, 9000);
       const out = {
         'Content-Type': audioContentTypeForUrl(audioUrl, up.headers.get('content-type')),
-        'Access-Control-Allow-Origin': '*',
+        ...(res._cors || {}),
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-store',
       };

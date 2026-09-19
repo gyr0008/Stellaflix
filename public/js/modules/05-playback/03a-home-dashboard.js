@@ -1802,6 +1802,34 @@ function renderHomeInsightDock() {
     }
   }
 
+  // ────────────── 影视态反转：DISCOVER「平台热歌与个人偏好」卡 → 精选片单浮层入口 ──────────────
+  var discoverCard = document.querySelector('.home-ranking-entry:not(.home-radio-entry)');
+  if (discoverCard) {
+    var discoverKicker = discoverCard.querySelector('.home-insight-kicker');
+    var discoverTitle = discoverCard.querySelector('.home-ranking-entry-title');
+    var discoverSub = discoverCard.querySelector('.home-ranking-entry-sub');
+    if (isVideo) {
+      if (discoverKicker) discoverKicker.textContent = 'CURATED · 精选片单';
+      if (discoverTitle) discoverTitle.textContent = '精选片单';
+      if (discoverSub) discoverSub.textContent = '编辑策展的主题片单，无需 TMDB Key 即可浏览';
+      discoverCard.setAttribute('aria-label', '打开精选片单');
+      discoverCard.onclick = function () {
+        var innerSFV = (typeof window !== 'undefined' && window.StellaflixVideo) ? window.StellaflixVideo : null;
+        var overlay = innerSFV && innerSFV.homeCollectionsOverlay;
+        if (overlay && typeof overlay.open === 'function') overlay.open();
+      };
+    } else {
+      // T118：音乐态 100% 还原原文案 + 原 onclick
+      if (discoverKicker) discoverKicker.textContent = 'DISCOVER · 音乐发现';
+      if (discoverTitle) discoverTitle.textContent = '平台热歌与个人偏好';
+      if (discoverSub) discoverSub.textContent = '打开平台推荐中心；没有可信推荐接口时会明确留空';
+      discoverCard.setAttribute('aria-label', '打开音乐发现');
+      discoverCard.onclick = function () {
+        if (typeof openHomeDashboardCharts === 'function') openHomeDashboardCharts();
+      };
+    }
+  }
+
   renderHomeDashboardDiscovery();
   renderHomeDashboardLocalMusic();
 }

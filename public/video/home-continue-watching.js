@@ -110,8 +110,9 @@
     }
     if (!entry) { toast('该记录已不存在'); return; }
     // 直接起播：优先用上次片源，失败按画质跨源切换
+    // _origin:'continue' 透传给播放返回栈：退出播放器回首页，而非重建详情页
     if (SFV.detailSource && typeof SFV.detailSource.smartResumePlay === 'function') {
-      SFV.detailSource.smartResumePlay(entry);
+      SFV.detailSource.smartResumePlay(Object.assign({}, entry, { _origin: 'continue' }));
     } else if (SFV.online && SFV.online.openDetailFromMeta) {
       // 兜底：detail-source 未就绪时退回到旧行为（打开详情页）
       SFV.online.openDetailFromMeta(entry);

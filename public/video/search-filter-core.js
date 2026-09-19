@@ -5,6 +5,8 @@
  *   初始 1:1 移植自 Kazumi 2.2.6 search_parser.dart（正向「想看」筛选）。
  *   2026-08-06 起改为「纯排除」模型：筛选器只收集「不想看」的排除项，
  *   结果 = 搜索全量 − 排除项；排序作为中性重排保留。
+ *   2026-09 起：季/版身份识别加宽（第X季/部/期、S2、末尾数字、完结季…），
+ *   空年份只并入 identity 完全相同的组，避免丢季。
  *
  * 设计原则：
  *   - 纯逻辑，无任何 DOM/BOM 依赖，可在浏览器与 Node 测试环境运行
@@ -68,7 +70,7 @@
   // 多源结果聚合身份键清洗
   // 原则：
   // 1. 「源噪声」（语言/画质/源标识）只影响播放体验，不影响作品身份，应去掉。
-  // 2. 「身份标记」（第X季/剧场版/OVA/SP/特别篇/番外/动态漫/动画版…）代表不同
+  // 2. 「身份标记」（第X季/剧场版/OVA/SP/完结季/最终季…）代表不同
   //    作品或不同版本，必须保留并归一化，否则会把不同季合并成一张卡。
   // ------------------------------------------------------------------
 
@@ -79,52 +81,97 @@
     '修复版', '未删减', '完整版', '独家', '会员', '抢先', '预告', 'PV', '合集', '全集'
   ];
 
-  // 季数正则：第1季 / 第一季 / 第十季 等
-  var SEASON_RE = /第([0-9一二三四五六七八九十百]+)季/g;
-  // 身份标记：剧场版/OVA/SP/特别篇/番外/动态漫/动画版等影响作品身份的版本词
-  var EDITION_RE = /(剧场版|电影版|OVA|SP|特别篇|番外|前传|后传|外传|动态漫画|动态漫|动画版|漫画版|真人版|真人电影|网络剧|网剧版|网络电影|TV版|tv版| tv版| TV版)/g;
+  // 季数正则：第1季 / 第一季 / 第十一季 / 第2部 / 第3期
+  var SEASON_RE = /第([0-9一二三四五六七八九十百]+)(季|部|期)/g;
+  // S2 / s01（禁止吞掉 PS2 这类字母粘连）
+  var SEASON_S_RE = /(?<![A-Za-z0-9])[Ss](\d{1,2})(?![0-9])/g;
+  // 标题末尾数字季：一念永恒2 / 阿凡达2（要求前面是汉字，避免纯数字片名「2012」）
+  var SEASON_TAIL_NUM_RE = /([一-鿿])([2-9]|[1-9][0-9])$/;
+  // 罗马数字季：一念永恒Ⅱ
+  var ROMAN_MAP = { 'Ⅱ': '2', 'Ⅲ': '3', 'Ⅳ': '4', 'Ⅴ': '5', 'Ⅵ': '6', 'Ⅶ': '7', 'Ⅷ': '8', 'Ⅸ': '9', 'Ⅹ': '10' };
+  var SEASON_TAIL_ROMAN_RE = /([一-鿿A-Za-z])([ⅡⅢⅣⅤⅥⅦⅧⅨⅩ])$/;
+  // 身份标记：剧场版/OVA/SP/完结季/最终季等影响作品身份的版本词
+  var EDITION_RE = /(剧场版|电影版|OVA|SP|特别篇|番外|前传|后传|外传|完结季|完结篇|最终季|终季|动态漫画|动态漫|动画版|漫画版|真人版|真人电影|网络剧|网剧版|网络电影|TV版|tv版)/g;
 
-  // 从标题提取并归一化身份标记（第X季 → Sx，其余保留小写）。
+  // 中文数字 → 阿拉伯数字（支持 1–99 与「百」）
+  function parseCnOrDigit(n) {
+    if (n == null || n === '') return '';
+    var raw = String(n);
+    if (/^\d+$/.test(raw)) return String(parseInt(raw, 10));
+    var digits = { '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+    if (raw === '十') return '10';
+    if (raw === '百') return '100';
+    if (raw.length === 1 && digits[raw] != null) return String(digits[raw]);
+    if (raw.indexOf('十') >= 0) {
+      var parts = raw.split('十');
+      var tens = (parts[0] === '' || parts[0] == null) ? 1 : digits[parts[0]];
+      var ones = (parts[1] === '' || parts[1] == null) ? 0 : digits[parts[1]];
+      if (tens != null && ones != null) return String(tens * 10 + ones);
+    }
+    return raw;
+  }
+
+  // 从标题提取并归一化身份标记（第X季/S2/末尾数字/完结季 → sN 或小写版名词）。
   function extractIdentityMarkers(s) {
+    if (!s) return '';
     var markers = [];
-    var map = {
-      '一': '1', '二': '2', '三': '3', '四': '4', '五': '5',
-      '六': '6', '七': '7', '八': '8', '九': '9', '十': '10', '百': '100'
-    };
-    s.replace(SEASON_RE, function (m, p1) {
-      markers.push('S' + (map[p1] || p1));
+    var text = String(s).replace(/[　\s]+/g, '');
+    text.replace(SEASON_RE, function (m, p1) {
+      markers.push('s' + parseCnOrDigit(p1));
       return '';
     });
-    s.replace(EDITION_RE, function (m) {
+    text.replace(SEASON_S_RE, function (m, p1) {
+      markers.push('s' + String(parseInt(p1, 10)));
+      return '';
+    });
+    var tailNum = SEASON_TAIL_NUM_RE.exec(text);
+    if (tailNum) markers.push('s' + tailNum[2]);
+    var tailRoman = SEASON_TAIL_ROMAN_RE.exec(text);
+    if (tailRoman && ROMAN_MAP[tailRoman[2]]) markers.push('s' + ROMAN_MAP[tailRoman[2]]);
+    text.replace(EDITION_RE, function (m) {
       markers.push(m.toLowerCase().replace(/\s+/g, ''));
       return '';
     });
-    return markers.sort().join('+');
+    var seen = {};
+    var uniq = [];
+    for (var i = 0; i < markers.length; i++) {
+      if (!seen[markers[i]]) { seen[markers[i]] = 1; uniq.push(markers[i]); }
+    }
+    return uniq.sort().join('+');
   }
 
   // 清洗标题用于聚合身份键：保留季数/版本标记，仅去掉源噪声与空白/分隔符。
   function cleanTitleForAgg(t) {
     if (!t) return '';
     var s = String(t).trim();
-    // 去全角/半角空白
     s = s.replace(/[　\s]+/g, '');
-    // 提取身份标记（在去除括号之前，避免括号内标记丢失）
     var markers = extractIdentityMarkers(s);
-    // 去括号及括号内内容（含中文「（）」、英文「()」、方头「【】」）
     s = s.replace(/[（(][^（）()]*[)）]/g, '');
     s = s.replace(/[【][^【】]*[】]/g, '');
-    // 再次去掉已提取过的身份标记本体
     s = s.replace(SEASON_RE, '');
+    s = s.replace(SEASON_S_RE, '');
+    s = s.replace(SEASON_TAIL_NUM_RE, '$1');
+    s = s.replace(SEASON_TAIL_ROMAN_RE, '$1');
     s = s.replace(EDITION_RE, '');
-    // 去源噪声
     for (var i = 0; i < SOURCE_NOISE.length; i++) {
       s = s.split(SOURCE_NOISE[i]).join('');
     }
-    // 去残留分隔符
     s = s.replace(/[·・\-—_~.。・]/g, '');
     s = s.toLowerCase();
-    // 身份键 = 基础标题 [+ 标记]
     return markers ? (s + '|' + markers) : s;
+  }
+
+  // 聚合键格式：identity|year；identity 本身可含 |markers
+  function identityOfKey(lk) {
+    if (!lk) return '';
+    var i = String(lk).lastIndexOf('|');
+    return i >= 0 ? lk.slice(0, i) : String(lk);
+  }
+
+  function baseOfIdentity(identity) {
+    if (!identity) return '';
+    var i = String(identity).indexOf('|');
+    return i >= 0 ? identity.slice(0, i) : String(identity);
   }
 
   // 把单个搜索结果项拆分为「统一 variant 描述」数组。
@@ -136,12 +183,8 @@
   }
 
   /**
-   * 按 (清洗标题, 年份) 归并异构搜索结果（CMS10 + Kazumi）。
-   * @returns {Array} 聚合后的卡片列表，每张卡：
-   *   { title, year, pic, typeName, area, remarks, content, playUrl,
-   *     isKazumi, variants, cmsVars, kzVars, _localKey }
-   *   - variants：合并后的全部来源（CMS 在前，Kazumi 在后）
-   *   - isKazumi：仅当全部来源都是 Kazumi 时为 true（混合卡默认走 CMS 播放）
+   * 按 (清洗标题 identity, 年份) 归并异构搜索结果（CMS10 + Kazumi）。
+   * 空年份只并入 identity 完全相同的组，禁止前缀误吞不同季。
    */
   function aggregateByLocalKey(items) {
     var groups = {};
@@ -159,22 +202,36 @@
     (items || []).forEach(function (it) {
       if (!it || !it.title) return;
       var clean = cleanTitleForAgg(it.title);
-      var year = it.year || '';
-      var lk = clean + '|' + year;
-      var g;
-      if (year) {
-        g = ensureGroup(lk);
-      } else {
-        // 空年份（如 Kazumi 规则源不返回年份）：并入同清洗标题的已有组
-        // （优先带年份的），否则新建空年组。这样无年份的规则源也能和带
-        // 年份的 CMS 结果归并成同一张卡。
-        var found = null;
-        var keys = Object.keys(groups);
-        for (var i = 0; i < keys.length; i++) {
-          if (keys[i].indexOf(clean + '|') === 0) { found = keys[i]; break; }
-        }
-        g = found ? groups[found] : ensureGroup(lk);
+      var year = String(it.year || '').trim();
+      var g = null;
+      if (year && groups[clean + '|' + year]) {
+        g = groups[clean + '|' + year];
       }
+      if (!g) {
+        if (year) {
+          var emptySame = null;
+          for (var j = 0; j < order.length; j++) {
+            var ek = order[j];
+            if (identityOfKey(ek) === clean && groups[ek] && !groups[ek].year) {
+              emptySame = ek;
+              break;
+            }
+          }
+          g = emptySame ? groups[emptySame] : ensureGroup(clean + '|' + year);
+        } else {
+          var found = null;
+          var foundWithYear = null;
+          for (var i = 0; i < order.length; i++) {
+            var k = order[i];
+            if (identityOfKey(k) !== clean) continue;
+            if (!found) found = k;
+            if (groups[k] && groups[k].year) { foundWithYear = k; break; }
+          }
+          var targetKey = foundWithYear || found;
+          g = targetKey ? groups[targetKey] : ensureGroup(clean + '|');
+        }
+      }
+      g.identity = clean;
       if (!g.title && it.title) g.title = it.title;
       if (!g.year && it.year) g.year = it.year;
       if (!g.pic && it.pic) g.pic = it.pic;
@@ -194,7 +251,7 @@
       return {
         title: g.title, year: g.year, pic: g.pic, typeName: g.typeName,
         area: g.area, remarks: g.remarks, content: g.content, playUrl: g.playUrl,
-        isKazumi: g.cmsVars.length === 0, // 仅全 Kazumi 才走规则详情
+        isKazumi: g.cmsVars.length === 0,
         variants: variants, cmsVars: g.cmsVars, kzVars: g.kzVars,
         _localKey: lk
       };
@@ -238,10 +295,10 @@
       var t = (c && c.title) || '';
       var ct = cleanTitleForAgg(t);
       if (!ct) return -1;
-      if (ct === cq) return 10000;                                          // 防御性全覆盖
-      if (ct.indexOf(cq) === 0) return 1000 - Math.abs(ct.length - cq.length); // 标题以查询开头
-      if (ct.indexOf(cq) >= 0) return 500 - Math.abs(ct.length - cq.length);   // 标题包含查询
-      if (cq.indexOf(ct) === 0 && ct.length >= 2) return 200;                   // 查询包含标题
+      if (ct === cq) return 10000;
+      if (ct.indexOf(cq) === 0) return 1000 - Math.abs(ct.length - cq.length);
+      if (ct.indexOf(cq) >= 0) return 500 - Math.abs(ct.length - cq.length);
+      if (cq.indexOf(ct) === 0 && ct.length >= 2) return 200;
       return 0;
     }
     var ranked = candidates
@@ -264,12 +321,9 @@
    *     查询包含标题(≥2字)     → 200
    *     否则                   → 0（无关）
    *   收敛规则：
-   *     - 存在强匹配(精确/开头)时，只保留强匹配项，剔除纯包含(不同作品)噪声；
-   *       于是「你的名字」置顶、剔除非开头的「请以你的名字呼唤我」，同时保留
-   *       开头匹配的「你的名字是玫瑰」与续集（视作同前缀相关）。
+   *     - 存在强匹配(精确/开头)时，只保留强匹配项 + 同 base 的其它季/版；
+   *       剔除纯包含(不同作品)噪声。
    *     - 无强匹配时，保留所有相关(分数>0)项并按分降序，取 Top N。
-   *   与 filterCandidatesForQuery(方案 C，严格优先、可能只留精确)不同，本函数
-   *   用于「发现型」搜索面板：保留前缀相关项、仅剔除明显跨作品的子串噪声。
    * ------------------------------------------------------------------ */
   function rankSearchResults(items, query, opts) {
     opts = opts || {};
@@ -280,9 +334,6 @@
     var cq = cleanTitleForAgg(q);
     if (!cq) return items.slice();
 
-    // 分类：strong = 精确匹配或标题以查询开头（同作品/同前缀，视为强相关）；
-    // 其余仅按相关性分数(>0)判定是否相关。强相关的分数基准须高于 1000，
-    // 否则长标题的 startsWith 相减后会跌破阈值被误判为弱匹配。
     function classify(it) {
       var t = (it && it.title) || '';
       var ct = cleanTitleForAgg(t);
@@ -295,8 +346,14 @@
     }
     var scored = items.map(function (it) { return { it: it, c: classify(it) }; });
     var hasStrong = scored.some(function (x) { return x.c.strong; });
+    var cqBase = baseOfIdentity(cq);
     var kept = hasStrong
-      ? scored.filter(function (x) { return x.c.strong; })
+      ? scored.filter(function (x) {
+          if (x.c.strong) return true;
+          // 同一 base 的其它季/版（完结季等）：即使未进 strong 也保留
+          var ct = cleanTitleForAgg((x.it && x.it.title) || '');
+          return !!ct && baseOfIdentity(ct) === cqBase && ct !== cqBase;
+        })
       : scored.filter(function (x) { return x.c.s > 0; });
     kept.sort(function (a, b) { return b.c.s - a.c.s; });
     return kept.slice(0, topN).map(function (x) { return x.it; });
@@ -364,7 +421,7 @@
 
   /* ------------------------------------------------------------------
    * SearchParser（仅序列化正向意图 keyword + sort）
-   *   排除维度无法表达为 CMS/Bangumi 查询语法，统一走客户端过滤，
+   *   排除维度无法表达为 CMS/Bangumi 的查询语法，统一走客户端过滤，
    *   因此 fromFilterState 不产出任何 exclude token。
    * ------------------------------------------------------------------ */
 
@@ -429,6 +486,74 @@
   // 类型池 → 中文展示（供 chips/UI 复用）
   function typeLabel(t) { return t; }
 
+  /** markers 字符串 → 人类可读季/版标签（s2→第2季，完结季→完结季） */
+  function labelIdentityMarkers(markers) {
+    if (!markers) return '';
+    return String(markers).split('+').map(function (m) {
+      if (!m) return '';
+      var s = /^s(\d+)$/i.exec(m);
+      if (s) return '第' + s[1] + '季';
+      return m;
+    }).filter(Boolean).join(' · ');
+  }
+
+  /**
+   * 从一次搜索的身份卡列表中取出「同 base 的其它季/版」（不含当前 title）。
+   */
+  function filterSeasonSiblings(cards, currentTitle) {
+    var out = [];
+    if (!cards || !cards.length) return out;
+    var qBase = baseOfIdentity(cleanTitleForAgg(currentTitle || ''));
+    if (!qBase) return out;
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i];
+      if (!c || !c.title) continue;
+      if (String(c.title) === String(currentTitle || '')) continue;
+      if (baseOfIdentity(cleanTitleForAgg(c.title)) === qBase) out.push(c);
+    }
+    return out;
+  }
+
+  /**
+   * 从 raw 命中里捞出「同 base 的季/版，但未进入已有身份卡」的条目。
+   * 场景：CMS 列表页与多源弹窗子串命中不一致，或 rank/过滤后漏卡。
+   * 返回可直接追加到网格的聚合卡数组（可能为空）。
+   */
+  function collectSeasonFamilyHits(rawItems, existingCards, query, opts) {
+    opts = opts || {};
+    var limit = (opts.limit != null) ? opts.limit : 6;
+    if (!rawItems || !rawItems.length) return [];
+    var q = String(query || '').trim();
+    if (!q) return [];
+    var cq = cleanTitleForAgg(q);
+    var qBase = baseOfIdentity(cq);
+    if (!qBase) return [];
+
+    var seenIdentity = {};
+    (existingCards || []).forEach(function (c) {
+      var idn = cleanTitleForAgg((c && c.title) || '');
+      if (idn) seenIdentity[idn] = 1;
+      if (c && c._localKey) seenIdentity[identityOfKey(c._localKey)] = 1;
+    });
+
+    var leftovers = [];
+    (rawItems || []).forEach(function (it) {
+      if (!it || !it.title) return;
+      var idn = cleanTitleForAgg(it.title);
+      if (!idn) return;
+      var base = baseOfIdentity(idn);
+      // 仅同 base（查询 base 或以查询为前缀的季族）
+      if (base !== qBase && base.indexOf(qBase) !== 0) return;
+      // 已有同 identity 卡 → 跳过
+      if (seenIdentity[idn]) return;
+      // 无标记的纯本体若已有卡则上面已跳过；此处保留「有季/版标记」的漏网命中
+      leftovers.push(it);
+      seenIdentity[idn] = 1;
+    });
+    if (!leftovers.length) return [];
+    return aggregateByLocalKey(leftovers).slice(0, limit);
+  }
+
   /* ------------------------------------------------------------------
    * 导出
    * ------------------------------------------------------------------ */
@@ -449,6 +574,12 @@
     cleanTitleForAgg: cleanTitleForAgg,
     aggregateByLocalKey: aggregateByLocalKey,
     extractIdentityMarkers: extractIdentityMarkers,
+    identityOfKey: identityOfKey,
+    baseOfIdentity: baseOfIdentity,
+    parseCnOrDigit: parseCnOrDigit,
+    labelIdentityMarkers: labelIdentityMarkers,
+    collectSeasonFamilyHits: collectSeasonFamilyHits,
+    filterSeasonSiblings: filterSeasonSiblings,
     filterCandidatesForQuery: filterCandidatesForQuery,
     rankSearchResults: rankSearchResults
   };

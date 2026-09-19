@@ -13,7 +13,7 @@
  *
  * 数据：SFV.bangumi（当季 getCalendar，往季 getSeasonCalendar）
  * 季度：SFV.bangumiSeason（移植自 Kazumi AnimeSeason）
- * 追番：SFV.model 六态（key = bangumi:<id>）；加入片单：SFV.collections
+ * 追番：SFV.model 六态（key = bangumi:<id>）；加入片单功能已删除
  *
  * 约定：kazumi/ 内部不改；本文件为目录外新增。
  * @license GPL-3.0
@@ -315,11 +315,25 @@
 
     card.addEventListener('click', function (e) {
       e.stopPropagation();
+      // 弹窗模式下遮罩盖在详情页之上，须先关闭再跳转，否则视觉上「点了没反应」
+      if (_modalOverlay) closePopup();
+      // 走项目通用 Plex 风详情页（同「类似影片」入口）；追片身份 key = bangumi:<id> 与本页共用
+      var S = SFV.onlineShared;
+      if (S && typeof S.openDetailFromMeta === 'function') {
+        S.openDetailFromMeta({
+          key: trackKey(item),
+          title: item.title || item.name || '',
+          pic: item.poster || '',
+          year: (item.airDate || '').slice(0, 4),
+          mediaType: 'tv'
+        });
+        return;
+      }
       if (SFV.bangumiInfo && typeof SFV.bangumiInfo.open === 'function') {
         SFV.bangumiInfo.open(item);
         return;
       }
-      // 详情页未就绪时降级为追番弹层
+      // 通用详情页未就绪时降级为追番弹层
       openPopover(card, item);
     });
     return card;
@@ -398,7 +412,7 @@
     });
   }
 
-  // ---------------------------------------------------------------- 追番 / 加入片单 弹层
+  // ---------------------------------------------------------------- 追番弹层
   var _pop = null;
   function closePop() {
     if (_pop && _pop.parentNode) _pop.parentNode.removeChild(_pop);
@@ -436,60 +450,12 @@
     });
     pop.appendChild(trackWrap);
 
-    var addBtn = el('button', 'sfv-bgm-pop-add', '+ 加入片单');
-    addBtn.type = 'button';
-    addBtn.addEventListener('click', function (ev) {
-      ev.stopPropagation();
-      showFolderPicker(pop, item);
-    });
-    pop.appendChild(addBtn);
-
     var r = anchor.getBoundingClientRect();
     pop.style.position = 'fixed';
     pop.style.left = Math.min(r.left, global.innerWidth - 280) + 'px';
     pop.style.top = Math.min(r.bottom + 6, global.innerHeight - 240) + 'px';
     (doc.body || doc.documentElement).appendChild(pop);
     setTimeout(function () { doc.addEventListener('click', onDocClick, true); }, 0);
-  }
-
-  function showFolderPicker(pop, item) {
-    pop.innerHTML = '';
-    pop.appendChild(el('div', 'sfv-bgm-pop-title', '加入片单'));
-    var cols = SFV.collections;
-    var folders = (cols && cols.listUserFolders) ? cols.listUserFolders() : [];
-
-    function doAdd(folderId, folderName) {
-      if (cols && cols.addUserItem) {
-        cols.addUserItem(folderId, {
-          id: 'bangumi:' + item.id, mediaType: 'tv',
-          title: item.title || item.name,
-          year: (item.airDate || '').slice(0, 4),
-          poster: item.poster, rating: item.ratingScore, overview: item.summary
-        });
-      }
-      trackToast('已加入「' + folderName + '」');
-      closePop();
-    }
-
-    if (!folders.length) {
-      pop.appendChild(el('div', 'sfv-bgm-pop-hint', '暂无片单夹，新建一个：'));
-      var newBtn = el('button', 'sfv-bgm-pop-folder', '+ 新建「追番」片单夹');
-      newBtn.type = 'button';
-      newBtn.addEventListener('click', function (ev) {
-        ev.stopPropagation();
-        var fid = (cols && cols.createUserFolder) ? cols.createUserFolder('追番') : null;
-        if (fid) doAdd(fid, '追番');
-      });
-      pop.appendChild(newBtn);
-      return;
-    }
-
-    folders.forEach(function (f) {
-      var b = el('button', 'sfv-bgm-pop-folder', f.name + ' (' + ((f.items || []).length) + ')');
-      b.type = 'button';
-      b.addEventListener('click', function (ev) { ev.stopPropagation(); doAdd(f.id, f.name); });
-      pop.appendChild(b);
-    });
   }
 
   // ---------------------------------------------------------------- 弹窗模式

@@ -166,7 +166,7 @@
         // 同位置对齐（青/青/蓝灰/青/奶白），无需 nth-child 补丁。
         // 若误删，tone-a 会回退基类默认青色，音乐态的色彩层次随之丢失（此前的不一致 root cause）。
         // 仍保留 home-card-featured / home-card-quick（控制 art 尺寸/排版），沿用音乐态 DOM 上的 class。
-        // cards[0] = featured (心动大卡), cards[1-4] = quick (片单/追片/历史/音乐空间小卡)
+        // cards[0] = featured (心动大卡), cards[1-4] = quick (片库/追片/历史/音乐空间小卡)
 
         // T119：每张分类卡的封面 = 各自 flag 类最新一条的 pic
         // 传 musicSyncUrl 供 music-space 卡使用

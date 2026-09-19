@@ -200,6 +200,8 @@ function animatePlaylistPanelCurrentTab(panel, opts) {
     animateVisiblePanelList(document.getElementById('queue-list'), '.queue-item', panel, '.queue-item.now', { scrollActive: opts.scrollActive !== false });
   } else if (queueViewTab === 'playlists') {
     animateVisiblePanelList(document.getElementById('pl-list'), '.pl-card', panel);
+  } else if (queueViewTab === 'subsonic') {
+    animateVisiblePanelList(document.getElementById('subsonic-list'), '.pl-card', panel);
   } else {
     animateVisiblePanelList(document.getElementById('podcast-list'), '.pl-card', panel);
   }
@@ -213,6 +215,7 @@ function preparePlaylistPanelTabOnOpen(panel) {
   }
   if (queueViewTab === 'queue') scrollPlaylistPanelToCurrent();
   else if (queueViewTab === 'playlists' || queueViewTab === 'podcasts') refreshUserPlaylists();
+  else if (queueViewTab === 'subsonic') refreshSubsonicPane();
 }
 function switchPlaylistTab(tab, opts) {
   opts = opts || {};
@@ -225,13 +228,18 @@ function switchPlaylistTab(tab, opts) {
   if (playlistTab) playlistTab.classList.toggle('active', tab === 'playlists');
   var podcastTab = document.getElementById('tab-podcast');
   if (podcastTab) podcastTab.classList.toggle('active', tab === 'podcasts');
+  var subsonicTab = document.getElementById('tab-subsonic');
+  if (subsonicTab) subsonicTab.classList.toggle('active', tab === 'subsonic');
   var queuePane = document.getElementById('queue-pane');
   var playlistPane = document.getElementById('pl-pane');
   if (queuePane) queuePane.style.display = tab === 'queue' ? '' : 'none';
   if (playlistPane) playlistPane.style.display = tab === 'playlists' ? '' : 'none';
   var podcastPane = document.getElementById('podcast-pane');
   if (podcastPane) podcastPane.style.display = tab === 'podcasts' ? '' : 'none';
+  var subsonicPane = document.getElementById('subsonic-pane');
+  if (subsonicPane) subsonicPane.style.display = tab === 'subsonic' ? '' : 'none';
   if ((tab === 'playlists' || tab === 'podcasts') && opts.refresh !== false) refreshUserPlaylists();
+  if (tab === 'subsonic' && opts.refresh !== false) refreshSubsonicPane();
   if (opts.animate !== false) animatePlaylistPanelCurrentTab(document.getElementById('playlist-panel'));
 }
 function setMiniQueueOpen(open) {

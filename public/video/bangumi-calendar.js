@@ -9,7 +9,7 @@
  * 这里保留 SFV.bangumiCalendar 名称，全部方法转发到 SFV.bangumiTimeline。
  *
  * 样式说明：
- *   - bangumi-calendar.css 仍保留 .sfv-bgm-pop*（追番/加入片单弹层），被两个模块共用；
+ *   - bangumi-calendar.css 仍保留 .sfv-bgm-pop*（追番弹层），被两个模块共用；
  *   - 新的页面样式在 bangumi-timeline.css。
  *
  * @license GPL-3.0

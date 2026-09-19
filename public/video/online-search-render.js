@@ -51,6 +51,19 @@
         voteBadge.textContent = '★ ' + Number(it.tmdbRating).toFixed(1);
         cover.appendChild(voteBadge);
       }
+      // 季/版徽章：完结季、第2季等，避免同系列多卡只靠海报区分
+      var seasonLabel = '';
+      if (SFV.SearchFilterCore && SFV.SearchFilterCore.extractIdentityMarkers) {
+        seasonLabel = SFV.SearchFilterCore.labelIdentityMarkers(
+          SFV.SearchFilterCore.extractIdentityMarkers(it.title || '')
+        );
+      }
+      if (seasonLabel) {
+        var seasonBadge = doc.createElement('span');
+        seasonBadge.className = 'sfv-card-season';
+        seasonBadge.textContent = seasonLabel;
+        cover.appendChild(seasonBadge);
+      }
 
       var name = doc.createElement('div');
       name.className = 'sfv-card-name';
@@ -58,7 +71,7 @@
 
       var sub = doc.createElement('div');
       sub.className = 'sfv-card-sub';
-      /* T166b：原 sub 内的 `★ 8.5` 已挪到右上角徽章（见 cover 块），此处仅保留年份/来源 */
+      /* 副文案：年份 · N 源（源数不参与身份，只作徽章） */
       var st = '';
       if (it.year) st += it.year;
       if (it.variants && it.variants.length > 1) {

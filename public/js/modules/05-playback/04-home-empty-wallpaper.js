@@ -181,7 +181,7 @@ function openHomeLocalImport() {
   homeSuppressed = false;
   setHomeControlsLocked(false);
   updateEmptyHomeVisibility();
-  if (typeof loadPersistedLocalLibraryIntoQueue === 'function' && loadPersistedLocalLibraryIntoQueue()) return;
+  // 始终打开导入面板：有曲库时面板内提供「播放本地曲库」，避免吞掉二次导入入口
   openUploadPanel();
 }
 function openHomeProductGuide() {
@@ -360,6 +360,17 @@ function isHomeBlankDismissClick(e) {
   if (!emptyHomeActive || !e || e.defaultPrevented) return false;
   if (e.button != null && e.button !== 0) return false;
   if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
+  // 任一「点外即关」面板打开时，空白点击一律不关 Home（API 守卫，比 class 选择器更稳）
+  try {
+    var SFV = window.StellaflixVideo;
+    if (SFV) {
+      if (SFV.sourcePicker && SFV.sourcePicker.isOpen && SFV.sourcePicker.isOpen()) return false;
+      if (SFV.SearchFilter && SFV.SearchFilter.isOpen && SFV.SearchFilter.isOpen()) return false;
+    }
+    var csOverlay = document.getElementById('custom-source-modal-overlay');
+    if (csOverlay && csOverlay.getAttribute('data-open') === '1') return false;
+    if (document.querySelector('.sfv-bgm-modal-overlay')) return false;
+  } catch (err) { /* 守卫失败不阻断空白关闭 */ }
   var target = e.target;
   if (!target || !target.closest) return false;
   var blockedSelector = [
@@ -388,7 +399,22 @@ function isHomeBlankDismissClick(e) {
     '.modal',
     '.track-detail-modal',
     '.cover-color-pop',
-    '.color-lab-pop'
+    '.color-lab-pop',
+    // 视影视态弹层与登录 modal 同级保护：点遮罩关面板时不得连带关 Home
+    // （home 空白关闭跑在 document 捕获阶段，若不拦截，点四面板遮罩会先 dismissHome）
+    '.sfv-bgm-modal-overlay',
+    '.sfv-bgm-modal',
+    '.sfv-bgm-tl-sheet-mask',
+    '.sfv-bgm-tl-sheet',
+    '.sfv-picker-backdrop',
+    '.sfv-picker',
+    '.sfv-picker-modal-backdrop',
+    '.sfv-picker-captcha-backdrop',
+    '.custom-source-modal-overlay',
+    '.custom-source-modal',
+    '.sf-filter-layer',
+    '.sf-filter-scrim',
+    '.sf-filter-sheet'
   ].join(',');
   if (target.closest(blockedSelector)) return false;
   var x = e.clientX;

@@ -775,7 +775,8 @@
           pic: rec.img || rec.pic || '',
           year: rec.year || '',
           source: { id: src.id, name: src.name || '' },
-          vodId: rec.lastVodId
+          vodId: rec.lastVodId,
+          _origin: rec._origin
         };
         startPlay(v2, res.plays, fromIndex);
         cb(true);
@@ -826,7 +827,8 @@
               pic: rec.img || rec.pic || '',
               year: rec.year || '',
               source: { id: variant.sourceId, name: variant.sourceName || variant.sourceId || '' },
-              vodId: variant.vodId
+              vodId: variant.vodId,
+              _origin: rec._origin
             };
             startPlay(v2, dres.plays, fromIndex);
           }).catch(function () { next(); });

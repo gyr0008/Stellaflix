@@ -281,29 +281,31 @@ function toggleControlsAutoHide() {
   saveBooleanPreference(CONTROLS_AUTO_HIDE_STORE_KEY, controlsAutoHide);
   var btn = document.getElementById('controls-hide-btn');
   if (btn) btn.classList.toggle('active', controlsAutoHide);
-  // =====【修复2026-09-06 17:31】影视态下控制条常驻设计 =====
-  // player-controller.js 的 sanitizeBar()（150ms 轮询 + MutationObserver）会在影视态激活期间
-  // 强制移除 #bottom-bar 的 soft-hidden class，目的是防止 HLS/拖动时控制条被意外隐藏。
-  // 这套保护器会一并清掉用户主动开启的 soft-hidden，导致用户在影视态下点 #controls-hide-btn
-  // 看似「按钮无效」（持久化已写、.active 已切换、但视觉上控制条永不隐藏）。
-  //
-  // 设计权衡：影视态下控制条必须常驻（防播放卡死），但用户的偏好必须被尊重且持久化。
-  // 方案 A：影视态下点击只持久化偏好 + 切换 .active 视觉态，不调度隐藏；
-  // 退出影视态回到音乐态时，由 01-scene/04-bottom-controls-cursor 的鼠标移动 / 调度逻辑按持久化值生效。
-  if (document.body && document.body.classList.contains('video-player-active')) {
-    setControlsHidden(false); // 影视态下不隐藏，但确保当前显示态正确（防御性）
-    showToast(controlsAutoHide
-      ? '影视态控制条常驻；自动隐藏已开启，切回音乐态后生效'
-      : '影视态控制条常驻；自动隐藏已关闭，切回音乐态后生效');
+
+  // 统一语义（音乐态 / 影视态一致）：
+  //   .active 高亮 = 自动隐藏开启 → 空闲后淡出
+  //   未高亮     = 控制条常驻
+  // 影视态隐藏走 video-player-idle（player.js wireIdle），不再依赖 soft-hidden，
+  // 因此不必再对 video-player-active 做「只持久化不生效」的特判。
+  setControlsHidden(false);
+  if (controlsHideTimer) { clearTimeout(controlsHideTimer); controlsHideTimer = null; }
+
+  var isVideoPlayer = !!(document.body && document.body.classList.contains('video-player-active'));
+  if (isVideoPlayer && typeof SFV !== 'undefined' && SFV.player) {
+    if (controlsAutoHide) {
+      if (typeof SFV.player.armHideTimer === 'function') SFV.player.armHideTimer(520);
+      showToast('控制条自动隐藏已开启');
+    } else {
+      if (typeof SFV.player.forceControlsVisible === 'function') SFV.player.forceControlsVisible();
+      showToast('控制条保持显示');
+    }
     return;
   }
-  // ===== 修复结束 =====
-  setControlsHidden(false);
+
   if (controlsAutoHide) {
     scheduleControlsHide(520);
     showToast('控制条自动隐藏已开启');
   } else {
-    if (controlsHideTimer) { clearTimeout(controlsHideTimer); controlsHideTimer = null; }
     showToast('控制条保持显示');
   }
 }

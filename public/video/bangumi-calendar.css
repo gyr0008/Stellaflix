@@ -185,33 +185,6 @@
 .sfv-bgm-pop-state.st-planToWatch.active { background: rgba(255, 179, 71, .9); color: #2a1c00; }
 .sfv-bgm-pop-state.st-watched.active { background: rgba(76, 217, 130, .85); color: #06210f; }
 .sfv-bgm-pop-state.st-abandoned.active { background: rgba(244, 67, 89, .85); }
-.sfv-bgm-pop-add {
-  width: 100%;
-  border: 1px dashed rgba(0, 245, 212, .5);
-  background: rgba(0, 245, 212, .08);
-  color: #c8fff6;
-  border-radius: 10px;
-  padding: 8px;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.sfv-bgm-pop-add:hover { background: rgba(0, 245, 212, .16); }
-.sfv-bgm-pop-hint { font-size: 12px; color: rgba(255, 255, 255, .6); margin-bottom: 8px; }
-.sfv-bgm-pop-folder {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: 1px solid rgba(255, 255, 255, .12);
-  background: rgba(255, 255, 255, .05);
-  color: rgba(255, 255, 255, .9);
-  border-radius: 9px;
-  padding: 7px 10px;
-  font-size: 12.5px;
-  margin-bottom: 6px;
-  cursor: pointer;
-}
-.sfv-bgm-pop-folder:hover { background: rgba(255, 255, 255, .12); }
-.sfv-bgm-pop-create { border-style: dashed; color: #c8fff6; }
 
 @media (max-width: 1100px) {
   .sfv-bgm-grid { grid-template-columns: repeat(4, 1fr); }

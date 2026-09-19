@@ -1,8 +1,10 @@
 /*
  * Stellaflix 影视模块 — 片单浏览（collections）(拆债 #1)
  *
- * 本文件从 online.js 抽出的「片单」全部逻辑：打开片单页、进入具体片单影片列表、
- * 退出片单重渲染、渲染片单影片网格、加入我的片单弹窗。
+ * 本文件从 online.js 抽出的「片单」浏览逻辑：片库页跳转、时间表弹窗、
+ * 进入具体片单影片列表（collection-items 视图）并渲染其影片网格。
+ * （2026-09-19：旧片单页入口与「我的片单」加入弹窗已随功能删除，
+ *  首页入口改为 home-collections-overlay.js 片单中心弹窗。）
  *
  * 共享状态与协调器函数统一经 SFV.onlineShared(S) 访问：
  *   - 共享状态：S.overlay / S.titleEl / S.bodyEl 等；
@@ -17,12 +19,12 @@
   var S = SFV.onlineShared;
   if (!S) { throw new Error('[SFV online-collections] onlineShared 未加载，请检查 index.html 加载顺序'); }
 
-  // ===== 片单浏览：打开 collections 页（router page）=====
-  function openCollections() {
-    S.goToNav('collections');
+  // ===== 片库：打开 library 占位页（Folia 海报墙落点；原首页「片单」卡改名入口）=====
+  function openLibrary() {
+    S.goToNav('library');
   }
   // 打开「时间表」面板弹窗（首页 BANGUMI 卡片入口）。
-  // 行为对齐音乐态「电台/歌单」：居中玻璃面板，Esc/点空白关闭；collections 标签页仍走整页 mount(view)。
+  // 行为对齐音乐态「电台/歌单」：居中玻璃面板，Esc/点空白关闭。
   function openCalendar() {
     if (SFV.bangumiTimeline && typeof SFV.bangumiTimeline.openPopup === 'function') {
       SFV.bangumiTimeline.openPopup();
@@ -32,30 +34,19 @@
       SFV.bangumiCalendar.openPopup();
       return;
     }
-    // 兜底：弹窗不可用则走整页
+    // 兜底：弹窗不可用则走放送表整页
     if (SFV.bangumiTimeline && typeof SFV.bangumiTimeline.openPage === 'function') {
       SFV.bangumiTimeline.openPage();
       return;
     }
-    // 最终兜底：旧行为（模块未加载时）
-    if (SFV.pageCollections && typeof SFV.pageCollections.setActiveTab === 'function') {
-      SFV.pageCollections.setActiveTab('calendar');
-    }
-    S.goToNav('collections');
+    S.toast('放送表模块未加载');
   }
-  // 打开某片单的影片列表（collection-items 视图）
+  // 打开某片单的影片列表（collection-items 视图）。
+  // 首页浮层等外部入口无 goToNav 前置：先 ensureOverlayShown() 懒建浏览层 DOM，
+  // 否则 pushView→render 在 S.backBtn(null) 上抛 TypeError（2026-09-18 冒烟实测）。
   function openCollectionItems(def) {
+    S.ensureOverlayShown();
     S.pushView({ mode: 'collection-items', collId: def.id, collTitle: def.title, collDef: def });
-    // 通知片单页：已进入二级视图（具体片单），供其 back() 消费返回
-    if (SFV.pageCollections && typeof SFV.pageCollections.setItemsOpen === 'function') {
-      SFV.pageCollections.setItemsOpen(true);
-    }
-  }
-
-  // 退出具体片单后，重渲染片单列表（router page），复位页内二级视图状态。
-  // 由 page-collections.js 的 back() 在消费返回时调用。
-  function reopenCollections() {
-    if (SFV.router) SFV.router.go('collections');
   }
 
   // 渲染 collection-items：横向滚动 rail + hover 电影 logo，对齐详情页「类似影片」
@@ -175,68 +166,9 @@
     });
   }
 
-  // 加入我的片单：选择片单夹弹窗
-  function showPickFolderDialog(view) {
-    if (!SFV.collections) return;
-    var doc = S.d();
-    var mask = S.el('div', 'sfv-pick-dialog-mask');
-    var dialog = S.el('div', 'sfv-pick-dialog');
-    dialog.appendChild(S.el('h3', null, '加入我的片单'));
-    var folders = SFV.collections.listUserFolders();
-
-    if (!folders.length) {
-      dialog.appendChild(S.el('div', 'sfv-pick-item-count', '还没有片单夹，先新建一个吧'));
-    }
-    folders.forEach(function (f) {
-      var item = S.el('div', 'sfv-pick-item');
-      item.appendChild(S.el('div', 'sfv-pick-item-name', f.name));
-      item.appendChild(S.el('div', 'sfv-pick-item-count', (f.items ? f.items.length : 0) + ' 部'));
-      item.addEventListener('click', function () {
-        SFV.collections.addUserItem(f.id, {
-          id: view.id || view.key, mediaType: view.mediaType || 'movie',
-          title: view.title, year: view.year, poster: view.pic || view.poster,
-          rating: view.rating || 0, overview: view.overview || ''
-        });
-        closePick();
-        S.toast('已加入「' + f.name + '」');
-      });
-      dialog.appendChild(item);
-    });
-
-    var addNew = S.el('div', 'sfv-pick-item add-new', '＋ 新建片单夹');
-    addNew.addEventListener('click', function () {
-      closePick();
-      if (SFV.pageCollections && SFV.pageCollections.showFolderDialog) {
-        SFV.pageCollections.showFolderDialog(null);
-        global.setTimeout(function () {
-          var fs = SFV.collections.listUserFolders();
-          if (fs.length) {
-            var last = fs[fs.length - 1];
-            SFV.collections.addUserItem(last.id, {
-              id: view.id || view.key, mediaType: view.mediaType || 'movie',
-              title: view.title, year: view.year, poster: view.pic || view.poster,
-              rating: view.rating || 0, overview: view.overview || ''
-            });
-            S.toast('已新建并加入「' + last.name + '」');
-          }
-        }, 350);
-      }
-    });
-    dialog.appendChild(addNew);
-
-    var closePick = function () { if (mask.parentNode) mask.parentNode.removeChild(mask); };
-    mask.addEventListener('click', function (ev) { if (ev.target === mask) closePick(); });
-    mask.appendChild(dialog);
-    // 挂载到当前浏览覆盖层宿主（.sfv-browse-body），使弹窗浮于当前页（具体片单视图）之上，
-    // 而非沉到 document.body（首页背景层）。S.bodyEl 即 collections 列表页与二级视图共用的渲染宿主。
-    (S.bodyEl || doc.body || doc.documentElement).appendChild(mask);
-  }
-
   // 注册到共享状态，供 online.js 协调器与门面调用
-  S.openCollections = openCollections;
+  S.openLibrary = openLibrary;
   S.openCalendar = openCalendar;
   S.openCollectionItems = openCollectionItems;
-  S.reopenCollections = reopenCollections;
   S.renderCollectionItems = renderCollectionItems;
-  S.showPickFolderDialog = showPickFolderDialog;
 })(typeof window !== 'undefined' ? window : this);

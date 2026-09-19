@@ -6,12 +6,15 @@ const path = require('path');
 const CONFIG_FILE = process.env.STELLAFIX_SUBSONIC_CONFIG_FILE || path.join(__dirname, 'data', 'subsonic-servers.json');
 const API_V = '1.16.1';
 const CLIENT = 'Stellaflix';
+// 上游请求超时（ms）；测试可用 STELLAFIX_SUBSONIC_TIMEOUT_MS 缩短，生产默认 15s
+const TIMEOUT_MS = Number(process.env.STELLAFIX_SUBSONIC_TIMEOUT_MS) || 15000;
 
 function loadStore() {
   try {
     const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     return { version: 1, servers: parsed && Array.isArray(parsed.servers) ? parsed.servers : [] };
   } catch (_) {
+    console.warn('[Subsonic] config unreadable, starting empty:', CONFIG_FILE);
     return { version: 1, servers: [] };
   }
 }
@@ -36,6 +39,8 @@ function saveServer(input) {
   let parsed;
   try { parsed = new URL(baseUrl); } catch (_) { throw new Error('SUBSONIC_BAD_BASE_URL'); }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('SUBSONIC_BAD_BASE_URL');
+  // userinfo（http://user:pass@host）会被原样存储并由 GET /api/subsonic/config 回显 → 明文凭据泄漏
+  if (parsed.username || parsed.password) throw new Error('SUBSONIC_BAD_BASE_URL');
   const username = String(input.username || '').trim();
   if (!username) throw new Error('SUBSONIC_MISSING_USERNAME');
   const existing = input.id ? getServer(input.id) : null;
@@ -69,20 +74,39 @@ function authParams(server, salt) {
 
 function buildRestUrl(server, endpoint, params) {
   const q = new URLSearchParams(Object.assign(
-    { v: API_V, c: CLIENT },
+    { v: API_V, c: CLIENT, f: 'json' },
     authParams(server),
     params || {}));
-  return server.baseUrl + '/rest/' + endpoint + '.json?' + q.toString();
+  // Navidrome 实测只路由 .view / 无后缀（.json 返回 404，Subsonic 规范里的 .json 并非通行）
+  return server.baseUrl + '/rest/' + endpoint + '.view?' + q.toString();
 }
 
 function audioProxyUrl(upstreamUrl) {
   return '/api/audio?url=' + encodeURIComponent(upstreamUrl);
 }
 
+function isAbortishError(err) {
+  return !!err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+}
+
 async function subsonicCall(server, endpoint, params) {
-  const res = await fetch(buildRestUrl(server, endpoint, params), { signal: AbortSignal.timeout(15000) });
+  let res;
+  try {
+    res = await fetch(buildRestUrl(server, endpoint, params), { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  } catch (err) {
+    // 上游不可达/DNS/拒绝连接等网络层错误：raw `TypeError: fetch failed` 会泄漏到路由层，
+    // 统一收敛为 SUBSONIC_* 命名空间（原始错误保留在 cause 里）
+    if (isAbortishError(err)) throw new Error('SUBSONIC_TIMEOUT', { cause: err });
+    throw new Error('SUBSONIC_NETWORK', { cause: err });
+  }
   if (!res.ok) throw new Error('SUBSONIC_HTTP_' + res.status);
-  const body = await res.json();
+  let body;
+  try {
+    body = await res.json();
+  } catch (err) {
+    if (isAbortishError(err)) throw new Error('SUBSONIC_TIMEOUT', { cause: err });
+    throw new Error('SUBSONIC_BAD_JSON', { cause: err });
+  }
   const r = body && body['subsonic-response'];
   if (!r || r.status !== 'ok') {
     const err = new Error('SUBSONIC_' + ((r && r.error && r.error.code) || 'UNKNOWN'));

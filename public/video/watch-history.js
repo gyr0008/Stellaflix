@@ -567,7 +567,8 @@
     try {
       if (SFV.detailSource && typeof SFV.detailSource.smartResumePlay === 'function') {
         // 直接起播：跳过详情页，按「上次片源 → 跨源画质优先」策略恢复播放
-        SFV.detailSource.smartResumePlay(rec);
+        // _origin:'history' 透传给播放返回栈：退出播放器回历史页，而非重建详情页
+        SFV.detailSource.smartResumePlay(Object.assign({}, rec, { _origin: 'history' }));
       } else if (SFV.online && SFV.online.openDetailFromMeta && rec.sourceId && rec.vodId) {
         // 兜底：detail-source 未就绪时退回到旧行为（打开详情页）
         SFV.online.openDetailFromMeta(Object.assign({}, rec, { _origin: 'history', pic: rec.img || rec.pic }));

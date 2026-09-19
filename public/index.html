@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="css/index.css?v=20260822-t158-space-isolation">
 <link rel="stylesheet" href="video/player.css">
 <link rel="stylesheet" href="video/watch-history.css">
+<link rel="stylesheet" href="video/poster-wall/poster-wall.css">
 <link rel="stylesheet" href="video/hall.css">
 <link rel="stylesheet" href="video/bangumi-calendar.css">
 <link rel="stylesheet" href="video/bangumi-timeline.css">
@@ -337,6 +338,22 @@
           <button id="home-platform-recommend-refresh" type="button">刷新当前平台</button>
           <button id="home-platform-recommend-done" type="button">完成</button>
         </div>
+      </div>
+    </div>
+
+    <div id="home-video-collections-mask" class="modal-mask" role="dialog" aria-modal="true" aria-hidden="true"
+      aria-labelledby="home-video-collections-title">
+      <div class="modal home-video-collections-modal">
+        <div class="home-video-collections-head">
+          <div>
+            <h2 id="home-video-collections-title">精选片单</h2>
+            <p>编辑策展的主题片单，片单目录内置于本机；打开片单内容需要 TMDB Key。</p>
+          </div>
+          <button id="home-video-collections-close" class="home-video-collections-close" type="button"
+            aria-label="关闭精选片单">×</button>
+        </div>
+        <div id="home-video-collections-tabs" class="home-video-collections-tabs" role="tablist" aria-label="片单分类"></div>
+        <div id="home-video-collections-list" class="home-video-collections-list"></div>
       </div>
     </div>
 
@@ -1202,6 +1219,7 @@
           <button id="tab-queue" class="panel-tab active" onclick="switchPlaylistTab('queue')">当前队列</button>
           <button id="tab-pl" class="panel-tab" onclick="switchPlaylistTab('playlists')">我的歌单</button>
           <button id="tab-podcast" class="panel-tab" onclick="switchPlaylistTab('podcasts')">我的播客</button>
+          <button id="tab-subsonic" class="panel-tab" onclick="switchPlaylistTab('subsonic')">远程库</button>
         </div>
       </div>
       <div id="queue-pane">
@@ -1231,6 +1249,14 @@
             style="height:26px;padding:0 10px;font-size:11px">刷新</button>
         </div>
         <div id="podcast-list"></div>
+      </div>
+      <div id="subsonic-pane" style="display:none">
+        <div class="queue-toolbar">
+          <div class="queue-chip">Navidrome / Subsonic</div>
+          <button class="fx-mini-btn ghost" onclick="refreshSubsonicPane()"
+            style="height:26px;padding:0 10px;font-size:11px">刷新</button>
+        </div>
+        <div id="subsonic-list"></div>
       </div>
     </div>
 
@@ -2005,7 +2031,6 @@
     "video/source-adapter-hls.js",
     "video/video-info-modal.js",
     "video/modal-video-reparent.js",
-    "video/player-collect.js",
     "video/sources-core.js",
     "video/sources.js",
     "video/fx-sources.js",
@@ -2089,7 +2114,10 @@
     "video/source-picker.js",
     "video/source-picker-captcha.js",
     "video/hall.js",
-    "video/page-collections.js",
+    "video/poster-wall/wall-adapter.js",
+    "video/poster-wall/hex-wall.js",
+    "video/page-library.js",
+    "video/home-collections-overlay.js",
     "video/watch-history.js",
     "video/page-discover.js"
     // 汇联完整实现暂时下线，改为占位页；恢复时取消下列注释并去掉 page-discover.js
@@ -2146,6 +2174,7 @@
  <!-- AI 助手 (小M) -->
  <script src="js/agent-adapter.js"></script>
  <script src="js/agent-music-tools.js"></script>
+ <script src="js/agent-daily-recommendation.js"></script>
  <script src="js/agent-video-tools.js"></script>
  <script src="js/music-agent-command.js"></script>
 

@@ -4,9 +4,12 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sfz-subsonic-'));
 process.env.STELLAFIX_SUBSONIC_CONFIG_FILE = path.join(tmp, 'subsonic-servers.json');
+// 超时用例不想等 15s：在 require 前把上游超时调短（模块缺省仍为 15000ms）
+process.env.STELLAFIX_SUBSONIC_TIMEOUT_MS = '500';
 const sub = require('../subsonic-api.js');
 
 test('token 认证：t = md5(password + salt)', () => {
@@ -16,19 +19,23 @@ test('token 认证：t = md5(password + salt)', () => {
   assert.strictEqual(p.t, 'b9777213162ed1a3cc3eb04ed0c7d95b'); // md5('guessme'+'salt123')，值预先算好
 });
 
-test('buildRestUrl 带 v/c/u/s/t 且路径为 /rest/<endpoint>.json', () => {
+test('buildRestUrl 带 v/c/u/s/t 且路径为 /rest/<endpoint>.view', () => {
   const url = new URL(sub.buildRestUrl(
     { baseUrl: 'http://navi.lan:4533', username: 'alice', password: 'guessme' },
     'getAlbum', { id: 'al-1' }));
-  assert.strictEqual(url.pathname, '/rest/getAlbum.json');
+  assert.strictEqual(url.pathname, '/rest/getAlbum.view');
   assert.strictEqual(url.searchParams.get('v'), '1.16.1');
   assert.strictEqual(url.searchParams.get('c'), 'Stellaflix');
   assert.ok(url.searchParams.get('t'));
+  // Navidrome 实测：.view 默认回 XML，必须带 f=json 才回 JSON（.json 后缀直接 404）
+  assert.strictEqual(url.searchParams.get('f'), 'json');
   assert.strictEqual(url.searchParams.get('id'), 'al-1');
 });
 
 test('saveServer：非法 baseUrl 拒绝', () => {
   assert.throws(() => sub.saveServer({ baseUrl: 'ftp://x', username: 'a', password: 'b' }), /SUBSONIC_BAD_BASE_URL/);
+  // userinfo（http://user:pass@host）会被原样存储并由 GET /api/subsonic/config 回显 → 明文凭据泄漏，必须拒绝
+  assert.throws(() => sub.saveServer({ baseUrl: 'http://alice:secr3t@navi.lan:4533', username: 'a', password: 'b' }), /SUBSONIC_BAD_BASE_URL/);
   assert.throws(() => sub.saveServer({ baseUrl: 'http://x', username: '', password: 'b' }), /SUBSONIC_MISSING_USERNAME/);
   assert.throws(() => sub.saveServer({ baseUrl: 'http://x', username: 'a', password: '' }), /SUBSONIC_MISSING_PASSWORD/);
 });
@@ -51,6 +58,23 @@ test('saveServer/deleteServer 往返 + 公开视图不泄露密码 + 文件落�
   assert.strictEqual(sub.deleteServer(saved.id), false);
 });
 
+test('损坏的 config 文件：loadStore 告警（只打路径不打内容）后从空开始', () => {
+  const garbage = path.join(tmp, 'corrupt-config.json');
+  fs.writeFileSync(garbage, '{ not json', 'utf8');
+  const r = spawnSync(process.execPath, ['-e', 'require(process.env.SFZ_SUB_MODULE)'], {
+    env: Object.assign({}, process.env, {
+      STELLAFIX_SUBSONIC_CONFIG_FILE: garbage,
+      SFZ_SUB_MODULE: path.join(__dirname, '..', 'subsonic-api.js'),
+    }),
+    encoding: 'utf8',
+    timeout: 20000,
+  });
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stderr, /\[Subsonic\] config unreadable, starting empty:/);
+  assert.match(r.stderr, /corrupt-config\.json/);
+  assert.ok(!r.stderr.includes('not json'), '告警只可打印路径，不得回显文件内容');
+});
+
 test('mapTrack 生成 localUrl/cover 走 /api/audio 代理', () => {
   const server = { id: 's1', baseUrl: 'http://navi.lan:4533', username: 'alice', password: 'guessme' };
   const song = sub.mapTrack(server, { id: 'tr-1', title: '曲 A', artist: '歌手 B', album: '专 C', albumId: 'al-1', duration: 213, coverArt: 'co-1' });
@@ -61,17 +85,22 @@ test('mapTrack 生成 localUrl/cover 走 /api/audio 代理', () => {
   assert.strictEqual(song.duration, 213);
   assert.ok(song.localUrl.startsWith('/api/audio?url='));
   const inner = decodeURIComponent(song.localUrl.slice('/api/audio?url='.length));
-  assert.ok(inner.startsWith('http://navi.lan:4533/rest/stream.json?'));
+  assert.ok(inner.startsWith('http://navi.lan:4533/rest/stream.view?'));
   assert.ok(inner.includes('id=tr-1'));
   assert.ok(inner.includes('u=alice') && inner.includes('&s=') && inner.includes('&t='));
   assert.ok(song.cover.startsWith('/api/audio?url='));
-  assert.ok(decodeURIComponent(song.cover).includes('getCoverArt.json'));
+  assert.ok(decodeURIComponent(song.cover).includes('getCoverArt.view'));
 });
 
 test('browseAlbum 经假上游返回映射歌曲', async () => {
   const fake = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
-    if (u.pathname === '/rest/getAlbum.json') {
+    if (u.pathname === '/rest/getAlbum.view') {
+      if (u.searchParams.get('f') !== 'json') {
+        res.writeHead(200, { 'Content-Type': 'text/xml' });
+        res.end('<?xml version="1.0" encoding="UTF-8"?><subsonic-response status="failed"/>');
+        return;
+      }
       assert.ok(u.searchParams.get('t'));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ 'subsonic-response': { status: 'ok', version: '1.16.1', album: {
@@ -92,6 +121,41 @@ test('browseAlbum 经假上游返回映射歌曲', async () => {
     assert.ok(r.songs[0].localUrl.startsWith('/api/audio?url='));
     assert.strictEqual(sub.deleteServer(saved.id), true);
   } finally { fake.close(); }
+});
+
+test('subsonicCall 上游 200 但响应非 JSON → SUBSONIC_BAD_JSON', async () => {
+  const fake = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('not json');
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  try {
+    await assert.rejects(
+      sub.subsonicCall({ baseUrl: 'http://127.0.0.1:' + fake.address().port, username: 'a', password: 'b' }, 'ping', {}),
+      /SUBSONIC_BAD_JSON/);
+  } finally { fake.close(); }
+});
+
+test('subsonicCall 上游挂起不应答 → SUBSONIC_TIMEOUT（经 STELLAFIX_SUBSONIC_TIMEOUT_MS 缩短）', async () => {
+  const sockets = new Set();
+  const fake = http.createServer(() => { /* 永不应答 */ });
+  fake.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  try {
+    await assert.rejects(
+      sub.subsonicCall({ baseUrl: 'http://127.0.0.1:' + fake.address().port, username: 'a', password: 'b' }, 'ping', {}),
+      /SUBSONIC_TIMEOUT/);
+  } finally { fake.close(); sockets.forEach((s) => s.destroy()); }
+});
+
+test('subsonicCall 上游不可达（端口已关闭）→ SUBSONIC_NETWORK', async () => {
+  const probe = http.createServer();
+  await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+  const closedPort = probe.address().port;
+  await new Promise((r) => probe.close(r));
+  await assert.rejects(
+    sub.subsonicCall({ baseUrl: 'http://127.0.0.1:' + closedPort, username: 'a', password: 'b' }, 'ping', {}),
+    /SUBSONIC_NETWORK/);
 });
 
 test('subsonicCall 上游 status=error 抛 SUBSONIC_<code>', async () => {

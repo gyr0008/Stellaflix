@@ -59,6 +59,9 @@ contextBridge.exposeInMainWorld('desktopWindow', {
     if (!authorization || authorization.ok !== true || !authorization.token) return authorization;
     return ipcRenderer.invoke('stellaflix-local-library-import', { token: authorization.token });
   },
+  removeLocalMusicTracks: (ids) => ipcRenderer.invoke('stellaflix-local-library-remove', {
+    ids: Array.isArray(ids) ? ids.map((id) => String(id || '')) : [],
+  }),
   readLyricCache: (key) => ipcRenderer.invoke('stellaflix-cache-read-lyric', key || ''),
   writeLyricCache: (key, payload) => ipcRenderer.invoke('stellaflix-cache-write-lyric', key || '', payload || {}),
   close: (behavior) => ipcRenderer.invoke('desktop-window-close', behavior),

@@ -1,7 +1,7 @@
 {
   "name": "stellaflix",
   "productName": "Stellaflix",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Windows 沉浸式音乐播放器，融合桌面模式、歌词舞台、粒子视觉和 3D 歌单架。",
   "author": "Stellaflix",
   "license": "GPL-3.0-only",
@@ -162,7 +162,7 @@
       "autoCleanCache": true
     },
     "network": {
-      "userAgent": "Stellaflix/0.1.2 Video",
+      "userAgent": "Stellaflix/0.1.3 Video",
       "timeout": 30000,
       "maxRetries": 3,
       "enableProxy": false,

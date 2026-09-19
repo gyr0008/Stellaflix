@@ -1,23 +1,15 @@
 /*
  * Stellaflix 影视模块 — 片单数据引擎 (Step 5 片单功能)
  *
- * 数据策略（用户确认 2026-08-03）：
+ * 数据策略（2026-09-19 收敛：删除 C 玩法用户片单夹）：
  *   - B 主干：TMDB 动态查询（discover / collection / trending / upcoming）
  *   - A 补充：硬编码编辑精选（static-list，TMDB 无法用查询表达的策展片单）
- *   - C 玩法：用户自建片单夹（localStorage，支持自定义命名 / 多夹 / 增删影片）
  *
  * 对外 API（SFV.collections）：
  *   getTabs()                         → 6 个平行 tab 定义
  *   getByTab(tabId)                  → 该 tab 下的片单列表（含封面/计数占位）
  *   getItems(collDef)                → 该片单的影片列表（normalizeList 格式，喂 renderGrid）
  *   getPosters(collDef, n)           → 前 n 张海报 URL（叠加效果用）
- *   listUserFolders()                → 用户自建片单夹列表
- *   createUserFolder(name)           → 新建片单夹，返回 folderId
- *   renameUserFolder(folderId, name) → 重命名
- *   deleteUserFolder(folderId)       → 删除（含内部影片）
- *   addUserItem(folderId, item)      → 加入影片
- *   removeUserItem(folderId, itemId) → 移除影片
- *   getUserFolderItems(folderId)     → 某夹内影片列表
  *
  * 合规：本文件零硬编码视频源；仅元数据（海报/简介）来自 TMDB，符合 §0.3。
  * 双态隔离：本模块不感知音乐态，仅由影视态页面调用。
@@ -26,15 +18,14 @@
   'use strict';
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
 
-  // ---------------------------------------------------------------- Tab 定义（7 个平行）
+  // ---------------------------------------------------------------- Tab 定义（6 个平行）
   var TABS = [
     { id: 'featured', label: '推荐' },
     { id: 'theme', label: '主题' },
     { id: 'classic', label: '经典' },
     { id: 'highscore', label: '高分' },
     { id: 'awards', label: '获奖' },
-    { id: 'calendar', label: '每周新番' },
-    { id: 'mine', label: '我的片单' }
+    { id: 'calendar', label: '每周新番' }
   ];
 
   // ---------------------------------------------------------------- 预置片单目录（B 主干 + A 补充）
@@ -106,43 +97,15 @@
     { id: 'calendar', title: '每周新番', sub: 'Bangumi 放送表', type: 'bangumi-calendar', tab: 'calendar', warm: '#16a085' }
   ];
 
-  // ---------------------------------------------------------------- 用户自建片单夹（C 玩法）
-  var USER_KEY = 'stellaflix-user-collections';
-  // 观看标记（看过 / 弃）：独立键，不与片单夹耦合，便于搜索结果前端过滤
+  // ---------------------------------------------------------------- 观看标记（看过 / 弃）
+  // 独立键，不与（已删除的）用户片单夹耦合，便于搜索结果前端过滤
   var MARKS_KEY = 'stellaflix-view-marks';
   var LS = global.localStorage;
-
-  function loadUser() {
-    if (!LS) return { folders: [] };
-    try {
-      var raw = LS.getItem(USER_KEY);
-      if (!raw) return { folders: [] };
-      var p = JSON.parse(raw);
-      return p && p.folders ? p : { folders: [] };
-    } catch (e) { return { folders: [] }; }
-  }
-  function saveUser(data) {
-    if (!LS) return false;
-    try { LS.setItem(USER_KEY, JSON.stringify(data)); return true; }
-    catch (e) { return false; }
-  }
-  function genId() {
-    return 'uf_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
-  }
 
   // ---------------------------------------------------------------- 对外方法
   function getTabs() { return TABS.slice(); }
 
   function getByTab(tabId) {
-    if (tabId === 'mine') {
-      // 我的片单：返回用户片单夹列表（动态）
-      return listUserFolders().map(function (f) {
-        return {
-          id: f.id, title: f.name, sub: (f.items ? f.items.length : 0) + ' 部',
-          type: 'user-folder', warm: '#534AB7', folderId: f.id
-        };
-      });
-    }
     return CATALOG.filter(function (c) { return c.tab === tabId; }).map(function (c) {
       return {
         id: c.id, title: c.title, sub: c.sub || '',
@@ -185,8 +148,6 @@
       case 'static-list':
         // A 补充：逐条 getDetails 补全（数量少，串行可控）
         return resolveStatic(def.tmdbIds || []);
-      case 'user-folder':
-        return Promise.resolve(getUserFolderItems(def.folderId));
       default:
         return Promise.reject(new Error('UNKNOWN_TYPE_' + def.type));
     }
@@ -220,69 +181,6 @@
       }
       return posters;
     }).catch(function () { return []; });
-  }
-
-  // ---------------------------------------------------------------- 用户片单夹 CRUD
-  function listUserFolders() {
-    var d = loadUser();
-    return (d.folders || []).map(function (f) {
-      return { id: f.id, name: f.name, items: f.items || [] };
-    });
-  }
-  function createUserFolder(name) {
-    var d = loadUser();
-    if (!d.folders) d.folders = [];
-    var folder = { id: genId(), name: (name || '我的片单').trim() || '我的片单', items: [] };
-    d.folders.push(folder);
-    saveUser(d);
-    return folder.id;
-  }
-  function renameUserFolder(folderId, name) {
-    var d = loadUser();
-    var f = (d.folders || []).filter(function (x) { return x.id === folderId; })[0];
-    if (!f) return false;
-    f.name = (name || '').trim() || f.name;
-    return saveUser(d);
-  }
-  function deleteUserFolder(folderId) {
-    var d = loadUser();
-    d.folders = (d.folders || []).filter(function (x) { return x.id !== folderId; });
-    return saveUser(d);
-  }
-  function addUserItem(folderId, item) {
-    var d = loadUser();
-    var f = (d.folders || []).filter(function (x) { return x.id === folderId; })[0];
-    if (!f) return false;
-    if (!f.items) f.items = [];
-    // 去重：同 id 不重复加
-    for (var i = 0; i < f.items.length; i++) if (f.items[i].id === item.id) return true;
-    f.items.push({
-      id: item.id, mediaType: item.mediaType || 'movie',
-      title: item.title || '', year: item.year || '', poster: item.poster || '',
-      rating: item.rating || 0, overview: item.overview || '',
-      addedAt: Date.now() // 供首页片单卡展示"最新加入"海报
-    });
-    var saved = saveUser(d);
-    // 加入片单即把海报本地缓存（与追片/历史一致的离线可见机制），取消移除时由 removeUserItem 删除
-    if (saved && item.poster && SFV.posterCache && typeof SFV.posterCache.cache === 'function' && item.poster.indexOf('data:') !== 0) {
-      SFV.posterCache.cache(item.id, item.poster);
-    }
-    return saved;
-  }
-  function removeUserItem(folderId, itemId) {
-    var d = loadUser();
-    var f = (d.folders || []).filter(function (x) { return x.id === folderId; })[0];
-    if (!f || !f.items) return false;
-    f.items = f.items.filter(function (x) { return x.id !== itemId; });
-    var saved = saveUser(d);
-    // 从片单移除：同步删除本地海报缓存，避免本地存储无限膨胀
-    if (saved && SFV.posterCache && typeof SFV.posterCache.remove === 'function') SFV.posterCache.remove(itemId);
-    return saved;
-  }
-  function getUserFolderItems(folderId) {
-    var d = loadUser();
-    var f = (d.folders || []).filter(function (x) { return x.id === folderId; })[0];
-    return f ? (f.items || []) : [];
   }
 
   // ---------------------------------------------------------------- 看过 / 弃 标记（Kazumi 隐藏已看/已弃）
@@ -347,13 +245,6 @@
     getByTab: getByTab,
     getItems: getItems,
     getPosters: getPosters,
-    listUserFolders: listUserFolders,
-    createUserFolder: createUserFolder,
-    renameUserFolder: renameUserFolder,
-    deleteUserFolder: deleteUserFolder,
-    addUserItem: addUserItem,
-    removeUserItem: removeUserItem,
-    getUserFolderItems: getUserFolderItems,
     // 看过 / 弃 标记
     markWatched: markWatched,
     unmarkWatched: unmarkWatched,

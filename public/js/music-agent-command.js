@@ -132,6 +132,30 @@
   }
 
   function dailyRecommendation() {
+    var api = window.StellaflixAgentDailyRecommendation;
+    if (api && typeof api.pickDailyRecommendation === 'function') {
+      try {
+        var stats = { songs: {}, artists: {}, history: [] };
+        var raw = localStorage.getItem('stellaflix-listen-stats-v1');
+        if (raw) {
+          var data = JSON.parse(raw);
+          stats = {
+            songs: data && data.songs && typeof data.songs === 'object' ? data.songs : {},
+            artists: data && data.artists && typeof data.artists === 'object' ? data.artists : {},
+            history: data && Array.isArray(data.history) ? data.history : [],
+          };
+        }
+        var picked = api.pickDailyRecommendation({
+          now: Date.now(),
+          stats: stats,
+          localTracks: typeof window.getStellaflixPersistentLocalLibraryTracks === 'function'
+            ? (window.getStellaflixPersistentLocalLibraryTracks() || []) : [],
+          playlists: Array.isArray(window.userPlaylists) ? window.userPlaylists : [],
+          matchStore: window.localOnlineMatchStore || null,
+        });
+        if (picked) return picked;
+      } catch (e) { }
+    }
     var now = new Date();
     var dayNumber = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000);
     var selected = DAILY_RECOMMENDATIONS[Math.abs(dayNumber) % DAILY_RECOMMENDATIONS.length];
@@ -143,9 +167,87 @@
     var button = panel.querySelector('[data-agent-daily-recommendation]');
     if (!button) return;
     var recommendation = dailyRecommendation();
-    button.textContent = '试着对我说：播放《' + recommendation.title + '》';
     button.setAttribute('data-agent-example', recommendation.command);
-    button.title = '播放 ' + recommendation.title + ' · ' + recommendation.artist + '（每天更新）';
+    if (recommendation.kind) {
+      button.textContent = '为你推荐：播放《' + recommendation.title + '》';
+      button.title = '推荐理由：' + recommendation.reason + ' · ' + recommendation.artist + '（每天更新）';
+    } else {
+      button.textContent = '试着对我说：播放《' + recommendation.title + '》';
+      button.title = '播放 ' + recommendation.title + ' · ' + recommendation.artist + '（每天更新）';
+    }
+  }
+
+  // v2：v1 缓存里的 '影视播放X' 裸格式无法被 parseVideoCommand 解析，换 key 作废当日旧缓存
+  var DAILY_MOVIE_CACHE_KEY = 'stellaflix-agent-daily-movie-v2';
+  var dailyMovieRefreshing = false;
+
+  function refreshDailyMoviePick() {
+    if (readDailyMovieCache()) return;
+    var SFV = window.StellaflixVideo;
+    var tmdb = SFV && SFV.tmdb;
+    if (!tmdb || typeof tmdb.hasKey !== 'function' || !tmdb.hasKey() || typeof tmdb.trending !== 'function' || dailyMovieRefreshing) return;
+    dailyMovieRefreshing = true;
+    var history = readVideoHistoryRecords();
+    Promise.resolve(tmdb.trending('movie', 'week')).then(function (items) {
+      var api = window.StellaflixAgentDailyRecommendation;
+      var pick = api && typeof api.pickDailyMovie === 'function' ? api.pickDailyMovie(items || [], history, Date.now()) : null;
+      if (pick) writeDailyMovieCache(pick);
+    }, function () { }).then(function () {
+      dailyMovieRefreshing = false;
+      updateDailyMovieExample();
+    });
+  }
+
+  function dailyMovieDayKey() {
+    var d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+  }
+  function readDailyMovieCache() {
+    try {
+      var raw = localStorage.getItem(DAILY_MOVIE_CACHE_KEY);
+      if (!raw) return null;
+      var data = JSON.parse(raw);
+      return data && data.pick && data.dayKey === dailyMovieDayKey() ? data.pick : null;
+    } catch (e) { return null; }
+  }
+  function writeDailyMovieCache(pick) {
+    try { localStorage.setItem(DAILY_MOVIE_CACHE_KEY, JSON.stringify({ dayKey: dailyMovieDayKey(), pick: pick, updatedAt: Date.now() })); } catch (e) { }
+  }
+  function readVideoHistoryRecords() {
+    try {
+      var SFV = window.StellaflixVideo;
+      if (SFV && SFV.watchHistory && typeof SFV.watchHistory.getAll === 'function') return SFV.watchHistory.getAll() || [];
+    } catch (e) { }
+    return [];
+  }
+  function readVideoTrackRecords() {
+    try {
+      var SFV = window.StellaflixVideo;
+      if (SFV && SFV.model && typeof SFV.model.getKeysByTrack === 'function' && typeof SFV.model.resolveList === 'function') {
+        return SFV.model.resolveList(SFV.model.getKeysByTrack('watching')) || [];
+      }
+    } catch (e) { }
+    return [];
+  }
+
+  function updateDailyMovieExample() {
+    if (!panel) return;
+    var button = panel.querySelector('[data-agent-daily-movie]');
+    if (!button) return;
+    var api = window.StellaflixAgentDailyRecommendation;
+    var pick = readDailyMovieCache();
+    if (!pick && api && typeof api.pickLibraryMovie === 'function') {
+      pick = api.pickLibraryMovie(readVideoHistoryRecords(), readVideoTrackRecords());
+    }
+    if (pick) {
+      button.textContent = '今日影视：《' + pick.title + '》';
+      button.setAttribute('data-agent-example', pick.command);
+      button.title = '推荐理由：' + pick.reason + '（每天更新）';
+    } else {
+      button.textContent = '试着对我说：影视播放《你的名字》';
+      button.setAttribute('data-agent-example', '影视播放《你的名字》');
+      button.title = '示例指令，点击填入输入框';
+    }
   }
 
   function parseMusicCommand(command) {
@@ -155,8 +257,8 @@
       .replace(/^(?:请|麻烦)?(?:你)?(?:帮我)?\s*/, '')
       .trim();
     var patterns = [
-      /^(?:播放|放|来一首|我想听|想听|听)(.+?)的[《“"]?(.+?)[》”"]?$/,
-      /^(?:播放|放|来一首|我想听|想听|听)[《“"]?(.+?)[》”"]?\s*[-—–]\s*(.+)$/
+      /^(?:播放|播听|放|来一首|我想听|想听|听)(.+?)的[《“"]?(.+?)[》”"]?$/,
+      /^(?:播放|播听|放|来一首|我想听|想听|听)[《“"]?(.+?)[》”"]?\s*[-—–]\s*(.+)$/
     ];
     var match = patterns[0].exec(text);
     if (match) {
@@ -166,7 +268,7 @@
     if (match) {
       return { action: 'search_and_play_music', title: cleanPart(match[1]), artist: cleanPart(match[2]), query: cleanPart(match[1]) + ' ' + cleanPart(match[2]), original: original };
     }
-    text = text.replace(/^(?:播放|放|来一首|我想听|想听|听)\s*/, '').trim();
+    text = text.replace(/^(?:播放|播听|放|来一首|我想听|想听|听)\s*/, '').trim();
     return { action: 'search_and_play_music', query: cleanPart(text), original: original };
   }
 
@@ -188,7 +290,7 @@
   function isVideoStrongIntent(message) {
     var text = String(message || '').trim();
     if (!text) return false;
-    if (/(?:电影|影片|剧场版|纪录片|电视剧|剧集|连续剧|番剧|观影|影视)/.test(text)) return true;
+    if (/(?:电影|影片|剧场版|纪录片|电视剧|剧集|连续剧|番剧|观影|影视|播看)/.test(text)) return true;
     if (/(?:我想看|想看|看一?部|观看|去看)/.test(text)) return true;
     if (/(?:下一集|上一集|这一集|第\s*\d+\s*集|换一集)/.test(text)) return true;
     if (/(?:视频|影片|电影).{0,8}(?:全屏|暂停|继续|快进|跳到|播放控制)/.test(text)) return true;
@@ -269,7 +371,7 @@
       title = quoted[1];
     } else {
       // 2) 无书名号：去掉播放/想看等动词后再剥类型词
-      var m1 = /^(?:播放|放|看|观看|我想看|想看|来一?[部集])\s*(.+?)$/.exec(text);
+      var m1 = /^(?:播放|播看|放|看|观看|我想看|想看|来一?[部集])\s*(.+?)$/.exec(text);
       if (m1) title = m1[1];
     }
     title = String(title || '')
@@ -330,7 +432,7 @@
 
   function isMusicIntent(message) {
     if (isVideoStrongIntent(message)) return false;
-    return /(?:播放|放(?:一首|点|一下)?|想听|听首|来一首|找.{0,12}(?:歌|音乐)|歌曲|音乐)|\b(?:play|listen to)\b/i.test(String(message || ''));
+    return /(?:播放|播听|放(?:一首|点|一下)?|想听|听首|来一首|找.{0,12}(?:歌|音乐)|歌曲|音乐)|\b(?:play|listen to)\b/i.test(String(message || ''));
   }
 
   function isReplayIntent(message) {
@@ -2579,6 +2681,8 @@
     ensureUi();
     requestNativeKeyboardFocus('open');
     updateDailyRecommendationExample();
+    updateDailyMovieExample();
+    refreshDailyMoviePick();
     panel.classList.add('show');
     panel.setAttribute('aria-hidden', 'false');
     if (pet) pet.classList.add('talking');
@@ -2828,8 +2932,7 @@
           '<button class="music-agent-submit" type="submit">发送</button></form>' +
           '<div class="music-agent-status" role="status" aria-live="polite">无需 API：播放、界面、设置和明确的软件控制均在本地执行。</div>' +
           '<div class="music-agent-examples"><button class="music-agent-example" type="button" data-agent-daily-recommendation data-agent-example="">试着对我说：播放一首歌</button>' +
-          '<button class="music-agent-example" type="button" data-agent-example="导入歌单">导入歌单</button>' +
-          '<button class="music-agent-example" type="button" data-agent-example="打开音源">打开音源</button></div>' +
+          '<button class="music-agent-example" type="button" data-agent-daily-movie data-agent-example="">今日影视</button></div>' +
         '</div>' +
         '<div class="music-agent-settings-view" hidden><form class="music-agent-settings-form">' +
           '<label class="music-agent-enable"><span><b>启用 AI 对话</b><small>关闭后仍可使用本地播放、歌单和 DIY 设置</small></span><input type="checkbox" name="enabled"><i aria-hidden="true"></i></label>' +

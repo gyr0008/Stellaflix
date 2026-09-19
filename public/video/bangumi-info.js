@@ -15,7 +15,6 @@
  *
  * 交互：
  *   - 追番 6 态：复用 SFV.model（key = bangumi:<id>），与时间表页共用同一份状态
- *   - 加入片单：复用 SFV.collections.addUserItem
  *   - 返回    ：back() 回到时间表页（router page 'bangumi-timeline'）
  *
  * 约定：kazumi/ 内部不改；本文件为目录外新增。
@@ -240,7 +239,7 @@
     return s;
   }
 
-  // ---- 追番 / 加入片单 ----
+  // ---- 追番 ----
   function buildActions(item) {
     var row = el('div', 'sfv-bgi-actions');
 
@@ -262,39 +261,7 @@
       row.appendChild(b);
     });
 
-    var addBtn = el('button', 'sfv-bgi-btn ghost', '+ 加入片单');
-    addBtn.type = 'button';
-    addBtn.addEventListener('click', function () { pickFolder(item); });
-    row.appendChild(addBtn);
-
     return row;
-  }
-
-  function pickFolder(item) {
-    var cols = SFV.collections;
-    var folders = (cols && cols.listUserFolders) ? cols.listUserFolders() : [];
-    function doAdd(fid, fname) {
-      if (cols && cols.addUserItem) {
-        cols.addUserItem(fid, {
-          id: 'bangumi:' + item.id, mediaType: 'tv',
-          title: item.title, year: (item.airDate || '').slice(0, 4),
-          poster: item.poster, rating: item.ratingScore, overview: item.summary
-        });
-      }
-      trackToast('已加入「' + fname + '」');
-    }
-    if (!folders.length) {
-      var fid = (cols && cols.createUserFolder) ? cols.createUserFolder('追番') : null;
-      if (fid) doAdd(fid, '追番');
-      return;
-    }
-    var name = (global.prompt ? global.prompt('加入哪个片单夹？\n' + folders.map(function (f, i) { return (i + 1) + '. ' + f.name; }).join('\n') + '\n\n输入序号或名称', folders[0].name) : '') || '';
-    name = String(name).trim();
-    if (!name) return;
-    var idx = parseInt(name, 10);
-    var target = (!isNaN(idx) && folders[idx - 1]) ? folders[idx - 1]
-      : folders.filter(function (f) { return f.name === name; })[0];
-    if (target) doAdd(target.id, target.name);
   }
 
   // ---- 附加区块：角色 / 关联 / 评论 ----

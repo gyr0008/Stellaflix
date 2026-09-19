@@ -19,6 +19,9 @@
  */
 try {
   if (typeof togglePlay === 'function') window.togglePlay = togglePlay;
+  // playQueueAt 同为 async 声明不泄漏；agent-adapter.js / agent-music-tools.js 是独立
+  // <script>（AI 助手委托主播放通道），只能经 window 拿到它。
+  if (typeof playQueueAt === 'function') window.playQueueAt = playQueueAt;
   if (typeof showLoginModal === 'function') window.showLoginModal = showLoginModal;
   if (typeof submitQQCookieLogin === 'function') window.submitQQCookieLogin = submitQQCookieLogin;
   if (typeof confirmCookieExportPrompt === 'function') window.confirmCookieExportPrompt = confirmCookieExportPrompt;
@@ -34,6 +37,11 @@ try {
   if (typeof chooseWallpaperEngineDirectory === 'function') window.chooseWallpaperEngineDirectory = chooseWallpaperEngineDirectory;
   if (typeof refreshWallpaperEngineLibrary === 'function') window.refreshWallpaperEngineLibrary = refreshWallpaperEngineLibrary;
   if (typeof launchWallpaperEngineProjectDetails === 'function') window.launchWallpaperEngineProjectDetails = launchWallpaperEngineProjectDetails;
+  // persistentLocalLibraryTracks 是被整体重新赋值的 var，静态挂值会失效，须经 getter 读取。
+  window.getStellaflixPersistentLocalLibraryTracks = function () {
+    return typeof persistentLocalLibraryTracks !== 'undefined' && Array.isArray(persistentLocalLibraryTracks)
+      ? persistentLocalLibraryTracks : [];
+  };
 } catch (e) {
   try { console.error('[Startup] expose-inline-globals failed:', e); } catch (e2) {}
 }
