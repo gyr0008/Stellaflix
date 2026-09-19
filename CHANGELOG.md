@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.5
+
+- **紧急修复 v0.1.4 启动失败 `SF-BOOT-SERVER-START`**：汽水运行时目录 `qishui-audio-decryptor/`、`qishui-auth-v6/` 被 `.gitignore` 排除，在 git worktree 中打包时未带上，导致 `server.js` 找不到 `track-decryptor`。本版从本机可信源完整拷入后再打包。
+- 新增 `scripts/verify-pack-requirements.js`：发版前/后校验安装包是否含启动必需文件与生产依赖。
+- 已安装 v0.1.3 / v0.1.4 的用户请下载本安装包覆盖安装（损坏版主进程无法启动，不能走应用内更新）。
+
 ## v0.1.4
 
 - **紧急修复 v0.1.3 安装包启动报错**：打包时生产依赖未完整写入 `resources/app/node_modules`，导致 `electron-updater` 找不到 `fs-extra`。本版使用完整依赖树重新构建；请已安装 0.1.3 的用户下载本安装包覆盖安装（应用内更新因主进程无法启动不可用）。
