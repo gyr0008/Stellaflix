@@ -28,21 +28,21 @@ Stellaflix 是一款 音乐 × 影视双形态 的 Windows 桌面沉浸式影音
 
 从 GitHub Release 下载安装包：Stellaflix Releases
 
-安装时只需要下载并运行 Stellaflix-0.1.5-Setup.exe。不要把 .blockmap、latest.yml 或 win-unpacked 当成正式安装包。
+安装时只需要下载并运行 Stellaflix-0.1.3-Setup.exe。不要把 .blockmap、latest.yml 或 win-unpacked 当成正式安装包。
 
 下载或安装被拦截怎么办
 
-小众 Electron 桌面软件、未签名安装包有时会被浏览器、Windows Defender 或 SmartScreen 提示风险。请先确认安装包来自官方 GitHub Release，文件名是 Stellaflix-0.1.5-Setup.exe。
+小众 Electron 桌面软件、未签名安装包有时会被浏览器、Windows Defender 或 SmartScreen 提示风险。请先确认安装包来自官方 GitHub Release，文件名是 Stellaflix-0.1.3-Setup.exe。
 
 1.浏览器下载栏提示风险时，打开下载列表，点这条下载右侧的 ... 三个点，选择 保留 / 仍要保留 / 显示更多 后继续保留。2.Windows SmartScreen 弹出蓝色拦截窗口时，点 更多信息，再点 仍要运行。3.如果杀毒软件明确显示木马、高危或已经隔离，不要强行运行；删除该文件后重新从 GitHub Release 下载，仍然异常请带截图反馈给作者。
 
 当前版本
 
-当前版本：0.1.5
+当前版本：0.1.3
 
 状态：测试版。
 
-安全提示：安装包请以本页 0.1.5 为准重新安装；v1.0.10 及更早包同样不再建议继续使用。v0.1.3 / v0.1.4 因打包缺文件无法启动，请勿再下载。
+安全提示：安装包请以本页 0.1.3 为准重新安装；v1.0.10 及更早包同样不再建议继续使用。
 
 技术架构
 
@@ -52,7 +52,7 @@ desktop/ — Electron 主进程：窗口/托盘/IPC、Wallpaper Engine 运行时
 
 使用说明
 
-从 GitHub Release 下载 Stellaflix-0.1.5-Setup.exe 安装；不建议直接使用 win-unpacked 目录。安装包会创建桌面快捷方式。已安装过旧版本的用户可直接运行新安装包完成更新。打包版优先走应用内自动更新；更新失败时可在浏览器打开 GitHub Release 手动下载。
+从 GitHub Release 下载 Stellaflix-0.1.3-Setup.exe 安装；不建议直接使用 win-unpacked 目录。安装包会创建桌面快捷方式。已安装过旧版本的用户可直接运行新安装包完成更新。打包版优先走应用内自动更新；更新失败时可在浏览器打开 GitHub Release 手动下载。
 
 更新机制
 
