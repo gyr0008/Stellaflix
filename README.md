@@ -42,7 +42,7 @@ Stellaflix 是一款 音乐 × 影视双形态 的 Windows 桌面沉浸式影音
 
 状态：测试版。
 
-安全提示：安装包请以本页 0.1.3 为准重新安装；v1.0.10 及更早包同样不再建议继续使用。
+安全提示：安装包请以本页 0.1.3 为准安装
 
 技术架构
 
@@ -59,7 +59,7 @@ desktop/ — Electron 主进程：窗口/托盘/IPC、Wallpaper Engine 运行时
 Stellaflix 采用 应用内自动更新为主、手动下载为辅 的双轨更新：
 
 1.应用内热更新（主路径）
-客户端通过 electron-updater 检查 GitHub Releases（失败时回退国内镜像 feed），下载对应版本的 NSIS 安装包（latest.yml 校验），用户确认后静默安装并重启。下载前会做磁盘空间预检；下载失败会自动切换线路重试。
+客户端通过 electron-updater 检查 GitHub国内镜像（失败回退github直连），下载对应版本的 NSIS 安装包（latest.yml 校验），用户确认后静默安装并重启。下载前会做磁盘空间预检；下载失败会自动切换线路重试。
 
 2.GitHub Release 手动下载（降级）
 当应用内更新不可用（开发环境、网络/校验失败、磁盘不足等）时，可在浏览器打开 Release 页面手动下载 Stellaflix-x.y.z-Setup.exe 安装。
@@ -77,14 +77,6 @@ Stellaflix-<version>-Setup.exe同目录的 latest.yml（electron-builder 自动�
 参考：Mineradio
 
 Stellaflix 的视觉核心——电影镜头、粒子视觉与歌词舞台——参考了开源项目 Mineradio（一款以电影镜头、粒子视觉和歌词舞台为核心的沉浸式音乐播放器，GPL-3.0），并在此基础上扩展出影视态与完整桌面形态。感谢 Mineradio 及其社区的工作。
-
-作者支持
-
-如果 Stellaflix 陪你多听了一首歌，也欢迎请作者一杯咖啡。
-
-查看完整支持页
-
-图片加载失败
 
 第三方音乐平台说明
 
