@@ -315,6 +315,51 @@
   // 清除某片追片状态（= 设为 none）
   function clearTrack(key) { return setTrackStatus(key, null); }
 
+  // ---- 追片 canonical 键（方案 A，2026-09-25）----
+  // canonical 键 = 'tmdb:<movie|tv>:<id>'，一部片全局唯一，不随片源漂移。
+  // 推导优先级：view._tmdb → view.key 已是 tmdb: 前缀 → view.id+view.mediaType（TMDB 墙/片单形态）。
+  // 取不到返回 null，调用方回退源键（view.key / seriesKey）。
+  function canonicalTrackKey(view) {
+    if (!view) return null;
+    var t = view._tmdb;
+    if (t && t.id != null) {
+      return 'tmdb:' + (t.mediaType === 'tv' ? 'tv' : 'movie') + ':' + t.id;
+    }
+    if (typeof view.key === 'string' && view.key.indexOf('tmdb:') === 0) return view.key;
+    if (view.id != null && (view.mediaType === 'movie' || view.mediaType === 'tv')) {
+      return 'tmdb:' + view.mediaType + ':' + view.id;
+    }
+    return null;
+  }
+
+  // 多候选键读取：按顺序返回首个命中（主键=TMDB 键，别名=源键，兼容存量数据）
+  function getTrackStatusForKeys(keys) {
+    var list = keys || [];
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i] ? getTrackStatus(list[i]) : null;
+      if (s) return s;
+    }
+    return null;
+  }
+
+  // 多候选键写入：落主键、清其余别名键（惰性迁移）；
+  // 主键为 tmdb: 且尚无 meta 时用 meta 信息播种，保证追片页可渲染标题/封面。
+  function setTrackStatusForKeys(keys, status, meta) {
+    var list = [];
+    (keys || []).forEach(function (k) { if (k && list.indexOf(k) < 0) list.push(k); });
+    if (!list.length) return null;
+    var primary = list[0];
+    var result = setTrackStatus(primary, status);
+    for (var i = 1; i < list.length; i++) {
+      if (!result && getTrackStatus(list[i])) result = status || getTrackStatus(list[i]);
+      setTrackStatus(list[i], null);
+    }
+    if (status && result && primary.indexOf('tmdb:') === 0 && meta && meta.title && !getMeta(primary)) {
+      setMeta({ key: primary, title: meta.title, pic: meta.pic || '', year: meta.year || '' });
+    }
+    return result;
+  }
+
   // 返回某标记类下所有 vod key（数组）
   function getKeysByFlag(field) {
     if (FLAG_FIELDS.indexOf(field) < 0) return [];
@@ -426,6 +471,9 @@
     getTrackCount: getTrackCount,
     getTrackKeys: getTrackKeys,
     clearTrack: clearTrack,
+    canonicalTrackKey: canonicalTrackKey,
+    getTrackStatusForKeys: getTrackStatusForKeys,
+    setTrackStatusForKeys: setTrackStatusForKeys,
     TRACK_STATUSES: TRACK_STATUSES,
     TRACK_LABELS: TRACK_LABELS,
     STATE_ICONS: STATE_ICONS,
