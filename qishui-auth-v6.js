@@ -10,8 +10,45 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { BrowserWindow, app, session } = require('electron');
-const QRCode = require('qrcode');
+
+// ---------- 运行期守卫（2026-09-24 防御性加固）----------
+// electron/qrcode 改惰性加载：本模块被 server.js 顶层 require，
+// 纯 Node 环境（npm test / CI / node server.js）下顶层 require('electron') 会直接
+// Cannot find module 炸掉整条链。惰性化后模块加载零副作用，真正发起 QR 登录时才
+// 需要 Electron；缺失时抛带 code 的明确错误，由 server 路由 catch 透传给前端。
+let electronApiCache = null;
+function getElectron() {
+  // 判定必须在 Electron 外部执行：装了 electron 的机器上纯 Node require('electron')
+  // 不抛错而是返回二进制路径字符串，会得到 app=undefined 的裸 TypeError。
+  // process.versions.electron 只在 Electron 运行时内存在，是唯一可靠的在场证据。
+  if (!process.versions || !process.versions.electron) {
+    const err = new Error('汽水扫码登录需要 Electron 运行时，当前为纯 Node 环境');
+    err.code = 'QS_AUTH_ELECTRON_UNAVAILABLE';
+    throw err;
+  }
+  if (!electronApiCache) {
+    try {
+      electronApiCache = require('electron');
+    } catch (error) {
+      const err = new Error('汽水扫码登录需要 Electron 运行时，当前为纯 Node 环境');
+      err.code = 'QS_AUTH_ELECTRON_UNAVAILABLE';
+      err.cause = error;
+      throw err;
+    }
+  }
+  return electronApiCache;
+}
+
+function getQRCode() {
+  try {
+    return require('qrcode');
+  } catch (error) {
+    const err = new Error('二维码图片生成依赖 qrcode 包缺失，请执行 npm install');
+    err.code = 'QS_AUTH_QRCODE_UNAVAILABLE';
+    err.cause = error;
+    throw err;
+  }
+}
 
 const API_BASE = 'https://api.qishui.com';
 const AID = '386088';
@@ -241,6 +278,7 @@ class QishuiAuthRuntime {
   }
 
   async _initialize() {
+    const { BrowserWindow, app, session } = getElectron();
     if (!app.isReady()) await app.whenReady();
     ensureIdentity();
     await this._startAssetServer();
@@ -417,7 +455,7 @@ class QishuiAuthRuntime {
       throw new Error(`二维码生成失败：code=${data.error_code} ${data.description || envelope.message || ''}`);
     }
     const scanUrl = officialScanUrl(data.qrcode_index_url, identity.computerName);
-    const qrDataUrl = await QRCode.toDataURL(scanUrl, {
+    const qrDataUrl = await getQRCode().toDataURL(scanUrl, {
       errorCorrectionLevel: 'M',
       margin: 2,
       width: 360,
@@ -546,6 +584,7 @@ async function clear() {
   if (runtime) {
     await runtime.clear();
   } else {
+    const { app, session } = getElectron();
     if (!app.isReady()) await app.whenReady();
     const authSession = session.fromPartition(AUTH_PARTITION);
     await authSession.clearStorageData({
