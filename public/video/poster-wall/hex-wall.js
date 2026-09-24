@@ -33,9 +33,11 @@
     anim: null,         // { targetX, targetY, velX, velY, stiffness?, damping?, mass? }
     drag: null,
     wheelTarget: null,  // 滚轮钳制目标（对齐 Folia wheelTargetRef）
+    enteredKeys: {},    // 已播过入场动画的条目 id（对齐 Folia useProgressiveItemEntrance 一次性语义）
     draining: false,    // 无 rAF 环境下同步排空动画，防递归爆栈
     commitTimer: null,
     loadToken: 0,
+    progressiveMounted: false,
     lastOpen: { id: null, at: 0 }
   };
 
@@ -91,23 +93,28 @@
     card.setAttribute('role', 'button');
     card.setAttribute('aria-label', item.title || '');
 
+    // 内容包进翻转层：rotateY 在卡片自身坐标系内翻转（帧 transform 含座位 translate3d，
+    // 若把 rotate 叠在外层会与位移复合成绕世界原点公转）。透视由 .sfv-hex-card 提供。
+    var flip = doc.createElement('div');
+    flip.className = 'sfv-hex-flip';
+
     var art = doc.createElement('div');
     art.className = 'sfv-hex-art';
     if (item.poster) {
       art.style.backgroundImage = 'url("' + String(item.poster).replace(/"/g, '\\"') + '")';
     }
-    card.appendChild(art);
+    flip.appendChild(art);
 
     var shade = doc.createElement('div');
     shade.className = 'sfv-hex-shade';
-    card.appendChild(shade);
+    flip.appendChild(shade);
 
     var copy = doc.createElement('div');
     copy.className = 'sfv-hex-copy';
     var strong = doc.createElement('strong');
     strong.textContent = item.title || '';
     copy.appendChild(strong);
-    card.appendChild(copy);
+    flip.appendChild(copy);
 
     var chrome = doc.createElement('div');
     chrome.className = 'sfv-hex-chrome';
@@ -139,7 +146,8 @@
       actions.appendChild(resumeBtn);
     }
     chrome.appendChild(actions);
-    card.appendChild(chrome);
+    flip.appendChild(chrome);
+    card.appendChild(flip);
 
     var m = state.metrics;
     card.style.width = m.cardW + 'px';
@@ -168,6 +176,11 @@
     state.world.appendChild(el);
     state.nodes[index] = { el: el, cache: {} };
     state.mounted[index] = true;
+    var seenKey = item.id != null ? String(item.id) : ('idx:' + index);
+    if (!state.enteredKeys[seenKey]) {
+      state.enteredKeys[seenKey] = true;
+      el.classList.add('sfv-hex-card--enter');
+    }
     if (index === state.focusIndex) el.classList.add('is-focused');
     return state.nodes[index];
   }
@@ -566,16 +579,32 @@
     state.loadToken += 1;
     var token = state.loadToken;
     state.host = host;
+    state.progressiveMounted = false;
     clearHost(host);
     host.innerHTML = '<div class="sfv-hex-loading">正在从 TMDB 拉取多品类海报…</div>';
     host.setAttribute('data-sfv-library-wall', 'loading');
 
-    return A.collectWallItemsAsync().then(function (res) {
+    return A.collectWallItemsAsync({
+      onBatch: function (items) {
+        if (token !== state.loadToken || state.host !== host) return;
+        if (!items || !items.length) return;
+        if (!state.progressiveMounted) {
+          mountSync(host, items);
+          state.progressiveMounted = true;
+        } else {
+          applyItemsIncrementally(items);
+        }
+      }
+    }).then(function (res) {
       if (token !== state.loadToken || state.host !== host) return false;
       if (res.keyMissing && (!res.items || !res.items.length)) {
         state.items = [];
         clearHost(host);
         renderEmpty(host, 'key');
+        return true;
+      }
+      if (state.progressiveMounted) {
+        applyItemsIncrementally(res.items || []);
         return true;
       }
       return mountSync(host, res.items || []);
@@ -588,8 +617,19 @@
     });
   }
 
+  // 增量并入前缀扩展批次：adapter 保证新快照以旧快照为前缀，
+  // 因此只需重建坐标表并重绘，索引不漂移，焦点/平移偏移原样保留。
+  function applyItemsIncrementally(items) {
+    state.items = items || [];
+    rebuildCoords();
+    if (state.focusIndex >= state.items.length) state.focusIndex = Math.max(0, state.items.length - 1);
+    applyFrames();
+    if (state.host) state.host.setAttribute('data-hex-count', String(state.items.length));
+  }
+
   function unmount() {
     state.loadToken += 1;
+    state.enteredKeys = {};
     if (state.rafId != null && global.cancelAnimationFrame) cancelAnimationFrame(state.rafId);
     state.rafId = null;
     if (state.commitTimer) clearTimeout(state.commitTimer);

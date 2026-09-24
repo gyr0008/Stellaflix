@@ -103,6 +103,31 @@
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
   will-change: transform, opacity;
   transform-origin: center center;
+  perspective: 1200px;
+}
+
+/* 翻转层承载入场动画（帧 transform 在卡上含座位位移，rotate 必须在内容层内做） */
+.sfv-hex-flip {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  backface-visibility: hidden;
+}
+
+/* 入场：对齐 Folia initial {opacity:0, scale:.98, rotateY:-90} → 0.36s [0.4,0,0.2,1] */
+@keyframes sfv-hex-entrance {
+  from {
+    opacity: 0;
+    transform: scale(0.98) rotateY(-90deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotateY(0deg);
+  }
+}
+
+.sfv-hex-card--enter .sfv-hex-flip {
+  animation: sfv-hex-entrance 0.36s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .sfv-hex-card.is-focused {

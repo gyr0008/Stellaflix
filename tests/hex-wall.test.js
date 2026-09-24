@@ -368,6 +368,41 @@ test('边界回弹：滚轮/拖拽越界后被钳回内容边界（Folia dragBou
     '松手后应回弹钳制到边界，实际 ' + afterDrag);
 });
 
+test('入场动画：首现卡挂 enter 类与翻转包裹层；已见条目重挂载不再播；unmount 后重置', () => {
+  const { wall } = loadHexWall({ adapter: null });
+  mountReady(wall);
+  const node0 = wall.getNode(0);
+  assert.ok(node0.classList.contains('sfv-hex-card--enter'), '首次挂载应有入场类');
+  let hasFlip = false;
+  (function walk(n) {
+    n.children.forEach((c) => {
+      if (c.className && String(c.className).indexOf('sfv-hex-flip') >= 0) hasFlip = true;
+      walk(c);
+    });
+  })(node0);
+  assert.ok(hasFlip, '卡内容应包在 .sfv-hex-flip 翻转层内（rotateY 不得绕座位公转）');
+
+  wall.centerOnIndex(239, { immediate: true });
+  assert.ok(!wall.getNode(0), '远端聚焦后 index 0 应被回收');
+  wall.centerOnIndex(0, { immediate: true });
+  const node0Again = wall.getNode(0);
+  assert.ok(node0Again, '回到 0 应重新挂载');
+  assert.equal(node0Again.classList.contains('sfv-hex-card--enter'), false, '已见条目不应重播入场');
+
+  wall.unmount();
+  mountReady(wall);
+  assert.ok(wall.getNode(0).classList.contains('sfv-hex-card--enter'), 'unmount 重挂后入场应重置');
+});
+
+test('入场 CSS：关键参数对齐 Folia（rotateY -90→0 / scale .98→1 / .36s cubic-bezier(.4,0,.2,1) / 1200px 透视）', () => {
+  const css = read('public/video/poster-wall/poster-wall.css');
+  assert.ok(/rotateY\(-90deg\)/.test(css), '应有 rotateY(-90deg) 起始帧');
+  assert.ok(/scale\(0\.98\)/.test(css), '应有 scale(0.98) 起始帧');
+  assert.ok(/cubic-bezier\(\s*0?\.4\s*,\s*0\s*,\s*0?\.2\s*,\s*1\s*\)/.test(css), '缓动曲线应为 Folia 标准曲线');
+  assert.ok(/0?\.36s/.test(css), '时长应为 .36s');
+  assert.ok(/perspective:\s*1200px/.test(css), '应有 1200px 透视（对齐 Folia）');
+});
+
 test('unmount：清空 DOM 与状态，可再次 mount', () => {
   const { wall } = loadHexWall({ adapter: null });
   const host = mountReady(wall);
