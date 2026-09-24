@@ -25,8 +25,10 @@ function serverFunctionSource(name, nextName) {
   return serverText.slice(start, end);
 }
 
-test('2.1.0 update metadata accepts only a bounded HTTPS external page', () => {
-  assert.equal(packageData.version, '2.1.0');
+test('update metadata accepts only a bounded HTTPS external page', () => {
+  // 版本号随每次发布变化，断言只校验语义化格式，不绑定具体版本
+  assert.match(packageData.version, /^\d+\.\d+\.\d+$/);
+  assert.ok(packageData.stellaflix && packageData.stellaflix.update);
   assert.equal(packageData.stellaflix.update.preview, false);
   assert.match(serverText, /function safeExternalUpdateUrl\(value\)/);
   assert.match(serverText, /raw\.length > 2048/);
@@ -38,7 +40,8 @@ test('2.1.0 update metadata accepts only a bounded HTTPS external page', () => {
   assert.match(serverText, /\n\s+downloadPageUrl,/);
   assert.match(serverText, /\n\s+downloadPages,/);
   assert.match(serverText, /patchAvailable:\s*false/);
-  assert.match(htmlText, /id="update-modal-version"[^>]*>v2\.1\.0</);
+  // 弹层里的版本占位文本由运行时填充，只断言节点存在
+  assert.match(htmlText, /id="update-modal-version"/);
   assert.match(htmlText, /id="update-download-sources"/);
 });
 

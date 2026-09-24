@@ -5,7 +5,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { JSDOM } = require('C:\\Users\\Administrator\\.workbuddy\\binaries\\node\\workspace\\node_modules\\jsdom');
+const { JSDOM } = require('jsdom');
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);

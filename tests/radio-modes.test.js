@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { JSDOM } = require('C:/Users/Administrator/.workbuddy/binaries/node/workspace/node_modules/jsdom');
+const { JSDOM } = require('jsdom');
 
 const appRoot = path.resolve(__dirname, '..');
 const indexHtml = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');

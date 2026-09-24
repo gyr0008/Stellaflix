@@ -5728,6 +5728,12 @@ function configureLocalServerEnvironment(port) {
   if (!process.env.SPOTIFY_CONFIG_FILE && !process.env.STELLAFLIX_SPOTIFY_CONFIG_FILE) {
     process.env.SPOTIFY_CONFIG_FILE = path.join(STABLE_USER_DATA_PATH, '.spotify-credentials.json');
   }
+  // Subsonic 配置同样落 userData（历史遗漏：其余数据文件均已迁移，唯此项仍写
+  // 安装目录 data/，重装/升级即丢配置）。注意变量名是单 L 的 STELLAFIX_（历史
+  // 拼写遗留，subsonic-api.js 按此名读取，测试亦然，不可"顺手修正"）。
+  if (!process.env.STELLAFIX_SUBSONIC_CONFIG_FILE) {
+    process.env.STELLAFIX_SUBSONIC_CONFIG_FILE = path.join(STABLE_USER_DATA_PATH, 'subsonic-servers.json');
+  }
 }
 
 const APP_OWNED_MIGRATION_FILES = [
@@ -5882,6 +5888,20 @@ function migrateLegacyAuthStorage() {
     }
   } catch (e) {
     console.warn('Qishui token migration skipped:', e.message);
+  }
+  try {
+    // Subsonic 配置迁移：data/subsonic-servers.json（安装目录，重装/升级即丢）
+    // → userData。模式与上方 cookie 迁移一致：目标不存在才复制，复制成功后删旧件。
+    const legacySubsonicConfig = path.join(__dirname, '..', 'data', 'subsonic-servers.json');
+    if (fs.existsSync(legacySubsonicConfig)) {
+      if (!fs.existsSync(process.env.STELLAFIX_SUBSONIC_CONFIG_FILE)) {
+        fs.mkdirSync(path.dirname(process.env.STELLAFIX_SUBSONIC_CONFIG_FILE), { recursive: true });
+        fs.copyFileSync(legacySubsonicConfig, process.env.STELLAFIX_SUBSONIC_CONFIG_FILE);
+      }
+      fs.unlinkSync(legacySubsonicConfig);
+    }
+  } catch (e) {
+    console.warn('Subsonic config migration skipped:', e.message);
   }
   try {
     const qishuiOAuthTarget = process.env.QISHUI_OAUTH_CONFIG_FILE;

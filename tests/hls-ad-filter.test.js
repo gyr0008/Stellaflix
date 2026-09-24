@@ -24,7 +24,9 @@ function runGroup(groupLabel, count, segDuration, prefix) {
 }
 
 function playlist(parts) {
-  return ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:120'].concat(parts).join('\n') + '\n';
+  // B6 配套：真实 VOD 清单以 #EXT-X-ENDLIST 收尾；缺 ENDLIST = 直播/截断清单，
+  // 过滤器现按 live-playlist 原样放行，故测试夹具必须带上 ENDLIST 才走过滤分支。
+  return ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:120'].concat(parts).concat(['#EXT-X-ENDLIST']).join('\n') + '\n';
 }
 
 function countSegs(text) {

@@ -1095,6 +1095,13 @@ async function callGemini(config, apiKey, message, history, context, fetchImpl, 
 }
 
 function tryElectronSecurity() {
+  // B4 环境哨兵：node_modules 装了 electron 包但没下二进制时（fresh clone + npm ci 默认态），
+  // require('electron') 不会抛错，而是 spawnSync 同步下载 100MB 二进制（见 node_modules/
+  // electron/index.js 的 downloadElectron）—— 纯 Node 场景（单测/CI）会无限期挂死。
+  // 必须先确认当前进程本身就是 Electron 运行时，再 require。
+  if (!process.versions || !process.versions.electron) {
+    return { app: null, safeStorage: null };
+  }
   try {
     const electron = require('electron');
     return { app: electron.app || null, safeStorage: electron.safeStorage || null };

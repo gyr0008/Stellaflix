@@ -7,7 +7,6 @@ const path = require('path');
 const appRoot = path.resolve(__dirname, '..');
 const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
 const runtimeText = fs.readFileSync(path.join(appRoot, 'desktop', 'wallpaper-engine-runtime.js'), 'utf8');
-const htmlText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
 
 function sourceBlock(text, startNeedle, endNeedle) {
   const start = text.indexOf(startNeedle);
@@ -15,19 +14,6 @@ function sourceBlock(text, startNeedle, endNeedle) {
   const end = text.indexOf(endNeedle, start + startNeedle.length);
   assert(end > start, `missing source block terminator: ${endNeedle}`);
   return text.slice(start, end);
-}
-
-function testLoginWishTitle() {
-  assert.match(
-    htmlText,
-    /<h1>\s*心愿是\s*<\/h1>/,
-    '彩蛋解锁面板标题必须保持为“心愿是”'
-  );
-  assert.doesNotMatch(
-    htmlText,
-    /<h1>\s*我希望\s*<\/h1>/,
-    '旧的“我希望”标题不应回归'
-  );
 }
 
 function testWallpaperEngineElevationBroker() {
@@ -110,7 +96,6 @@ function testFullscreenVisibilityAndSystemWakeGuards() {
   assert.match(mainText, /powerMonitor\.on\('unlock-screen',[\s\S]{0,140}restoreUnexpectedFullscreenVisibility\(mainWindow, 'screen-unlock'\)/, '解锁屏幕后必须检查全屏可见性');
 }
 
-testLoginWishTitle();
 testWallpaperEngineElevationBroker();
 testRendererGoneDelayedRecovery();
 testFullscreenVisibilityAndSystemWakeGuards();

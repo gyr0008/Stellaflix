@@ -5,7 +5,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { JSDOM } = require('C:\\Users\\Administrator\\.workbuddy\\binaries\\node\\workspace\\node_modules\\jsdom');
+const { JSDOM } = require('jsdom');
 
 function freshWindow() {
   const dom = new JSDOM('<!DOCTYPE html><html><body><div class="music-agent-chat-log"></div></body></html>', {

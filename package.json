@@ -8,6 +8,7 @@
   "main": "desktop/main.js",
   "private": true,
   "scripts": {
+    "test": "node tests/run-all.js",
     "start": "electron .",
     "build:win": "electron-builder --win nsis",
     "build:win:dir": "electron-builder --win dir",
@@ -196,6 +197,7 @@
     "music-metadata": "11.14.0"
   },
   "devDependencies": {
+    "jsdom": "^24.1.0",
     "electron": "^42.4.1",
     "electron-builder": "^26.15.3",
     "rcedit": "^5.0.2"

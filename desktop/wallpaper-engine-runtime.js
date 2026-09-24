@@ -1529,6 +1529,10 @@ function defaultEngineProcessProbe(powerShellExecutable, nativeTempPath, expecte
 }
 
 function defaultDesktopCapturer() {
+  // B4 哨兵：纯 Node（单测/CLI）下 node_modules 缺 electron 二进制时，require('electron')
+  // 不抛错而是 spawnSync 同步下载挂死 —— try/catch 只能接住抛错接不住挂死。
+  // 仅当前进程确实是 Electron 运行时才 require（生产环境本模块跑在 Electron 主进程内）。
+  if (!process.versions || !process.versions.electron) return null;
   try {
     return require('electron').desktopCapturer;
   } catch (_) {

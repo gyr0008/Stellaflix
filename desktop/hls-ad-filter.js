@@ -124,6 +124,13 @@ function filterHlsAds(content, baseUrl) {
     return { content: content, removed: 0, changed: false, reason: 'not-playlist' };
   }
 
+  // B6 直播保护：无 #EXT-X-ENDLIST 视为直播（或被截断的不完整清单）。discontinuity
+  // 分组启发式只对完整 VOD 成立；过滤直播会在每次 reload 时删掉不同分片，打乱 hls.js
+  // 的媒体序列对齐导致卡死。原样放行（保守侧：宁可不过滤，不可过滤错）。
+  if (content.indexOf('#EXT-X-ENDLIST') === -1) {
+    return { content: content, removed: 0, changed: false, reason: 'live-playlist' };
+  }
+
   const segments = parseSegments(content, baseUrl);
   if (segments.length === 0) {
     return { content: content, removed: 0, changed: false, reason: 'no-segments' };
@@ -134,15 +141,20 @@ function filterHlsAds(content, baseUrl) {
     return { content: content, removed: 0, changed: false, reason: 'no-ads' };
   }
 
-  const dropResolved = new Set();
-  for (const seg of segments) {
-    if (adGroups.has(seg.group)) dropResolved.add(seg.resolved);
+  // B5 正片保护：原实现把"组归属"换算成"URI 身份"再删 —— 广告组与正片组复用同一
+  // 分片 URI 时（部分源站广告直接插正片转场），正片组里的原份会被连带误删，违反
+  // 文件头"最长组永不删除"的承诺。改为按"出现位置"删除：广告组的出现照删（含复用
+  // URI 的那份），非广告组的出现绝不动。组归属到位置是无损映射，不经过 URI。
+  const dropOccurrences = new Set(); // segments 数组下标 → 该出现要删
+  for (let i = 0; i < segments.length; i++) {
+    if (adGroups.has(segments[i].group)) dropOccurrences.add(i);
   }
 
   const lines = content.split(/\r?\n/);
   const out = [];
   let bufferedDisc = null;
   let bufferedExtinf = null;
+  let uriIndex = 0; // URI 出现序号，与 parseSegments 的收集顺序一一对应
 
   for (const line of lines) {
     const t = line.trim();
@@ -157,12 +169,15 @@ function filterHlsAds(content, baseUrl) {
     }
 
     if (t && t.charAt(0) !== '#') {
-      const resolved = resolveUrl(baseUrl, t);
-      if (dropResolved.has(resolved)) {
+      // B5：按出现位置判定 —— parseSegments 只在 URI 行收集 segment，
+      // 故 uriIndex 与 segments 下标一一对应。
+      if (dropOccurrences.has(uriIndex)) {
+        uriIndex += 1;
         bufferedExtinf = null;
         bufferedDisc = null;
         continue;
       }
+      uriIndex += 1;
       if (bufferedDisc) { out.push(bufferedDisc); bufferedDisc = null; }
       if (bufferedExtinf) { out.push(bufferedExtinf); bufferedExtinf = null; }
       out.push(line);
@@ -187,14 +202,14 @@ function filterHlsAds(content, baseUrl) {
 
   const rewritten = out.join('\n');
   // 空结果保护：过滤后几乎没分片则回退
-  const keptCount = segments.length - dropResolved.size;
+  const keptCount = segments.length - dropOccurrences.size;
   if (keptCount <= 0) {
     return { content: content, removed: 0, changed: false, reason: 'empty-after-filter' };
   }
 
   return {
     content: rewritten,
-    removed: dropResolved.size,
+    removed: dropOccurrences.size,
     changed: rewritten !== content,
     reason: 'filtered',
   };

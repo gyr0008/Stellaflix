@@ -80,7 +80,21 @@ const tls = require('tls');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
 const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer');
-const { TrackDecryptor } = require('./qishui-audio-decryptor/track-decryptor');
+// B2 惰性加载：qishui-audio-decryptor/ 是 gitignore 的本机专有运行时（.gitignore:70-76），
+// fresh clone / CI 缺件属正常态。顶层 require 会让整个 server 崩在启动（0.1.4 安装包
+// SF-BOOT-SERVER-START 的根因）。改为首次用到汽水解密时才加载，缺件降级走普通代理。
+let _trackDecryptorMod; // undefined=未尝试, null=缺件, object=已加载
+function loadTrackDecryptor() {
+  if (_trackDecryptorMod === undefined) {
+    try {
+      _trackDecryptorMod = require('./qishui-audio-decryptor/track-decryptor');
+    } catch (e) {
+      console.warn('[Qishui] decryptor runtime missing; qishui encrypted audio falls back to direct proxy:', e.code || e.message);
+      _trackDecryptorMod = null;
+    }
+  }
+  return _trackDecryptorMod && _trackDecryptorMod.TrackDecryptor ? _trackDecryptorMod.TrackDecryptor : null;
+}
 const {
   normalizeQQVipPayload: normalizeQQVipPayloadStrict,
   resolveQQVipFromProbes,
@@ -186,7 +200,19 @@ const LISTEN_SYNC_JOURNAL_LIMIT = 600;
 const APP_PACKAGE = readPackageInfo();
 const APP_VERSION = process.env.STELLAFLIX_VERSION || APP_PACKAGE.version || '0.1.0';
 const UPDATE_CONFIG = readUpdateConfig(APP_PACKAGE);
-const qishuiAudioDecryptor = new TrackDecryptor();
+let qishuiAudioDecryptor = null; // B2 惰性单例：首次汽水解密时才构造，缺件不阻塞启动
+function ensureQishuiAudioDecryptor() {
+  if (!qishuiAudioDecryptor) {
+    const TrackDecryptorClass = loadTrackDecryptor();
+    if (!TrackDecryptorClass) return null;
+    try { qishuiAudioDecryptor = new TrackDecryptorClass(); }
+    catch (e) {
+      console.warn('[Qishui] decryptor init failed; falls back to direct proxy:', e.message);
+      return null;
+    }
+  }
+  return qishuiAudioDecryptor;
+}
 const qishuiAudioDecryptCache = new Map();
 // 48MB keeps a couple of recent tracks without letting long DJ sets pin ~100MB.
 const QISHUI_AUDIO_DECRYPT_CACHE_MAX_BYTES = 48 * 1024 * 1024;
@@ -855,19 +881,25 @@ function compactBeatMapCachePayload(body) {
   };
 }
 function readBeatMapCache(key) {
+  // B3 已知限制：保持同步读（cuefield/stellaflix-bridge.js:18 以同步契约消费本回调，
+  // 改 async 会静默破坏转场规划）。读的是压缩后的小 JSON，阻塞窗口远小于写路径；
+  // 后续若要异步化需连同 bridge 与 quick-check 一起改。
   const file = safeBeatMapCacheFile(key);
   if (!file || !fs.existsSync(file)) return null;
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
   return raw && raw.map ? raw : null;
 }
-function writeBeatMapCache(body) {
+async function writeBeatMapCache(body) {
+  // B3 异步写：原 writeFileSync+renameSync 在 /api/audio 音频流的关键期（新歌起播、
+  // 客户端回传 beatmap 存档）同步阻塞事件循环，慢盘上可感知为音频瞬断。
+  // 改 fs.promises 后写盘让出事件循环；tmp+rename 的原子性保持不变。
   const payload = compactBeatMapCachePayload(body);
   if (!payload) return { ok: false, error: 'INVALID_BEATMAP_CACHE_PAYLOAD' };
   const file = safeBeatMapCacheFile(payload.key);
   if (!file) return { ok: false, error: 'INVALID_BEATMAP_CACHE_KEY' };
   const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(payload));
-  fs.renameSync(tmp, file);
+  await fs.promises.writeFile(tmp, JSON.stringify(payload));
+  await fs.promises.rename(tmp, file);
   return { ok: true, key: payload.key, savedAt: payload.savedAt, dir: path.dirname(file) };
 }
 function localUpdateFallback(reason, opts) {
@@ -3252,6 +3284,8 @@ function rememberQishuiDecryptedAudio(key, payload) {
 }
 
 async function getQishuiDecryptedAudio(audioUrl) {
+  const decryptor = ensureQishuiAudioDecryptor(); // B2 缺件降级：返回 null，调用方走普通代理
+  if (!decryptor) return null;
   const parsed = qishuiAudioAuthFromUrl(audioUrl);
   if (!parsed.auth) return null;
   const key = qishuiAudioCacheKey(parsed.cleanUrl, parsed.auth);
@@ -3284,7 +3318,7 @@ async function getQishuiDecryptedAudio(audioUrl) {
       if (encryptedBuffer.length > QISHUI_AUDIO_DECRYPT_MAX_SOURCE_BYTES) {
         throw new Error('Qishui encrypted audio too large: ' + encryptedBuffer.length + ' bytes');
       }
-      const result = qishuiAudioDecryptor.decrypt({ encryptedBuffer, spadeA: parsed.auth });
+      const result = decryptor.decrypt({ encryptedBuffer, spadeA: parsed.auth });
       // Drop the ciphertext as soon as plaintext is ready when they are distinct buffers.
       if (result.buffer !== encryptedBuffer) {
         encryptedBuffer.fill?.(0);
@@ -5412,7 +5446,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST') {
       try {
         const body = await readRequestBody(req);
-        sendJSON(res, writeBeatMapCache(body));
+        sendJSON(res, await writeBeatMapCache(body)); // B3：异步写盘，避免阻塞音频流事件循环
       } catch (err) {
         const info = err.info || beatCacheRootInfo();
         sendJSON(res, {

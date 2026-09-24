@@ -60,7 +60,8 @@
   // hls.js 已本地化 vendor 到 public/vendor/hls.min.js（同源静态服务，规避 jsdelivr 国内不可达）。
   // 这是 JS 库而非片源，不触碰合规红线；许可证为 MIT，可自由内置分发。
   // 拆债 #6：HLS 子系统（attachHls/loadHlsLib/makeProxyLoader + 状态）已抽到
-  // source-adapter-hls.js；诊断浮层 showDiagnosticOverlay 已抽到 source-adapter-diagnostic.js。
+  // source-adapter-hls.js；诊断浮层模块 source-adapter-diagnostic.js 已于 0.1.3 审查后
+  // 移除（从未接线），showDiagnosticOverlay 委托保留为 no-op 兜底。
   // 运行期经 SFV.sourceAdapterHls / SFV.sourceAdapterDiag 委托（见底部 facade 与下方别名）。
   var attachHls = function (videoEl, rawUrl, opts) {
     var f = SFV.sourceAdapterHls && SFV.sourceAdapterHls.attachHls;
