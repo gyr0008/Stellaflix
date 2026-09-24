@@ -74,3 +74,40 @@ test('player-controller：onHeartClick/refreshHeartBtn 走 ForKeys 原语，不�
   assert.ok(refresh, 'expected refreshHeartBtn()');
   assert.match(refresh[0], /getTrackStatusForKeys\s*\(/);
 });
+
+// ===== 加固锁（Task 4 审查裁定）：候选顺序 / 单键 API 负锁 / 写入载荷与兜底 =====
+
+test('player-controller：getHeartTrackKeys 候选顺序锁 —— tmdbKey 必须先于 seriesKey push（顺序颠倒会写别名键并清主键）', () => {
+  const fn = /function\s+getHeartTrackKeys\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(fn, 'expected getHeartTrackKeys()');
+  const body = fn[0];
+  const tmdbIdx = body.indexOf('keys.push(meta.tmdbKey)');
+  const seriesIdx = body.indexOf('keys.push(meta.seriesKey)');
+  assert.notStrictEqual(tmdbIdx, -1, 'expected keys.push(meta.tmdbKey)');
+  assert.notStrictEqual(seriesIdx, -1, 'expected keys.push(meta.seriesKey)');
+  assert.equal(tmdbIdx < seriesIdx, true, 'tmdbKey 必须排在 seriesKey 之前（主键=canonical）');
+  assert.match(body, /keys\.indexOf\(\s*meta\.seriesKey\s*\)/, 'seriesKey 入队前必须去重，避免同键重复 push');
+});
+
+test('player-controller：onHeartClick/refreshHeartBtn 禁再用单键原语 getTrackStatus/setTrackStatus（标题所称"不再裸用"的实证锁）', () => {
+  const click = /function\s+onHeartClick\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(click, 'expected onHeartClick()');
+  const refresh = /function\s+refreshHeartBtn\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(refresh, 'expected refreshHeartBtn()');
+  for (const [name, body] of [['onHeartClick', click[0]], ['refreshHeartBtn', refresh[0]]]) {
+    assert.equal(body.includes('SFV.model.getTrackStatus('), false, name + ' 不得调用单键 SFV.model.getTrackStatus(key)');
+    assert.equal(body.includes('SFV.model.setTrackStatus('), false, name + ' 不得调用单键 SFV.model.setTrackStatus(key, status)');
+    assert.match(body, /getTrackStatusForKeys\s*\(/, name + ' 必须保留 ForKeys 读原语');
+  }
+  assert.match(click[0], /setTrackStatusForKeys\s*\(/, 'onHeartClick 必须保留 ForKeys 写原语');
+});
+
+test('player-controller：onHeartClick 写入载荷锁（keys+next+meta 播种）与 refreshHeartBtn 主键回填兜底', () => {
+  const click = /function\s+onHeartClick\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(click, 'expected onHeartClick()');
+  assert.match(click[0], /setTrackStatusForKeys\(\s*keys\s*,\s*next\s*,/, '必须把候选键数组与下一状态作为载荷写入');
+  assert.match(click[0], /title:\s*\(meta\s*&&\s*meta\.seriesTitle\)/, 'meta 播种须带 seriesTitle');
+  const refresh = /function\s+refreshHeartBtn\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(refresh, 'expected refreshHeartBtn()');
+  assert.equal(refresh[0].includes('currentSeriesKey = keys[0] || null'), true, 'refreshHeartBtn 须把主键回填 currentSeriesKey，供无 meta 时点击兜底');
+});
