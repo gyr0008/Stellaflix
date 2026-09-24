@@ -1,0 +1,40 @@
+'use strict';
+
+/**
+ * 追片 canonical 键接线测试：详情页 / 起播链路 / 播放器三处必须走
+ * model.canonicalTrackKey + get/setTrackStatusForKeys，禁止再直接读写裸 view.key。
+ * 运行：node --test tests/track-key-wiring.test.js
+ */
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.join(__dirname, '..');
+const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+
+const detailSrc = read('public/video/detail.js');
+
+test('detail.js：trackKeysForView 以 canonical 键为主、view.key 兜底', () => {
+  const fn = /function\s+trackKeysForView\s*\([\s\S]*?\n  \}/.exec(detailSrc);
+  assert.ok(fn, 'expected trackKeysForView()');
+  assert.match(fn[0], /canonicalTrackKey\s*\(/);
+  assert.match(fn[0], /view\.key/);
+});
+
+test('detail.js：cycleTrackStatus 不再因缺 view.key 静默 return（原始 bug 回归锁）', () => {
+  const fn = /function\s+cycleTrackStatus\s*\([\s\S]*?\n  \}/.exec(detailSrc);
+  assert.ok(fn, 'expected cycleTrackStatus()');
+  assert.match(fn[0], /trackKeysForView\s*\(/);
+  assert.match(fn[0], /getTrackStatusForKeys\s*\(/);
+  assert.match(fn[0], /setTrackStatusForKeys\s*\(/);
+  assert.equal(/if\s*\(\s*!\s*key\s*\|\|/.test(fn[0]), false, '不得残留裸 key 早退守卫');
+});
+
+test('detail.js：首屏 curTrack 图标/标题也走候选键（进页即显示已追状态）', () => {
+  const init = /var\s+curTrack\s*=[\s\S]{0,220}/.exec(detailSrc);
+  assert.ok(init, 'expected curTrack init');
+  assert.match(init[0], /getTrackStatusForKeys\s*\(/);
+  assert.match(init[0], /trackKeysForView\s*\(/);
+});

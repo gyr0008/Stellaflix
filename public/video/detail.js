@@ -115,16 +115,30 @@
   // 追片触发器引用（cycleTrackStatus 刷新图标时同步更新）
   var _trackTriggerBtn = null;
 
+  // 追片候选键：主键=TMDB canonical（一部片跨源稳定），别名=源键（存量/无 TMDB id 时）。
+  // 读写均经 model.get/setTrackStatusForKeys，写入时惰性清别名键。
+  function trackKeysForView(view) {
+    var keys = [];
+    if (SFV.model && typeof SFV.model.canonicalTrackKey === 'function') {
+      var c = SFV.model.canonicalTrackKey(view);
+      if (c) keys.push(c);
+    }
+    if (view && view.key && keys.indexOf(view.key) < 0) keys.push(view.key);
+    return keys;
+  }
+
   // 追片：点击循环切换 6 态（与播放器底部控制栏 heart-btn 完全一致：
   //   纯图标刷新 + 互斥单值 6 态循环 + toast 提示；无下拉菜单）。
   function cycleTrackStatus(view) {
-    var key = view && view.key;
-    if (!key || !SFV.model || typeof SFV.model.getTrackStatus !== 'function' || typeof SFV.model.setTrackStatus !== 'function') return;
-    var status = SFV.model.getTrackStatus(key);
-    var keys = TRACK_MENU.map(function (m) { return m.key; });
-    var idx = keys.indexOf(status);
-    var next = keys[(idx + 1) % keys.length];
-    SFV.model.setTrackStatus(key, next);
+    var keys = trackKeysForView(view);
+    if (!keys.length || !SFV.model ||
+        typeof SFV.model.getTrackStatusForKeys !== 'function' ||
+        typeof SFV.model.setTrackStatusForKeys !== 'function') return;
+    var status = SFV.model.getTrackStatusForKeys(keys);
+    var menuKeys = TRACK_MENU.map(function (m) { return m.key; });
+    var idx = menuKeys.indexOf(status);
+    var next = menuKeys[(idx + 1) % menuKeys.length];
+    SFV.model.setTrackStatusForKeys(keys, next, { title: view.title, pic: view.pic, year: view.year });
     // 纯图标刷新（对照 heart-btn：仅图标，无文字），并同步 title
     if (_trackTriggerBtn) {
       _trackTriggerBtn.innerHTML = trackIcon(next);
@@ -503,7 +517,9 @@
     header.appendChild(actions);
 
     // 操作按钮组（药丸）
-    var curTrack = (SFV.model && typeof SFV.model.getTrackStatus === 'function') ? SFV.model.getTrackStatus(view.key) : null;
+    var curTrack = (SFV.model && typeof SFV.model.getTrackStatusForKeys === 'function')
+      ? SFV.model.getTrackStatusForKeys(trackKeysForView(view))
+      : null;
     var btnPlay = mkPill('sfv-plex-pill--play', ICON.play, '播放');
     btnPlay.addEventListener('click', function () { if (SFV.detailSource && typeof SFV.detailSource.searchAndPick === 'function') SFV.detailSource.searchAndPick(view, sections); });
     actions.appendChild(btnPlay);
