@@ -2,7 +2,7 @@
 
 /**
  * 精选片单 · 弹窗二级页（参照移动端片单页设计，用户 2026-09-19 裁定：先改弹窗二级页）
- * 结构：hero 头图（首海报 CSS blur 底 + 片单名 + 共N部 + 返回）
+ * 结构：hero 头图（首海报清晰铺底 + 底部 scrim + 片单名 + 共N部 + 返回；2026-09-25 D1 去 blur）
  *      + 四列海报网格（左上=年份胶囊，右上=地区胶囊，底部=类型串压图，标题在图下）
  * 数据：tmdb.js normalizeList 补 originalLanguage；getDetails 补 genres；
  *      静态 GENRE_NAMES 字典 + genreNames()/regionLabel()（零额外请求）
@@ -126,15 +126,56 @@ test('二级页 hero 标题含「共N部」计数与片单名', () => {
 
 // ---------------------------------------------------------------- CSS
 
-test('CSS：二级页四列网格 + hero 用 filter blur（禁 canvas 红线）', () => {
+test('CSS：二级页三列网格 + hero 清晰海报底（去 blur/去渐晕，保留底部 scrim，禁 canvas 红线）', () => {
   const grid = /\.home-video-collections-items-grid\s*\{[^}]*\}/s.exec(indexCss);
   assert.ok(grid, '缺少 .home-video-collections-items-grid 规则');
-  assert.match(grid[0], /grid-template-columns:\s*repeat\(\s*4/);
+  assert.match(grid[0], /grid-template-columns:\s*repeat\(\s*3/, 'D3：二级页海报网格须为三列（向参照图呼吸感靠拢）');
+  // D1：hero 加高让海报有展示空间（旧 132px → ≥180px）
+  const heroBox = /\.home-video-collections-hero\s*\{[^}]*\}/s.exec(indexCss);
+  assert.ok(heroBox, '缺少 .home-video-collections-hero 规则');
+  assert.match(heroBox[0], /min-height:\s*(1[89]\d|[2-9]\d{2}|[1-9]\d{3,})px/);
+  // hero 底 = 清晰海报（D1：去模糊），cover 铺满，无 filter:blur
   const hero = /\.home-video-collections-hero-bg\s*\{[^}]*\}/s.exec(indexCss);
   assert.ok(hero, '缺少 .home-video-collections-hero-bg 规则');
-  assert.match(hero[0], /filter:\s*blur\(/);
+  assert.match(hero[0], /background-size:\s*cover/);
+  assert.equal(/filter:\s*blur\(/.test(hero[0]), false, 'D1：hero 底须为清晰海报，不得再 blur');
+  assert.equal(/opacity:\s*0?\.[0-4]/.test(hero[0]), false, 'D1：清晰海报不得被低 opacity 压淡');
+  // scrim 只留底部向上单层 linear 渐变，删除 radial 渐晕
+  const scrim = /\.home-video-collections-hero::after\s*\{[^}]*\}/s.exec(indexCss);
+  assert.ok(scrim, '缺少 .home-video-collections-hero::after scrim 规则');
+  assert.match(scrim[0], /linear-gradient\(/, 'hero 须保留底部渐变 scrim 保文字可读');
+  assert.equal(/radial-gradient\(/.test(scrim[0]), false, 'D1：清晰海报不再套 radial 边缘渐晕');
+  // 禁 canvas 红线不变
+  assert.equal(/getContext|drawImage|canvas/i.test(hero[0]), false, 'hero 底禁用 canvas');
   // 胶囊样式存在且为深色半透明底
   const pill = /\.home-video-collections-item-year\s*\{[^}]*\}/s.exec(indexCss);
   assert.ok(pill, '缺少 .home-video-collections-item-year 胶囊规则');
   assert.match(pill[0], /border-radius/);
+});
+
+// ---------------------------------------------------------------- D2：环境色页面底
+
+test('D2 环境色：renderItemsPage 把 --wc-warm 挂到 modal、closeCollectionDetail 摘除', () => {
+  const render = /function\s+renderItemsPage[\s\S]*?\n  \}/.exec(overlaySrc);
+  assert.ok(render, 'expected renderItemsPage()');
+  // 进入二级页时在弹窗根节点设置 warm 变量，供 --detail 底色 color-mix 取用
+  assert.match(render[0], /modal\.style\.setProperty\(\s*['"]--wc-warm['"]/);
+  const close = /function\s+closeCollectionDetail[\s\S]*?\n  \}/.exec(overlaySrc);
+  assert.ok(close, 'expected closeCollectionDetail()');
+  // 返回一级须清除变量，避免污染 tab 列表态
+  assert.match(close[0], /modal\.style\.removeProperty\(\s*['"]--wc-warm['"]/);
+});
+
+test('D2 环境色：--detail 弹窗底用 color-mix(warm 淡色) 且有纯色回退行', () => {
+  const rule = /\.home-video-collections-modal\.home-video-collections--detail\s*\{([^}]*)\}/s.exec(indexCss);
+  assert.ok(rule, '缺少 .home-video-collections-modal.home-video-collections--detail 规则');
+  const body = rule[1];
+  // 回退：先一条纯色 background，再 color-mix 覆盖（老浏览器忽略第二行）
+  const bgLines = body.split(';').map((s) => s.trim()).filter((s) => /^background(-color)?:/.test(s));
+  assert.ok(bgLines.length >= 2, '须有纯色回退 + color-mix 两条 background');
+  assert.match(body, /color-mix\(in srgb,\s*var\(--wc-warm/);
+  // 淡色：warm 占比应低（≤12%），只做氛围不做装饰
+  const pct = /color-mix\(in srgb,\s*var\(--wc-warm[^)]*?\)\s*(\d+(?:\.\d+)?)%/.exec(body);
+  assert.ok(pct, 'color-mix 须显式 warm 百分比');
+  assert.ok(Number(pct[1]) <= 12, 'warm 占比须 ≤12%（极淡偏色）');
 });

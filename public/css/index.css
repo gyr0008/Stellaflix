@@ -18474,19 +18474,16 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
 
 .home-video-collections-card {
   position: relative;
-  isolation: isolate;
   overflow: hidden;
   min-width: 0;
-  /* 100px 竖版叠卡(top14) + 8px 间隙 + 两行文案(~40px) + 上下 padding(28px) ≈ 176px */
-  min-height: 176px;
-  padding: 14px;
+  padding: 10px 10px 12px;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
   gap: 0;
   border: 1px solid transparent;
   border-radius: 16px;
-  background: linear-gradient(135deg, var(--wc-warm, #534AB7), rgba(8, 10, 14, .92));
+  /* 干净卡面：纯色深灰底，文案不再压图（v3，2026-09-25 参照截图） */
+  background: #14161d;
   color: #fff;
   text-align: left;
   font-family: inherit;
@@ -18499,74 +18496,78 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
   border-color: rgba(var(--fc-accent-rgb), .4)
 }
 
-/* 封面底 = 首张海报模糊铺底（CSS filter，禁 canvas：跨源海报会污染画布，见 7c84045 事故） */
-.home-video-collections-card-bg {
-  position: absolute;
-  inset: -26px;
-  z-index: -1;
-  background-size: cover;
-  background-position: center;
-  filter: blur(26px) saturate(1.2);
-  opacity: .62
+/* 封面区 = def.warm 纯色场域（同色系微渐变，深左上→亮右下）；无海报内容、零模糊 */
+.home-video-collections-cover {
+  position: relative;
+  height: 150px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--wc-warm, #534AB7);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--wc-warm, #534AB7) 55%, #05070c) 0%, var(--wc-warm, #534AB7) 100%)
 }
 
-.home-video-collections-card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  /* 第一层 = 边缘渐晕：把模糊海报底压离圆角边缘，消除「外圈亮光」；第二层 = 底部文字遮罩 */
-  background:
-    radial-gradient(128% 128% at 50% 42%, rgba(8, 10, 14, 0) 46%, rgba(8, 10, 14, .82) 100%),
-    linear-gradient(180deg, rgba(8, 10, 14, .12) 0%, rgba(8, 10, 14, .55) 62%, rgba(8, 10, 14, .82) 100%)
-}
-
-/* 叠卡海报：左上角 2–3 张迷你海报；无快照时退化为 warm 色条 */
+/* 扇形叠卡：靠左排布，首卡最高在最前，后卡阶梯下降只露右缘；无快照时退化为半透明色条 */
 .home-video-collections-stack {
   position: absolute;
-  top: 14px;
-  left: 12px;
+  left: 14px;
+  bottom: 14px;
   display: flex;
   align-items: flex-end
 }
 
 .home-video-collections-stack img {
-  width: 66px;
-  height: 100px;
+  width: 72px;
   object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, .3);
-  box-shadow: 0 6px 14px rgba(0, 0, 0, .42);
+  border-radius: 8px;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, .38);
   background: rgba(8, 10, 14, .5)
 }
 
-.home-video-collections-stack img+img {
-  margin-left: -26px;
-  transform: rotate(2deg)
+.home-video-collections-stack img:nth-child(1) {
+  height: 108px;
+  z-index: 3
+}
+
+.home-video-collections-stack img:nth-child(2) {
+  height: 92px;
+  margin-left: -46px;
+  z-index: 2
+}
+
+.home-video-collections-stack img:nth-child(3) {
+  height: 78px;
+  margin-left: -46px;
+  z-index: 1
 }
 
 .home-video-collections-stack i {
-  width: 5px;
-  margin-left: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, .68)
+  width: 30px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: rgba(255, 255, 255, .18)
 }
 
 .home-video-collections-stack i:nth-child(1) {
-  height: 12px;
-  margin-left: 0
+  height: 64px;
+  z-index: 3
 }
 
 .home-video-collections-stack i:nth-child(2) {
-  height: 20px
+  height: 54px;
+  margin-left: -12px;
+  z-index: 2
 }
 
 .home-video-collections-stack i:nth-child(3) {
-  height: 15px
+  height: 44px;
+  margin-left: -12px;
+  z-index: 1
 }
 
+/* 文案区：封面块下方独立浅色带，不压图 */
 .home-video-collections-copy {
-  min-width: 0
+  min-width: 0;
+  padding: 12px 4px 0
 }
 
 .home-video-collections-copy>* {
@@ -18577,19 +18578,18 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
 }
 
 .home-video-collections-copy strong {
-  font-size: 14px;
-  font-weight: 780;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, .55)
+  font-size: 15px;
+  font-weight: 780
 }
 
 .home-video-collections-copy small {
   margin-top: 6px;
-  color: rgba(255, 255, 255, .72);
-  font-size: 10px
+  color: rgba(255, 255, 255, .58);
+  font-size: 10.5px
 }
 
 .home-video-collections-copy small.home-video-collections-count-sub {
-  color: rgba(255, 255, 255, .5)
+  color: rgba(255, 255, 255, .42)
 }
 
 .home-video-collections-empty {
@@ -18605,18 +18605,24 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
   font-size: 10.5px
 }
 
-/* ---- 二级页：片单明细（hero 头图 + 四列海报网格，参照移动端精选片单页）---- */
+/* ---- 二级页：片单明细（hero 头图 + 三列海报网格，参照移动端精选片单页）---- */
 .home-video-collections--detail .home-video-collections-tabs {
   display: none
+}
+
+/* D2 环境色页面底：二级页弹窗面板被片单主色极淡染色（首行纯色回退，老浏览器忽略 color-mix） */
+.home-video-collections-modal.home-video-collections--detail {
+  background: #0c0e13;
+  background: color-mix(in srgb, var(--wc-warm, #534AB7) 7%, #0c0e13)
 }
 
 .home-video-collections-hero {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  min-height: 132px;
+  min-height: 200px;
   margin-bottom: 14px;
-  padding: 14px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -18624,15 +18630,13 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
   background: linear-gradient(135deg, var(--wc-warm, #534AB7), rgba(8, 10, 14, .94))
 }
 
-/* hero 底 = 首条目海报模糊铺底（CSS filter，禁 canvas：7c84045 跨源污染事故） */
+/* hero 底 = 首条目清晰海报铺底（D1 去 blur：CSS 背景图，禁 canvas：7c84045 跨源污染事故） */
 .home-video-collections-hero-bg {
   position: absolute;
-  inset: -30px;
+  inset: 0;
   z-index: -1;
   background-size: cover;
-  background-position: center 22%;
-  filter: blur(30px) saturate(1.2);
-  opacity: .5
+  background-position: center 22%
 }
 
 .home-video-collections-hero::after {
@@ -18640,9 +18644,8 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
   position: absolute;
   inset: 0;
   z-index: -1;
-  background:
-    radial-gradient(128% 128% at 50% 42%, rgba(8, 10, 14, 0) 46%, rgba(8, 10, 14, .82) 100%),
-    linear-gradient(180deg, rgba(8, 10, 14, .18) 0%, rgba(8, 10, 14, .62) 100%)
+  /* D1：清晰海报只保留单层底部向上 scrim 保标题可读，删除 radial 边缘渐晕 */
+  background: linear-gradient(180deg, rgba(8, 10, 14, 0) 42%, rgba(8, 10, 14, .55) 74%, rgba(8, 10, 14, .88) 100%)
 }
 
 .home-video-collections-back {
@@ -18680,8 +18683,8 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
 
 .home-video-collections-items-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px 10px
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px 14px
 }
 
 .home-video-collections-item {

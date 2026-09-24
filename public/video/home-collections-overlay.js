@@ -3,11 +3,13 @@
  *
  * 结构（参照移动端精选片单页设计，落地于弹窗而非页面）：
  *   - 顶部 tab 条：推荐 / 主题 / 经典 / 高分 / 获奖（只读内置 CATALOG，SFV.collections.getByTab）
- *   - 两列封面卡网格：模糊海报底（CSS filter blur，禁 canvas —— 7c84045 跨源污染事故）
- *     + 叠卡海报 + 标题 + 计数（分页型片单=「精选N部」，全量型=「共N部」）
+ *   - 两列封面卡网格：warm 纯色场域封面区（def.warm 同色系 linear-gradient）+ 左置扇形叠卡
+ *     + 封面下方独立文案区（v2 的海报 blur 底与 ::after 渐晕已移除，2026-09-25 参照截图；
+ *     canvas 红线不变 —— 7c84045 跨源污染事故）
+ *     计数：分页型片单=「精选N部」，全量型=「共N部」
  *   - 封面快照：localStorage（stellaflix-collection-cover-snapshot-v1），打开即回填，
  *     24h 内新鲜即跳过补请求；过期才逐卡 collections.getItems 异步补海报/计数并写回
- * 点击卡片 → 弹窗内二级页（openCollectionDetail）：hero 头图 + 四列海报网格（年份/地区/类型胶囊）。
+ * 点击卡片 → 弹窗内二级页（openCollectionDetail）：清晰海报 hero + 三列海报网格（年份/地区/类型胶囊）+ 环境色面板底。
  * 二级页点条目 → SFV.online.openDetailFromMeta(it) 进详情页。
  * 双态隔离：仅影视态首页调用；音乐态「平台热歌与个人偏好」路径不经过本文件。
  */
@@ -83,13 +85,12 @@
   }
 
   function cardHtml(def, snap) {
-    var bg = snap && snap.posters && snap.posters[0];
-    var bgStyle = bg ? ' style="background-image:url(' + esc(safeUrl(bg)) + ')"' : '';
     var countText = countLabel(def, snap && snap.count) || esc(def.sub || '');
     return '<button class="home-video-collections-card" type="button" data-wc-id="' + esc(def.id) + '"' +
       ' style="--wc-warm:' + esc(def.warm || '#534AB7') + '">' +
-      '<span class="home-video-collections-card-bg" aria-hidden="true"' + bgStyle + '></span>' +
+      '<span class="home-video-collections-cover" aria-hidden="true">' +
       stackHtml(snap && snap.posters, def) +
+      '</span>' +
       '<span class="home-video-collections-copy">' +
       '<strong>' + esc(def.title) + '</strong>' +
       '<small data-wc-count' + (snap && snap.count ? '' : ' class="home-video-collections-count-sub"') + '>' +
@@ -100,10 +101,15 @@
     var bar = document.getElementById('home-video-collections-tabs');
     if (!bar) return;
     bar.innerHTML = OVERLAY_TABS.map(function (t) {
+      var active = t.id === state.activeTab;
       return '<button type="button" class="home-video-collections-tab' +
-        (t.id === state.activeTab ? ' active' : '') + '" data-wc-tab="' + t.id + '"' +
-        (t.id === state.activeTab ? ' aria-current="true"' : '') + '>' + esc(t.label) + '</button>';
+        (active ? ' active' : '') + '" data-wc-tab="' + t.id + '"' +
+        ' id="home-video-collections-tab-' + t.id + '" role="tab"' +
+        ' aria-selected="' + (active ? 'true' : 'false') + '"' +
+        ' aria-controls="home-video-collections-list">' + esc(t.label) + '</button>';
     }).join('');
+    var panel = document.getElementById('home-video-collections-list');
+    if (panel) panel.setAttribute('aria-labelledby', 'home-video-collections-tab-' + state.activeTab);
   }
 
   function renderList() {
@@ -127,8 +133,6 @@
     var id = def && def.id;
     var card = list.querySelector('[data-wc-id="' + (global.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
     if (!card) return;
-    var bg = card.querySelector('.home-video-collections-card-bg');
-    if (bg && posters[0]) bg.style.backgroundImage = 'url(' + safeUrl(posters[0]) + ')';
     var stack = card.querySelector('.home-video-collections-stack');
     if (stack && posters.length) {
       stack.innerHTML = posters.slice(0, 3).map(function (u) {
@@ -196,6 +200,7 @@
     var col = state.collection;
     if (!col) return;
     var def = col.def;
+    if (modal) modal.style.setProperty('--wc-warm', def.warm || '#534AB7'); // D2：面板环境色取片单主色
     var items = col.items || [];
     var heroPoster = items[0] && items[0].poster;
     var countText = col.error ? '加载失败'
@@ -251,7 +256,10 @@
   function closeCollectionDetail() {
     state.collection = null;
     var modal = document.querySelector('.home-video-collections-modal');
-    if (modal) modal.classList.remove('home-video-collections--detail');
+    if (modal) {
+      modal.classList.remove('home-video-collections--detail');
+      modal.style.removeProperty('--wc-warm'); // 防环境色残留到一级 tab 态
+    }
     renderTabs();
     renderList();
   }
@@ -283,11 +291,38 @@
     // 整窗关闭即回一级：下次打开不残留二级页
     state.collection = null;
     var modal = document.querySelector('.home-video-collections-modal');
-    if (modal) modal.classList.remove('home-video-collections--detail');
+    if (modal) {
+      modal.classList.remove('home-video-collections--detail');
+      modal.style.removeProperty('--wc-warm');
+    }
     var focusTarget = state.previousFocus;
     state.previousFocus = null;
     if (focusTarget && typeof focusTarget.focus === 'function') {
       setTimeout(function () { focusTarget.focus(); }, 0);
+    }
+  }
+
+  var FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  // aria-modal="true" 的兑现：Tab/Shift+Tab 在浮层内循环，焦点不得走到背后 Home
+  function trapTabFocus(event) {
+    var mask = document.getElementById('home-video-collections-mask');
+    if (!mask) return;
+    var els = [].slice.call(mask.querySelectorAll(FOCUSABLE_SELECTOR)).filter(function (el) {
+      if (el.disabled) return false;
+      // 二级页在场时 tab 条被 CSS 隐藏，浏览器原生 Tab 会跳过，陷阱同样排除
+      if (state.collection && el.closest('.home-video-collections-tabs')) return false;
+      return true;
+    });
+    if (!els.length) return;
+    var first = els[0];
+    var last = els[els.length - 1];
+    var active = document.activeElement;
+    if (event.shiftKey && (active === first || !mask.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || !mask.contains(active))) {
+      event.preventDefault();
+      first.focus();
     }
   }
 
@@ -320,7 +355,9 @@
       if (event.target === mask) closeHomeVideoCollectionsOverlay();
     });
     document.addEventListener('keydown', function (event) {
-      if (event.key !== 'Escape' || !state.open) return;
+      if (!state.open) return;
+      if (event.key === 'Tab') { trapTabFocus(event); return; }
+      if (event.key !== 'Escape') return;
       // 二级页在场时 Esc 先回一级，再按一次才关整个弹窗
       if (state.collection) closeCollectionDetail();
       else closeHomeVideoCollectionsOverlay();

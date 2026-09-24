@@ -106,26 +106,45 @@ test('浮层为片单中心：5 tab（推荐/主题/经典/高分/获奖），�
   assert.match(overlayScript, /collections\.getByTab\s*\(/);
 });
 
-test('参照式封面卡：两列网格 + 模糊海报底 + 叠卡 + 「共N部」计数', () => {
-  // 网格容器与卡结构类名
+test('封面卡 v3：纯色 warm 场域 + 左置扇形叠卡 + 独立文案区（2026-09-25 参照截图，去海报模糊底）', () => {
+  // JS 结构：cover 场域包住 stack，文案区在 cover 之外；模糊海报底层整体移除
   assert.match(overlayScript, /home-video-collections-grid/);
-  assert.match(overlayScript, /home-video-collections-card-bg/);
+  assert.match(overlayScript, /home-video-collections-cover/);
+  assert.equal(overlayScript.includes('home-video-collections-card-bg'), false, '海报模糊底层须移除');
   assert.match(overlayScript, /home-video-collections-stack/);
-  assert.match(overlayScript, /共.{0,3}部/); // 「共N部」
-  // CSS：两列网格 + blur 背景（CSS filter，不用 canvas —— 7c84045 跨源污染事故）
+  assert.match(overlayScript, /共.{0,3}部/); // 「共N部/精选N部」
   const css = indexCss;
-  assert.ok(/grid-template-columns:\s*repeat\(\s*2[^}]+\}/s.test(css), '须有 .home-video-collections 两列网格');
-  const bgRule = /home-video-collections-card-bg\s*\{[^}]*\}/s.exec(css);
-  assert.ok(bgRule, '缺少 .home-video-collections-card-bg 规则');
-  assert.match(bgRule[0], /filter:\s*blur\(/);
-  // 外圈不发光：卡描边透明 + ::after 边缘渐晕压暗四周（用户 2026-09-19 要求删除外圈亮光）
+  assert.ok(/grid-template-columns:\s*repeat\(\s*2[^}]+\}/s.test(css), '两列网格保持');
+  // 封面区 = warm 纯色场域（同色系 linear-gradient），禁 blur 海报底（canvas 红线不变）
+  const coverRule = /\.home-video-collections-cover\s*\{[^}]*\}/s.exec(css);
+  assert.ok(coverRule, '缺少 .home-video-collections-cover 规则');
+  assert.match(coverRule[0], /linear-gradient\(/);
+  assert.match(coverRule[0], /--wc-warm/);
+  assert.equal(/filter:\s*blur/.test(coverRule[0]), false, '封面区不得再用模糊海报底');
+  // 边缘渐晕层随模糊底一并移除（纯色场域无「外圈亮光」问题）
+  const afterRule = /\.home-video-collections-card::after\s*\{[^}]*\}/s.exec(css);
+  assert.ok(!afterRule || !/radial-gradient\(/.test(afterRule[0]), '边缘渐晕层须移除');
+  // 卡面保持无外发光描边（用户 2026-09-19 裁定继续有效）
   const cardRule = /\.home-video-collections-card\s*\{[^}]*\}/s.exec(css);
   assert.ok(cardRule, '缺少 .home-video-collections-card 规则');
   assert.match(cardRule[0], /border:\s*1px solid transparent/);
-  const afterRule = /\.home-video-collections-card::after\s*\{[^}]*\}/s.exec(css);
-  assert.ok(afterRule, '缺少 .home-video-collections-card::after 规则');
-  assert.match(afterRule[0], /radial-gradient\(/);
-  assert.match(overlayScript, /<img|background-image/);
+  // 扇形叠卡：首卡最高在前，后卡阶梯下降露右缘（z-index 递减）
+  const stack1 = /\.home-video-collections-stack img:nth-child\(1\)\s*\{[^}]*\}/s.exec(css);
+  const stack2 = /\.home-video-collections-stack img:nth-child\(2\)\s*\{[^}]*\}/s.exec(css);
+  assert.ok(stack1 && stack2, '缺少扇形叠卡 nth-child 规则');
+  assert.match(stack1[0], /z-index:\s*3/);
+  assert.match(stack2[0], /z-index:\s*2/);
+  const h1 = /height:\s*(\d+)px/.exec(stack1[0]);
+  const h2 = /height:\s*(\d+)px/.exec(stack2[0]);
+  assert.ok(h1 && h2 && Number(h1[1]) > Number(h2[1]), '首卡须高于第二卡（阶梯下降）');
+  // 文案区物理分离：封面下方独立区，不压图 → 标题不再需要 text-shadow
+  const copyRule = /\.home-video-collections-copy\s*\{[^}]*\}/s.exec(css);
+  assert.ok(copyRule, '缺少 .home-video-collections-copy 规则');
+  assert.match(copyRule[0], /padding/);
+  const strongRule = /\.home-video-collections-copy strong\s*\{[^}]*\}/s.exec(css);
+  assert.ok(strongRule, '缺少标题规则');
+  assert.equal(/text-shadow/.test(strongRule[0]), false, '文案不压图，标题不需要 text-shadow');
+  assert.match(overlayScript, /<img/);
   assert.equal(/getContext|drawImage|createElement\(\s*['"]canvas/i.test(overlayScript), false, '封面底不得走 canvas 方案');
 });
 
