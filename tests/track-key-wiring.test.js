@@ -54,3 +54,23 @@ test('play-orchestrator.js：setMeta 透传 tmdbKey + seriesTitle 供 heart-btn 
   assert.match(call[0], /tmdbKey:\s*view\.tmdbKey\s*\|\|/);
   assert.match(call[0], /seriesTitle:\s*view\.title/);
 });
+
+const playerCtrlSrc = read('public/video/player-controller.js');
+
+test('player-controller：候选键组装 tmdbKey 优先、seriesKey 兜底', () => {
+  const fn = /function\s+getHeartTrackKeys\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(fn, 'expected getHeartTrackKeys()');
+  assert.match(fn[0], /meta\.tmdbKey/);
+  assert.match(fn[0], /meta\.seriesKey/);
+});
+
+test('player-controller：onHeartClick/refreshHeartBtn 走 ForKeys 原语，不再裸用 seriesKey 写读', () => {
+  const click = /function\s+onHeartClick\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(click, 'expected onHeartClick()');
+  assert.match(click[0], /getTrackStatusForKeys\s*\(/);
+  assert.match(click[0], /setTrackStatusForKeys\s*\(/);
+  assert.match(click[0], /getHeartTrackKeys\s*\(/);
+  const refresh = /function\s+refreshHeartBtn\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(refresh, 'expected refreshHeartBtn()');
+  assert.match(refresh[0], /getTrackStatusForKeys\s*\(/);
+});

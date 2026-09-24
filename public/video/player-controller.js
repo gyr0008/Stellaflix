@@ -256,9 +256,18 @@
   }
 
   // ---------- 追片状态按钮（影视态下心形按钮改为6态图标，无文字） ----------
-  function getSeriesKey() {
+  // 候选键：主=TMDB canonical（起播链路透传 meta.tmdbKey），别名=源键 seriesKey（存量兼容）。
+  // 与详情页 cycleTrackStatus 经 model.setTrackStatusForKeys 落同一主键，双键状态互通。
+  function getHeartTrackKeys() {
     var meta = (SFV.player && SFV.player.getMeta) ? SFV.player.getMeta() : null;
-    return (meta && meta.seriesKey) ? meta.seriesKey : null;
+    var keys = [];
+    if (meta && meta.tmdbKey) keys.push(meta.tmdbKey);
+    if (meta && meta.seriesKey && keys.indexOf(meta.seriesKey) < 0) keys.push(meta.seriesKey);
+    return keys;
+  }
+  function getSeriesKey() {
+    var keys = getHeartTrackKeys();
+    return keys[0] || null;
   }
   function getTrackIconHtml(status) {
     var map = (SFV.model && SFV.model.STATE_ICONS) || {};
@@ -268,9 +277,10 @@
   function refreshHeartBtn() {
     var btn = $('heart-btn');
     if (!btn) return;
-    var key = getSeriesKey();
-    currentSeriesKey = key;
-    var status = (key && SFV.model && typeof SFV.model.getTrackStatus === 'function') ? SFV.model.getTrackStatus(key) : null;
+    var keys = getHeartTrackKeys();
+    currentSeriesKey = keys[0] || null;
+    var status = (keys.length && SFV.model && typeof SFV.model.getTrackStatusForKeys === 'function')
+      ? SFV.model.getTrackStatusForKeys(keys) : null;
     var label = (status && SFV.model && SFV.model.TRACK_LABELS) ? SFV.model.TRACK_LABELS[status] : '未追';
     btn.innerHTML = getTrackIconHtml(status);
     btn.title = '追片：' + label;
@@ -278,12 +288,19 @@
   }
   function onHeartClick(e) {
     e && e.preventDefault();
-    var key = currentSeriesKey || getSeriesKey();
-    if (!key || !SFV.model || typeof SFV.model.getTrackStatus !== 'function' || typeof SFV.model.setTrackStatus !== 'function') return;
-    var status = SFV.model.getTrackStatus(key);
+    var keys = getHeartTrackKeys();
+    if (!keys.length) {
+      var legacy = currentSeriesKey;
+      if (legacy) keys = [legacy];
+    }
+    if (!keys.length || !SFV.model ||
+        typeof SFV.model.getTrackStatusForKeys !== 'function' ||
+        typeof SFV.model.setTrackStatusForKeys !== 'function') return;
+    var status = SFV.model.getTrackStatusForKeys(keys);
     var idx = heartBtnStates.indexOf(status);
     var next = heartBtnStates[(idx + 1) % heartBtnStates.length];
-    SFV.model.setTrackStatus(key, next);
+    var meta = (SFV.player && SFV.player.getMeta) ? SFV.player.getMeta() : null;
+    SFV.model.setTrackStatusForKeys(keys, next, { title: (meta && meta.seriesTitle) || '', pic: (meta && meta.cover) || '', year: '' });
     refreshHeartBtn();
     var label = (next && SFV.model.TRACK_LABELS) ? SFV.model.TRACK_LABELS[next] : '未追';
     toast('已设为：' + label);
