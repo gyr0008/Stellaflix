@@ -581,6 +581,9 @@
     function destroy() {
       doc.body.classList.remove('sfv-plex-immersive');
       doc.removeEventListener('keydown', escHandler);
+      // 追片按钮引用随页面销毁释放：_trackTriggerBtn 是模块级变量，
+      // 留着会让下一次 cycleTrackStatus 改写已卸载页面的陈旧节点（跨实例串扰）
+      _trackTriggerBtn = null;
       // 清理轮播 resize 监听，避免详情页反复打开导致全局监听器堆积
       for (var i = 0; i < __railResizeHandlers.length; i++) {
         global.removeEventListener('resize', __railResizeHandlers[i]);

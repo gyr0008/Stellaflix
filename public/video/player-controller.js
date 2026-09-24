@@ -34,6 +34,11 @@
   var origHeart = null;     // 影视态激活时替换 #heart-btn 为追片状态按钮（退出时还原）
   var origControlTrack = null; // 影视态激活时替换 #control-cover/#control-title/#control-artist 点击为视频详情（退出时还原）
   var currentSeriesKey = null;
+  // tmdbKey 记忆：player.js 每次 open() 都整体重建 currentMeta（player.js:698，继承字段里
+  // 只有 seriesKey/cover/pic/subtitle），起播后的窗口期内 meta.tmdbKey 会丢失
+  // → 候选键退化为 [源键]，与详情页主键分裂。故在 heart-btn 刷新时记住最近一次
+  // 同时拿到 (seriesKey, tmdbKey) 的映射，缺 tmdbKey 时按 seriesKey 认领记忆值。
+  var lastHeartTmdb = { seriesKey: null, tmdbKey: null };
   var heartBtnStates = [null, 'watching', 'planToWatch', 'onHold', 'watched', 'abandoned'];
   var epPanel = null;          // 「选集」弹层 DOM
   var epAnchorEl = null;       // 「选集」按钮（用于捕获阶段排除，避免点击瞬间被空白判定提前关闭）
@@ -262,6 +267,11 @@
     var meta = (SFV.player && SFV.player.getMeta) ? SFV.player.getMeta() : null;
     var keys = [];
     if (meta && meta.tmdbKey) keys.push(meta.tmdbKey);
+    else if (meta && meta.seriesKey && lastHeartTmdb.tmdbKey &&
+             meta.seriesKey === lastHeartTmdb.seriesKey) {
+      // open() 重建 meta 后 tmdbKey 暂时丢失：用记忆的 canonical 主键顶上，顺序锁不变（tmdb 先于 seriesKey）
+      keys.push(lastHeartTmdb.tmdbKey);
+    }
     if (meta && meta.seriesKey && keys.indexOf(meta.seriesKey) < 0) keys.push(meta.seriesKey);
     return keys;
   }
@@ -275,6 +285,12 @@
     return '<span class="sfv-track-icon">' + icon + '</span>';
   }
   function refreshHeartBtn() {
+    // 记忆 tmdbKey：必须在按钮守卫之前记录（open() 重建 meta 的窗口期里也要留下映射）
+    var memMeta = (SFV.player && SFV.player.getMeta) ? SFV.player.getMeta() : null;
+    if (memMeta && memMeta.tmdbKey && memMeta.seriesKey) {
+      lastHeartTmdb.seriesKey = memMeta.seriesKey;
+      lastHeartTmdb.tmdbKey = memMeta.tmdbKey;
+    }
     var btn = $('heart-btn');
     if (!btn) return;
     var keys = getHeartTrackKeys();

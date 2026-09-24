@@ -111,3 +111,43 @@ test('player-controller：onHeartClick 写入载荷锁（keys+next+meta 播种�
   assert.ok(refresh, 'expected refreshHeartBtn()');
   assert.equal(refresh[0].includes('currentSeriesKey = keys[0] || null'), true, 'refreshHeartBtn 须把主键回填 currentSeriesKey，供无 meta 时点击兜底');
 });
+
+// ===== 终审加固（I4）：detail 侧候选键顺序锁 —— 与 player 侧同款 indexOf 位置比较 =====
+
+test('detail.js：trackKeysForView 候选顺序锁 —— canonical 主键必须先于 view.key 别名键 push', () => {
+  const fn = /function\s+trackKeysForView\s*\([\s\S]*?\n  \}/.exec(detailSrc);
+  assert.ok(fn, 'expected trackKeysForView()');
+  const body = fn[0];
+  const canonicalIdx = body.indexOf('keys.push(c)');
+  const viewKeyIdx = body.indexOf('keys.push(view.key)');
+  assert.notStrictEqual(canonicalIdx, -1, 'expected keys.push(c)（canonical 主键入队）');
+  assert.notStrictEqual(viewKeyIdx, -1, 'expected keys.push(view.key)（源键别名入队）');
+  assert.equal(canonicalIdx < viewKeyIdx, true,
+    'canonical 必须排在 view.key 之前（主键=TMDB 键；顺序颠倒会把状态写进源键并清掉主键）');
+  assert.match(body, /keys\.indexOf\(\s*view\.key\s*\)/, 'view.key 入队前必须去重，避免同键重复 push');
+  // 与 player 侧同款约束：候选键组装函数不得使用单键原语（单键读写会绕过惰性合并）
+  assert.equal(body.includes('SFV.model.getTrackStatus('), false, 'trackKeysForView 不得调用单键 getTrackStatus');
+  assert.equal(body.includes('SFV.model.setTrackStatus('), false, 'trackKeysForView 不得调用单键 setTrackStatus');
+});
+
+// ===== 终审缓解项：player 侧 tmdbKey 记忆（setCurrentMeta 窗口期兜底）接线锁 =====
+
+test('player-controller：lastHeartTmdb 记忆 —— refreshHeartBtn 记录、getHeartTrackKeys 消费', () => {
+  assert.match(playerCtrlSrc, /var\s+lastHeartTmdb\s*=\s*\{[^}]*seriesKey[^}]*tmdbKey[^}]*\};/,
+    '须有模块级记忆变量 var lastHeartTmdb = { seriesKey: ..., tmdbKey: ... };');
+  const refresh = /function\s+refreshHeartBtn\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(refresh, 'expected refreshHeartBtn()');
+  assert.match(refresh[0], /lastHeartTmdb\.seriesKey\s*=/, 'refreshHeartBtn 须记录 seriesKey（认领凭据）');
+  assert.match(refresh[0], /lastHeartTmdb\.tmdbKey\s*=/, 'refreshHeartBtn 须记录 tmdbKey');
+  assert.match(refresh[0], /memMeta\.tmdbKey\s*&&\s*memMeta\.seriesKey/, '仅当两者同在才记录，避免脏映射');
+  const keys = /function\s+getHeartTrackKeys\s*\([\s\S]*?\n  \}/.exec(playerCtrlSrc);
+  assert.ok(keys, 'expected getHeartTrackKeys()');
+  assert.match(keys[0], /lastHeartTmdb\.tmdbKey/, 'getHeartTrackKeys 须消费记忆的 tmdbKey');
+  assert.match(keys[0], /meta\.seriesKey\s*===\s*lastHeartTmdb\.seriesKey/, '须按 seriesKey 相等认领，防跨片串键');
+  // 顺序锁对兜底分支同样成立：记忆主键也必须排在别名键之前
+  const memoryPush = keys[0].indexOf('keys.push(lastHeartTmdb.tmdbKey)');
+  const seriesPush = keys[0].indexOf('keys.push(meta.seriesKey)');
+  assert.notStrictEqual(memoryPush, -1, 'expected keys.push(lastHeartTmdb.tmdbKey) 兜底分支');
+  assert.notStrictEqual(seriesPush, -1, 'expected keys.push(meta.seriesKey)');
+  assert.equal(memoryPush < seriesPush, true, '记忆主键须排在 seriesKey 别名键之前');
+});

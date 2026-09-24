@@ -317,7 +317,8 @@
 
   // ---- 追片 canonical 键（方案 A，2026-09-25）----
   // canonical 键 = 'tmdb:<movie|tv>:<id>'，一部片全局唯一，不随片源漂移。
-  // 推导优先级：view._tmdb → view.key 已是 tmdb: 前缀 → view.id+view.mediaType（TMDB 墙/片单形态）。
+  // 推导优先级：view._tmdb → view.tmdbKey（播放器再入形态）→ view.key 已是 tmdb: 前缀
+  //           → view.id+view.mediaType（TMDB 墙/片单形态）。
   // 取不到返回 null，调用方回退源键（view.key / seriesKey）。
   function canonicalTrackKey(view) {
     if (!view) return null;
@@ -325,8 +326,14 @@
     if (t && t.id != null) {
       return 'tmdb:' + (t.mediaType === 'tv' ? 'tv' : 'movie') + ':' + t.id;
     }
+    // 播放器退出 → 详情页再入的 view（online-detail.openDetailFromMeta 展开 detail-source v2）
+    // 只带 key + tmdbKey，无 id/_tmdb/mediaType。不认 tmdbKey 则候选键退化成 [源键]，
+    // 详情页与播放器又回到双键分裂。仅接受严格 canonical 形态（tmdb:anime / 非数字 id / 非串一律不认）。
+    if (typeof view.tmdbKey === 'string' && /^tmdb:(movie|tv):\d+$/.test(view.tmdbKey)) return view.tmdbKey;
     if (typeof view.key === 'string' && view.key.indexOf('tmdb:') === 0) return view.key;
-    if (view.id != null && (view.mediaType === 'movie' || view.mediaType === 'tv')) {
+    // id 必须是纯数字：防上游脏数据（含 ':' '/' 等）拼进存储键
+    if (view.id != null && (view.mediaType === 'movie' || view.mediaType === 'tv') &&
+        /^\d+$/.test(String(view.id))) {
       return 'tmdb:' + view.mediaType + ':' + view.id;
     }
     return null;
@@ -342,14 +349,27 @@
     return null;
   }
 
+  // 只删「追片条目」，不动该键的 meta / 海报缓存 —— 供别名键清除使用：
+  // 源键同时是 KEY_FLAG（心动）的命名空间与首页封面池的主键，
+  // 走完整 setTrackStatus(key, null) teardown 会连带删掉 meta + 海报，误伤追片之外的面。
+  // 不导出：真·取消追片（主键清除）必须继续用 setTrackStatus 的完整 teardown。
+  function deleteTrackEntryOnly(key) {
+    if (!key) return;
+    var all = readJSON(KEY_TRACK, {});
+    if (!all[key]) return;
+    delete all[key]; writeJSON(KEY_TRACK, all);
+  }
+
   // 多候选键写入：落主键、清其余别名键（惰性迁移）；
   // 主键为 tmdb: 且尚无 meta 时用 meta 信息播种，保证追片页可渲染标题/封面。
   // 语义约束（2026-09-25 审查修复）：
   //   1) 清除（status 空 / 'none'）恒返 null，绝不回吐别名键的旧状态；
   //   2) 无效非空状态 = 无操作 —— 主键与别名键（含其 meta）一律不触碰，
   //      与 setTrackStatus「无效状态忽略、保留原状态」的防御保持一致；
-  //   3) 清别名键会连带删掉该键的 meta + 海报缓存，故清除前先暂存首个带标题的别名 meta；
-  //      主键最终仍无 meta 时用入参 meta（优先）或暂存 meta 播种，避免合并后显示「未命名」。
+  //   3) 别名键只删 track 条目（deleteTrackEntryOnly），保留其 meta / 海报缓存，
+  //      因为源键还是 FLAG（心动）与首页封面池的主键；合并前仍暂存首个带标题的别名 meta，
+  //      主键最终无 meta 时按「入参 meta 优先、逐字段回退别名 meta」播种（含 sourceId/vodId/year，
+  //      online-track 重开源依赖 sourceId/vodId），避免合并后「未命名」或无法重开。
   function setTrackStatusForKeys(keys, status, meta) {
     var list = [];
     (keys || []).forEach(function (k) {
@@ -368,12 +388,22 @@
       }
     }
     var result = setTrackStatus(primary, status);
-    for (var i = 1; i < list.length; i++) setTrackStatus(list[i], null);
+    for (var i = 1; i < list.length; i++) deleteTrackEntryOnly(list[i]);
     if (!status || status === 'none') return null; // 清除：两键全清后恒返 null
     if (result && primary.indexOf('tmdb:') === 0 && !getMeta(primary)) {
-      var seed = (meta && meta.title) ? meta : carry;
-      if (seed && seed.title) {
-        setMeta({ key: primary, title: seed.title, pic: seed.pic || '', year: seed.year || '' });
+      var fromIn = (meta && meta.title) ? meta : null;
+      var seedTitle = (fromIn && fromIn.title) || (carry && carry.title) || '';
+      if (seedTitle) {
+        // 字段级取值：入参该字段为空时回退别名 meta，绝不用空串覆盖已有值
+        var pick = function (f) { return (fromIn && fromIn[f]) || (carry && carry[f]) || ''; };
+        setMeta({
+          key: primary,
+          title: seedTitle,
+          pic: pick('pic'),
+          year: pick('year'),
+          sourceId: pick('sourceId'),
+          vodId: pick('vodId')
+        });
       }
     }
     return result;
