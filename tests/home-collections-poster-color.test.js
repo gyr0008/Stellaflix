@@ -9,6 +9,8 @@
  *   ② overlay：快照带 color → cardHtml 即时回填；新鲜无 color → 只补色不重拉 getItems；
  *      过期 → getItems 后补色并写回快照
  *   ③ color 必须是 #hex 才生效（快照被篡改也不注入样式）
+ *   ④ V1（09-25 参照图裁定）：二级页 modal/hero 的 --wc-warm 与封面卡同色源——
+ *      快照 color 优先，无色时按首条目海报异步补色并写回快照，失败静默回落 CATALOG warm
  * 运行：node --test tests/home-collections-poster-color.test.js
  */
 
@@ -161,4 +163,65 @@ test('快照 color 被篡改为非 #hex：不得注入卡样式（XSS 防线）'
   const style = warmOf('trending-week');
   assert.equal(style.includes('red;background'), false, '非法 color 不得进 style');
   assert.match(style, /--wc-warm:\s*#e74c3c/, '回落后须用 CATALOG warm');
+});
+
+// ==================================================== 二级页色源（V1，用户 09-25 裁定）
+
+test('V1 二级页：快照带 color 时 modal 与 hero 的 --wc-warm 用海报取色而非 CATALOG，且零取色请求', async () => {
+  const { SFV, color, list, click, settle, win } = buildEnv();
+  win.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
+    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), color: '#123456' },
+  }));
+  SFV.homeCollectionsOverlay.open();
+  await settle();
+  click(list.querySelector('[data-wc-id="trending-week"]'));
+  await settle();
+  const modal = win.document.querySelector('.home-video-collections-modal');
+  assert.match(modal.getAttribute('style') || '', /--wc-warm:\s*#123456/, 'modal 环境色须用快照海报色');
+  const hero = list.querySelector('.home-video-collections-hero');
+  assert.ok(hero, '二级页 hero 应渲染');
+  assert.match(hero.getAttribute('style') || '', /--wc-warm:\s*#123456/);
+  assert.equal(color.calls.includes('https://img.example/T1.jpg'), false, '已有 color 不得重复取色');
+});
+
+test('V1 二级页：快照无 color 时按首条目海报异步补色 modal/hero 并写回快照', async () => {
+  const { SFV, color, list, click, settle, win, snapshots } = buildEnv();
+  color.impl = () => Promise.reject(new Error('COLOR_OFFLINE')); // 列表阶段取色失败 → 快照无 color
+  SFV.homeCollectionsOverlay.open();
+  await settle();
+  assert.equal(snapshots()['trending-week'].color, undefined, '前置：快照应无 color');
+  color.impl = () => Promise.resolve('#2468ac'); // 网络恢复
+  click(list.querySelector('[data-wc-id="trending-week"]'));
+  await settle();
+  const modal = win.document.querySelector('.home-video-collections-modal');
+  assert.match(modal.getAttribute('style') || '', /--wc-warm:\s*#2468ac/, '二级页须异步补色 modal');
+  assert.equal(snapshots()['trending-week'].color, '#2468ac', '补色须写回快照');
+});
+
+test('V1 二级页：取色失败保持 CATALOG warm 兜底（静默）', async () => {
+  const { SFV, color, list, click, settle, win } = buildEnv();
+  color.impl = () => Promise.reject(new Error('COLOR_OFFLINE'));
+  SFV.homeCollectionsOverlay.open();
+  await settle();
+  click(list.querySelector('[data-wc-id="trending-week"]'));
+  await settle();
+  const modal = win.document.querySelector('.home-video-collections-modal');
+  assert.match(modal.getAttribute('style') || '', /--wc-warm:\s*#e74c3c/);
+});
+
+test('V1 二级页：快照 color 被篡改非 #hex 不得进 modal/hero 样式（XSS 防线）', async () => {
+  const { SFV, color, list, click, settle, win } = buildEnv();
+  color.impl = () => Promise.reject(new Error('COLOR_OFFLINE'));
+  win.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
+    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), color: 'red;background:url(x)' },
+  }));
+  SFV.homeCollectionsOverlay.open();
+  await settle();
+  click(list.querySelector('[data-wc-id="trending-week"]'));
+  await settle();
+  const modal = win.document.querySelector('.home-video-collections-modal');
+  const hero = list.querySelector('.home-video-collections-hero');
+  assert.equal((modal.getAttribute('style') || '').includes('red;background'), false);
+  assert.equal((hero.getAttribute('style') || '').includes('red;background'), false);
+  assert.match(modal.getAttribute('style') || '', /--wc-warm:\s*#e74c3c/);
 });

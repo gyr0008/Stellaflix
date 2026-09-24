@@ -225,6 +225,26 @@
       '</button>';
   }
 
+  // V1：二级页快照无 color 时按首条目海报异步补色（modal+hero），并写回快照
+  function fillDetailColor(def, items, heroPoster) {
+    var collections = SFV.collections;
+    if (!collections || typeof collections.getPosterColor !== 'function') return;
+    collections.getPosterColor(heroPoster).then(function (color) {
+      if (!isHexColor(color)) return;
+      if (!state.collection || state.collection.def !== def) return; // 已返回/已切片单
+      var modal = document.querySelector('.home-video-collections-modal');
+      if (modal) modal.style.setProperty('--wc-warm', color);
+      var hero = document.querySelector('.home-video-collections-hero');
+      if (hero) hero.style.setProperty('--wc-warm', color);
+      var posters = [];
+      for (var i = 0; i < items.length && posters.length < 3; i++) {
+        var img = items[i] && (items[i].poster || items[i].pic);
+        if (img) posters.push(img);
+      }
+      writeSnapshot(def.id, posters, items.length, color);
+    }).catch(function () { /* 取色失败：保持 CATALOG warm 兜底 */ });
+  }
+
   function renderItemsPage() {
     var list = document.getElementById('home-video-collections-list');
     var modal = document.querySelector('.home-video-collections-modal');
@@ -233,13 +253,21 @@
     var col = state.collection;
     if (!col) return;
     var def = col.def;
-    if (modal) modal.style.setProperty('--wc-warm', def.warm || '#534AB7'); // D2：面板环境色取片单主色
+    // V1 二级页色源与封面卡一致：快照海报取色 > CATALOG warm > 兜底紫
+    var snaps = readSnapshots();
+    var snap = def && snaps[def.id];
+    var posterColor = snap && isHexColor(snap.color) ? snap.color : '';
+    var warm = posterColor || def.warm || '#534AB7';
+    if (modal) modal.style.setProperty('--wc-warm', warm); // D2：面板环境色取片单主色
     var items = col.items || [];
     var heroPoster = items[0] && items[0].poster;
+    if (!posterColor && heroPoster && !col.error && !col.placeholder) {
+      fillDetailColor(def, items, heroPoster);
+    }
     var countText = col.error ? '加载失败'
       : col.placeholder ? '即将上线'
       : (items.length ? countLabel(def, items.length) : '加载中…');
-    var html = '<div class="home-video-collections-hero" style="--wc-warm:' + esc(def.warm || '#534AB7') + '">' +
+    var html = '<div class="home-video-collections-hero" style="--wc-warm:' + esc(warm) + '">' +
       '<span class="home-video-collections-hero-bg" aria-hidden="true"' +
       (heroPoster ? ' style="background-image:url(' + esc(safeUrl(heroPoster)) + ')"' : '') + '></span>' +
       '<button class="home-video-collections-back" type="button" data-wc-back aria-label="返回片单列表">←</button>' +

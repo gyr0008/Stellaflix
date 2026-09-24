@@ -166,7 +166,7 @@ test('D2 环境色：renderItemsPage 把 --wc-warm 挂到 modal、closeCollectio
   assert.match(close[0], /modal\.style\.removeProperty\(\s*['"]--wc-warm['"]/);
 });
 
-test('D2 环境色：--detail 弹窗底用 color-mix(warm 淡色) 且有纯色回退行', () => {
+test('D2/V3 环境色：--detail 弹窗底用 color-mix(warm 18~30%) 且有纯色回退行', () => {
   const rule = /\.home-video-collections-modal\.home-video-collections--detail\s*\{([^}]*)\}/s.exec(indexCss);
   assert.ok(rule, '缺少 .home-video-collections-modal.home-video-collections--detail 规则');
   const body = rule[1];
@@ -174,8 +174,35 @@ test('D2 环境色：--detail 弹窗底用 color-mix(warm 淡色) 且有纯色�
   const bgLines = body.split(';').map((s) => s.trim()).filter((s) => /^background(-color)?:/.test(s));
   assert.ok(bgLines.length >= 2, '须有纯色回退 + color-mix 两条 background');
   assert.match(body, /color-mix\(in srgb,\s*var\(--wc-warm/);
-  // 淡色：warm 占比应低（≤12%），只做氛围不做装饰
+  // V3 提浓（09-25 参照图裁定）：环境色须主导页面观感，warm 占比窗口 18%~30%；
+  // 明度由基色 #0c0e13 压住，保白字可读。上限防高饱和海报把整页带脏。
   const pct = /color-mix\(in srgb,\s*var\(--wc-warm[^)]*?\)\s*(\d+(?:\.\d+)?)%/.exec(body);
   assert.ok(pct, 'color-mix 须显式 warm 百分比');
-  assert.ok(Number(pct[1]) <= 12, 'warm 占比须 ≤12%（极淡偏色）');
+  assert.ok(Number(pct[1]) >= 18, 'V3：warm 占比须 ≥18%（环境色主导而非点缀）');
+  assert.ok(Number(pct[1]) <= 30, 'V3：warm 占比须 ≤30%（防高饱和海报发脏）');
+});
+
+// ---------------------------------------------------------------- V2：hero 渐变溶色（09-25 参照图「无接缝」裁定）
+
+test('V2 溶色：--detail 规则把环境色定义为共享变量 --wc-ambient（含纯色回退），background 取 var(--wc-ambient)', () => {
+  const rule = /\.home-video-collections-modal\.home-video-collections--detail\s*\{([^}]*)\}/s.exec(indexCss);
+  assert.ok(rule, '缺少 .home-video-collections-modal.home-video-collections--detail 规则');
+  const body = rule[1];
+  // --wc-ambient 须有纯色回退行 + color-mix 覆盖行（与 background 同款双行防御）
+  const ambientLines = body.split(';').map((s) => s.trim()).filter((s) => /^--wc-ambient:/.test(s));
+  assert.ok(ambientLines.length >= 2, '--wc-ambient 须有纯色回退 + color-mix 两条定义');
+  assert.match(ambientLines[ambientLines.length - 1], /color-mix\(in srgb,\s*var\(--wc-warm/);
+  assert.match(body, /background:\s*var\(--wc-ambient/);
+});
+
+test('V2 溶色：hero ::after 最后一条 background 渐变末影(100%)用 var(--wc-ambient)，与页面底同源消接缝', () => {
+  const scrim = /\.home-video-collections-hero::after\s*\{([^}]*)\}/s.exec(indexCss);
+  assert.ok(scrim, '缺少 .home-video-collections-hero::after 规则');
+  const body = scrim[1].replace(/\/\*[\s\S]*?\*\//g, ''); // 规则内注释不参与 split
+  const bgLines = body.split(';').map((s) => s.trim()).filter((s) => /^background:/.test(s));
+  assert.ok(bgLines.length >= 2, '须保留 rgba 回退渐变 + color-mix 溶色渐变两条 background');
+  const last = bgLines[bgLines.length - 1];
+  assert.match(last, /linear-gradient\(/);
+  assert.match(last, /var\(--wc-ambient/, '渐变须引用共享环境色');
+  assert.match(last, /var\(--wc-ambient[^;]*\)\s*100%/, '100% 末影须落在环境色上（与 --detail 底色同值）');
 });

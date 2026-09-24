@@ -18610,10 +18610,14 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
   display: none
 }
 
-/* D2 环境色页面底：二级页弹窗面板被片单主色极淡染色（首行纯色回退，老浏览器忽略 color-mix） */
+/* D2 环境色页面底：二级页弹窗面板被片单主色染色（首行纯色回退，老浏览器忽略 color-mix）
+   V2：环境色提为共享变量 --wc-ambient，hero 渐变末影与页面底取同一值消除接缝
+   V3：warm 占比 7%→24% 提浓（参照图环境色主导观感），基色 #0c0e13 压明度保白字可读 */
 .home-video-collections-modal.home-video-collections--detail {
+  --wc-ambient: #0c0e13;
+  --wc-ambient: color-mix(in srgb, var(--wc-warm, #534AB7) 24%, #0c0e13);
   background: #0c0e13;
-  background: color-mix(in srgb, var(--wc-warm, #534AB7) 7%, #0c0e13)
+  background: var(--wc-ambient)
 }
 
 .home-video-collections-hero {
@@ -18645,7 +18649,9 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
   inset: 0;
   z-index: -1;
   /* D1：清晰海报只保留单层底部向上 scrim 保标题可读，删除 radial 边缘渐晕 */
-  background: linear-gradient(180deg, rgba(8, 10, 14, 0) 42%, rgba(8, 10, 14, .55) 74%, rgba(8, 10, 14, .88) 100%)
+  background: linear-gradient(180deg, rgba(8, 10, 14, 0) 42%, rgba(8, 10, 14, .55) 74%, rgba(8, 10, 14, .88) 100%);
+  /* V2 溶色：三段全部落在环境色上（transparent→62%→100%），末影与 --detail 页面底同值消除接缝 */
+  background: linear-gradient(180deg, transparent 42%, color-mix(in srgb, var(--wc-ambient, #0c0e13) 62%, transparent) 74%, var(--wc-ambient, #0c0e13) 100%)
 }
 
 .home-video-collections-back {
