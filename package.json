@@ -34,6 +34,7 @@
       "*-api.js",
       "qishui-auth-v6.js",
       "qishui-qr-login.js",
+      "platform-playlist-import.js",
       "qishui-auth-v6/**/*",
       "qishui-audio-decryptor/**/*",
       "dj-analyzer.js",
