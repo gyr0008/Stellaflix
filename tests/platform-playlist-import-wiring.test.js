@@ -187,3 +187,59 @@ test('本地入口委托：openLocalFolderImport → openHomeLocalImport', () =>
   assert.strictEqual(result.ok, true);
   assert.strictEqual(delegated, true);
 });
+
+test('LxDatas 直读：GET /api/lx/playlists → 逐歌单 upsert 落库', async () => {
+  const sandbox = makeSandbox();
+  loadModules(sandbox);
+  sandbox.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({
+      ok: true,
+      playlists: [
+        { id: 'list_01', name: '我的华语最爱', source: 'wy', songs: [
+          { id: 's1', name: '晴天', singer: '周杰伦', source: 'wy', interval: '4:29', songmid: '186016', albumName: '叶惠美', picUrl: 'http://p1/q.jpg' },
+          { id: 's2', name: '七里香', singer: '周杰伦', source: 'wy', songmid: '186035' },
+        ] },
+        { id: 'list_02', name: '空歌单', source: 'tx', songs: [] },
+      ],
+    }),
+  });
+  const result = await sandbox.window.importLxDatabases();
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.imported, 1, '空歌单应跳过');
+  assert.strictEqual(result.songCount, 2);
+  const lists = sandbox.window.localPlaylistStore.list();
+  const stored = lists.find(pl => pl.platformImportKey === 'lx_db_list_01');
+  assert.ok(stored, 'lx_db 歌单应落库');
+  assert.strictEqual(stored.songs[0].songmid, '186016');
+  assert.strictEqual(stored.songs[0].type, 'lx-online');
+  assert.ok(sandbox.calls.toasts.some(t => t.includes('我的华语最爱') || t.includes('落雪桌面版')), '应有汇总 toast');
+});
+
+test('LxDatas 直读：数据库不存在时友好降级', async () => {
+  const sandbox = makeSandbox();
+  loadModules(sandbox);
+  sandbox.fetch = async () => ({
+    ok: false, status: 404,
+    json: async () => ({ ok: false, error: 'LX_DATABASE_NOT_FOUND', message: '未找到落雪音乐数据库' }),
+  });
+  const result = await sandbox.window.importLxDatabases();
+  assert.strictEqual(result.ok, false);
+  assert.match(result.message, /未找到落雪音乐数据库/);
+  assert.ok(sandbox.calls.toasts.some(t => t.includes('LX 桌面版扫描失败')), '应有失败 toast');
+});
+
+test('主页按钮入口：index.html 含歌单导入卡片 onclick', () => {
+  const html = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
+  assert.match(html, /onclick="openPlatformPlaylistImport\(\)"/, '主页快捷卡应绑定 openPlatformPlaylistImport');
+  assert.match(html, /IMPORT[\s\S]{0,200}歌单导入/, '卡片应有 IMPORT 标签与标题');
+});
+
+test('server 侧 LxDatas 接线：readLxPlaylists + /api/lx/playlists 路由', () => {
+  const src = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
+  assert.match(src, /function readLxPlaylists\(\)/, 'readLxPlaylists 应存在');
+  assert.match(src, /function findLxDatabasePath\(\)/, 'findLxDatabasePath 应存在');
+  assert.match(src, /pn === '\/api\/lx\/playlists'/, '路由应挂载');
+  assert.match(src, /STELLAFLIX_LX_DB_PATH/, '应支持 env 直指数据库路径');
+  assert.match(src, /require\('node:sqlite'\)/, '应使用 node:sqlite');
+});

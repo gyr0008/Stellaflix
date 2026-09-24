@@ -201,7 +201,7 @@
       '.sf-ppi-title{margin:0 0 4px;font-size:17px;font-weight:650;letter-spacing:.02em}',
       '.sf-ppi-sub{margin:0 0 14px;font-size:12px;color:#a9b0d4;line-height:1.6}',
       '.sf-ppi-section-label{font-size:11px;font-weight:700;color:rgba(255,255,255,.5);letter-spacing:.6px;margin:12px 0 8px}',
-      '.sf-ppi-entry-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}',
+      '.sf-ppi-entry-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}',
       '.sf-ppi-platform-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}',
       '.sf-ppi-btn{height:42px;border-radius:12px;border:1px solid rgba(255,255,255,.11);background:rgba(255,255,255,.05);color:rgba(255,255,255,.68);font:600 12px/1 inherit;letter-spacing:.3px;cursor:pointer;transition:background .18s,color .18s,transform .18s,border-color .18s}',
       '.sf-ppi-btn:hover{background:rgba(255,255,255,.09);color:#fff;transform:translateY(-1px)}',
@@ -230,6 +230,7 @@
       { label: '本地文件', small: '多选音频立即播放', action: 'local-file' },
       { label: '本地文件夹', small: '批量扫描子目录', action: 'local-folder' },
       { label: 'LX 歌单', small: '导入 .lxmc 文件', action: 'lxmc' },
+      { label: 'LX 桌面版', small: '直读已装落雪曲库', action: 'lx-db' },
     ].map(function (entry) {
       return '<button class="sf-ppi-btn sf-ppi-entry-btn" data-entry="' + entry.action + '" type="button"><span>' + entry.label + '</span><small>' + entry.small + '</small></button>';
     }).join('');
@@ -275,6 +276,7 @@
         if (action === 'local-file' && typeof global.toggleUploadPanel === 'function') global.toggleUploadPanel();
         else if (action === 'local-folder' && typeof global.openHomeLocalImport === 'function') global.openHomeLocalImport();
         else if (action === 'lxmc') openLxPlaylistImport();
+        else if (action === 'lx-db') importLxDatabases();
       });
     });
     dialogState.source = 'tx';
@@ -437,6 +439,62 @@
     });
   }
 
+  // ---------- LX Music 桌面版数据库直读（LxDatas 借鉴，自 MR /api/lx/playlists 移植）----------
+  // 免 .lxmc 手动导出：后端 node:sqlite 只读打开落雪 %APPDATA%/lx-music-desktop/LxDatas/lx.data.db，
+  // 拉全部歌单+歌曲，前端按 lx_db_<listId> 键 upsert 到本地歌单库（重复扫描 = 刷新曲目）。
+  function importLxDatabases(options) {
+    options = options || {};
+    return fetchJSON('/api/lx/playlists', { method: 'GET', timeoutMs: options.timeoutMs || 20000 })
+      .then(function (result) {
+        if (!result || result.ok === false) {
+          throw new Error(result && result.message || result && result.error || 'LX_DATABASE_READ_FAILED');
+        }
+        var playlists = Array.isArray(result.playlists) ? result.playlists : [];
+        if (!playlists.length) throw new Error('落雪音乐里没有可导入的歌单');
+        var imported = 0, failed = 0, totalSongs = 0, names = [];
+        playlists.forEach(function (list) {
+          var converted = {
+            id: 'lx_db_' + String(list.id || ''),
+            name: String(list.name || '落雪歌单'),
+            cover: '',
+            source: String(list.source || ''),
+            sourceListId: String(list.sourceListId || ''),
+            totalTracks: (list.songs || []).length,
+            partial: false,
+            importLimitReason: '',
+            songs: (Array.isArray(list.songs) ? list.songs : []).slice(0, MAX_SONGS).map(convertSong)
+              .filter(function (song) { return song.name && song.songmid; }),
+          };
+          if (!converted.songs.length) return;
+          var stored = upsertImportedPlaylist(converted);
+          if (stored && stored.ok) {
+            imported += 1;
+            totalSongs += converted.songs.length;
+            names.push(converted.name);
+          } else {
+            failed += 1;
+            console.warn('[LxDbImport]', converted.name, stored && stored.message);
+          }
+        });
+        refreshPlaylistUI();
+        if (imported) {
+          var preservedNote = failed ? '，失败 ' + failed + ' 个' : '';
+          toast('已从落雪桌面版导入 ' + imported + ' 个歌单，共 ' + totalSongs + ' 首' + preservedNote);
+        } else {
+          toast('落雪桌面版歌单导入失败');
+        }
+        return { ok: !!imported, imported: imported, failed: failed, songCount: totalSongs, names: names };
+      })
+      .catch(function (error) {
+        var message = String(error && error.message || error);
+        if (/LX_DATABASE_NOT_FOUND|DATABASE_READ/i.test(message)) {
+          message = '未找到落雪音乐数据库；请确认电脑已安装 LX Music 桌面版且至少打开过一次';
+        }
+        toast('LX 桌面版扫描失败：' + message);
+        return { ok: false, error: 'LX_DATABASE_IMPORT_FAILED', message: message };
+      });
+  }
+
   // ---------- 其余 opener：委托 Stellaflix 既有入口 ----------
   function openPlaylistSelection() {
     if (typeof global.openPlaylistPanelTab === 'function') {
@@ -472,10 +530,12 @@
   global.openLxSourceImport = openLxSourceImport;
   global.openLocalFileImport = openLocalFileImport;
   global.openLocalFolderImport = openLocalFolderImport;
+  global.importLxDatabases = importLxDatabases;
   global.sfPlatformPlaylistImport = {
     importPlatformPlaylistFromInput: importPlatformPlaylistFromInput,
     openPlatformPlaylistImport: openPlatformPlaylistImport,
     openLxPlaylistImport: openLxPlaylistImport,
+    importLxDatabases: importLxDatabases,
     convertSong: convertSong,
     convertImported: convertImported,
     upsertImportedPlaylist: upsertImportedPlaylist,

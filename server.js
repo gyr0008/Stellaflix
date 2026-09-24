@@ -256,6 +256,88 @@ function recognizeWhisperAudio(audioBuffer, extension) {
 }
 // ============ 语音双引擎结束 ============
 
+// ============ LX Music 桌面版数据库直读（LxDatas 借鉴，自 MR readLxPlaylists 移植，2026-09-23） ============
+// 只读打开落雪 %APPDATA%/lx-music-desktop/LxDatas/lx.data.db（node:sqlite，Node 22.5+/Electron 42+），
+// 拉全部歌单+歌曲。免 .lxmc 手动导出；装了落雪的用户点一下即全量导入。
+function findLxDatabasePath() {
+  const candidates = [
+    process.env.STELLAFLIX_LX_DB_PATH,
+    process.env.APPDATA && path.join(process.env.APPDATA, 'lx-music-desktop', 'LxDatas', 'lx.data.db'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'lx-music-desktop', 'portable', 'LxDatas', 'lx.data.db'),
+  ].filter(Boolean);
+  return candidates.find(candidate => fs.existsSync(candidate)) || '';
+}
+
+function decodeLxText(value) {
+  return String(value || '')
+    .replace(/&#(\d+);/g, (_m, code) => {
+      try { return String.fromCodePoint(Number(code)); } catch (_e) { return _m; }
+    })
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function readLxPlaylists() {
+  const dbPath = findLxDatabasePath();
+  if (!dbPath) throw new Error('LX_DATABASE_NOT_FOUND');
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const storedLists = db.prepare(
+      'SELECT id, name, source, sourceListId, position FROM my_list ORDER BY position ASC'
+    ).all();
+    const lists = [
+      { id: 'default', name: '默认列表', source: '', sourceListId: '', position: -2 },
+      { id: 'love', name: '我的收藏', source: '', sourceListId: '', position: -1 },
+      ...storedLists,
+    ];
+    const songs = db.prepare(
+      'SELECT m.id, m.listId, m.name, m.singer, m.source, m.interval, m.meta, ' +
+      'COALESCE(o."order", 999999) AS sortOrder ' +
+      'FROM my_list_music_info m LEFT JOIN my_list_music_info_order o ' +
+      'ON o.listId=m.listId AND o.musicInfoId=m.id ' +
+      "WHERE m.listId <> 'temp' ORDER BY m.listId, sortOrder ASC"
+    ).all();
+    const songsByList = new Map();
+    songs.forEach(row => {
+      let meta = {};
+      try { meta = JSON.parse(row.meta || '{}') || {}; } catch (_e) {}
+      const song = {
+        id: row.id,
+        name: decodeLxText(row.name),
+        singer: decodeLxText(row.singer),
+        source: row.source,
+        interval: row.interval || '',
+        songmid: meta.songId == null ? row.id : meta.songId,
+        albumName: decodeLxText(meta.albumName),
+        picUrl: meta.picUrl || '',
+        albumId: meta.albumId == null ? '' : meta.albumId,
+      };
+      if (!songsByList.has(row.listId)) songsByList.set(row.listId, []);
+      songsByList.get(row.listId).push(song);
+    });
+    return {
+      ok: true,
+      dbPath,
+      playlists: lists
+        .map(list => ({
+          id: list.id,
+          name: decodeLxText(list.name),
+          source: list.source || '',
+          sourceListId: list.sourceListId || '',
+          lxNative: true,
+          lxDbListId: list.id,
+          songs: songsByList.get(list.id) || [],
+        }))
+        .filter(list => list.songs.length),
+    };
+  } finally {
+    db.close();
+  }
+}
+// ============ LxDatas 直读结束 ============
+
 const tls = require('tls');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
@@ -5755,6 +5837,20 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('[PlatformPlaylistImport]', err && err.message);
       sendJSON(res, { ok: false, error: 'IMPORT_FAILED', message: err && err.message || '歌单导入失败' }, 400);
+    }
+    return;
+  }
+
+  // ---------- LX Music 桌面版数据库直读（LxDatas 借鉴）----------
+  if (pn === '/api/lx/playlists') {
+    if (req.method !== 'GET') { sendJSON(res, { ok: false, error: 'METHOD_NOT_ALLOWED' }, 405); return; }
+    try {
+      sendJSON(res, readLxPlaylists());
+    } catch (err) {
+      const notFound = err && err.message === 'LX_DATABASE_NOT_FOUND';
+      sendJSON(res, { ok: false, error: notFound ? 'LX_DATABASE_NOT_FOUND' : 'LX_PLAYLIST_READ_FAILED',
+        message: notFound ? '未找到落雪音乐数据库（支持 %APPDATA%/lx-music-desktop/LxDatas 与便携版 portable/LxDatas）' : (err && err.message || '读取落雪数据库失败') },
+        notFound ? 404 : 500);
     }
     return;
   }
