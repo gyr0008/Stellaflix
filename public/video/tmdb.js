@@ -147,6 +147,25 @@
     });
   }
 
+  // 海报平均色：走本地 /api/image-color（服务端 wsrv 1×1 降采样 + zlib 解码，零 canvas 红线）。
+  // 入参可为 posterUrl() 产出的代理链接，自动提取原始 image.tmdb.org 地址。
+  function getPosterColor(poster) {
+    if (!global.fetch) return Promise.reject(new Error('TMDB_NO_FETCH'));
+    var full = String(poster || '');
+    var m = /[?&]url=([^&]+)/.exec(full);
+    if (m) { try { full = decodeURIComponent(m[1]); } catch (e) { /* 保持原值 */ } }
+    if (!/^https:\/\/image\.tmdb\.org\//i.test(full)) return Promise.reject(new Error('COLOR_NO_TMDB_POSTER'));
+    var u = (cfg.proxyBase || '') + '/api/image-color?url=' + encodeURIComponent(full);
+    return global.fetch(u).then(function (r) {
+      if (!r.ok) throw new Error('COLOR_HTTP_' + r.status);
+      return r.json();
+    }).then(function (j) {
+      var c = (j && j.color) || '';
+      if (!/^#[0-9a-fA-F]{6}$/.test(c)) throw new Error('COLOR_BAD_PAYLOAD');
+      return c.toLowerCase();
+    });
+  }
+
   // 便捷：按标题取最相关的**有海报的** TMDB 匹配
   //
   // 核心原则：宁可无海报（🎬），也不要把不相关内容的海报错配给当前条目。
@@ -541,6 +560,7 @@
     logoUrl: logoUrl,
     search: search,
     getDetails: getDetails,
+    getPosterColor: getPosterColor,
     bestMatch: bestMatch,
     popular: popular,
     discover: discover,

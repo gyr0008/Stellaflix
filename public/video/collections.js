@@ -174,6 +174,23 @@
     return chain.then(function () { return out; });
   }
 
+  // 海报平均色：同 URL 复用在途/已完成 promise，失败不进缓存（与 getItems 同策略）。
+  // 入参可为条目对象或其 poster URL；实际请求经 SFV.tmdb.getPosterColor → /api/image-color。
+  var colorCache = {}; // poster -> promise
+  function getPosterColor(posterOrItem) {
+    var poster = posterOrItem && typeof posterOrItem === 'object' ? posterOrItem.poster : posterOrItem;
+    if (!poster) return Promise.reject(new Error('COLOR_NO_POSTER'));
+    if (colorCache[poster]) return colorCache[poster];
+    var tmdb = SFV.tmdb;
+    if (!tmdb || typeof tmdb.getPosterColor !== 'function') return Promise.reject(new Error('COLOR_UNAVAILABLE'));
+    var p = tmdb.getPosterColor(poster).catch(function (e) {
+      if (colorCache[poster] === p) delete colorCache[poster];
+      throw e;
+    });
+    colorCache[poster] = p;
+    return p;
+  }
+
   // ---------------------------------------------------------------- 看过 / 弃 标记（Kazumi 隐藏已看/已弃）
   // 主键策略：搜索结果去重后无单一 id，以其身份键（小写 title|year）为主；
   // TMDB 条目（含 mediaType/id）回退 mediaType:id；源 variant 直接用其复合 key。
@@ -234,6 +251,7 @@
   SFV.collections = {
     getByTab: getByTab,
     getItems: getItems,
+    getPosterColor: getPosterColor,
     // 看过 / 弃 标记
     markWatched: markWatched,
     unmarkWatched: unmarkWatched,

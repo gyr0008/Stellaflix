@@ -649,6 +649,29 @@ const IMG_CACHE_MAX_FILES = 1500;
 const IMG_CACHE_EXT_RE = /\.(png|jpe?g|gif|webp|ico|bmp|avif)(\?|#|$)/i;
 const imgCacheLru = new Map(); // key -> 最近访问时间（HIT 也 touch）
 
+// ---------- /api/image-color：海报平均色（wsrv 1×1 PNG + zlib 解像素，零 canvas） ----------
+const imageColorCache = new Map(); // tmdb 图片 URL -> '#rrggbb'
+function decode1x1Png(buf) {
+  if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) throw new Error('NOT_PNG');
+  const colorType = buf[25]; // 0=灰度 2=RGB 6=RGBA
+  let off = 8;
+  const idat = [];
+  while (off + 8 <= buf.length) {
+    const len = buf.readUInt32BE(off);
+    const type = buf.toString('ascii', off + 4, off + 8);
+    if (type === 'IDAT') idat.push(buf.slice(off + 8, off + 8 + len));
+    if (type === 'IEND') break;
+    off += 12 + len;
+  }
+  const raw = require('zlib').inflateSync(Buffer.concat(idat));
+  // 每 scanline 首字节是 filter type；1×1 只有一个像素行，跳过后即像素
+  const px = raw.slice(1);
+  let r, g, b;
+  if (colorType === 0) { r = g = b = px[0]; }
+  else { r = px[0]; g = px[1]; b = px[2]; }
+  return '#' + [r, g, b].map((v) => (v & 0xff).toString(16).padStart(2, '0')).join('');
+}
+
 function imgCacheKey(targetUrl) {
   try {
     const u = new URL(targetUrl);
@@ -7680,6 +7703,48 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { /* 诊断路由永不报错 */ }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end('{"ok":true}');
+    return;
+  }
+
+  // ---------- 海报平均色（精选片单封面卡「色温跟随首张海报」） ----------
+  // wsrv.nl 把 TMDB 海报缩到 1×1 PNG，本端 zlib 解像素即得平均色：零新依赖、零 canvas。
+  if (pn === '/api/image-color') {
+    const target = url.searchParams.get('url') || '';
+    // SSRF 白名单：仅 TMDB 图片 CDN 的 t/p 路径
+    if (!/^https:\/\/image\.tmdb\.org\/t\/p\/[a-zA-Z0-9_]+\/[^/?#]+$/i.test(target)) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Invalid image url');
+      return;
+    }
+    const hit = imageColorCache.get(target);
+    const sendColor = (color) => {
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        ...(res._cors || {}),
+        'Cache-Control': 'public, max-age=604800',
+      });
+      res.end(JSON.stringify({ color }));
+    };
+    if (hit) { sendColor(hit); return; }
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10000);
+      let up;
+      try {
+        up = await fetch('https://wsrv.nl/?url=' + encodeURIComponent(target) + '&w=1&h=1&output=png', {
+          headers: { 'User-Agent': UA }, signal: ctrl.signal,
+        });
+      } finally { clearTimeout(timer); }
+      if (!up.ok) throw new Error('WSRV_HTTP_' + up.status);
+      const buf = Buffer.from(await up.arrayBuffer());
+      const color = decode1x1Png(buf);
+      imageColorCache.set(target, color);
+      sendColor(color);
+    } catch (err) {
+      console.warn('[ImageColor]', err.message || err, target);
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('image-color upstream failed');
+    }
     return;
   }
 

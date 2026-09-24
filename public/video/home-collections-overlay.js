@@ -50,6 +50,11 @@
     return (COMPLETE_TYPES[def && def.type] ? '共' : '精选') + num + '部';
   }
 
+  // 快照里的 color 来自外部数据链路，只认 #rrggbb 才允许进样式（防篡改注入）
+  function isHexColor(c) {
+    return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c);
+  }
+
   function readSnapshots() {
     if (!LS) return {};
     try {
@@ -58,11 +63,12 @@
       return p && typeof p === 'object' ? p : {};
     } catch (e) { return {}; }
   }
-  function writeSnapshot(id, posters, count) {
+  function writeSnapshot(id, posters, count, color) {
     if (!LS || !id) return;
     try {
       var s = readSnapshots();
       s[id] = { posters: posters.slice(0, 3), count: count, ts: Date.now() };
+      if (isHexColor(color)) s[id].color = color;
       LS.setItem(SNAPSHOT_KEY, JSON.stringify(s));
     } catch (e) {}
   }
@@ -86,8 +92,10 @@
 
   function cardHtml(def, snap) {
     var countText = countLabel(def, snap && snap.count) || esc(def.sub || '');
+    // 色温跟随首张海报：快照 color 优先，CATALOG warm 兜底
+    var warm = (snap && isHexColor(snap.color) && snap.color) || def.warm || '#534AB7';
     return '<button class="home-video-collections-card" type="button" data-wc-id="' + esc(def.id) + '"' +
-      ' style="--wc-warm:' + esc(def.warm || '#534AB7') + '">' +
+      ' style="--wc-warm:' + esc(warm) + '">' +
       '<span class="home-video-collections-cover" aria-hidden="true">' +
       stackHtml(snap && snap.posters, def) +
       '</span>' +
@@ -127,7 +135,7 @@
     fillCovers(defs, snaps);
   }
 
-  function updateCardDom(def, posters, count) {
+  function updateCardDom(def, posters, count, color) {
     var list = document.getElementById('home-video-collections-list');
     if (!list) return;
     var id = def && def.id;
@@ -139,12 +147,24 @@
         return '<img src="' + esc(safeUrl(u)) + '" alt="" loading="lazy" referrerpolicy="no-referrer">';
       }).join('');
     }
+    if (isHexColor(color)) card.style.setProperty('--wc-warm', color);
     var countEl = card.querySelector('[data-wc-count]');
     var label = countLabel(def, count);
     if (countEl && label) {
       countEl.textContent = label;
       countEl.classList.remove('home-video-collections-count-sub');
     }
+  }
+
+  function fillColorOnly(def, snap, collections) {
+    if (typeof collections.getPosterColor !== 'function') return;
+    var first = snap.posters && snap.posters[0];
+    if (!first) return;
+    collections.getPosterColor(first).then(function (color) {
+      if (!isHexColor(color)) return;
+      writeSnapshot(def.id, snap.posters, snap.count, color);
+      updateCardDom(def, snap.posters, snap.count, color);
+    }).catch(function () { /* 取色失败：保持 CATALOG warm 兜底 */ });
   }
 
   function fillCovers(defs, snaps) {
@@ -155,7 +175,11 @@
       if (!def || def.type === 'placeholder') return;
       var snap = snaps && snaps[def.id];
       // 快照 24h 内新鲜：cardHtml 已按快照回填海报/计数，跳过补请求（冷启动零请求）
-      if (snap && Number(snap.count) > 0 && now - (snap.ts || 0) < SNAPSHOT_TTL_MS) return;
+      if (snap && Number(snap.count) > 0 && now - (snap.ts || 0) < SNAPSHOT_TTL_MS) {
+        // 旧格式快照没有 color：只补一次取色，不重拉列表
+        if (!isHexColor(snap.color)) fillColorOnly(def, snap, collections);
+        return;
+      }
       var got;
       try { got = collections.getItems(def); } catch (e) { return; }
       if (!got || typeof got.then !== 'function') return;
@@ -170,6 +194,15 @@
         if (!list.length) return;
         writeSnapshot(def.id, posters, list.length);
         updateCardDom(def, posters, list.length);
+        // 色温跟随首张海报：按刷新后的首条目海报取色，异步回填
+        if (posters[0]) {
+          var first = list[0].poster || posters[0];
+          collections.getPosterColor(first).then(function (color) {
+            if (!isHexColor(color)) return;
+            writeSnapshot(def.id, posters, list.length, color);
+            updateCardDom(def, posters, list.length, color);
+          }).catch(function () { /* 无 Key / 网络失败：保持 CATALOG warm 兜底 */ });
+        }
       }).catch(function () { /* 无 Key / 网络失败：保留 warm 渐变兜底 */ });
     });
   }
