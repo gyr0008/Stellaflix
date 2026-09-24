@@ -303,7 +303,7 @@ test('聚焦提交：选中卡海报/片名写入 localStorage，供首页片库
   assert.equal(saved2.title, '片名 5', '再次聚焦应覆写');
 });
 
-test('蜂窝咬合：spacingY 小于卡高（对齐 Folia ≈0.96×H）', () => {
+test('蜂窝咬合：spacingY 小于卡高（Folia desktop 档 320/330≈0.970）', () => {
   const { wall } = loadHexWall({ adapter: null });
   mountReady(wall);
   const state = wall.getState();
@@ -315,11 +315,12 @@ test('蜂窝咬合：spacingY 小于卡高（对齐 Folia ≈0.96×H）', () => 
     if (c && c.cube.z === 1) spacingY = c.baseY;
   }
   assert.ok(spacingY !== null, '应有 z=1 的坐标');
-  assert.ok(Math.abs(spacingY - Math.round(h * 0.96)) <= 1,
-    'spacingY 应≈0.96×卡高实现行咬合，实际 ' + spacingY + ' vs 卡高 ' + h);
+  assert.equal(h, 330, '1280 视口应为 Folia desktop 档卡高 330');
+  assert.ok(Math.abs(spacingY - 320) <= 1,
+    'spacingY 应为 Folia desktop 档 320（行咬合），实际 ' + spacingY);
 });
 
-test('maxDistance 收紧：远处卡定在最小 scale（Folia ≈2.32×卡宽比例）', () => {
+test('maxDistance 收紧：远处卡定在最小 scale（Folia desktop 档 maxDistance=500）', () => {
   const { wall } = loadHexWall({ adapter: null });
   mountReady(wall);
   wall.centerOnIndex(0, { immediate: true });
@@ -330,13 +331,37 @@ test('maxDistance 收紧：远处卡定在最小 scale（Folia ≈2.32×卡宽�
     const c = wall.coordOf(i);
     const dist = Math.sqrt((c.baseX - c0.baseX) ** 2 + (c.baseY - c0.baseY) ** 2);
     const node = wall.getNode(i);
-    if (node && dist > 350) { found = { dist, transform: node.style.transform }; break; }
+    if (node && node.style.transform && dist > 520) { found = { dist, transform: node.style.transform }; break; }
   }
-  assert.ok(found, '应有距离>350px 的挂载卡（1280 视口卡宽 132，maxDistance≈306）');
+  assert.ok(found, '应有距离>520px 的挂载卡（1280 视口 desktop 档 maxDistance=500）');
   const m = /scale\(([\d.]+)\)/.exec(found.transform);
   assert.ok(m, 'transform 应含 scale');
   assert.ok(Math.abs(parseFloat(m[1]) - 0.45) < 0.02,
-    '远处卡应已定底 0.45（半对角旧算法此处约 0.79），实际 ' + m[1]);
+    '超出 maxDistance 的卡应定底 0.45，实际 ' + m[1]);
+});
+
+test('四档表：卡片/间距/衰减参数逐档照抄 Folia resolveGridViewCardBox（GridView.tsx:130-172）', () => {
+  const TIERS = [
+    { viewW: 600,  cardW: 180, cardH: 280, spacingX: 205, spacingY: 270, maxDistance: 420, lodStart: 280, lodEnd: 320 },
+    { viewW: 1280, cardW: 220, cardH: 330, spacingX: 250, spacingY: 320, maxDistance: 500, lodStart: 340, lodEnd: 385 },
+    { viewW: 1600, cardW: 250, cardH: 375, spacingX: 285, spacingY: 365, maxDistance: 580, lodStart: 400, lodEnd: 450 },
+    { viewW: 2560, cardW: 280, cardH: 420, spacingX: 320, spacingY: 410, maxDistance: 660, lodStart: 450, lodEnd: 510 },
+  ];
+  TIERS.forEach((tier) => {
+    const { wall } = loadHexWall({ adapter: null });
+    const host = makeEl('div');
+    host.clientWidth = tier.viewW;
+    wall.mount(host, { items: makeItems(60) });
+    const m = wall.getState().metrics;
+    assert.ok(m, 'getState 应暴露 metrics');
+    assert.deepEqual(
+      { cardW: m.cardW, cardH: m.cardH, spacingX: m.spacingX, spacingY: m.spacingY,
+        maxDistance: m.maxDistance, lodStart: m.lodStart, lodEnd: m.lodEnd },
+      { cardW: tier.cardW, cardH: tier.cardH, spacingX: tier.spacingX, spacingY: tier.spacingY,
+        maxDistance: tier.maxDistance, lodStart: tier.lodStart, lodEnd: tier.lodEnd },
+      '视口 ' + tier.viewW + ' 应命中 Folia 对应档');
+    wall.unmount();
+  });
 });
 
 test('边界回弹：滚轮/拖拽越界后被钳回内容边界（Folia dragBounds 语义）', () => {

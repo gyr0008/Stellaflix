@@ -41,16 +41,22 @@
     lastOpen: { id: null, at: 0 }
   };
 
+  // Folia 四档表逐值照抄：GridView.tsx resolveGridViewCardBox（<768 / <1440 / <2000 / ≥2000）
   function pickMetrics(viewW) {
-    var cardW = viewW < 700 ? 104 : (viewW < 1100 ? 118 : 132);
-    var cardH = Math.round(cardW * 1.5);
-    return {
-      cardW: cardW,
-      cardH: cardH,
-      spacingX: Math.round(cardW * 1.16),
-      spacingY: Math.round(cardH * 0.96),
-      gap: 18
-    };
+    if (viewW < 768) {
+      return { cardW: 180, cardH: 280, spacingX: 205, spacingY: 270,
+        maxDistance: 420, lodStart: 280, lodEnd: 320, gap: 18 };
+    }
+    if (viewW < 1440) {
+      return { cardW: 220, cardH: 330, spacingX: 250, spacingY: 320,
+        maxDistance: 500, lodStart: 340, lodEnd: 385, gap: 18 };
+    }
+    if (viewW < 2000) {
+      return { cardW: 250, cardH: 375, spacingX: 285, spacingY: 365,
+        maxDistance: 580, lodStart: 400, lodEnd: 450, gap: 18 };
+    }
+    return { cardW: 280, cardH: 420, spacingX: 320, spacingY: 410,
+      maxDistance: 660, lodStart: 450, lodEnd: 510, gap: 18 };
   }
 
   function viewportSize() {
@@ -68,11 +74,10 @@
     var clipRadius = halfDiag + Math.max(m.cardW, m.cardH);
     return {
       clipRadius: clipRadius,
-      // 衰减半径按 Folia 断点表比例（maxDistance≈2.32×卡宽、lod≈1.57/1.78×卡宽，
-      // GridView.tsx resolveGridViewCardBox），随卡宽缩放而非视口对角线
-      maxDistance: Math.round(m.cardW * 2.32),
-      lodStart: Math.round(m.cardW * 1.57),
-      lodEnd: Math.round(m.cardW * 1.78),
+      // 衰减/LOD 阈值取 Folia 四档表逐档精确值（pickMetrics）
+      maxDistance: m.maxDistance,
+      lodStart: m.lodStart,
+      lodEnd: m.lodEnd,
       viewportWidth: vp.w,
       viewportHeight: vp.h,
       cardWidth: m.cardW,
@@ -671,6 +676,7 @@
         focusIndex: state.focusIndex,
         mountedCount: Object.keys(state.mounted).length,
         offset: { dx: state.offset.dx, dy: state.offset.dy },
+        metrics: state.metrics,
         dom: { field: state.field, world: state.world }
       };
     }
