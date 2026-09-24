@@ -300,15 +300,10 @@
       })
       .then(function (b) {
         if (!b) return; // 基础渲染已显示 view.title/pic，静默保留
-        // 背景替换为 TMDB backdrop —— 先 Image 探测，加载成功才替换；
+        // 背景替换为 TMDB backdrop —— 立即应用 + 后台探测，加载失败回退；
+        // 不再等整张 w1280 图经代理下载完才切换（渐进渲染提前首屏 ~1s）。
         // 失败（404/超时/无 key）保留 build 时设置的条目自带海报 view.pic
-        if (b.backdrop) {
-          var backdropProbe = new Image();
-          backdropProbe.onload = function () {
-            bg.style.backgroundImage = 'url("' + esc(b.backdrop) + '")';
-          };
-          backdropProbe.src = b.backdrop;
-        }
+        if (b.backdrop) D.applyBackdropSafe(bg, b.backdrop);
         // 详情页已抓到 TMDB 海报（w500）：回写 view.pic + 落本地缓存，
         // 让底部控制条左侧海报容器直接复用这张已经下载好的图。
         if (b.poster) rememberPoster(view, b.poster);

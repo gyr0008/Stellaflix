@@ -599,6 +599,111 @@ const MIME = {
   '.m4s':  'video/iso-segment',
 };
 
+// ---------- TMDB API 只读缓存（内存，TTL 30min，模块级单例） ----------
+// api.tmdb.org /3/ 的 GET JSON 200 响应服务端复用：详情页 bundle / 海报墙品类
+// 每次打开都重新远程往返（单程 0.3~0.8s），而元数据变化以小时计。
+// 缓存键剥离 api_key（结果与 key 无关，也避免凭证进入缓存索引）。
+// 播放链路零影响：非 /3/ 目标、带 Range、非 2xx 一律不缓存。
+const TMDB_API_CACHE_TTL_MS = 30 * 60 * 1000;
+const TMDB_API_CACHE_MAX = 150;
+const TMDB_API_CACHE_MAX_BODY = 512 * 1024;
+const tmdbApiCache = new Map(); // key -> { ct, buf, at }
+
+function tmdbApiCacheKey(targetUrl) {
+  try {
+    const u = new URL(targetUrl);
+    if (u.pathname !== '/3' && !u.pathname.startsWith('/3/')) return null;
+    u.searchParams.delete('api_key');
+    u.hash = '';
+    return u.origin + u.pathname + '?' + u.searchParams.toString();
+  } catch (e) { return null; }
+}
+
+function tmdbApiCacheGet(key) {
+  const hit = tmdbApiCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > TMDB_API_CACHE_TTL_MS) { tmdbApiCache.delete(key); return null; }
+  return hit;
+}
+
+function tmdbApiCacheSet(key, entry) {
+  tmdbApiCache.set(key, entry);
+  while (tmdbApiCache.size > TMDB_API_CACHE_MAX) {
+    const oldest = tmdbApiCache.keys().next().value;
+    if (oldest === undefined) break;
+    tmdbApiCache.delete(oldest);
+  }
+}
+
+// ---------- /api/proxy 图片磁盘缓存（跨进程/跨重启持久，海报墙冷启动秒出） ----------
+// 海报墙一次拉 ~200 张 TMDB 图，浏览器缓存受端口跳变（3000→动态端口）与
+// 「同 URL 变参数」影响命中率低；服务端落盘后同 URL 永不再打 image.tmdb.org
+// （国内网络该域名单张 0.2~1.3s，是首屏 3s 的主要来源）。
+// 键 = 上游完整 URL 的 sha1（含查询参数：w500 与 original 是不同资源）；
+// 仅 GET、无 Range、扩展名像图片且上游 200 + image/* 才读写。
+// 目录默认在用户主目录（打包安装目录可能只读），SFV_CACHE_DIR 供测试/部署覆盖。
+const IMG_CACHE_DIR = process.env.SFV_CACHE_DIR
+  || path.join(os.homedir(), '.stellaflix', 'proxy-img-cache');
+const IMG_CACHE_MAX_FILE = 5 * 1024 * 1024;
+const IMG_CACHE_MAX_FILES = 1500;
+const IMG_CACHE_EXT_RE = /\.(png|jpe?g|gif|webp|ico|bmp|avif)(\?|#|$)/i;
+const imgCacheLru = new Map(); // key -> 最近访问时间（HIT 也 touch）
+
+function imgCacheKey(targetUrl) {
+  try {
+    const u = new URL(targetUrl);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    if (!IMG_CACHE_EXT_RE.test(u.pathname)) return null;
+    return crypto.createHash('sha1').update(u.origin + u.pathname + (u.search || '')).digest('hex');
+  } catch (e) { return null; }
+}
+
+async function imgCacheGet(key) {
+  const bin = path.join(IMG_CACHE_DIR, key);
+  try {
+    const meta = JSON.parse(await fs.promises.readFile(bin + '.meta', 'utf8'));
+    const buf = await fs.promises.readFile(bin);
+    imgCacheLru.set(key, Date.now());
+    fs.promises.utimes(bin, new Date(), new Date()).catch(() => {});
+    return { buf, ct: meta.ct || 'application/octet-stream', cc: meta.cc || '' };
+  } catch (e) { return null; }
+}
+
+async function imgCachePut(key, buf, ct, cc) {
+  const bin = path.join(IMG_CACHE_DIR, key);
+  try {
+    await fs.promises.mkdir(IMG_CACHE_DIR, { recursive: true });
+    await fs.promises.writeFile(bin, buf);
+    await fs.promises.writeFile(bin + '.meta', JSON.stringify({ ct, cc, at: Date.now() }));
+    imgCacheLru.set(key, Date.now());
+    imgCachePut.count = (imgCachePut.count || 0) + 1;
+    if (imgCachePut.count % 50 === 0) imgCacheSweep();
+  } catch (e) {
+    console.warn('[ImgCache] put failed:', e.message);
+  }
+}
+
+// 容量兜底：按 mtime 删最旧的超额对象（含跨进程累积，内存 LRU 重启即清零）
+async function imgCacheSweep() {
+  let files;
+  try { files = await fs.promises.readdir(IMG_CACHE_DIR); } catch (e) { return; }
+  const bins = files.filter((f) => /^[0-9a-f]{40}$/.test(f));
+  if (bins.length <= IMG_CACHE_MAX_FILES) return;
+  const stats = [];
+  for (const b of bins) {
+    const p = path.join(IMG_CACHE_DIR, b);
+    try { stats.push({ p, key: b, mtime: (await fs.promises.stat(p)).mtimeMs }); } catch (e) {}
+  }
+  stats.sort((a, b) => a.mtime - b.mtime);
+  for (let i = 0; i < stats.length - IMG_CACHE_MAX_FILES; i += 1) {
+    try {
+      await fs.promises.unlink(stats[i].p);
+      await fs.promises.unlink(stats[i].p + '.meta');
+    } catch (e) {}
+    imgCacheLru.delete(stats[i].key);
+  }
+}
+
 // ---------- SSRF 防护：私网 IP/主机名拦截（/api/proxy 使用） ----------
 function isPrivateIPv4(ip) {
   const p = String(ip).split('.').map(Number);
@@ -7589,6 +7694,38 @@ const server = http.createServer(async (req, res) => {
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') { res.writeHead(403); res.end('Forbidden scheme'); return; }
       if (isPrivateHost(parsed.hostname)) { res.writeHead(403); res.end('Forbidden host'); return; }
       const range = req.headers.range || '';
+      // TMDB API 只读缓存：GET /3/ 且无 Range 才参与（命中直接回源内存副本）
+      const tCacheKey = (req.method === 'GET' && !range) ? tmdbApiCacheKey(target) : null;
+      if (tCacheKey) {
+        const hit = tmdbApiCacheGet(tCacheKey);
+        if (hit) {
+          res.writeHead(200, {
+            'Content-Type': hit.ct,
+            'Content-Length': String(hit.buf.length),
+            'X-TMDB-Cache': 'HIT',
+            ...(res._cors || {}),
+          });
+          res.end(hit.buf);
+          return;
+        }
+      }
+      // 图片磁盘缓存：GET 直链图片（无 Range）先查盘，命中直接回字节
+      const iCacheKey = (req.method === 'GET' && !range) ? imgCacheKey(target) : null;
+      if (iCacheKey) {
+        const cached = await imgCacheGet(iCacheKey);
+        if (cached) {
+          res.writeHead(200, {
+            'Content-Type': cached.ct,
+            'Content-Length': String(cached.buf.length),
+            'Cache-Control': cached.cc || 'public, max-age=86400',
+            'Accept-Ranges': 'bytes',
+            'X-SFV-Img-Cache': 'HIT',
+            ...(res._cors || {}),
+          });
+          res.end(cached.buf);
+          return;
+        }
+      }
       // 参考 KVideo（MIT）的成熟代理方案：中国 CDN 普遍检查 Origin/Referer/Sec-Fetch 等头，
       // 缺少任一都可能导致 403。以下完整模拟浏览器请求特征。
       const headers = {
@@ -7643,6 +7780,56 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      // TMDB API JSON：全量读入并写缓存后回包（体积小，无需走下方流式路径）
+      if (tCacheKey && up.ok && /json/i.test(ct)) {
+        let jsonBuf;
+        try {
+          jsonBuf = Buffer.from(await up.text(), 'utf8');
+        } catch (readErr) {
+          console.warn('[Proxy] tmdb json read failed:', readErr.message, target);
+          try { res.writeHead(502); } catch (e) {}
+          res.end('tmdb json read failed');
+          return;
+        }
+        res.writeHead(up.status, {
+          'Content-Type': ct,
+          'Content-Length': String(jsonBuf.length),
+          ...(res._cors || {}),
+        });
+        res.end(jsonBuf);
+        if (jsonBuf.length <= TMDB_API_CACHE_MAX_BODY) {
+          tmdbApiCacheSet(tCacheKey, { ct, buf: jsonBuf, at: Date.now() });
+        }
+        return;
+      }
+
+      // 图片 MISS：整体读入 → 先落盘再回包（保证紧接的二次请求必 HIT），
+      // 超过 5MB 只回包不落盘（海报量级远小于此；异常大响应不值得占磁盘）。
+      if (iCacheKey && up.ok && upstreamIsImage) {
+        let imgBuf;
+        try {
+          imgBuf = Buffer.from(await up.arrayBuffer());
+        } catch (readErr) {
+          console.warn('[Proxy] image read failed:', readErr.message, target);
+          try { res.writeHead(502); } catch (e) {}
+          res.end('image read failed');
+          return;
+        }
+        const imgCc = up.headers.get('cache-control') || 'public, max-age=86400';
+        if (imgBuf.length <= IMG_CACHE_MAX_FILE) {
+          await imgCachePut(iCacheKey, imgBuf, ct, imgCc);
+        }
+        res.writeHead(up.status, {
+          'Content-Type': ct,
+          'Content-Length': String(imgBuf.length),
+          'Cache-Control': imgCc,
+          'Accept-Ranges': 'bytes',
+          ...(res._cors || {}),
+        });
+        res.end(imgBuf);
+        return;
+      }
+
       // ---- HLS 广告过滤（discontinuity 分组启发式）----
       // 仅处理完整 playlist（无 Range）；分片/图片仍走流式透传。
       // 关闭：请求加 &ad=0。master 原样返回，由 hls.js 再拉 media 时过滤。
@@ -7694,6 +7881,12 @@ const server = http.createServer(async (req, res) => {
       const upstreamEncoded = !!up.headers.get('content-encoding');
       const cl = up.headers.get('content-length'); if (cl && !upstreamEncoded) out['Content-Length'] = cl;
       const cr = up.headers.get('content-range'); if (cr) out['Content-Range'] = cr;
+      // 图片响应保留缓存语义（TMDB 海报等）：透传上游 Cache-Control，
+      // 缺失时补 24h 强缓存——此前代理头重建把上游 immutable 缓存头丢掉，
+      // 导致浏览器每次开海报墙都重新远程拉全部图片（单张经上游要 0.2~1.3s）。
+      if (upstreamIsImage) {
+        out['Cache-Control'] = up.headers.get('cache-control') || 'public, max-age=86400';
+      }
       res.writeHead(up.status, out);
       if (upstreamIsImage) console.log('[Proxy-IMG]', up.status, ct, target);
       if (!up.body) { res.end(); return; }

@@ -61,8 +61,13 @@
     };
   }
 
-  /** TMDB 多品类并行拉取；单类失败不拖垮整墙。 */
-  function collectTmdbWallItems() {
+  /**
+   * TMDB 多品类并行拉取；单类失败不拖垮整墙。
+   * options.onBatch(itemsSnapshot)：渐进挂载回调——每当 CATEGORY_JOBS
+   * 定义顺序上的"前导缺口"被补齐，就发出累计前缀快照。前缀严格单调扩展
+   * （aggregate(k) 恒为 aggregate(k+1) 的前缀），蜂窝墙据此增量刷新而不漂移索引。
+   */
+  function collectTmdbWallItems(options) {
     var t = SFV.tmdb;
     if (!t) return Promise.resolve({ items: [], keyMissing: true, errors: ['tmdb module missing'] });
 
@@ -70,43 +75,54 @@
       return Promise.resolve({ items: [], keyMissing: true, errors: [] });
     }
 
-    var seen = {};
-    var items = [];
+    var onBatch = (options && typeof options.onBatch === 'function') ? options.onBatch : null;
+    var results = new Array(CATEGORY_JOBS.length); // idx -> list；未回为 undefined，失败为 []
     var errors = [];
+    var nextFlush = 0;
 
-    function mergeBatch(list, label, mediaType) {
-      (list || []).forEach(function (raw) {
-        var item = normalizeTmdb(raw, label, mediaType);
-        if (!item) return;
-        if (seen[item.id]) return;
-        // 优先保留有海报的条目
-        if (!item.poster) return;
-        seen[item.id] = true;
-        items.push(item);
-      });
+    function aggregate(count) {
+      var seen = {};
+      var items = [];
+      for (var i = 0; i < count; i++) {
+        var job = CATEGORY_JOBS[i];
+        var mt = job.label.indexOf('剧') >= 0 ? 'tv' : 'movie';
+        (results[i] || []).forEach(function (raw) {
+          var item = normalizeTmdb(raw, job.label, mt);
+          if (!item) return;
+          // 优先保留有海报的条目
+          if (!item.poster) return;
+          if (seen[item.id]) return;
+          seen[item.id] = true;
+          items.push(item);
+        });
+      }
+      return items;
     }
 
-    var jobs = CATEGORY_JOBS.map(function (job) {
+    function flushBatches() {
+      if (!onBatch) return;
+      var ready = nextFlush;
+      while (ready < results.length && results[ready]) ready += 1;
+      // 一次事件只发一份最新前缀快照（中间态并入），避免积压时连环重排
+      if (ready > nextFlush) {
+        nextFlush = ready;
+        onBatch(aggregate(ready));
+      }
+    }
+
+    var jobs = CATEGORY_JOBS.map(function (job, idx) {
       return Promise.resolve()
         .then(function () { return job.run(t); })
-        .then(function (list) {
-          var mt = job.label.indexOf('剧') >= 0 ? 'tv' : 'movie';
-          mergeBatch(list, job.label, mt);
-        })
+        .then(function (list) { results[idx] = list || []; })
         .catch(function (err) {
+          results[idx] = [];
           errors.push(job.label + ': ' + (err && err.message ? err.message : String(err)));
-        });
+        })
+        .then(flushBatches);
     });
 
     return Promise.all(jobs).then(function () {
-      // 品类顺序：保持 CATEGORY_JOBS 定义顺序
-      var order = CATEGORY_JOBS.map(function (c) { return c.label; });
-      items.sort(function (a, b) {
-        var ia = order.indexOf(a.sectionLabel);
-        var ib = order.indexOf(b.sectionLabel);
-        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-      });
-      return { items: items, keyMissing: false, errors: errors };
+      return { items: aggregate(results.length), keyMissing: false, errors: errors };
     });
   }
 
@@ -155,8 +171,8 @@
     return collectLocalExtras();
   }
 
-  function collectWallItemsAsync() {
-    return collectTmdbWallItems().then(function (res) {
+  function collectWallItemsAsync(options) {
+    return collectTmdbWallItems(options).then(function (res) {
       if (res.items && res.items.length) {
         var extras = collectLocalExtras().filter(function (e) {
           return !res.items.some(function (i) { return i.id === e.id; });

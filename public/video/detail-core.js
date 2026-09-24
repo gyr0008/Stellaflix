@@ -174,6 +174,21 @@
     return candidates;
   }
 
+  /**
+   * 详情页大背景图安全替换：立即应用新 backdrop（浏览器渐进渲染提前首屏），
+   * 同时探测加载；失败才回退原背景。旧实现等整图经代理下完（0.2~1.3s）才替换。
+   */
+  function applyBackdropSafe(bg, url) {
+    if (!bg || !bg.style || !url) return;
+    var prev = bg.style.backgroundImage;
+    bg.style.backgroundImage = 'url("' + String(url).replace(/"/g, '\\"') + '")';
+    var ImageCtor = (typeof Image !== 'undefined') ? Image : null;
+    if (!ImageCtor) return;
+    var probe = new ImageCtor();
+    probe.onerror = function () { bg.style.backgroundImage = prev; };
+    probe.src = url;
+  }
+
   // 基础 facade：仅含纯数据层；DOM 层（build 等）由 detail.js 叠加。
   // 注意：若 detail.js 先于本文件加载（异常顺序），幂等守卫已 return，
   // SFV.detail 将只剩 DOM 层，此时 classifyCandidateEmbed/buildCandidates 缺失。
@@ -184,6 +199,7 @@
     classifyCandidateEmbed: classifyCandidateEmbed,
     buildCandidates: buildCandidates,
     sourceKeyOf: sourceKeyOf,
+    applyBackdropSafe: applyBackdropSafe,
     alignEpisodeByIdentifier: alignEpisodeByIdentifier
   };
 })(typeof window !== 'undefined' ? window : this);
