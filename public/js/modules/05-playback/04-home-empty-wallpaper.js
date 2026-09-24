@@ -362,6 +362,11 @@ function isHomeBlankDismissClick(e) {
   if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
   // 任一「点外即关」面板打开时，空白点击一律不关 Home（API 守卫，比 class 选择器更稳）
   try {
+    // 影视浏览层（#sfv-browse）打开时一律不关 Home：该层透明铺满视口叠在 Home 上，
+    // 片库/历史页内的点/拖坐标必然落在 #empty-home 矩形内，若放行会摘掉
+    // empty-home-active → 返回后首页透明只剩粒子星空（2026-09-25 片库返回 bug）
+    var browseEl = document.getElementById('sfv-browse');
+    if (browseEl && browseEl.classList.contains('sfv-show')) return false;
     var SFV = window.StellaflixVideo;
     if (SFV) {
       if (SFV.sourcePicker && SFV.sourcePicker.isOpen && SFV.sourcePicker.isOpen()) return false;
