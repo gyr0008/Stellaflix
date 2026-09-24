@@ -115,16 +115,21 @@ function bindMiniQueueLazyRender() {
   }, { passive: true });
 }
 function normalizePlaylistProvider(provider) {
-  if (provider === 'qq' || provider === 'kugou' || provider === 'qishui' || provider === 'spotify') return provider;
+  if (provider === 'qq' || provider === 'kugou' || provider === 'qishui' || provider === 'spotify' || provider === 'local') return provider;
   return 'netease';
+}
+function playlistCardProvider(pl) {
+  if (pl && (pl.localUserPlaylist || String(pl.id || '').indexOf('local-pl-') === 0)) return 'local';
+  return normalizePlaylistProvider(pl.provider);
 }
 function playlistProviderLabel(provider) {
   provider = normalizePlaylistProvider(provider);
-  return provider === 'qq' ? 'QQ' : (provider === 'kugou' ? 'KG' : (provider === 'qishui' ? 'QS' : (provider === 'spotify' ? 'SP' : 'NE')));
+  return provider === 'qq' ? 'QQ' : (provider === 'kugou' ? 'KG' : (provider === 'qishui' ? 'QS' : (provider === 'spotify' ? 'SP' : (provider === 'local' ? '本' : 'NE'))));
 }
 function playlistProviderName(provider) {
   provider = normalizePlaylistProvider(provider);
   if (provider === 'spotify') return 'Spotify';
+  if (provider === 'local') return '本地歌单';
   return provider === 'qq' ? 'QQ 音乐' : (provider === 'kugou' ? '酷狗音乐' : (provider === 'qishui' ? '汽水音乐' : '网易云音乐'));
 }
 function playlistPanelKey(provider, id) {
@@ -197,7 +202,7 @@ function playlistPanelDetailRowsHtml(options) {
 var PLAYLIST_REORDER_STORE_KEY = 'stellaflix-playlist-reorder-v1';
 function playlistReorderKey(pl) {
   if (!pl) return '';
-  return playlistPanelKey(normalizePlaylistProvider(pl.provider), pl.id);
+  return playlistPanelKey(playlistCardProvider(pl), pl.id);
 }
 function readPlaylistReorderKeys() {
   try {
@@ -358,6 +363,24 @@ async function loadMorePlaylistPanelDetailTracks(reason) {
   var parts = st.key.split(':');
   var provider = normalizePlaylistProvider(parts[0]);
   var pid = parts.slice(1).join(':');
+  if (provider === 'local') {
+    var songs = st.playlist && Array.isArray(st.playlist.songs) ? st.playlist.songs : [];
+    st.tracks = songs.map(cloneSong);
+    st.total = songs.length;
+    st.nextOffset = songs.length;
+    st.hasMore = false;
+    st.loading = false;
+    st.loadingMore = false;
+    st.error = '';
+    st.message = songs.length ? '' : '歌单暂无可播放歌曲';
+    if (reason === 'initial') {
+      renderPlaylistPanelDetailState();
+      scrollPlaylistPanelDetailIntoView(st.key);
+    } else {
+      renderPlaylistPanelDetailRows();
+    }
+    return songs.length > 0;
+  }
   var offset = reason === 'initial' ? 0 : Math.max(0, Number(st.nextOffset) || st.tracks.length);
   var token = st.token;
   var controller = window.AbortController ? new AbortController() : null;
@@ -415,7 +438,7 @@ async function openPlaylistPanelDetail(provider, pid, title) {
   if (!pid) return;
   provider = normalizePlaylistProvider(provider);
   var key = playlistPanelKey(provider, pid);
-  var pl = userPlaylists.find(function (item) { return playlistPanelKey(normalizePlaylistProvider(item.provider), item.id) === key; }) || { id: pid, provider: provider, name: title || '歌单详情' };
+  var pl = userPlaylists.find(function (item) { return playlistPanelKey(playlistCardProvider(item), item.id) === key; }) || { id: pid, provider: provider, name: title || '歌单详情' };
   if (playlistPanelDetailState.key === key) {
     cancelPlaylistPanelDetailRequest();
     playlistPanelDetailState.key = '';
@@ -440,6 +463,16 @@ function playPlaylistPanelDetail() {
   var parts = st.key.split(':');
   var provider = normalizePlaylistProvider(parts[0]);
   var pid = parts.slice(1).join(':');
+  if (provider === 'local') {
+    var tracks = st.tracks || [];
+    loadPlaylistIntoQueueById(pid, true, st.playlist && st.playlist.name || '', {
+      seedTracks: tracks,
+      total: tracks.length,
+      nextOffset: tracks.length,
+      hasMore: false
+    });
+    return;
+  }
   loadPlaylistIntoQueueById(playlistPanelProviderId(provider, pid), true, st.playlist && st.playlist.name || '');
 }
 async function togglePlaylistPanelCollection(collected) {
@@ -525,7 +558,7 @@ function playlistPanelDetailShellHeight() {
   return PLAYLIST_DETAIL_OUTER_CHROME_HEIGHT + rows * PLAYLIST_DETAIL_ROW_STEP + noticeHeight + footerHeight;
 }
 function playlistPanelGroupKey(pl) {
-  return normalizePlaylistProvider(pl && pl.provider);
+  return playlistCardProvider(pl);
 }
 function playlistPanelBuildVirtualEntries() {
   var detailSig = [
@@ -540,9 +573,9 @@ function playlistPanelBuildVirtualEntries() {
   if (playlistPanelVirtualCache.revision === playlistCatalogRevision &&
       playlistPanelVirtualCache.detailKey === playlistPanelDetailState.key &&
       playlistPanelVirtualCache.detailSig === detailSig) return playlistPanelVirtualCache;
-  var labels = { netease: '网易云歌单', qq: 'QQ 音乐歌单', kugou: '酷狗音乐歌单', qishui: '汽水音乐歌单', spotify: 'Spotify 歌单' };
-  var order = ['netease', 'qq', 'kugou', 'qishui', 'spotify'];
-  var groups = { netease: [], qq: [], kugou: [], qishui: [], spotify: [] };
+  var labels = { netease: '网易云歌单', qq: 'QQ 音乐歌单', kugou: '酷狗音乐歌单', qishui: '汽水音乐歌单', spotify: 'Spotify 歌单', local: '本地歌单' };
+  var order = ['netease', 'qq', 'kugou', 'qishui', 'spotify', 'local'];
+  var groups = { netease: [], qq: [], kugou: [], qishui: [], spotify: [], local: [] };
   userPlaylists.forEach(function (pl, sourceIndex) {
     var key = playlistPanelGroupKey(pl);
     if (!groups[key]) groups[key] = [];
@@ -558,9 +591,9 @@ function playlistPanelBuildVirtualEntries() {
     entries.push({ type: 'label', key: key, label: labels[key] || key, height: 31 });
     items.forEach(function (entry) {
       entries.push({ type: 'card', pl: entry.pl, sourceIndex: entry.sourceIndex, height: 69 });
-      var cardKey = playlistPanelKey(normalizePlaylistProvider(entry.pl.provider), entry.pl.id);
+      var cardKey = playlistPanelKey(playlistCardProvider(entry.pl), entry.pl.id);
       if (playlistPanelDetailState.key === cardKey) {
-        entries.push({ type: 'detail', pl: entry.pl, provider: normalizePlaylistProvider(entry.pl.provider), height: playlistPanelDetailShellHeight() });
+        entries.push({ type: 'detail', pl: entry.pl, provider: playlistCardProvider(entry.pl), height: playlistPanelDetailShellHeight() });
       }
     });
   });
@@ -639,7 +672,7 @@ function renderUserPlaylistsList(opts) {
   var panel = document.getElementById('playlist-panel');
   var keepTop = panel ? panel.scrollTop : 0;
   function playlistCardHtml(pl, sourceIndex) {
-    var provider = normalizePlaylistProvider(pl.provider);
+    var provider = playlistCardProvider(pl);
     var providerLabel = playlistProviderLabel(provider);
     var thumb = pl.cover ? (provider === 'netease' ? (pl.cover + '?param=88y88') : pl.cover) : '';
     var imgTag = thumb ? '<img src="' + thumb + '" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0.2">' : '<div style="width:44px;height:44px;border-radius:8px;background:rgba(255,255,255,.06);flex-shrink:0"></div>';

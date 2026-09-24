@@ -7466,6 +7466,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const id = url.searchParams.get('id');
       if (!id) { sendJSON(res, { error: 'Missing playlist id', tracks: [] }, 400); return; }
+      if (!/^\d+$/.test(String(id))) { sendJSON(res, { error: 'INVALID_PLAYLIST_ID', tracks: [] }, 400); return; }
 
       const pageLimit = parseInt(url.searchParams.get('limit') || '0', 10) || 0;
       const pageOffset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
