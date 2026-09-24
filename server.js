@@ -167,6 +167,22 @@ const {
 } = require('./cuefield/feedback-log');
 const { planCuefieldTransitionFromCache } = require('./cuefield/stellaflix-bridge');
 const agentApi = require('./agent-api');
+const platformPlaylistImport = require('./platform-playlist-import');
+// 平台歌单导入的跨平台匹配桥：sp/qs/am 导入歌曲无 Stellaflix 原生 id，
+// 用 netease cloudsearch 按歌名+歌手匹配出可播版本；匹配不上的歌保留
+// needsCrossPlatformMatch，由前端 custom-source 聚合解析现场兜底。
+platformPlaylistImport.setSearchImplementation(async function (query, options) {
+  const limit = Math.max(1, Math.min(30, Number(options && options.limit) || 10));
+  const songs = await handleSearch(String(query || ''), limit, 0);
+  return {
+    ok: true,
+    songs: (Array.isArray(songs) ? songs : []).map(s => ({
+      name: s.name, singer: s.artist || '', songmid: String(s.id || ''),
+      picUrl: s.cover || '', interval: s.interval || 0, source: 'wy',
+    })),
+    failures: [],
+  };
+});
 const { setupGlobalProxy } = require('./desktop/global-proxy');
 const hlsAdFilter = require('./desktop/hls-ad-filter');
 
@@ -5543,6 +5559,23 @@ const server = http.createServer(async (req, res) => {
       installed: [{ name: 'netease', enabled: true, note: 'built-in cloudsearch' }],
       enabledCount: 1
     });
+    return;
+  }
+
+  // ---------- 平台歌单导入（platform-playlist-import.js，自 Mineradio 移植）----------
+  // body: { input: 分享链接/纯数字歌单 ID, source: tx|wy|kw|kg|kgc|mg|sp|qs|am（可选） }
+  if (pn === '/api/platform-playlist/import') {
+    if (req.method !== 'POST') { sendJSON(res, { ok: false, error: 'METHOD_NOT_ALLOWED' }, 405); return; }
+    try {
+      const body = await readRequestBody(req);
+      const input = String(body.input || '').trim();
+      if (!input) { sendJSON(res, { ok: false, error: 'INPUT_REQUIRED', message: '请粘贴歌单分享链接或数字歌单 ID' }, 400); return; }
+      const result = await platformPlaylistImport.importPlaylist(input, String(body.source || '').trim());
+      sendJSON(res, result);
+    } catch (err) {
+      console.error('[PlatformPlaylistImport]', err && err.message);
+      sendJSON(res, { ok: false, error: 'IMPORT_FAILED', message: err && err.message || '歌单导入失败' }, 400);
+    }
     return;
   }
 
