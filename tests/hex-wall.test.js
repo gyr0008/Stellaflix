@@ -303,6 +303,71 @@ test('聚焦提交：选中卡海报/片名写入 localStorage，供首页片库
   assert.equal(saved2.title, '片名 5', '再次聚焦应覆写');
 });
 
+test('蜂窝咬合：spacingY 小于卡高（对齐 Folia ≈0.96×H）', () => {
+  const { wall } = loadHexWall({ adapter: null });
+  mountReady(wall);
+  const state = wall.getState();
+  const h = parseFloat(wall.getNode(state.focusIndex).style.height);
+  // 找一个 z=1 的坐标反推 spacingY
+  let spacingY = null;
+  for (let i = 0; i < state.count && spacingY === null; i += 1) {
+    const c = wall.coordOf(i);
+    if (c && c.cube.z === 1) spacingY = c.baseY;
+  }
+  assert.ok(spacingY !== null, '应有 z=1 的坐标');
+  assert.ok(Math.abs(spacingY - Math.round(h * 0.96)) <= 1,
+    'spacingY 应≈0.96×卡高实现行咬合，实际 ' + spacingY + ' vs 卡高 ' + h);
+});
+
+test('maxDistance 收紧：远处卡定在最小 scale（Folia ≈2.32×卡宽比例）', () => {
+  const { wall } = loadHexWall({ adapter: null });
+  mountReady(wall);
+  wall.centerOnIndex(0, { immediate: true });
+  const st = wall.getState();
+  const c0 = wall.coordOf(0);
+  let found = null;
+  for (let i = 1; i < st.count; i += 1) {
+    const c = wall.coordOf(i);
+    const dist = Math.sqrt((c.baseX - c0.baseX) ** 2 + (c.baseY - c0.baseY) ** 2);
+    const node = wall.getNode(i);
+    if (node && dist > 350) { found = { dist, transform: node.style.transform }; break; }
+  }
+  assert.ok(found, '应有距离>350px 的挂载卡（1280 视口卡宽 132，maxDistance≈306）');
+  const m = /scale\(([\d.]+)\)/.exec(found.transform);
+  assert.ok(m, 'transform 应含 scale');
+  assert.ok(Math.abs(parseFloat(m[1]) - 0.45) < 0.02,
+    '远处卡应已定底 0.45（半对角旧算法此处约 0.79），实际 ' + m[1]);
+});
+
+test('边界回弹：滚轮/拖拽越界后被钳回内容边界（Folia dragBounds 语义）', () => {
+  const { wall } = loadHexWall({ adapter: null });
+  mountReady(wall);
+  wall.centerOnIndex(0, { immediate: true });
+  const st = wall.getState();
+
+  // 扫出内容包围盒
+  let maxY = 0, maxX = 0;
+  for (let i = 0; i < st.count; i += 1) {
+    const c = wall.coordOf(i);
+    if (c.baseY > maxY) maxY = c.baseY;
+    if (c.baseX > maxX) maxX = c.baseX;
+  }
+  // 假 DOM host 1280×720：bufferY=max(0,360-2*spacingY)=0，top 边界=-maxY
+  const field = wall.getState().dom.field;
+  fire(field, 'wheel', { deltaY: 100000, deltaMode: 0 });
+  const afterWheel = wall.getState().offset.dy;
+  assert.ok(Math.abs(afterWheel - (-maxY)) <= 2,
+    '滚轮越界应钳制到 top 边界 -maxY=' + (-maxY) + '，实际 ' + afterWheel);
+
+  // 拖拽：向上拖 5000px（远超界）后松手，应回弹到边界
+  fire(field, 'pointerdown', { button: 0, clientX: 100, clientY: 5000 });
+  fire(field, 'pointermove', { clientX: 100, clientY: 5000 - 5000 });
+  fire(field, 'pointerup', {});
+  const afterDrag = wall.getState().offset.dy;
+  assert.ok(Math.abs(afterDrag - (-maxY)) <= 2,
+    '松手后应回弹钳制到边界，实际 ' + afterDrag);
+});
+
 test('unmount：清空 DOM 与状态，可再次 mount', () => {
   const { wall } = loadHexWall({ adapter: null });
   const host = mountReady(wall);

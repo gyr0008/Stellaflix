@@ -30,8 +30,10 @@
     offset: { dx: 0, dy: 0 },
     metrics: null,
     rafId: null,
-    anim: null,         // { targetX, targetY, velX, velY }
+    anim: null,         // { targetX, targetY, velX, velY, stiffness?, damping?, mass? }
     drag: null,
+    wheelTarget: null,  // 滚轮钳制目标（对齐 Folia wheelTargetRef）
+    draining: false,    // 无 rAF 环境下同步排空动画，防递归爆栈
     commitTimer: null,
     loadToken: 0,
     lastOpen: { id: null, at: 0 }
@@ -44,7 +46,7 @@
       cardW: cardW,
       cardH: cardH,
       spacingX: Math.round(cardW * 1.16),
-      spacingY: Math.round(cardH * 1.1),
+      spacingY: Math.round(cardH * 0.96),
       gap: 18
     };
   }
@@ -64,9 +66,11 @@
     var clipRadius = halfDiag + Math.max(m.cardW, m.cardH);
     return {
       clipRadius: clipRadius,
-      maxDistance: Math.max(halfDiag, 1),
-      lodStart: Math.min(vp.w, vp.h) * 0.28,
-      lodEnd: Math.min(vp.w, vp.h) * 0.55,
+      // 衰减半径按 Folia 断点表比例（maxDistance≈2.32×卡宽、lod≈1.57/1.78×卡宽，
+      // GridView.tsx resolveGridViewCardBox），随卡宽缩放而非视口对角线
+      maxDistance: Math.round(m.cardW * 2.32),
+      lodStart: Math.round(m.cardW * 1.57),
+      lodEnd: Math.round(m.cardW * 1.78),
       viewportWidth: vp.w,
       viewportHeight: vp.h,
       cardWidth: m.cardW,
@@ -222,8 +226,15 @@
         stepAnimation();
         applyFrames();
       });
-    } else {
-      stepAnimation();
+    } else if (!state.draining) {
+      // 无 rAF（测试沙箱）：同步排空弹簧，避免 stepAnimation→requestFrame 递归
+      state.draining = true;
+      try {
+        var maxFrames = 600;
+        while (state.anim && maxFrames-- > 0) stepAnimation();
+      } finally {
+        state.draining = false;
+      }
       applyFrames();
     }
   }
@@ -233,12 +244,13 @@
     var anim = state.anim;
     if (!anim) return;
     var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    var dt = anim.last ? Math.min((now - anim.last) / 1000, 0.033) : 0.016;
+    var dt = anim.last ? Math.min(Math.max((now - anim.last) / 1000, 0.001), 0.033) : 0.016;
     anim.last = now;
-    var stiffness = 220;
-    var damping = 28;
-    var ax = (anim.targetX - state.offset.dx) * stiffness - anim.velX * damping;
-    var ay = (anim.targetY - state.offset.dy) * stiffness - anim.velY * damping;
+    var stiffness = anim.stiffness || 220;
+    var damping = anim.damping || 28;
+    var mass = anim.mass || 1;
+    var ax = ((anim.targetX - state.offset.dx) * stiffness - anim.velX * damping) / mass;
+    var ay = ((anim.targetY - state.offset.dy) * stiffness - anim.velY * damping) / mass;
     anim.velX += ax * dt;
     anim.velY += ay * dt;
     state.offset.dx += anim.velX * dt;
@@ -296,6 +308,7 @@
     var targetX = -coord.baseX;
     var targetY = -coord.baseY;
     var immediate = options && options.immediate;
+    state.wheelTarget = null;
     if (immediate || !global.requestAnimationFrame) {
       state.anim = null;
       state.offset.dx = targetX;
@@ -329,6 +342,39 @@
     return true;
   }
 
+  // ---------- 边界（对齐 Folia GridView dragBounds：内容包围盒 + 视口余量缓冲） ----------
+
+  var BOUND_SPRING = { stiffness: 560, damping: 48, mass: 0.65 };
+
+  function dragBounds() {
+    var m = state.metrics;
+    var vp = viewportSize();
+    var minX = 0, maxX = 0, minY = 0, maxY = 0;
+    for (var i = 0; i < state.coords.length; i++) {
+      var c = state.coords[i];
+      if (c.baseX < minX) minX = c.baseX;
+      if (c.baseX > maxX) maxX = c.baseX;
+      if (c.baseY < minY) minY = c.baseY;
+      if (c.baseY > maxY) maxY = c.baseY;
+    }
+    var bufferX = Math.max(0, vp.w / 2 - 2 * m.spacingX);
+    var bufferY = Math.max(0, vp.h / 2 - 2 * m.spacingY);
+    return {
+      left: -maxX - bufferX,
+      right: -minX + bufferX,
+      top: -maxY - bufferY,
+      bottom: -minY + bufferY
+    };
+  }
+
+  function clampTarget(tx, ty) {
+    var b = dragBounds();
+    return {
+      x: Math.max(b.left, Math.min(b.right, tx)),
+      y: Math.max(b.top, Math.min(b.bottom, ty))
+    };
+  }
+
   // ---------- 输入 ----------
 
   function attachInput() {
@@ -336,9 +382,13 @@
     field.addEventListener('wheel', function (ev) {
       ev.preventDefault();
       var factor = ev.deltaMode === 1 ? 33 : (ev.deltaMode === 2 ? viewportSize().h : 1);
-      state.anim = null;
-      state.offset.dx -= (ev.deltaX || 0) * factor;
-      state.offset.dy -= (ev.deltaY || 0) * factor;
+      var base = state.wheelTarget || { x: state.offset.dx, y: state.offset.dy };
+      var t = clampTarget(base.x - (ev.deltaX || 0) * factor, base.y - (ev.deltaY || 0) * factor);
+      state.wheelTarget = t;
+      state.anim = {
+        targetX: t.x, targetY: t.y, velX: 0, velY: 0, last: 0,
+        stiffness: BOUND_SPRING.stiffness, damping: BOUND_SPRING.damping, mass: BOUND_SPRING.mass
+      };
       requestFrame();
     });
 
@@ -368,6 +418,7 @@
       var vx = 0;
       var vy = 0;
       state.anim = null;
+      state.wheelTarget = null;
       state.drag = true;
 
       function onMove(moveEv) {
@@ -389,14 +440,13 @@
         field.removeEventListener('pointercancel', onUp);
         state.drag = false;
         if (moved < 6) return; // 视作点击，交给 click 处理
-        if (global.requestAnimationFrame) {
-          state.anim = {
-            targetX: state.offset.dx + vx * 0.18,
-            targetY: state.offset.dy + vy * 0.18,
-            velX: 0, velY: 0, last: 0
-          };
-          requestFrame();
-        }
+        // 惯性甩动目标钳制到边界，越界时以边界弹簧回弹（Folia dragConstraints 语义）
+        var t = clampTarget(state.offset.dx + vx * 0.18, state.offset.dy + vy * 0.18);
+        state.anim = {
+          targetX: t.x, targetY: t.y, velX: 0, velY: 0, last: 0,
+          stiffness: BOUND_SPRING.stiffness, damping: BOUND_SPRING.damping, mass: BOUND_SPRING.mass
+        };
+        requestFrame();
       }
       field.addEventListener('pointermove', onMove);
       field.addEventListener('pointerup', onUp);
@@ -555,6 +605,7 @@
     state.offset = { dx: 0, dy: 0 };
     state.anim = null;
     state.drag = null;
+    state.wheelTarget = null;
   }
 
   function refresh() {
