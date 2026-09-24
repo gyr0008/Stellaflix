@@ -195,7 +195,7 @@
       return;
     }
     var t = s.src[0] + '×' + s.src[1] + ' → ' + s.out[0] + '×' + s.out[1];
-    t += ' · ' + s.fps + ' fps · 渲染 ' + s.renderMs + ' ms';
+    t += ' · ' + s.fps + ' fps · 提交 ' + s.renderMs + ' ms';
     statsEl.textContent = t;
   }
   function supportedNote() {
