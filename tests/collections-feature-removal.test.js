@@ -33,10 +33,12 @@ test('collections.js 移除用户片单夹（C 玩法），保留观看标记（
   assert.equal(src.includes('deleteUserFolder'), false);
   assert.equal(src.includes('addUserItem'), false);
   assert.equal(src.includes('USER_KEY'), false, 'stellaflix-user-collections 读写键须删除');
-  // 保留：看过/弃 标记与内置目录
+  // 保留：看过/弃 标记
   assert.match(src, /MARKS_KEY/);
   assert.match(src, /stellaflix-view-marks/);
-  assert.match(src, /\{ id: 'calendar'/, '每周新番目录项保留');
+  // calendar 条目 2026-09-25 判定为死数据删除：浮层 tab 源是 OVERLAY_TABS，
+  // 每周新番卡走 SFV.online.openCalendar()，均不经 CATALOG getByTab('calendar')
+  assert.equal(src.includes("{ id: 'calendar'"), false, 'calendar 死数据须删除');
 });
 
 test('online-collections.js 保留 items 视图与片库/时间表，删除片单页跳转', () => {

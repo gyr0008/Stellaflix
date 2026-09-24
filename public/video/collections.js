@@ -6,10 +6,8 @@
  *   - A 补充：硬编码编辑精选（static-list，TMDB 无法用查询表达的策展片单）
  *
  * 对外 API（SFV.collections）：
- *   getTabs()                         → 6 个平行 tab 定义
  *   getByTab(tabId)                  → 该 tab 下的片单列表（含封面/计数占位）
  *   getItems(collDef)                → 该片单的影片列表（normalizeList 格式，喂 renderGrid）
- *   getPosters(collDef, n)           → 前 n 张海报 URL（叠加效果用）
  *
  * 合规：本文件零硬编码视频源；仅元数据（海报/简介）来自 TMDB，符合 §0.3。
  * 双态隔离：本模块不感知音乐态，仅由影视态页面调用。
@@ -18,17 +16,8 @@
   'use strict';
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
 
-  // ---------------------------------------------------------------- Tab 定义（6 个平行）
-  var TABS = [
-    { id: 'featured', label: '推荐' },
-    { id: 'theme', label: '主题' },
-    { id: 'classic', label: '经典' },
-    { id: 'highscore', label: '高分' },
-    { id: 'awards', label: '获奖' },
-    { id: 'calendar', label: '每周新番' }
-  ];
-
   // ---------------------------------------------------------------- 预置片单目录（B 主干 + A 补充）
+  // tab 归属即浮层 OVERLAY_TABS 的 5 类；每周新番走 BANGUMI 卡（online.openCalendar），不在本目录
   // type:
   //   'tmdb-trending'   → trending(mediaType, timeWindow)
   //   'tmdb-popular'    → popular(mediaType)
@@ -93,8 +82,7 @@
     { id: 'oscar-best-picture', title: '奥斯卡最佳影片', sub: '历届最高荣誉',
       type: 'static-list', tmdbIds: [19404, 424, 11216, 70160, 524, 278, 238, 389, 13, 105], tab: 'awards', warm: '#f1c40f' },
     { id: 'awards-cn-placeholder', title: '金鹰 / 白玉兰 / 华表', sub: '中国奖项片单，即将上线',
-      type: 'placeholder', tab: 'awards', warm: '#c0392b' },
-    { id: 'calendar', title: '每周新番', sub: 'Bangumi 放送表', type: 'bangumi-calendar', tab: 'calendar', warm: '#16a085' }
+      type: 'placeholder', tab: 'awards', warm: '#c0392b' }
   ];
 
   // ---------------------------------------------------------------- 观看标记（看过 / 弃）
@@ -103,8 +91,6 @@
   var LS = global.localStorage;
 
   // ---------------------------------------------------------------- 对外方法
-  function getTabs() { return TABS.slice(); }
-
   function getByTab(tabId) {
     return CATALOG.filter(function (c) { return c.tab === tabId; }).map(function (c) {
       return {
@@ -120,7 +106,24 @@
   }
 
   // 取单个片单的影片列表（统一 normalizeList 格式）
+  // 内存缓存：封面回填与二级页共用在途/已完成结果；static-list 逐条 getDetails，
+  // 不缓存则每次开浮层/切 tab 都是请求风暴。失败不进缓存（下次重试）。
+  var ITEMS_TTL_MS = 10 * 60 * 1000;
+  var itemsCache = {}; // def.id -> { ts, promise }
   function getItems(def) {
+    if (!def || !def.id) return fetchItems(def);
+    var hit = itemsCache[def.id];
+    if (hit && Date.now() - hit.ts < ITEMS_TTL_MS) return hit.promise;
+    var entry = { ts: Date.now(), promise: null };
+    entry.promise = fetchItems(def).catch(function (e) {
+      if (itemsCache[def.id] === entry) delete itemsCache[def.id];
+      throw e;
+    });
+    itemsCache[def.id] = entry;
+    return entry.promise;
+  }
+
+  function fetchItems(def) {
     if (!def) return Promise.reject(new Error('NO_DEF'));
     var tmdb = SFV.tmdb;
     if (!tmdb || !tmdb.hasKey || !tmdb.hasKey()) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
@@ -169,18 +172,6 @@
       });
     });
     return chain.then(function () { return out; });
-  }
-
-  // 取片单封面用的前 n 张海报（叠加效果）
-  function getPosters(def, n) {
-    n = n || 3;
-    return getItems(def).then(function (items) {
-      var posters = [];
-      for (var i = 0; i < items.length && posters.length < n; i++) {
-        if (items[i].poster) posters.push(items[i].poster);
-      }
-      return posters;
-    }).catch(function () { return []; });
   }
 
   // ---------------------------------------------------------------- 看过 / 弃 标记（Kazumi 隐藏已看/已弃）
@@ -241,10 +232,8 @@
 
   // ---------------------------------------------------------------- 导出
   SFV.collections = {
-    getTabs: getTabs,
     getByTab: getByTab,
     getItems: getItems,
-    getPosters: getPosters,
     // 看过 / 弃 标记
     markWatched: markWatched,
     unmarkWatched: unmarkWatched,

@@ -4,9 +4,9 @@
  * 结构（参照移动端精选片单页设计，落地于弹窗而非页面）：
  *   - 顶部 tab 条：推荐 / 主题 / 经典 / 高分 / 获奖（只读内置 CATALOG，SFV.collections.getByTab）
  *   - 两列封面卡网格：模糊海报底（CSS filter blur，禁 canvas —— 7c84045 跨源污染事故）
- *     + 叠卡海报 + 标题 + 「共N部」计数
+ *     + 叠卡海报 + 标题 + 计数（分页型片单=「精选N部」，全量型=「共N部」）
  *   - 封面快照：localStorage（stellaflix-collection-cover-snapshot-v1），打开即回填，
- *     随后逐卡 collections.getItems 异步补海报/计数并写回快照
+ *     24h 内新鲜即跳过补请求；过期才逐卡 collections.getItems 异步补海报/计数并写回
  * 点击卡片 → 弹窗内二级页（openCollectionDetail）：hero 头图 + 四列海报网格（年份/地区/类型胶囊）。
  * 二级页点条目 → SFV.online.openDetailFromMeta(it) 进详情页。
  * 双态隔离：仅影视态首页调用；音乐态「平台热歌与个人偏好」路径不经过本文件。
@@ -17,6 +17,7 @@
   var LS = global.localStorage;
 
   var SNAPSHOT_KEY = 'stellaflix-collection-cover-snapshot-v1';
+  var SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
   var OVERLAY_TABS = [
     { id: 'featured', label: '推荐' },
     { id: 'theme', label: '主题' },
@@ -36,6 +37,15 @@
   }
   function safeUrl(u) {
     return String(u || '').replace(/["'\\()]/g, '').slice(0, 500);
+  }
+
+  // 计数语义：只有 tmdb-collection / static-list 是片单全量，可写「共N部」；
+  // trending/popular/upcoming/discover 仅取 TMDB 第 1 页（20 条），写作「精选N部」
+  var COMPLETE_TYPES = { 'tmdb-collection': true, 'static-list': true };
+  function countLabel(def, n) {
+    var num = Number(n);
+    if (!num || num < 0) return '';
+    return (COMPLETE_TYPES[def && def.type] ? '共' : '精选') + num + '部';
   }
 
   function readSnapshots() {
@@ -75,7 +85,7 @@
   function cardHtml(def, snap) {
     var bg = snap && snap.posters && snap.posters[0];
     var bgStyle = bg ? ' style="background-image:url(' + esc(safeUrl(bg)) + ')"' : '';
-    var countText = snap && snap.count ? '共' + snap.count + '部' : esc(def.sub || '');
+    var countText = countLabel(def, snap && snap.count) || esc(def.sub || '');
     return '<button class="home-video-collections-card" type="button" data-wc-id="' + esc(def.id) + '"' +
       ' style="--wc-warm:' + esc(def.warm || '#534AB7') + '">' +
       '<span class="home-video-collections-card-bg" aria-hidden="true"' + bgStyle + '></span>' +
@@ -108,12 +118,13 @@
     var snaps = readSnapshots();
     list.innerHTML = '<div class="home-video-collections-grid">' +
       defs.map(function (d) { return cardHtml(d, snaps[d.id]); }).join('') + '</div>';
-    fillCovers(defs);
+    fillCovers(defs, snaps);
   }
 
-  function updateCardDom(id, posters, count) {
+  function updateCardDom(def, posters, count) {
     var list = document.getElementById('home-video-collections-list');
     if (!list) return;
+    var id = def && def.id;
     var card = list.querySelector('[data-wc-id="' + (global.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
     if (!card) return;
     var bg = card.querySelector('.home-video-collections-card-bg');
@@ -125,17 +136,22 @@
       }).join('');
     }
     var countEl = card.querySelector('[data-wc-count]');
-    if (countEl && count) {
-      countEl.textContent = '共' + count + '部';
+    var label = countLabel(def, count);
+    if (countEl && label) {
+      countEl.textContent = label;
       countEl.classList.remove('home-video-collections-count-sub');
     }
   }
 
-  function fillCovers(defs) {
+  function fillCovers(defs, snaps) {
     var collections = SFV.collections;
     if (!collections || typeof collections.getItems !== 'function') return;
+    var now = Date.now();
     defs.forEach(function (def) {
       if (!def || def.type === 'placeholder') return;
+      var snap = snaps && snaps[def.id];
+      // 快照 24h 内新鲜：cardHtml 已按快照回填海报/计数，跳过补请求（冷启动零请求）
+      if (snap && Number(snap.count) > 0 && now - (snap.ts || 0) < SNAPSHOT_TTL_MS) return;
       var got;
       try { got = collections.getItems(def); } catch (e) { return; }
       if (!got || typeof got.then !== 'function') return;
@@ -149,7 +165,7 @@
         }
         if (!list.length) return;
         writeSnapshot(def.id, posters, list.length);
-        updateCardDom(def.id, posters, list.length);
+        updateCardDom(def, posters, list.length);
       }).catch(function () { /* 无 Key / 网络失败：保留 warm 渐变兜底 */ });
     });
   }
@@ -182,7 +198,9 @@
     var def = col.def;
     var items = col.items || [];
     var heroPoster = items[0] && items[0].poster;
-    var countText = col.error ? '加载失败' : (items.length ? '共' + items.length + '部' : '加载中…');
+    var countText = col.error ? '加载失败'
+      : col.placeholder ? '即将上线'
+      : (items.length ? countLabel(def, items.length) : '加载中…');
     var html = '<div class="home-video-collections-hero" style="--wc-warm:' + esc(def.warm || '#534AB7') + '">' +
       '<span class="home-video-collections-hero-bg" aria-hidden="true"' +
       (heroPoster ? ' style="background-image:url(' + esc(safeUrl(heroPoster)) + ')"' : '') + '></span>' +
@@ -193,6 +211,8 @@
       html += '<div class="home-video-collections-items-empty">' +
         (col.error === 'TMDB_KEY_REQUIRED' ? '打开片单内容需要先在设置配置 TMDB Key' : '片单加载失败：' + esc(col.error)) +
         '</div>';
+    } else if (col.placeholder) {
+      html += '<div class="home-video-collections-items-empty">该片单即将上线，敬请期待</div>';
     } else if (items.length) {
       html += '<div class="home-video-collections-items-grid">' +
         items.map(itemCardHtml).join('') + '</div>';
@@ -205,6 +225,12 @@
   function openCollectionDetail(def) {
     state.collection = { def: def, items: null, error: '' };
     renderItemsPage();
+    if (def.type === 'placeholder') {
+      // 占位片单无数据源：直接渲染「即将上线」，不进 getItems（否则暴露 UNKNOWN_TYPE 错误码）
+      state.collection.placeholder = true;
+      renderItemsPage();
+      return;
+    }
     var collections = SFV.collections;
     if (!collections || typeof collections.getItems !== 'function') {
       state.collection.error = '片单模块未加载';
