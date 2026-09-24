@@ -76,6 +76,186 @@ const { spawn } = require('child_process');
 let ffmpegStaticPath = null;
 try { ffmpegStaticPath = require('ffmpeg-static'); } catch (_) { ffmpegStaticPath = null; }
 let ffmpegBinaryReady = !!(ffmpegStaticPath && fs.existsSync(ffmpegStaticPath));
+
+// ============ AI 助手语音双引擎（自 Mineradio-LX-Music GPL-3.0 移植，2026-09-22） ============
+// 引擎 A（主）：faster-whisper（Python）— 前端 MediaRecorder 音频 → /transcribe 高精度转写
+// 引擎 B（兜底直采）：Windows SpeechRecognitionEngine — 服务端麦克风直听 /recognize
+// 降级链：whisper 就绪 → A；A 缺失且 win32 → B；都不行 → 保留原 SAPI 转写链（SF 特有第三保险）
+const WINDOWS_SPEECH_SCRIPT = path.join(__dirname, 'desktop', 'speech', 'windows-speech-recognizer.ps1');
+const WHISPER_SPEECH_SCRIPT = path.join(__dirname, 'desktop', 'speech', 'whisper-speech-recognizer.py');
+let speechProcess = null; // 当前语音子进程（任一引擎），供 /cancel 统一终止
+// 熔断：whisper 探测只查文件存在性（不 spawn 验证 python 包），运行期连续失败后
+// 停用 whisper 直到重启，避免每次请求都先空等 90s 超时再回落 SAPI。
+const WHISPER_FAILURE_LIMIT = 2;
+let whisperFailureCount = 0;
+
+// Python 解释器多候选探测（MR 硬编码 Python313 的宽松化改造）：
+// env STELLAFLIX_WHISPER_PYTHON > win32 常见安装目录（313→310、LocalAppData 与 C:\）> PATH。
+function findWhisperPython() {
+  const envOverride = process.env.STELLAFLIX_WHISPER_PYTHON;
+  if (envOverride && fs.existsSync(envOverride)) return envOverride;
+  if (process.platform === 'win32') {
+    const localPrograms = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python');
+    for (const minor of [13, 12, 11, 10]) {
+      const candidate = path.join(localPrograms, `Python3${minor}`, 'python.exe');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    for (const minor of [13, 12, 11, 10]) {
+      const candidate = path.join('C:\\', `Python3${minor}`, 'python.exe');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    const launcher = path.join(process.env.SystemRoot || 'C:\\Windows', 'py.exe');
+    if (fs.existsSync(launcher)) return launcher;
+  }
+  const pathDirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    for (const name of process.platform === 'win32' ? ['python.exe'] : ['python3', 'python']) {
+      const candidate = path.join(dir, name);
+      try { if (fs.existsSync(candidate)) return candidate; } catch (_) {}
+    }
+  }
+  return '';
+}
+
+// huggingface 缓存的 Systran/faster-whisper-small 模型（可用 env 直指模型目录）。
+function findWhisperModelPath() {
+  const envModel = process.env.STELLAFLIX_WHISPER_MODEL;
+  if (envModel && fs.existsSync(path.join(envModel, 'model.bin'))) return envModel;
+  const root = path.join(os.homedir(), '.cache', 'huggingface', 'hub', 'models--Systran--faster-whisper-small', 'snapshots');
+  try {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => path.join(root, entry.name))
+      .find(candidate => fs.existsSync(path.join(candidate, 'model.bin'))) || '';
+  } catch (_error) { return ''; }
+}
+
+function whisperRuntimeReady() {
+  return whisperFailureCount < WHISPER_FAILURE_LIMIT
+    && !!findWhisperModelPath()
+    && !!findWhisperPython()
+    && fs.existsSync(WHISPER_SPEECH_SCRIPT);
+}
+
+function cancelWindowsSpeechRecognition() {
+  const child = speechProcess;
+  speechProcess = null;
+  if (!child) return false;
+  try { child.kill(); } catch (_error) {}
+  return true;
+}
+
+// 引擎 B：服务端麦克风直采（win32 + PowerShell System.Speech）。
+function recognizeWindowsSpeech(timeoutSeconds) {
+  if (process.platform !== 'win32' || !fs.existsSync(WINDOWS_SPEECH_SCRIPT)) {
+    return Promise.reject(Object.assign(new Error('当前系统不支持本地语音识别。'), { code: 'SPEECH_NOT_SUPPORTED' }));
+  }
+  if (speechProcess) {
+    return Promise.reject(Object.assign(new Error('语音识别正在进行中。'), { code: 'SPEECH_BUSY' }));
+  }
+  const timeout = Math.max(3, Math.min(30, Math.round(Number(timeoutSeconds) || 18)));
+  return new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', WINDOWS_SPEECH_SCRIPT, '-TimeoutSeconds', String(timeout),
+    ], { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    speechProcess = child;
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let killTimer = null;
+    const finish = (error, data) => {
+      if (settled) return;
+      settled = true;
+      if (speechProcess === child) speechProcess = null;
+      if (killTimer) clearTimeout(killTimer);
+      if (error) reject(error); else resolve(data);
+    };
+    child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+    child.once('error', error => finish(Object.assign(new Error('无法启动本地语音识别。'), { code: 'SPEECH_START_FAILED', cause: error })));
+    child.once('close', () => {
+      let data = null;
+      const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      for (let index = lines.length - 1; index >= 0 && !data; index -= 1) {
+        try { data = JSON.parse(lines[index]); } catch (_error) {}
+      }
+      if (data && data.ok && String(data.text || '').trim()) {
+        finish(null, { ok: true, text: String(data.text).trim().slice(0, 4000), engine: data.engine || 'windows-offline-zh-CN' });
+        return;
+      }
+      const errorCode = data && data.error || 'SPEECH_RECOGNITION_FAILED';
+      const speechMessages = {
+        SPEECH_ZH_CN_NOT_INSTALLED: '未安装 Windows 中文语音识别器。',
+        SPEECH_NOT_HEARD: '没有听清，请靠近麦克风再说一次。',
+        SPEECH_RECOGNITION_FAILED: '本地语音识别失败，请检查麦克风是否可用。',
+      };
+      const message = speechMessages[errorCode] || (stderr ? '本地语音识别失败，请检查麦克风。' : '没有听清，请再说一次。');
+      finish(Object.assign(new Error(message), { code: errorCode }));
+    });
+    killTimer = setTimeout(() => {
+      try { child.kill(); } catch (_error) {}
+      finish(Object.assign(new Error('语音输入等待超时，请重试。'), { code: 'SPEECH_TIMEOUT' }));
+    }, (timeout + 5) * 1000);
+  });
+}
+
+// 引擎 A：faster-whisper 转写（前端上传的 webm/wav/ogg/m4a，PyAV 解码，不依赖 ffmpeg-static）。
+function recognizeWhisperAudio(audioBuffer, extension) {
+  const modelPath = findWhisperModelPath();
+  const pythonExe = findWhisperPython();
+  if (!modelPath || !pythonExe || !fs.existsSync(WHISPER_SPEECH_SCRIPT)) {
+    return Promise.reject(Object.assign(new Error('高精度本地语音模型不可用。'), { code: 'WHISPER_NOT_AVAILABLE' }));
+  }
+  if (!Buffer.isBuffer(audioBuffer) || audioBuffer.length < 1024) {
+    return Promise.reject(Object.assign(new Error('没有听清，请再说一次。'), { code: 'SPEECH_NOT_HEARD' }));
+  }
+  const safeExtension = /^\.(?:webm|wav|ogg|m4a)$/i.test(extension || '') ? extension : '.webm';
+  const tempPath = path.join(os.tmpdir(), 'stellaflix-speech-' + process.pid + '-' + Date.now() + safeExtension);
+  fs.writeFileSync(tempPath, audioBuffer);
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonExe, [WHISPER_SPEECH_SCRIPT, '--audio', tempPath, '--model', modelPath], {
+      windowsHide: true,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' })
+    });
+    speechProcess = child;
+    let stdout = '';
+    let settled = false;
+    let killTimer = null;
+    const finish = (error, data) => {
+      if (settled) return;
+      settled = true;
+      if (speechProcess === child) speechProcess = null;
+      if (killTimer) clearTimeout(killTimer);
+      try { fs.unlinkSync(tempPath); } catch (_error) {}
+      if (error) reject(error); else resolve(data);
+    };
+    child.stdout.on('data', chunk => { stdout = (stdout + chunk.toString('utf8')).slice(-65536); });
+    child.once('error', error => finish(Object.assign(new Error('无法启动高精度本地语音识别。'), { code: 'WHISPER_START_FAILED', cause: error })));
+    child.once('close', () => {
+      let data = null;
+      const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      for (let index = lines.length - 1; index >= 0 && !data; index -= 1) {
+        try { data = JSON.parse(lines[index]); } catch (_error) {}
+      }
+      if (data && data.ok && String(data.text || '').trim()) {
+        whisperFailureCount = 0; // 成功即复位熔断
+        finish(null, { ok: true, text: String(data.text).trim().slice(0, 4000), engine: data.engine || 'faster-whisper-small-zh' });
+        return;
+      }
+      const code = data && data.error || 'WHISPER_RECOGNITION_FAILED';
+      finish(Object.assign(new Error(code === 'SPEECH_NOT_HEARD' ? '没有听清，请靠近麦克风再说一次。' : '高精度本地语音识别失败。'), { code }));
+    });
+    killTimer = setTimeout(() => {
+      try { child.kill(); } catch (_error) {}
+      finish(Object.assign(new Error('语音识别等待超时，请重试。'), { code: 'SPEECH_TIMEOUT' }));
+    }, 90000);
+  });
+}
+// ============ 语音双引擎结束 ============
+
 const tls = require('tls');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
@@ -7656,32 +7836,36 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ---------- AI 助手语音：前端 MediaRecorder 录 webm/opus → ffmpeg 转 16k 单声道 PCM WAV → PowerShell + SAPI 转写 ----------
+  // ---------- AI 助手语音三链：A=MediaRecorder→faster-whisper（/transcribe 主链）｜B=服务端麦克风直采（/recognize，win32）｜C=ffmpeg→SAPI（/transcribe 兜底） ----------
   if (pn === '/api/agent/speech/capabilities') {
+    // 真实探测（移植自 MR）：whisper = 模型+Python+脚本+未熔断；直采 = win32+脚本。
+    // 前端据此调度：whisper 可用 → MediaRecorder+/transcribe；否则 win32 → /recognize 直采。
     sendJSON(res, {
       ok: true,
-      whisperAvailable: false,
-      // windowsSpeechAvailable 仅代表"服务端麦克风直采"链路；当前未启用，
-      // 前端走 MediaRecorder + /transcribe（上传音频由服务端转写）。
-      windowsSpeechAvailable: false,
+      whisperAvailable: whisperRuntimeReady(),
+      windowsSpeechAvailable: process.platform === 'win32' && fs.existsSync(WINDOWS_SPEECH_SCRIPT),
     });
     return;
   }
 
   if (pn === '/api/agent/speech/recognize') {
-    // 服务端麦克风直采链路未实现；当前前端能力下不会触发此端点。
-    sendJSON(res, { ok: false, error: 'SPEECH_NOT_AVAILABLE', message: '当前环境未配置语音识别。' });
+    // 引擎 B：服务端麦克风直采（PowerShell System.Speech，仅 win32）。
+    if (req.method !== 'POST') {
+      sendJSON(res, { ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
+      return;
+    }
+    try {
+      const body = await readRequestBody(req);
+      sendJSON(res, await recognizeWindowsSpeech(body && body.timeoutSeconds));
+    } catch (err) {
+      sendJSON(res, { ok: false, error: err && err.code || 'SPEECH_RECOGNITION_FAILED', message: err && err.message || '语音识别失败。' }, 400);
+    }
     return;
   }
 
   if (pn === '/api/agent/speech/transcribe') {
     if (req.method !== 'POST') {
       sendJSON(res, { ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-      return;
-    }
-    if (!ffmpegBinaryReady) {
-      sendJSON(res, { ok: false, error: 'FFMPEG_BINARY_MISSING',
-        message: '未检测到 ffmpeg 二进制，请先在项目根目录执行 npm install ffmpeg-static（需联网下载 ~70MB 的 Windows 预编译包）。' });
       return;
     }
     const rawBody = await readRawBody(req, 20 * 1024 * 1024);
@@ -7691,6 +7875,32 @@ const server = http.createServer(async (req, res) => {
     }
     if (!rawBody.length) {
       sendJSON(res, { ok: false, error: 'EMPTY_AUDIO', message: '未收到音频数据。' });
+      return;
+    }
+    // —— 引擎 A（主）：faster-whisper 直转（PyAV 解码，不依赖 ffmpeg-static）——
+    if (whisperRuntimeReady()) {
+      const contentType = String(req.headers['content-type'] || '').toLowerCase();
+      const whisperExt = contentType.includes('wav') ? '.wav'
+        : (contentType.includes('ogg') ? '.ogg'
+          : (contentType.includes('mp4') ? '.m4a' : '.webm'));
+      try {
+        sendJSON(res, await recognizeWhisperAudio(rawBody, whisperExt));
+        return;
+      } catch (err) {
+        if (err && err.code === 'SPEECH_NOT_HEARD') {
+          // 没检测到人声：SAPI 也无能为力，直接返回
+          sendJSON(res, { ok: false, error: 'SPEECH_NOT_HEARD', message: err.message || '没有听清，请再说一次。' }, 400);
+          return;
+        }
+        // 包未装/模型损坏/启动失败等：熔断计数并回落 SAPI 链
+        whisperFailureCount += 1;
+        console.warn('[SpeechTranscribe] whisper 引擎失败（第 ' + whisperFailureCount + ' 次），回落 SAPI：', err && err.code, err && err.message);
+      }
+    }
+    // —— 引擎 C（SF 特有兜底）：ffmpeg 转 16k WAV → SAPI ——
+    if (!ffmpegBinaryReady) {
+      sendJSON(res, { ok: false, error: 'FFMPEG_BINARY_MISSING',
+        message: '未检测到 ffmpeg 二进制，请先在项目根目录执行 npm install ffmpeg-static（需联网下载 ~70MB 的 Windows 预编译包）。' });
       return;
     }
     const ps1Path = path.join(__dirname, 'desktop', 'speech', 'sapi-transcribe.ps1');
@@ -7740,7 +7950,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pn === '/api/agent/speech/cancel') {
-    sendJSON(res, { ok: true, canceled: false });
+    if (req.method !== 'POST') {
+      sendJSON(res, { ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
+      return;
+    }
+    sendJSON(res, { ok: true, canceled: cancelWindowsSpeechRecognition() });
     return;
   }
 
