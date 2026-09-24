@@ -38,3 +38,19 @@ test('detail.js：首屏 curTrack 图标/标题也走候选键（进页即显示
   assert.match(init[0], /getTrackStatusForKeys\s*\(/);
   assert.match(init[0], /trackKeysForView\s*\(/);
 });
+
+const detailSourceSrc = read('public/video/detail-source.js');
+const orchestratorSrc = read('public/video/play-orchestrator.js');
+
+test('detail-source.js：全部 4 处 v2 构造透传 tmdbKey（起播链路带 canonical 键）', () => {
+  const hits = detailSourceSrc.match(/tmdbKey:\s*\(/g) || [];
+  assert.strictEqual(hits.length, 4, 'v2 字面量应有且仅有 4 处注入 tmdbKey');
+  assert.match(detailSourceSrc, /SFV\.model\.canonicalTrackKey/);
+});
+
+test('play-orchestrator.js：setMeta 透传 tmdbKey + seriesTitle 供 heart-btn 消费', () => {
+  const call = /SFV\.player\.setMeta\(\{[^}]*\}\)/.exec(orchestratorSrc);
+  assert.ok(call, 'expected setMeta({...}) call');
+  assert.match(call[0], /tmdbKey:\s*view\.tmdbKey\s*\|\|/);
+  assert.match(call[0], /seriesTitle:\s*view\.title/);
+});

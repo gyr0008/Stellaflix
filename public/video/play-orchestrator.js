@@ -139,7 +139,7 @@
       }
       console.log('[SFV-FREEZE] M10 doPlay after source.open, url=' + String(playUrl).slice(0, 160));
       // 封面/站点名晚到：open 已同步 setCurrentMeta，这里合并（emit sfv:player-meta → 底部控制器刷新）
-      if (SFV.player && SFV.player.setMeta) SFV.player.setMeta({ key: id, seriesKey: view.key, cover: coverUrl, subtitle: sourceName });
+      if (SFV.player && SFV.player.setMeta) SFV.player.setMeta({ key: id, seriesKey: view.key, tmdbKey: view.tmdbKey || (SFV.model && SFV.model.canonicalTrackKey ? SFV.model.canonicalTrackKey(view) : null) || null, seriesTitle: view.title || '', cover: coverUrl, subtitle: sourceName });
       // 剧集导航：供底部控制器 prev/next 键使用（无剧集则清空）
       if (SFV.player && SFV.player.setPlaylist) {
         if (play && play.episodes) {

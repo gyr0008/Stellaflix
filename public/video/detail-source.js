@@ -136,6 +136,7 @@
           title: (playbackSession.view && playbackSession.view.title) || ref.title || c.label,
           pic: (playbackSession.view && playbackSession.view.pic) || ref.pic || '',
           year: (playbackSession.view && playbackSession.view.year) || '',
+          tmdbKey: (SFV.model && SFV.model.canonicalTrackKey) ? SFV.model.canonicalTrackKey(playbackSession.view) : null,
           source: { id: 'kazumi:' + (ref.ruleName || ''), name: ref.ruleName || 'Kazumi' },
           vodId: ref.src, isKazumi: true, ruleName: ref.ruleName
         };
@@ -163,6 +164,7 @@
         title: (playbackSession.view && playbackSession.view.title) || v.title || c.label,
         pic: (playbackSession.view && playbackSession.view.pic) || v.pic || '',
         year: (playbackSession.view && playbackSession.view.year) || v.year || '',
+        tmdbKey: (SFV.model && SFV.model.canonicalTrackKey) ? SFV.model.canonicalTrackKey(playbackSession.view) : null,
         source: { id: v.sourceId, name: v.sourceName || v.sourceId }, vodId: v.vodId
       };
       var play0 = res.plays[0];
@@ -576,6 +578,7 @@
           title: (view && view.title) || ref.title || c.label,
           pic: (view && view.pic) || ref.pic || '',
           year: (view && view.year) || '',
+          tmdbKey: (SFV.model && SFV.model.canonicalTrackKey) ? SFV.model.canonicalTrackKey(view) : null,
           source: { id: 'kazumi:' + (ref.ruleName || ''), name: ref.ruleName || 'Kazumi' },
           vodId: ref.src, isKazumi: true, ruleName: ref.ruleName
         };
@@ -595,6 +598,7 @@
           title: (view && view.title) || v.title || c.label,
           pic: (view && view.pic) || v.pic || '',
           year: (view && view.year) || v.year || '',
+          tmdbKey: (SFV.model && SFV.model.canonicalTrackKey) ? SFV.model.canonicalTrackKey(view) : null,
           source: { id: v.sourceId, name: v.sourceName }, vodId: v.vodId
         };
         var play0 = res.plays[0];
