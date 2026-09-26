@@ -105,9 +105,15 @@
     var missing = keys.filter(function (k) {
       return !present[k] && /^tmdb:/.test(k) && !S.trackMetaInflight[k];
     });
+    // 孤儿键：无 meta 且补全链路永远覆盖不到（非 tmdb 源键），或 tmdb 键正被上一次渲染补全
+    // （in-flight，本轮不再发请求，旧渲染回调因 renderId 失配不会补卡）。
+    // 必须渲染占位卡，否则 tab 计数含键、网格无卡，出现「计数 4 卡片 3」错位。
+    var orphan = keys.filter(function (k) {
+      return !present[k] && (!/^tmdb:/.test(k) || S.trackMetaInflight[k]);
+    });
     var canFetch = !!(SFV.tmdb && SFV.tmdb.getDetails);
 
-    if (!list.length && (!missing.length || !canFetch)) {
+    if (!list.length && !orphan.length && (!missing.length || !canFetch)) {
       return;
     }
 
@@ -165,11 +171,15 @@
 
       card.appendChild(cover);
 
-      card.addEventListener('click', function () { S.openDetailFromMeta(it); });
+      // 占位卡无 sourceId/vodId，点开详情必空，不绑跳转；状态按钮仍可循环至「未追」自助清理
+      if (!it.orphan) card.addEventListener('click', function () { S.openDetailFromMeta(it); });
       grid.appendChild(card);
     }
 
+    function appendOrphanCard(k) { appendTrackCard({ key: k, title: k, pic: '', orphan: true }); }
+
     list.forEach(appendTrackCard);
+    orphan.forEach(appendOrphanCard);
 
     if (missing.length && canFetch) {
       var status = S.el('div', 'sfv-browse-status', '补全 ' + missing.length + ' 条元数据…');
@@ -187,12 +197,14 @@
         S.trackMetaInflight[k] = true;
         SFV.tmdb.getDetails(id, mediaType).then(function (d) {
           delete S.trackMetaInflight[k];
-          if (!d || S.bodyEl._sfvTrackRenderId !== renderId) { tryRemoveStatus(); return; }
+          if (S.bodyEl._sfvTrackRenderId !== renderId) { tryRemoveStatus(); return; }
+          if (!d) { appendOrphanCard(k); tryRemoveStatus(); return; }
           SFV.model.setMeta({ key: k, title: d.title, pic: d.poster, year: d.year, sourceId: '', vodId: '' });
           appendTrackCard({ key: k, title: d.title, pic: d.poster, year: d.year, sourceId: '', vodId: '' });
           tryRemoveStatus();
         }).catch(function () {
           delete S.trackMetaInflight[k];
+          if (S.bodyEl._sfvTrackRenderId === renderId) appendOrphanCard(k);
           tryRemoveStatus();
         });
       });
