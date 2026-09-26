@@ -1034,6 +1034,20 @@ function homeDashboardDiscoverySongs() {
 function renderHomeDashboardDiscovery() {
   var root = document.getElementById('home-discovery-list');
   if (!root) return;
+  var isVideoStrip = !!(document.body && document.body.classList.contains('video-space-active'));
+  homeDashboardDiscoveryModeGate(isVideoStrip ? 'video' : 'music');
+  if (isVideoStrip) { renderHomeDashboardVideoDiscovery(root); return; }
+  // T118 铁律：音乐态 100% 原逻辑（数据源、点击、文案均不变）；影视态覆写的文案/换一批按钮在此还原
+  var musicStrip = root.closest ? root.closest('.home-discovery-strip') : null;
+  if (musicStrip) {
+    musicStrip.style.display = '';
+    var rotateBtn = musicStrip.querySelector('.home-discovery-rotate');
+    if (rotateBtn) rotateBtn.style.display = 'none';
+    var copyTitle = musicStrip.querySelector('.home-discovery-title');
+    if (copyTitle) copyTitle.textContent = '换一首，也许正合心意';
+    var copySub = musicStrip.querySelector('.home-discovery-sub');
+    if (copySub) copySub.textContent = '从每日推荐、歌单与本地音乐中挑选';
+  }
   homeDashboardDiscoveryCache = homeDashboardDiscoverySongs();
   var fingerprint = homeDashboardDiscoveryCache.map(function (song) {
     return [homeDashboardSongKey(song), song.name || song.title || '', homeDashboardSubtitle(song), homeDashboardSongCover(song, 180)].join('|');
@@ -1075,6 +1089,92 @@ function playHomeDashboardDiscoverySong(index) {
     manual: true,
     context: { type: 'home-discovery', playlistName: '为你挑选' },
   })).catch(function (error) { console.warn('[HomeDashboardDiscovery]', error); });
+}
+
+// ────────────── 影视态 FOR YOU：当下最热 / 高分电影 / 每周新番 三张代表作品卡 ──────────────
+var homeDashboardVideoDiscoveryCache = [];
+var homeDashboardVideoDiscoveryFingerprint = '';
+var homeDashboardDiscoveryLastMode = '';
+
+// 音乐/影视共用条带的指纹在跨态时必须作废，否则早退会把上一态的卡片留在 DOM 里
+function homeDashboardDiscoveryModeGate(mode) {
+  if (mode === homeDashboardDiscoveryLastMode) return false;
+  homeDashboardDiscoveryLastMode = mode;
+  homeDashboardDiscoveryFingerprint = '';
+  homeDashboardVideoDiscoveryFingerprint = '';
+  return true;
+}
+
+function homeDashboardVideoPosterUrl(url) {
+  var s = String(url || '');
+  if (s.indexOf('https://image.tmdb.org/') === 0) return '/api/proxy?url=' + encodeURIComponent(s);
+  return s;
+}
+
+function renderHomeDashboardVideoDiscovery(root) {
+  var strip = root.closest ? root.closest('.home-discovery-strip') : null;
+  var api = (typeof window !== 'undefined' && window.StellaflixHomeVideoDiscovery) ? window.StellaflixHomeVideoDiscovery : null;
+  if (strip) {
+    var copy = strip.querySelector('.home-discovery-copy');
+    if (copy) {
+      var kicker = copy.querySelector('.home-insight-kicker');
+      var titleEl = copy.querySelector('.home-discovery-title');
+      var subEl = copy.querySelector('.home-discovery-sub');
+      if (kicker) kicker.textContent = 'FOR YOU · 为你挑选';
+      if (titleEl) titleEl.textContent = '挑一部，今晚就开映';
+      if (subEl) subEl.textContent = '从当下最热、高分电影与新番中挑选';
+      var rotateBtn = copy.querySelector('.home-discovery-rotate');
+      if (!rotateBtn) {
+        rotateBtn = document.createElement('button');
+        rotateBtn.type = 'button';
+        rotateBtn.className = 'home-discovery-rotate';
+        rotateBtn.textContent = '换一批 ⟳';
+        copy.appendChild(rotateBtn);
+      }
+      rotateBtn.style.display = '';
+      rotateBtn.onclick = function () {
+        if (api && typeof api.rotate === 'function') api.rotate();
+        renderHomeDashboardVideoDiscovery(root);
+      };
+    }
+  }
+  var cards = (api && typeof api.getCards === 'function') ? api.getCards() : null;
+  if (!cards || !cards.length) {
+    // 取数中（cards=null，模块拉完会回调重渲染）或当日三源全空 → 整条隐藏，不留音乐空态
+    homeDashboardVideoDiscoveryCache = [];
+    homeDashboardVideoDiscoveryFingerprint = '';
+    root.innerHTML = '';
+    if (strip) strip.style.display = 'none';
+    return;
+  }
+  if (strip) strip.style.display = '';
+  homeDashboardVideoDiscoveryCache = cards;
+  var fingerprint = cards.map(function (c) { return [c.slot, c.title, c.cover, c.reason].join('|'); }).join('||');
+  if (fingerprint === homeDashboardVideoDiscoveryFingerprint) return;
+  homeDashboardVideoDiscoveryFingerprint = fingerprint;
+  root.classList.remove('is-empty');
+  root.innerHTML = cards.map(function (card, index) {
+    var cover = homeDashboardVideoPosterUrl(card.cover);
+    var coverStyle = cover ? ' style="background-image:url(&quot;' + escHtml(cssImageUrl(cover)) + '&quot;)"' : '';
+    return '<button class="home-discovery-song" type="button" onclick="openHomeDashboardVideoDiscoveryCard(' + index + ')" aria-label="打开详情：' + escHtml(card.title) + '">' +
+      '<span class="home-discovery-cover"' + coverStyle + '></span>' +
+      '<span class="home-discovery-song-copy"><span class="home-discovery-song-name">' + escHtml(card.title) + '</span>' +
+      '<span class="home-discovery-song-artist">' + escHtml(card.reason) + '</span></span></button>';
+  }).join('');
+}
+
+function openHomeDashboardVideoDiscoveryCard(index) {
+  var card = homeDashboardVideoDiscoveryCache[Number(index)];
+  if (!card || !card.meta) return;
+  var SFV = (typeof window !== 'undefined' && window.StellaflixVideo) ? window.StellaflixVideo : null;
+  var online = SFV && (SFV.online || SFV.onlineShared);
+  if (online && typeof online.openDetailFromMeta === 'function') {
+    try {
+      online.openDetailFromMeta(card.meta);
+      return;
+    } catch (e) { console.warn('[HomeDashboardVideoDiscovery] openDetailFromMeta 失败', e); }
+  }
+  if (typeof homeDashboardNotify === 'function') homeDashboardNotify('影视模块未就绪');
 }
 
 var homeDashboardLocalMusicFingerprint = '';

@@ -91,6 +91,7 @@
     'js/modules/05-playback/03-home-discover-weather.js',
     'js/modules/05-playback/03b-local-playlist-store.js',
     'js/modules/05-playback/03c-local-online-match.js',
+    'js/home-video-discovery.js',
     'js/modules/05-playback/03a-home-dashboard.js',
     'js/modules/05-playback/04a-radio-modes.js',
     'js/modules/05-playback/04-home-empty-wallpaper.js',
