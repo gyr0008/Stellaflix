@@ -2,7 +2,7 @@
  * Stellaflix 影视模块 — 首页「精选片单」浮层 = 片单中心（影视态 DISCOVER 卡入口）
  *
  * 结构（参照移动端精选片单页设计，落地于弹窗而非页面）：
- *   - 顶部 tab 条：推荐 / 主题 / 经典 / 高分 / 获奖（只读内置 CATALOG，SFV.collections.getByTab）
+ *   - 顶部 tab 条：推荐 / 系列 / 榜单 / 类型（只读内置 CATALOG，SFV.collections.getByTab）
  *   - 两列封面卡网格：warm 纯色场域封面区（def.warm 同色系 linear-gradient）+ 左置扇形叠卡
  *     + 封面下方独立文案区（v2 的海报 blur 底与 ::after 渐晕已移除，2026-09-25 参照截图；
  *     canvas 红线不变 —— 7c84045 跨源污染事故）
@@ -22,14 +22,13 @@
   var SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
   var OVERLAY_TABS = [
     { id: 'featured', label: '推荐' },
-    { id: 'theme', label: '主题' },
-    { id: 'classic', label: '经典' },
-    { id: 'highscore', label: '高分' },
-    { id: 'awards', label: '获奖' }
+    { id: 'series', label: '系列' },
+    { id: 'lists', label: '榜单' },
+    { id: 'genres', label: '类型' }
   ];
   function overlayTabs() { return OVERLAY_TABS.map(function (t) { return { id: t.id, label: t.label }; }); }
 
-  var state = { open: false, previousFocus: null, activeTab: 'featured', defs: [], collection: null };
+  var state = { open: false, parked: false, previousFocus: null, activeTab: 'featured', defs: [], collection: null };
   var controlsBound = false;
 
   function esc(s) {
@@ -41,9 +40,9 @@
     return String(u || '').replace(/["'\\()]/g, '').slice(0, 500);
   }
 
-  // 计数语义：只有 tmdb-collection / static-list 是片单全量，可写「共N部」；
+  // 计数语义：tmdb-collection / static-list / tmdb-list（getListAll 逐页拉全）是片单全量，可写「共N部」；
   // trending/popular/upcoming/discover 仅取 TMDB 第 1 页（20 条），写作「精选N部」
-  var COMPLETE_TYPES = { 'tmdb-collection': true, 'static-list': true };
+  var COMPLETE_TYPES = { 'tmdb-collection': true, 'static-list': true, 'tmdb-list': true };
   function countLabel(def, n) {
     var num = Number(n);
     if (!num || num < 0) return '';

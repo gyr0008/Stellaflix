@@ -66,7 +66,7 @@ test('tab 按钮具备 role=tab 与 aria-selected（活动项 true 其余 false�
   const { SFV, tabsBar } = buildEnv();
   SFV.homeCollectionsOverlay.open();
   const tabs = tabsBar.querySelectorAll('button');
-  assert.equal(tabs.length, 5);
+  assert.equal(tabs.length, 4);
   tabs.forEach((btn) => {
     assert.equal(btn.getAttribute('role'), 'tab', 'tab 条按钮须有 role="tab"');
     const selected = btn.getAttribute('aria-selected');
@@ -82,10 +82,10 @@ test('列表容器 role=tabpanel 且 aria-labelledby 跟随当前 tab', async ()
   SFV.homeCollectionsOverlay.open();
   assert.equal(list.getAttribute('role'), 'tabpanel', 'index.html 壳须标 role="tabpanel"');
   assert.equal(list.getAttribute('aria-labelledby'), 'home-video-collections-tab-featured');
-  const themeTab = tabsBar.querySelector('[data-wc-tab="theme"]');
-  themeTab.dispatchEvent(new doc.defaultView.MouseEvent('click', { bubbles: true }));
+  const seriesTab = tabsBar.querySelector('[data-wc-tab="series"]');
+  seriesTab.dispatchEvent(new doc.defaultView.MouseEvent('click', { bubbles: true }));
   await settle();
-  assert.equal(list.getAttribute('aria-labelledby'), 'home-video-collections-tab-theme', '切 tab 后 labelledby 须跟随');
+  assert.equal(list.getAttribute('aria-labelledby'), 'home-video-collections-tab-series', '切 tab 后 labelledby 须跟随');
 });
 
 test('焦点陷阱：末位 Tab 回首位，首位 Shift+Tab 到末位', async () => {

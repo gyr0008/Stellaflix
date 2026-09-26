@@ -4,7 +4,7 @@
  * 精选片单 P1 三项修复（2026-09-25 审查结论）
  *   1. 占位片单点击不再暴露 UNKNOWN_TYPE_placeholder 错误码，显示「即将上线」
  *   2. 计数语义：分页型片单（trending/popular/upcoming/discover 只取第 1 页）
- *      文案为「精选N部」；完整型片单（tmdb-collection/static-list）保持「共N部」
+ *      文案为「精选N部」；完整型片单（tmdb-collection/static-list/tmdb-list）保持「共N部」
  *   3. collections.getItems 加内存缓存：同一片单重复打开/切 tab 不再逐条重发 TMDB 请求
  *
  * 策略：jsdom 解析真实 index.html（拿真实弹窗壳），win.eval 真实
@@ -68,13 +68,17 @@ function buildEnv() {
 
 // ============================================================ 1. 占位片单
 
-test('点占位片单显示「即将上线」，不暴露 UNKNOWN_TYPE 且零请求', async () => {
+test('点占位片单显示「即将上线」，不暴露 UNKNOWN_TYPE 且零请求（占位机制保留；CATALOG 已无占位卡，注入合成 def 验证）', async () => {
   const { SFV, list, click, totalCalls, settle } = buildEnv();
+  const realGetByTab = SFV.collections.getByTab;
+  SFV.collections.getByTab = (tabId) => tabId === 'lists'
+    ? realGetByTab(tabId).concat([{ id: 'synthetic-placeholder', title: '占位测试', sub: '', type: 'placeholder', warm: '#c0392b', tab: 'lists', count: 0 }])
+    : realGetByTab(tabId);
   SFV.homeCollectionsOverlay.open();
-  click(list.ownerDocument.getElementById('home-video-collections-tabs').querySelector('[data-wc-tab="awards"]'));
+  click(list.ownerDocument.getElementById('home-video-collections-tabs').querySelector('[data-wc-tab="lists"]'));
   await settle();
-  const card = list.querySelector('[data-wc-id="awards-cn-placeholder"]');
-  assert.ok(card, '获奖 tab 应渲染占位片单卡');
+  const card = list.querySelector('[data-wc-id="synthetic-placeholder"]');
+  assert.ok(card, 'lists tab 应渲染注入的占位片单卡');
   const before = totalCalls();
   click(card);
   await settle();
@@ -98,10 +102,10 @@ test('分页型片单封面卡计数文案为「精选N部」', async () => {
 test('完整型片单（tmdb-collection）计数保持「共N部」', async () => {
   const { SFV, list, click, settle } = buildEnv();
   SFV.homeCollectionsOverlay.open();
-  click(list.ownerDocument.getElementById('home-video-collections-tabs').querySelector('[data-wc-tab="theme"]'));
+  click(list.ownerDocument.getElementById('home-video-collections-tabs').querySelector('[data-wc-tab="series"]'));
   await settle();
   const el = list.querySelector('[data-wc-id="coll-mcu"] [data-wc-count]');
-  assert.ok(el, 'theme tab 应渲染 coll-mcu 卡');
+  assert.ok(el, 'series tab 应渲染 coll-mcu 卡');
   assert.equal(el.textContent, '共8部');
 });
 
@@ -130,9 +134,9 @@ test('同一片单二次 getItems 只发一次 TMDB 请求', async () => {
 
 test('并发 getItems 共享同一在途请求', async () => {
   const { SFV, calls } = buildEnv();
-  const def = SFV.collections.getByTab('featured').find((d) => d.id === 'popular-movies');
+  const def = SFV.collections.getByTab('featured').find((d) => d.id === 'trending-tv-week');
   const [a, b] = await Promise.all([SFV.collections.getItems(def), SFV.collections.getItems(def)]);
-  assert.equal(calls.popular, 1, '在途 promise 须复用');
+  assert.equal(calls.trending, 1, '在途 promise 须复用');
   assert.equal(a.length, 20);
   assert.equal(b.length, 20);
 });

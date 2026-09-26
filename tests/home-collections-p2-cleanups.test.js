@@ -61,8 +61,8 @@ function buildEnv() {
   return { win, SFV: win.StellaflixVideo, calls, list, settle };
 }
 
-// featured tab 四个分页型片单（fillCovers 冷启动会逐卡发请求）
-const FEATURED_IDS = ['trending-week', 'trending-tv-week', 'popular-movies', 'upcoming'];
+// featured tab 三个分页型片单（fillCovers 冷启动会逐卡发请求；2026-09-26 官方映射批 popular 移除）
+const FEATURED_IDS = ['trending-week', 'trending-tv-week', 'upcoming'];
 function seedSnapshots(win, ts) {
   const snaps = {};
   FEATURED_IDS.forEach((id) => {

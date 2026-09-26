@@ -365,6 +365,50 @@
     });
   }
 
+  // 社区名榜详情（片单「榜单」类使用）：listId → 榜单元数据 + items（normalizeList 同格式）
+  // 注：TMDB 无官方榜单体系，/list/{id} 均为会员创建；UI 副标题须标「社区榜 · 创建者」明示来源。
+  function getList(listId, page) {
+    if (!cfg.apiKey) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
+    if (!listId) return Promise.reject(new Error('TMDB_NO_ID'));
+    var q = page ? { page: page } : {};
+    return request('/list/' + listId, q).then(function (r) {
+      return {
+        id: r.id,
+        name: r.name || '',
+        createdBy: r.created_by || '',
+        description: r.description || '',
+        itemCount: r.item_count || 0,
+        page: r.page || 1,
+        totalPages: r.pages || 1,
+        items: normalizeList({ results: r.items })
+      };
+    });
+  }
+
+  // 逐页拉全（二级页需要完整列表）：每页 20 条，顺序拉取防并发限流；
+  // 上限 15 页 = 300 条锁请求量（IMDb Top 250 = 13 页可全取）；中途失败整体 reject，不吐半截列表。
+  var LIST_MAX_PAGES = 15;
+  function getListAll(listId) {
+    if (!cfg.apiKey) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
+    if (!listId) return Promise.reject(new Error('TMDB_NO_ID'));
+    return getList(listId, 1).then(function (first) {
+      var acc = {
+        id: first.id, name: first.name, createdBy: first.createdBy,
+        description: first.description, itemCount: first.itemCount,
+        totalPages: first.totalPages, items: first.items
+      };
+      var last = Math.min(first.totalPages || 1, LIST_MAX_PAGES);
+      function next(p) {
+        if (p > last) return Promise.resolve(acc);
+        return getList(listId, p).then(function (r) {
+          acc.items = acc.items.concat(r.items);
+          return next(p + 1);
+        });
+      }
+      return next(2);
+    });
+  }
+
   // 详情页一次性聚合：主信息 + 演职员 + 相似影片（一次请求拿全，避免多次往返）
   // 返回 { backdrop, runtime, genres[], cast[{id,name,character,profile}], similar[{...normalizeList}], logos[{file_path,iso_639_1,vote_average,width,height}], ... }
   // 无 key / 网络失败 → reject，调用方静默降级（不展示该模块即可）。
@@ -567,6 +611,8 @@
     trending: trending,
     upcoming: upcoming,
     getCollection: getCollection,
+    getList: getList,
+    getListAll: getListAll,
     getDetailBundle: getDetailBundle,
     getMovieLogos: getMovieLogos,
     getExternalIds: getExternalIds,

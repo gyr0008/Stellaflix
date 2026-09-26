@@ -88,20 +88,23 @@ test('浮层壳在 index.html 且脚本按依赖顺序注册', () => {
   );
 });
 
-test('浮层为片单中心：5 tab（推荐/主题/经典/高分/获奖），不含 mine/calendar', () => {
+test('浮层为片单中心：4 tab（推荐/系列/榜单/类型，2026-09-26 官方映射批），不含 mine/calendar', () => {
   assert.ok(overlayExists, 'public/video/home-collections-overlay.js 必须存在');
   assert.match(overlayScript, /SFV\.homeCollectionsOverlay\s*=/);
   const tabsArr = /var OVERLAY_TABS\s*=\s*\[[\s\S]*?\];/.exec(overlayScript);
   assert.ok(tabsArr, '须定义 OVERLAY_TABS 数组');
   const tabsSrc = tabsArr[0];
-  for (const id of ['featured', 'theme', 'classic', 'highscore', 'awards']) {
+  for (const id of ['featured', 'series', 'lists', 'genres']) {
     assert.ok(tabsSrc.includes(`'${id}'`), `tab 条须含 ${id}`);
   }
-  for (const label of ['推荐', '主题', '经典', '高分', '获奖']) {
+  for (const label of ['推荐', '系列', '榜单', '类型']) {
     assert.ok(overlayScript.includes(label), `tab 条须有文案 ${label}`);
   }
-  assert.equal(overlayScript.includes("'mine'"), false, '浮层不得含「我的片单」tab');
-  assert.equal(overlayScript.includes("'calendar'"), false, '每周新番走 BANGUMI 卡，不进片单浮层');
+  for (const gone of ['theme', 'classic', 'highscore', 'awards']) {
+    assert.equal(tabsSrc.includes(`'${gone}'`), false, `旧 tab ${gone} 须移除（CATALOG 全量替换）`);
+  }
+  assert.equal(tabsSrc.includes("'mine'"), false, '浮层不得含「我的片单」tab');
+  assert.equal(tabsSrc.includes("'calendar'"), false, '每周新番走 BANGUMI 卡，不进片单浮层');
   // tab 数据源只读内置 CATALOG
   assert.match(overlayScript, /collections\.getByTab\s*\(/);
 });
