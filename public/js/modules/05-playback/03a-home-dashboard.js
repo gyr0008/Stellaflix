@@ -15,6 +15,11 @@ var HOME_DASHBOARD_VIDEO_LEGACY_META_KEY = 'stellaflix-home-dashboard-video-meta
 var HOME_DASHBOARD_VIDEO_MAX_BYTES = 300 * 1024 * 1024;
 var HOME_DASHBOARD_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 var homeDashboardVideoDbPromise = null;
+/* T-跨态连线v2：音乐态「影视空间」卡与影视态左侧壁纸同源（dashboard IDB blob），
+   blob 只能异步读取 → 水合后缓存 objectURL 供同步渲染复用 */
+var homeVideoSpaceCrossCover = '';
+var homeVideoSpaceCrossObjectUrl = '';
+var homeVideoSpaceCrossHydrating = false;
 
 /* T-双态独立海报：获取当前空间模式（music|video） */
 function getHomeDashboardMode() {
@@ -74,6 +79,8 @@ migrateHomeDashboardLegacyMedia();
 /* T-双态独立海报：切态时释放旧态媒体 + 加载新态媒体 */
 function homeDashboardHandleSpaceChange() {
   homeDashboardVideoDecodeFailed = false;
+  // 切态后影视态背景可能已被更换/移除：丢弃跨态缓存，下次音乐态渲染重新水合
+  homeVideoSpaceCrossCover = '';
   homeDashboardReleaseVideoSource(true);
   homeDashboardRenderVideoActions();
   homeDashboardUpdateVideoPower();
@@ -257,6 +264,51 @@ async function homeDashboardDeleteVideoBlob() {
     transaction.onerror = function () { reject(transaction.error || new Error('HOME_VIDEO_DELETE_FAILED')); };
     transaction.onabort = function () { reject(transaction.error || new Error('HOME_VIDEO_DELETE_ABORTED')); };
   });
+}
+
+/* T-跨态连线v2：音乐态「影视空间」卡展示影视态 dashboard 背景图。
+   与 home.js _readMusicPosterNow Layer 7 同法：直接从 dashboard 自己的 IDB 读 blob
+   并 createObjectURL 一个不被 homeDashboardReleaseVideoSource 追踪的新 URL，跨态复用安全。
+   （旧链路 getVideoLeftPosterImage 读的是 posterStore/个人海报 另一套存储，与壁纸不同源 → 取空后回落到音乐封面池） */
+function homeDashboardHydrateVideoSpaceCardCover() {
+  if (getHomeDashboardMode() !== 'music') return;
+  if (homeVideoSpaceCrossCover || homeVideoSpaceCrossHydrating) return;
+  var meta = null;
+  try { meta = JSON.parse(localStorage.getItem(HOME_DASHBOARD_VIDEO_META_KEY_VIDEO) || 'null'); } catch (e) { return; }
+  // 影视态背景是 mp4 视频时无法作为图片海报展示，保持原有兜底
+  if (!meta || meta.version !== 1 || meta.kind !== 'image') return;
+  homeVideoSpaceCrossHydrating = true;
+  homeDashboardOpenVideoDb().then(function (db) {
+    return new Promise(function (resolve) {
+      var transaction = db.transaction(HOME_DASHBOARD_VIDEO_STORE, 'readonly');
+      var request = transaction.objectStore(HOME_DASHBOARD_VIDEO_STORE).get(HOME_DASHBOARD_VIDEO_BLOB_ID_VIDEO);
+      request.onsuccess = function () { resolve(request.result || null); };
+      request.onerror = function () { resolve(null); };
+    });
+  }).then(function (record) {
+    homeVideoSpaceCrossHydrating = false;
+    if (!record || !record.blob) return;
+    var url = '';
+    try { url = (window.URL || window.webkitURL).createObjectURL(record.blob); } catch (e) { return; }
+    var staleUrl = homeVideoSpaceCrossObjectUrl;
+    homeVideoSpaceCrossObjectUrl = url;
+    homeVideoSpaceCrossCover = url;
+    if (staleUrl) { try { (window.URL || window.webkitURL).revokeObjectURL(staleUrl); } catch (e) { /* ignore */ } }
+    homeDashboardApplyVideoSpaceCrossCover();
+  }).catch(function () { homeVideoSpaceCrossHydrating = false; });
+}
+
+function homeDashboardApplyVideoSpaceCrossCover() {
+  if (!homeVideoSpaceCrossCover) return;
+  var grid = document.querySelector('#empty-home .home-grid');
+  if (!grid) return;
+  var cards = grid.querySelectorAll('.home-card');
+  var videoCard = cards[4];
+  if (!videoCard) return;
+  var art = videoCard.querySelector('.home-card-art');
+  if (!art) return;
+  art.className = 'home-card-art has-cover';
+  homeDashboardSetStableBackgroundImage(art, homeVideoSpaceCrossCover);
 }
 
 function homeDashboardReadVideoMeta() {
@@ -741,7 +793,9 @@ function renderHomeDashboardQuickCards() {
       title: '影视空间',
       sub: '搜索 / 播放影片',
       cover: (function () {
-        // T-跨态连线：音乐态「影视空间」卡展示影视态左侧海报
+        // T-跨态连线v2：优先影视态 dashboard 背景（与影视态左侧壁纸同源，异步水合后缓存）
+        if (homeVideoSpaceCrossCover) return homeVideoSpaceCrossCover;
+        // 旧链路兜底：用户「个人海报」（posterStore，另一套存储，仅小图 dataUrl 可同步取）
         try {
           var SFV = window.StellaflixVideo;
           if (SFV && SFV.home && typeof SFV.home.getVideoLeftPosterImage === 'function') {
@@ -834,6 +888,8 @@ function renderHomeDashboardQuickCards() {
     homeDashboardPatchCard(existingCards[index], card);
   });
   homeDashboardQuickFingerprint = fingerprint;
+  // T-跨态连线v2：首帧若跨态缓存为空（走了音乐封面池兜底），异步水合影视态背景后回填
+  homeDashboardHydrateVideoSpaceCardCover();
 }
 
 function resumeHomeDashboardPlayback() {
