@@ -18,16 +18,6 @@ Stellaflix 是一款「音乐 × 影视」双形态的 Windows 桌面沉浸式�
 - **影视态**：mpv/ffmpeg 解码、Emby/Jellyfin/Alist/WebDAV 接入、番剧时间线、弹幕与超分
 - **桌面形态**：完整桌面模式、Wallpaper Engine 壁纸、桌面歌词，闲置自动回收资源
 
-## 立即下载 Windows 安装包
-
-| 下载入口 | 推荐人群 | 链接 |
-| --- | --- | --- |
-| 夸克盘 | 夸克用户 | [下载 Stellaflix](https://pan.quark.cn/s/f40289e1c5d3) |
-| 百度云 | 百度网盘用户（提取码 `sjhp`） | [下载 Stellaflix](https://pan.baidu.com/s/14fgTABgbfseOg9QuX0Um7Q?pwd=sjhp) |
-| 蓝奏云 | 直接下载 | [下载 Stellaflix](https://xxhuber.lanzout.com/stellaflix2) |
-| GitHub Release | GitHub 用户、版本说明与源码 | [Stellaflix Releases](https://github.com/gyr0008/Stellaflix/releases) |
-
-安装时只需要下载并运行 `Stellaflix-0.1.4-Setup.exe`。不要把 `.blockmap`、`latest.yml` 或 `win-unpacked` 当成正式安装包。
 
 ## 下载或安装被拦截怎么办
 
