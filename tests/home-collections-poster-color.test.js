@@ -109,7 +109,7 @@ test('getPosterColor 失败不进缓存：下次调用重发', async () => {
 test('快照新鲜且带 color：cardHtml 即时回填 --wc-warm，零 getItems、零取色请求', async () => {
   const { SFV, color, requested, warmOf, win, settle } = buildEnv();
   win.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
-    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), color: '#123456' },
+    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), type: 'tmdb-trending', color: '#123456' },
   }));
   SFV.homeCollectionsOverlay.open();
   await settle();
@@ -121,7 +121,7 @@ test('快照新鲜且带 color：cardHtml 即时回填 --wc-warm，零 getItems�
 test('快照新鲜但无 color（旧格式）：只补色一次并写回快照，不重拉 getItems', async () => {
   const { SFV, color, requested, warmOf, win, settle, snapshots } = buildEnv();
   win.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
-    'trending-week': { posters: ['https://img.example/T1.jpg', 'https://img.example/T2.jpg'], count: 20, ts: Date.now() },
+    'trending-week': { posters: ['https://img.example/T1.jpg', 'https://img.example/T2.jpg'], count: 20, ts: Date.now(), type: 'tmdb-trending' },
   }));
   SFV.homeCollectionsOverlay.open();
   await settle();
@@ -156,7 +156,7 @@ test('快照 color 被篡改为非 #hex：不得注入卡样式（XSS 防线）'
   const { SFV, color, warmOf, win, settle } = buildEnv();
   color.impl = () => Promise.reject(new Error('COLOR_OFFLINE')); // 补色也不成功 → 只能回落 CATALOG
   win.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
-    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), color: 'red;background:url(x)' },
+    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), type: 'tmdb-trending', color: 'red;background:url(x)' },
   }));
   SFV.homeCollectionsOverlay.open();
   await settle();
@@ -170,7 +170,7 @@ test('快照 color 被篡改为非 #hex：不得注入卡样式（XSS 防线）'
 test('V1 二级页：快照带 color 时 modal 与 hero 的 --wc-warm 用海报取色而非 CATALOG，且零取色请求', async () => {
   const { SFV, color, list, click, settle, win } = buildEnv();
   win.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
-    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), color: '#123456' },
+    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), type: 'tmdb-trending', color: '#123456' },
   }));
   SFV.homeCollectionsOverlay.open();
   await settle();
@@ -213,7 +213,7 @@ test('V1 二级页：快照 color 被篡改非 #hex 不得进 modal/hero 样式�
   const { SFV, color, list, click, settle, win } = buildEnv();
   color.impl = () => Promise.reject(new Error('COLOR_OFFLINE'));
   win.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
-    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), color: 'red;background:url(x)' },
+    'trending-week': { posters: ['https://img.example/T1.jpg'], count: 20, ts: Date.now(), type: 'tmdb-trending', color: 'red;background:url(x)' },
   }));
   SFV.homeCollectionsOverlay.open();
   await settle();

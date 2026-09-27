@@ -63,10 +63,12 @@ function buildEnv() {
 
 // featured tab 三个分页型片单（fillCovers 冷启动会逐卡发请求；2026-09-26 官方映射批 popular 移除）
 const FEATURED_IDS = ['trending-week', 'trending-tv-week', 'upcoming'];
+// 快照须带 def.type 才算「来源未变的的新鲜」（09-26 修「共17部」陈旧计数：type 不符 → 重拉）
+const FEATURED_TYPES = { 'trending-week': 'tmdb-trending', 'trending-tv-week': 'tmdb-trending', 'upcoming': 'tmdb-upcoming' };
 function seedSnapshots(win, ts) {
   const snaps = {};
   FEATURED_IDS.forEach((id) => {
-    snaps[id] = { posters: ['https://img.example/seed-' + id + '.jpg'], count: 20, ts: ts };
+    snaps[id] = { posters: ['https://img.example/seed-' + id + '.jpg'], count: 20, ts: ts, type: FEATURED_TYPES[id] };
   });
   win.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snaps));
 }

@@ -322,6 +322,63 @@
     return request('/discover/movie', q).then(normalizeList);
   }
 
+  // 上游页数守卫：total_pages 缺失/非正整数/超 TMDB 硬上限（500）时视为脏值，只取首页。
+  // 「不限条数」= 取满真实页数，不是拿可疑值去空转几百个请求。
+  var TMDB_PAGE_CEILING = 500;
+  function sanePageCount(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n) || n < 1 || n > TMDB_PAGE_CEILING) return 1;
+    return Math.floor(n);
+  }
+
+  // discover 逐页拉全（片单二级页用；单页 discover 只有 20 条会截断影人/类型卡）。
+  // 顺序拉取防并发限流；中途失败整体 reject，不吐半截列表。
+  function discoverAll(params) {
+    if (!cfg.apiKey) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
+    var base = Object.assign({}, params || {});
+    return request('/discover/movie', Object.assign({ page: 1 }, base)).then(function (first) {
+      var acc = normalizeList(first);
+      var last = sanePageCount(first && first.total_pages);
+      function next(p) {
+        if (p > last) return Promise.resolve(acc);
+        return request('/discover/movie', Object.assign({ page: p }, base)).then(function (r) {
+          acc = acc.concat(normalizeList(r));
+          return next(p + 1);
+        });
+      }
+      return next(2);
+    });
+  }
+
+  // 名次段取数（2026-09-27 榜单二次分类：上千部的大榜拆成「第 1-100 / 101-200 / …」）。
+  // TMDB discover 每页 20 条，全局第 n 名（1 基）= 页 floor((n-1)/20)+1 的第 (n-1)%20 条，
+  // 于是起始页与页内偏移可直接换算，不必像 discoverAll 那样把区间前的几百条拉完再丢。
+  // 某页返回不足 20 条即视为上游到底（discover 分页顺序填充），如实返回已有条数、不空转补页。
+  var TMDB_PAGE_SIZE = 20;
+  function discoverRank(params, rankFrom, count) {
+    if (!cfg.apiKey) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
+    var base = Object.assign({}, params || {});
+    var rf = Number(rankFrom);
+    var start = (Number.isFinite(rf) && rf >= 1) ? Math.floor(rf) : 1;
+    var ct = Number(count);
+    var want = (Number.isFinite(ct) && ct >= 1) ? Math.floor(ct) : TMDB_PAGE_SIZE;
+    var firstPage = Math.floor((start - 1) / TMDB_PAGE_SIZE) + 1;
+    var offset = (start - 1) % TMDB_PAGE_SIZE;
+    var need = offset + want;
+    var acc = [];
+    function cut() { return acc.slice(offset, offset + want); }
+    function next(p) {
+      if (acc.length >= need) return Promise.resolve(cut());
+      return request('/discover/movie', Object.assign({ page: p }, base)).then(function (r) {
+        var pageItems = normalizeList(r);
+        acc = acc.concat(pageItems);
+        if (pageItems.length < TMDB_PAGE_SIZE) return cut();
+        return next(p + 1);
+      });
+    }
+    return next(firstPage);
+  }
+
   // 趋势榜（片单「推荐」类使用）：mediaType=movie|tv，timeWindow=day|week
   function trending(mediaType, timeWindow) {
     if (!cfg.apiKey) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
@@ -367,27 +424,51 @@
 
   // 社区名榜详情（片单「榜单」类使用）：listId → 榜单元数据 + items（normalizeList 同格式）
   // 注：TMDB 无官方榜单体系，/list/{id} 均为会员创建；UI 副标题须标「社区榜 · 创建者」明示来源。
+  var LIST_PAGE_SIZE = 20;
+  // created_by 有两种历史形状：旧 v3=字符串，现行=对象 {name, id, gravatar}。
+  // 归一化成字符串：该字段现无 UI 消费方（副标题走 CATALOG 静态 sub），但形状统一后
+  // 将来接「动态榜名/创建者」不会再露出 [object Object]。
+  function listCreator(cb) {
+    if (typeof cb === 'string') return cb;
+    return (cb && typeof cb.name === 'string') ? cb.name : '';
+  }
+  // 上游 pages 的可信区间：缺失/非法/超 TMDB 硬上限都算脏值（返回 0 = 不采信，交给 item_count 反推），
+  // 否则一个可疑的 pages=9999 会换来几千个串行请求。
+  function listPageBound(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n) || n < 1 || n > TMDB_PAGE_CEILING) return 0;
+    return Math.floor(n);
+  }
+
   function getList(listId, page) {
     if (!cfg.apiKey) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
     if (!listId) return Promise.reject(new Error('TMDB_NO_ID'));
     var q = page ? { page: page } : {};
     return request('/list/' + listId, q).then(function (r) {
+      var count = r.item_count || r.number_of_items || 0;
+      // /3/list/{id} 的真实响应没有 pages/total_pages 字段（只有 page / next_page / item_count），
+      // 每页固定 20 条 → 页数只能按 item_count 反推。误读 r.pages 会让每张社区榜停在第 1 页 20 部。
+      // 显式 pages 只信可信区间；item_count 是可信字段，按它反推后夹到 500 页硬顶。
+      var explicit = listPageBound(r.pages || r.total_pages);
+      var derived = count > 0 ? Math.min(Math.ceil(count / LIST_PAGE_SIZE), TMDB_PAGE_CEILING) : 1;
       return {
         id: r.id,
         name: r.name || '',
-        createdBy: r.created_by || '',
+        createdBy: listCreator(r.created_by),
         description: r.description || '',
-        itemCount: r.item_count || 0,
+        itemCount: count,
         page: r.page || 1,
-        totalPages: r.pages || 1,
+        totalPages: explicit || derived,
+        hasNextPage: r.next_page === true || Number(r.next_page) > 0,
         items: normalizeList({ results: r.items })
       };
     });
   }
 
   // 逐页拉全（二级页需要完整列表）：每页 20 条，顺序拉取防并发限流；
-  // 上限 15 页 = 300 条锁请求量（IMDb Top 250 = 13 页可全取）；中途失败整体 reject，不吐半截列表。
-  var LIST_MAX_PAGES = 15;
+  // 页数不设业务上限（2026-09-26 用户指令「所有片单不限制最多数量」），只受 TMDB 500 页硬顶；
+  // 空页即收尾（防 item_count 虚高空转）；item_count 缺失时靠 next_page 逐页放宽上界；
+  // 中途失败整体 reject，不吐半截列表。
   function getListAll(listId) {
     if (!cfg.apiKey) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
     if (!listId) return Promise.reject(new Error('TMDB_NO_ID'));
@@ -397,11 +478,15 @@
         description: first.description, itemCount: first.itemCount,
         totalPages: first.totalPages, items: first.items
       };
-      var last = Math.min(first.totalPages || 1, LIST_MAX_PAGES);
+      var last = listPageBound(first.totalPages) || 1;
+      if (first.hasNextPage && last < 2) last = 2;
       function next(p) {
         if (p > last) return Promise.resolve(acc);
         return getList(listId, p).then(function (r) {
+          var got = r.items.length;
           acc.items = acc.items.concat(r.items);
+          if (got === 0) return Promise.resolve(acc);
+          if (r.hasNextPage && last < p + 1) last = Math.min(p + 1, TMDB_PAGE_CEILING);
           return next(p + 1);
         });
       }
@@ -608,6 +693,10 @@
     bestMatch: bestMatch,
     popular: popular,
     discover: discover,
+    discoverAll: discoverAll,
+    discoverRank: discoverRank,
+    // 底层只读请求（片单 static-list 走 /movie?ids= chunk 端点批量取详情用）；勿用于写操作
+    request: request,
     trending: trending,
     upcoming: upcoming,
     getCollection: getCollection,

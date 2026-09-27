@@ -4,9 +4,9 @@
  * 精选片单 · 官方片单映射批 —— CATALOG 全量重写（2026-09-26 用户裁定：全量替换 + 引用社区名榜）
  * 结构定案（4 tab）：
  *   推荐 featured  = 3 动态卡（trending movie/tv + upcoming）
- *   系列 series    = 25 个 TMDB 官方合集（ID 全部经站内页直连核实；209=404 已剔除）
- *   榜单 lists     = 5 个已核实社区名榜（tmdb-list → tmdb.getListAll，含 DC=8005）+ 高分榜(discover)；占位卡已删
- *   类型 genres    = 10 个 discover 类型卡（with_genres 固定）
+ *   系列 series    = 26 个 TMDB 官方合集 + 3 影人专区卡（成龙卡 09-26 用户裁定删除 / 周星驰·宫崎骏·新海诚=静态编目）
+ *   榜单 lists     = 5 个已核实社区名榜（tmdb-list → tmdb.getListAll，含 DC=8005）+ 高分/恢复/华语 discover + 奥斯卡 static + 25 张年度高分动画卡
+ *   类型 genres    = 38 张二次分类子卡（09-27 用户指令：母卡全删、每卡 ≤100 部 = 主题过滤 + limit:100）
  * 契约：
  *   ① getByTab 的 tab 集合恰为上述 4 个；旧 tab（theme/classic/highscore/awards）返回空
  *   ② tmdb-list 定义带 listId 且 getByTab 透传；副标题标「社区榜 · 创建者」（TMDB 无官方榜单）
@@ -33,8 +33,10 @@ const VERIFIED_COLLECTION_IDS = [
   86311, 10, 1241, 328, 9485, // 原有（复核正确；209 已证实不存在→剔除）
   119, 645, 264, 10194, 230, 295, 2344, 87359, 263, 120794, // 新核实
   77816, 86066, 544669, 8354, 8650, 121938, 435259, 556, 125574, 573436,
+  814181, // 熊出没电影宇宙（14 部 2013-2026，含年年有熊）
 ];
 const VERIFIED_LIST_IDS = [28, 43, 634, 3682, 8005]; // travisbell / endtheme / Fernando K / Filmsomniac / Harish-P(DCEU)
+const VERIFIED_PERSON_IDS = [57607, 18897, 608, 74091]; // 周星驰 / 成龙 / 宫崎骏 / 新海诚（2026-09-26 TMDB 站内搜索核实）
 
 function makeItems(n, prefix) {
   const out = [];
@@ -89,7 +91,7 @@ const allDefs = (SFV) => ['featured', 'series', 'lists', 'genres'].flatMap((t) =
 test('tab 集合 = 推荐/系列/榜单/类型 4 个；旧 tab 不再返回条目', () => {
   const { SFV } = buildEnv();
   assert.equal(SFV.collections.getByTab('featured').length, 3, '推荐=3 动态卡');
-  assert.equal(SFV.collections.getByTab('series').length, 25, '系列=25 官方合集（DC 209 系 404 坏 ID，已改社区榜）');
+  assert.equal(SFV.collections.getByTab('series').length, 29, '系列=26 官方合集 + 3 影人静态专区（成龙卡已删）');
   assert.equal(SFV.collections.getByTab('theme').length, 0);
   assert.equal(SFV.collections.getByTab('classic').length, 0);
   assert.equal(SFV.collections.getByTab('highscore').length, 0);
@@ -112,21 +114,41 @@ test('推荐 tab：trending-week / trending-tv-week / upcoming，全部分页型
 
 // ============================================================ 系列（官方合集）
 
-test('系列 tab 恰为 25 个已核实合集 ID（白名单锁，防瞎编 ID 回归）', () => {
+test('系列 tab = 26 官方合集 + 3 影人静态专区（合集 ID 白名单锁，防瞎编 ID 回归）', () => {
   const { SFV } = buildEnv();
   const defs = SFV.collections.getByTab('series');
-  assert.equal(defs.length, VERIFIED_COLLECTION_IDS.length);
-  defs.forEach((d) => {
-    assert.equal(d.type, 'tmdb-collection', d.id + ' 须为 tmdb-collection');
+  assert.equal(defs.length, VERIFIED_COLLECTION_IDS.length + 3, '系列 = 26 官方合集 + 3 影人静态专区');
+  const colls = defs.filter((d) => d.type === 'tmdb-collection');
+  const persons = defs.filter((d) => d.type === 'tmdb-discover');
+  const pLists = defs.filter((d) => d.type === 'tmdb-list');
+  const pStatics = defs.filter((d) => d.type === 'static-list');
+  assert.equal(colls.length, VERIFIED_COLLECTION_IDS.length, '官方合集数=白名单数');
+  assert.equal(persons.length, 0, '影人卡已全部改静态编目（discover with_people 会混入非其导演条目）');
+  assert.equal(pLists.length, 0, 'series tab 内社区榜已清空（成龙卡 09-26 用户裁定删除）');
+  assert.equal(pStatics.length, 3, 'series 内静态编目 = 周星驰 + 宫崎骏 + 新海诚');
+  colls.forEach((d) => {
     assert.ok(VERIFIED_COLLECTION_IDS.includes(Number(d.collectionId)), '未核实合集 ID: ' + d.collectionId);
     assert.ok(d.title && d.warm, d.id + ' 须有中文标题与兜底色');
   });
-  assert.equal(new Set(defs.map((d) => Number(d.collectionId))).size, 25, '合集 ID 不得重复');
+  persons.forEach((d) => {
+    const pid = Number(d.query && d.query.with_people);
+    assert.ok(VERIFIED_PERSON_IDS.includes(pid), d.id + ' 未核实 person ID: ' + pid);
+    assert.equal(d.query.sort_by, 'vote_average.desc', d.id + ' 影人卡须按评分排');
+    assert.ok(d.title && d.warm, d.id + ' 须有中文标题与兜底色');
+  });
+  assert.ok(defs.some((d) => !d.title && !d.warm) === false, '全卡须有标题与兜底色');
+  assert.equal(new Set(colls.map((d) => Number(d.collectionId))).size, VERIFIED_COLLECTION_IDS.length, '合集 ID 不得重复');
   assert.equal(defs.some((d) => Number(d.collectionId) === 209), false, '209 页面 404 不存在，永不得作为合集 ID 回归');
-  // 抽查代表：原有 MCU + 新核实指环王/蜘蛛侠
+  // 抽查代表：原有 MCU + 新核实指环王/蜘蛛侠 + 熊出没 + 影人专区
   assert.ok(defs.some((d) => Number(d.collectionId) === 86311), 'MCU 86311 保留');
   assert.ok(defs.some((d) => Number(d.collectionId) === 119), '指环王 119');
   assert.ok(defs.some((d) => Number(d.collectionId) === 573436), '蜘蛛侠平行宇宙 573436');
+  assert.ok(defs.some((d) => Number(d.collectionId) === 814181), '熊出没电影宇宙 814181');
+  assert.equal(defs.some((d) => d.id === 'person-jackiechan'), false, '成龙专区已删（09-26 用户裁定）');
+  assert.equal(defs.some((d) => Number(d.listId) === 11302), false, '社区榜 11302 不得回归 series');
+  assert.ok(pStatics.some((d) => d.id === 'person-stephenchow'), '周星驰专区 = 静态编目（TMDB 无相关社区榜）');
+  assert.ok(pStatics.some((d) => d.id === 'person-miyazaki'), '宫崎骏 = 静态编目');
+  assert.ok(pStatics.some((d) => d.id === 'person-shinkai'), '新海诚 = 静态编目');
 });
 
 // ============================================================ 榜单（社区名榜）
@@ -144,18 +166,27 @@ test('榜单 tab 含 5 个已核实社区榜（tmdb-list + listId 透传 + 副�
   assert.ok(lists.some((d) => Number(d.listId) === 8005 && d.id === 'list-dceu'), 'DC 卡=社区榜 8005（list-dceu）');
 });
 
-test('榜单 tab = 5 社区榜 + 高分榜 + 恢复卡×7（影史百大/年度2024·2023·2022·2021·2020s/奥斯卡static），占位卡已删', () => {
+test('榜单 tab = 5 社区榜 + 名次段×5 + 年代带×7 + 年度×5 + 奥斯卡static + 25年度动画（09-27 大榜已拆段）', () => {
   const { SFV } = buildEnv();
   const defs = SFV.collections.getByTab('lists');
-  assert.equal(defs.length, 13, '5社区榜(含DC 8005)+高分榜+影史百大+5年度+奥斯卡static');
+  assert.equal(defs.length, 49, '5社区榜+奥斯卡+5名次段+4影史年代带+5年度+华语动画+3华语年代带+25年度动画');
   const disc = defs.filter((d) => d.type === 'tmdb-discover');
-  assert.equal(disc.length, 7, '高分榜+影史百大+5年度 = 7 个 discover');
-  assert.ok(disc.some((d) => d.id === 'top-rated'), 'top-rated 保留');
+  assert.equal(disc.length, 43, '5名次段+4影史年代带+5年度+1华语动画+3华语年代带+25年度动画 = 43');
+  // 09-27 用户指令：榜单 tab 每个片单 ≤100 部（社区榜属人工策展完整榜，用户裁定原样保留故豁免）
+  disc.forEach((d) => {
+    assert.ok(Number(d.limit) > 0 && Number(d.limit) <= 100, d.id + ' 榜卡须带 limit ≤100');
+  });
   assert.equal(defs.filter((d) => d.type === 'placeholder').length, 0, '金鹰/白玉兰/华表占位卡须移除');
   assert.equal(allDefs(SFV).some((d) => d.type === 'placeholder'), false, '全目录不留 placeholder 条目');
-  // 恢复卡锚点（09-26 用户点名恢复）
+  // 高分榜/影史百大/华语天花板三张母榜已按名次段+年代带拆开（负锁见 ranking-subdivide）
+  ['top-rated', 'classic-alltime', 'list-chinese-classics'].forEach((id) => {
+    assert.equal(allDefs(SFV).some((d) => d.id === id), false, id + ' 母榜已拆段，不得回归');
+  });
+  assert.ok(disc.some((d) => d.id === 'top-rated-1-100'), '高分榜名次段首段在册');
+  assert.ok(disc.some((d) => d.id === 'classic-golden-age'), '影史百大年代带首段在册');
+  assert.ok(disc.some((d) => d.id === 'chinese-classic-recent'), '华语经典年代带末段在册');
+  // 年度卡锚点（09-26 用户点名恢复，09-27 只补 limit 不改 ID/参数）
   const byId = (id) => defs.find((d) => d.id === id);
-  assert.ok(byId('classic-alltime'), '影史百大恢复');
   ['top-2024', 'top-2023', 'top-2022', 'top-2021', 'top-2020s'].forEach((id) => {
     const d = byId(id);
     assert.ok(d, id + ' 恢复');
@@ -168,6 +199,12 @@ test('榜单 tab = 5 社区榜 + 高分榜 + 恢复卡×7（影史百大/年度2
   assert.ok(oscar, '奥斯卡 static 10 部恢复');
   assert.equal(oscar.type, 'static-list');
   assert.equal((oscar.tmdbIds || []).length, 10, 'tmdbIds 经 getByTab 透传且保 10 部');
+  // 2026-09-26 新增：华语动画榜（保留原 ID），中国电影天花板已拆为三段
+  const zhAnim = byId('list-chinese-animation');
+  assert.ok(zhAnim, '华语动画榜');
+  assert.equal(String(zhAnim.query.with_original_language), 'zh');
+  assert.equal(String(zhAnim.query.with_genres), '16');
+  assert.equal(byId('list-animation-2002-2026'), undefined, '25 张年度动画卡已取代聚合卡');
 });
 
 test('getItems(tmdb-list) 走 getListAll(listId) 且返回全量 items；二次命中缓存', async () => {
@@ -191,17 +228,19 @@ test('tmdb-list 缺失 listId：reject TMDB_NO_ID 不发散调用', async () => 
 
 // ============================================================ 类型（discover 导航）
 
-test('类型 tab = 11 个 discover 卡（含恢复的犯罪悬疑），with_genres 固定且 ID 正确', () => {
+test('类型 tab = 38 张二次分类子卡，全部带 limit:100（2026-09-27 用户指令，契约详见 genre-subdivide）', () => {
   const { SFV } = buildEnv();
   const defs = SFV.collections.getByTab('genres');
-  assert.equal(defs.length, 11);
-  defs.forEach((d) => assert.equal(d.type, 'tmdb-discover'));
-  const genres = defs.map((d) => String(d.query.with_genres)).sort((a, b) => Number(a) - Number(b)).join(',');
-  assert.equal(genres, '16,18,27,28,35,80,878,9648,10749,10751,10752');
-  // 原有动画/科幻两卡保 id（快照兼容 + 历史契约）；genre-crime 恢复保 id
-  assert.ok(defs.some((d) => d.id === 'genre-animation'), 'genre-animation 保 id');
-  assert.ok(defs.some((d) => d.id === 'genre-scifi'), 'genre-scifi 保 id');
-  assert.ok(defs.some((d) => d.id === 'genre-crime'), 'genre-crime（犯罪悬疑）恢复保 id');
+  assert.equal(defs.length, 38);
+  defs.forEach((d) => {
+    assert.equal(d.type, 'tmdb-discover', d.id + ' 类型子卡走 TMDB 实时排序');
+    assert.equal(Number(d.limit), 100, d.id + ' 每张 ≤100 部');
+    assert.ok(d.id.indexOf('genre-') === 0, d.id + ' 子卡 ID 须挂 genre- 前缀');
+  });
+  // 11 个母类型 ID 已被子卡取代（09-27 裁定「母卡全删」）
+  ['genre-action', 'genre-comedy', 'genre-animation', 'genre-drama', 'genre-romance',
+    'genre-scifi', 'genre-horror', 'genre-mystery', 'genre-crime', 'genre-family', 'genre-war']
+    .forEach((id) => assert.equal(allDefs(SFV).some((d) => d.id === id), false, id + ' 母卡不得回归'));
 });
 
 // ============================================================ overlay 4 tab 与计数语义

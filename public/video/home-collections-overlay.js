@@ -19,6 +19,10 @@
   var LS = global.localStorage;
 
   var SNAPSHOT_KEY = 'stellaflix-collection-cover-snapshot-v1';
+  // tmdb-list 分页修复标记：09-27 之前 tmdb.getList 误读 TMDB 根本不返回的 pages 字段，
+  // 社区榜恒停在第 1 页 = 「共20部」。那期间写入的快照 type 相同又未过期，
+  // 光修分页会让错的 count 继续挂最长 24h → 用标记一次性作废（用户端自愈，无需清库）。
+  var LIST_FULL_MARK = 'v2';
   var SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
   var OVERLAY_TABS = [
     { id: 'featured', label: '推荐' },
@@ -62,11 +66,15 @@
       return p && typeof p === 'object' ? p : {};
     } catch (e) { return {}; }
   }
-  function writeSnapshot(id, posters, count, color) {
+  // 快照记 def.type：CATALOG 换数据源（如 discover→static-list）后 id 不变，
+  // 不带来源标识会让卡片沿用旧 count 最长 24h，而二级页现拉现算 → 两处不一致（09-26「共17部」实机反馈）
+  function writeSnapshot(def, posters, count, color) {
+    var id = def && def.id;
     if (!LS || !id) return;
     try {
       var s = readSnapshots();
-      s[id] = { posters: posters.slice(0, 3), count: count, ts: Date.now() };
+      s[id] = { posters: posters.slice(0, 3), count: count, ts: Date.now(), type: def.type };
+      if (def.type === 'tmdb-list') s[id].fullMark = LIST_FULL_MARK;
       if (isHexColor(color)) s[id].color = color;
       LS.setItem(SNAPSHOT_KEY, JSON.stringify(s));
     } catch (e) {}
@@ -161,49 +169,78 @@
     if (!first) return;
     collections.getPosterColor(first).then(function (color) {
       if (!isHexColor(color)) return;
-      writeSnapshot(def.id, snap.posters, snap.count, color);
+      writeSnapshot(def, snap.posters, snap.count, color);
       updateCardDom(def, snap.posters, snap.count, color);
     }).catch(function () { /* 取色失败：保持 CATALOG warm 兜底 */ });
+  }
+
+  function fillOneCover(def, collections) {
+    var got;
+    try { got = collections.getItems(def); } catch (e) { return Promise.resolve(); }
+    if (!got || typeof got.then !== 'function') return Promise.resolve();
+    return got.then(function (items) {
+      var list = items && items.length ? items : [];
+      var posters = [];
+      for (var i = 0; i < list.length && posters.length < 3; i++) {
+        var it = list[i];
+        var img = it && (it.poster || it.pic);
+        if (img) posters.push(img);
+      }
+      if (!list.length) return;
+      writeSnapshot(def, posters, list.length);
+      updateCardDom(def, posters, list.length);
+      // 色温跟随首张海报：按刷新后的首条目海报取色，异步回填
+      if (!posters[0] || typeof collections.getPosterColor !== 'function') return;
+      var first = list[0].poster || posters[0];
+      return collections.getPosterColor(first).then(function (color) {
+        if (!isHexColor(color)) return;
+        writeSnapshot(def, posters, list.length, color);
+        updateCardDom(def, posters, list.length, color);
+      }).catch(function () { /* 无 Key / 网络失败：保持 CATALOG warm 兜底 */ });
+    }).catch(function () { /* 无 Key / 网络失败：保留 warm 渐变兜底 */ });
+  }
+
+  // 单卡「列表 + 取色」是一条链；lists tab 40 卡（2026-09-26 年度动画卡批）若同步全发
+  // = 80 个上游请求，会撞 TMDB 限流反而更慢 → 全局小并发排队，切 tab 时过期任务直接丢弃。
+  var COVER_CONCURRENCY = 4;
+  var coverQueue = [];
+  var coverActive = 0;
+  var coverGen = 0;
+  function pumpCoverQueue() {
+    while (coverActive < COVER_CONCURRENCY && coverQueue.length) {
+      var task = coverQueue.shift();
+      if (task.gen !== coverGen) continue; // 渲染已换代（切 tab / 重开浮层），不再为其发请求
+      coverActive += 1;
+      Promise.resolve().then(task.run).then(coverDone).catch(coverDone);
+    }
+  }
+  function coverDone() {
+    coverActive -= 1;
+    pumpCoverQueue();
   }
 
   function fillCovers(defs, snaps) {
     var collections = SFV.collections;
     if (!collections || typeof collections.getItems !== 'function') return;
     var now = Date.now();
+    coverGen += 1;
+    var gen = coverGen;
     defs.forEach(function (def) {
       if (!def || def.type === 'placeholder') return;
       var snap = snaps && snaps[def.id];
-      // 快照 24h 内新鲜：cardHtml 已按快照回填海报/计数，跳过补请求（冷启动零请求）
-      if (snap && Number(snap.count) > 0 && now - (snap.ts || 0) < SNAPSHOT_TTL_MS) {
+      // 快照 24h 内新鲜且来源未变：cardHtml 已按快照回填海报/计数，跳过补请求（冷启动零请求）
+      // 无 type 的历史快照一律视为陈旧 → 现拉一次并写回带 type 的新快照（用户端自愈，无需清库）
+      // tmdb-list 还须带分页修复标记，否则是「共20部」时期的截断计数
+      if (snap && Number(snap.count) > 0 && snap.type === def.type &&
+        (def.type !== 'tmdb-list' || snap.fullMark === LIST_FULL_MARK) &&
+        now - (snap.ts || 0) < SNAPSHOT_TTL_MS) {
         // 旧格式快照没有 color：只补一次取色，不重拉列表
-        if (!isHexColor(snap.color)) fillColorOnly(def, snap, collections);
+        if (!isHexColor(snap.color)) coverQueue.push({ gen: gen, run: function () { return fillColorOnly(def, snap, collections); } });
         return;
       }
-      var got;
-      try { got = collections.getItems(def); } catch (e) { return; }
-      if (!got || typeof got.then !== 'function') return;
-      got.then(function (items) {
-        var list = items && items.length ? items : [];
-        var posters = [];
-        for (var i = 0; i < list.length && posters.length < 3; i++) {
-          var it = list[i];
-          var img = it && (it.poster || it.pic);
-          if (img) posters.push(img);
-        }
-        if (!list.length) return;
-        writeSnapshot(def.id, posters, list.length);
-        updateCardDom(def, posters, list.length);
-        // 色温跟随首张海报：按刷新后的首条目海报取色，异步回填
-        if (posters[0]) {
-          var first = list[0].poster || posters[0];
-          collections.getPosterColor(first).then(function (color) {
-            if (!isHexColor(color)) return;
-            writeSnapshot(def.id, posters, list.length, color);
-            updateCardDom(def, posters, list.length, color);
-          }).catch(function () { /* 无 Key / 网络失败：保持 CATALOG warm 兜底 */ });
-        }
-      }).catch(function () { /* 无 Key / 网络失败：保留 warm 渐变兜底 */ });
+      coverQueue.push({ gen: gen, run: function () { return fillOneCover(def, collections); } });
     });
+    pumpCoverQueue();
   }
 
   // ---------------------------------------------------------------- 二级页（片单明细）
@@ -240,7 +277,7 @@
         var img = items[i] && (items[i].poster || items[i].pic);
         if (img) posters.push(img);
       }
-      writeSnapshot(def.id, posters, items.length, color);
+      writeSnapshot(def, posters, items.length, color);
     }).catch(function () { /* 取色失败：保持 CATALOG warm 兜底 */ });
   }
 
