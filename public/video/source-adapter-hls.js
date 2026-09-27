@@ -182,9 +182,11 @@
         levelLoadingMaxRetry: 4,
         levelLoadingRetryDelay: 1000,
         levelLoadingMaxRetryTimeout: 64000,
+        // 清单/档位超时必须 > server.js /api/proxy 的 PROXY_TIMEOUT_MS(12s)，
+        // 让代理 502 先于 hls.js 超时到达，否则慢 CDN 下形成重试风暴（tests/hls-proxy-timeout-alignment.test.js）
         fragLoadingTimeOut: 20000,
-        manifestLoadingTimeOut: 10000,
-        levelLoadingTimeOut: 10000,
+        manifestLoadingTimeOut: 15000,
+        levelLoadingTimeOut: 15000,
         backBufferLength: 90,
       });
       activeHls = hls;
