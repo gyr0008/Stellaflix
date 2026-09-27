@@ -281,22 +281,21 @@ test('B1：建房后即时上球（refreshMap 不等 20s 轮询）', () => {
   assert.match(pw, /setMapRefreshHandler/);
 });
 
-test('B2：进度可视化（同步状态/人数上卡片）', () => {
+test('B2：进度可视化随旧卡片整面退役（ht-panel 换代后调用点须守卫不炸）', () => {
+  // ④-4 用户裁决「删」：旧 world-card 面（含 world-card-live 同步条）整条退役，
+  // hearthere 面板无该槽位，同步状态不再上卡片。
   const ui = read('public/video/world-ui.js');
-  assert.match(ui, /world-card-live/);
-  assert.match(ui, /updateCardLive/);
-  assert.match(ui, /data-live/);
-  // world-room 驱动 updateCardLive
+  assert.ok(!/updateCardLive/.test(ui), 'world-ui 不得再挂 updateCardLive（已退役）');
+  assert.ok(!/world-card-live/.test(ui), 'world-ui 不得再挂 world-card-live');
+  const css = read('public/video/lighthouse/lighthouse.css');
+  assert.ok(!/world-card/.test(css), 'lighthouse.css 卡片样式已归档 _archive/');
+  // world-room 调用点保留但必须存在性守卫（换代后静默 no-op，不抛）
   const room = read('public/video/world-room.js');
   assert.match(room, /updateCardLive/);
-  assert.match(room, /getPlaybackState/);
-  assert.match(room, /同步播放中/);
-  // world-sync 暴露 getPlaybackState
+  assert.match(room, /if \(!SFV\.worldUi \|\| !SFV\.worldUi\.updateCardLive\) return/);
+  // 同步引擎本体不受影响（getPlaybackState 仍在，供其它链路使用）
   const sync = read('public/video/world-sync.js');
   assert.match(sync, /getPlaybackState/);
-  // CSS 样式
-  const css = read('public/video/lighthouse/lighthouse.css');
-  assert.match(css, /world-card-live/);
 });
 
 test('B3：结束放映（服务端 close + 客户端清理 + 刷地图）', () => {
@@ -314,6 +313,91 @@ test('B3：结束放映（服务端 close + 客户端清理 + 刷地图）', () 
   assert.match(room, /removeRoom/);
   assert.match(room, /放映已结束/);
   assert.match(room, /refreshMap\(\)/);
+});
+
+test('B3 契约：RtcSession 的真实 API 是 close()，不存在 stop()（world-room 不得守卫一个不存在的方法）', () => {
+  const ctx = vm.createContext({
+    window: undefined, RTCPeerConnection: undefined,
+    navigator: { mediaDevices: {} }, console,
+    setTimeout, clearTimeout, setInterval, clearInterval, Promise,
+  });
+  vm.runInContext(read('public/video/lighthouse/webrtc.js'), ctx, { filename: 'webrtc.js' });
+  const RC = ctx.StellaflixVideo.lighthouse.webrtc.RtcSession;
+  assert.equal(typeof RC.prototype.close, 'function', 'RtcSession.prototype.close 应是方法');
+  assert.equal(RC.prototype.stop, undefined, 'RtcSession 从未提供 stop() —— rtcSession.stop 守卫会静默跳过');
+
+  // webrtc.js 不 require 任何 DOM 即可实例化（vm 安全）
+  const rc = new RC({ role: 'host', code: 'ABC123', deviceId: 't-1', onMessage() {}, onLinkState() {} });
+  rc.signal = {
+    sent: [],
+    send(payload) { this.sent.push(payload); if (this.ws) this.ws.readyState = 1; },
+    close() { this.closedFlag = true; },
+    open() {},
+    ws: null,
+  };
+  const link = { closedFlag: false, close() { this.closedFlag = true; } };
+  rc.links['t-2'] = link;
+  const signal = rc.signal;
+  rc.close();
+  assert.equal(link.closedFlag, true, 'close() 应关掉每条 peer 链路');
+  assert.equal(signal.closedFlag, true, 'close() 应关掉信令通道（否则 250ms 轮询孤儿化）');
+  assert.equal(rc.signal, null, 'close() 后 signal 引用应置空');
+});
+
+test('B3 行为：leave() 必须调用 rtcSession.close()（stop 轮询 bug 回归）', async () => {
+  let closeCalls = 0;
+  let startCalls = 0;
+  const ctx = vm.createContext({
+    console, setTimeout, clearTimeout, setInterval, clearInterval, Promise,
+    Uint8Array, TextEncoder, TextDecoder, Date, Math, JSON,
+  });
+  ctx.window = ctx;
+  ctx.self = ctx;
+  const LH = {
+    security: { getDeviceId: () => 'test-device' },
+    room: {
+      RoomSession: function () {
+        this.role = 'host'; this.code = ''; this.status = ''; this.members = [];
+        this._h = [];
+      },
+    },
+    webrtc: {
+      // 故意只提供 close()，与真实 webrtc.js 表面一致（无 stop）
+      RtcSession: function (opts) {
+        this.opts = opts;
+        this.close = () => { closeCalls++; };
+        this.start = () => { startCalls++; };
+      },
+    },
+    edge: { removeRoom: () => {} },
+    ui: {
+      showRoomPanel() {}, hideRoomPanel() {}, updateRoomPanel() {},
+      showChat() {}, hideChat() {}, isChatOpen() { return false; }, updateChat() {},
+    },
+  };
+  LH.room.RoomSession.prototype.on = function (fn) { this._h.push(fn); };
+  LH.room.RoomSession.prototype.joinAsGuest = function () { return Promise.reject(new Error('not-found')); };
+  LH.room.RoomSession.prototype.createAsHost = function () { this.code = 'ABC123'; this.status = 'active'; return Promise.resolve(); };
+  ctx.StellaflixVideo = {
+    lighthouse: LH,
+    worldUi: { toast() {}, updateCardLive() {} },
+    worldData: { fetchRooms: () => Promise.resolve({ rooms: [] }) },
+    worldLighthouse: { refreshStations() {} },
+    worldSync: {
+      setMyId() {}, bindPlayer() {}, startBroadcast() {}, reset() {},
+      getCurrentVideoInfo: () => null, getPlaybackState: () => 'idle',
+      onMessage() {}, onUpdate() {}, chatLog: [],
+    },
+  };
+  vm.runInContext(read('public/video/world-room.js'), ctx, { filename: 'world-room.js' });
+
+  await ctx.StellaflixVideo.worldRoom.createHost({ title: '测试放映', name: '测试城', lon: 0, lat: 0 });
+  assert.equal(startCalls, 1, '前置：createHost 应启动 RTC');
+  assert.equal(closeCalls, 0, '前置：入房后不应已关连接');
+
+  ctx.StellaflixVideo.worldRoom.leave();
+  assert.equal(closeCalls, 1, 'leave() 必须关 RtcSession —— 调不存在的 stop() 会静默跳过，SignalClient 的 250ms 轮询孤儿化并打爆 D2 限流');
+  assert.equal(ctx.StellaflixVideo.worldRoom.rtc, null, 'leave() 后 rtc 引用应清空');
 });
 
 test('C1：群聊 UI 接通（onOpenChat → showChat，消息事件刷新）', () => {

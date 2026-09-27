@@ -341,7 +341,7 @@
       try { LH.edge.removeRoom(code); } catch (e) {}
     }
     if (SFV.worldSync && typeof SFV.worldSync.reset === 'function') SFV.worldSync.reset();
-    try { if (rtcSession && rtcSession.stop) rtcSession.stop(); } catch (e) {}
+    try { if (rtcSession && rtcSession.close) rtcSession.close(); } catch (e) {}
     rtcSession = null;
     if (LH && LH.ui && LH.ui.hideRoomPanel) { try { LH.ui.hideRoomPanel(); } catch (e) {} }
     roomSession = null;
