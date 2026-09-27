@@ -46,6 +46,21 @@
   letter-spacing: 2px;
 }
 
+/* Task 9 口号叠层（左上，与右上 ON AIR 对称；pointer-events:none 不挡地图手势） */
+.world-brand-slogan {
+  position: absolute;
+  top: 28px;
+  left: 28px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+  font-weight: 300;
+  letter-spacing: 3px;
+  pointer-events: none;
+  user-select: none;
+  text-shadow: 0 0 16px rgba(0, 0, 0, 0.55);
+  z-index: 100;
+}
+
 /* ON AIR 指示器 */
 .world-on-air {
   position: absolute;
@@ -587,3 +602,394 @@
   background: linear-gradient(90deg, #66e0ff, #4aa9ff); color: #06243a; font-weight: 600; font-size: 13px;
 }
 .lh-chat-send:hover { filter: brightness(1.06); }
+
+
+/* ============================================================
+ * M3 · 世界页交互层（信标卡片 / 统计面板 / 欢迎 toast / 快捷键提示）
+ * 视觉对齐 hearthere：深空玻璃 + 柔光 + 脉冲，克制不花哨。
+ * ============================================================ */
+
+/* ---- 信标卡片（复用 .lh-card 玻璃骨架，补颜色条与收藏态）---- */
+.world-card {
+  position: absolute;
+  z-index: 220;
+  width: 264px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(12, 16, 28, 0.92);
+  border: 1px solid rgba(150, 180, 240, 0.26);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  color: #eaf1ff;
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+  transition: opacity .22s cubic-bezier(.22,1,.36,1), transform .22s cubic-bezier(.22,1,.36,1);
+  pointer-events: auto;
+}
+.world-card.is-in { opacity: 1; transform: translateY(0) scale(1); }
+
+.world-card-bar { height: 5px; width: 100%; }
+.world-card-body { padding: 13px 15px 15px; }
+
+.world-card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.world-card-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10.5px; letter-spacing: .6px; font-weight: 700;
+  padding: 3px 9px; border-radius: 999px;
+}
+.world-card-status .dot { width: 6px; height: 6px; border-radius: 50%; }
+.world-card-status--playing { background: rgba(255,90,110,.16); color: #ff8a96; }
+.world-card-status--playing .dot { background: #ff5a6e; animation: world-pulse 1.4s infinite; }
+.world-card-status--online  { background: rgba(92,225,230,.15); color: #7fe6ec; }
+.world-card-status--online .dot { background: #5ce1e6; }
+.world-card-status--offline { background: rgba(120,135,165,.16); color: #9aa8c2; }
+.world-card-status--offline .dot { background: #6b7793; }
+
+.world-card-close {
+  width: 24px; height: 24px; border: none; border-radius: 50%;
+  background: rgba(255,255,255,.08); color: #cfdcf2;
+  font-size: 15px; line-height: 1; cursor: pointer; flex-shrink: 0;
+}
+.world-card-close:hover { background: rgba(255,255,255,.18); }
+
+.world-card-name {
+  margin-top: 10px;
+  font-size: 20px; font-weight: 600; letter-spacing: .5px;
+  color: #f6f9ff; line-height: 1.25;
+}
+.world-card-geo {
+  margin-top: 5px; font-size: 11.5px; letter-spacing: .4px;
+  color: rgba(190, 208, 235, .72);
+  font-variant-numeric: tabular-nums;
+}
+
+.world-card-actions { display: flex; gap: 8px; margin-top: 13px; }
+.world-card-btn {
+  flex: 1; padding: 9px 0; border: none; border-radius: 11px;
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  transition: filter .16s ease, transform .16s ease, background .16s ease;
+}
+.world-card-btn:active { transform: translateY(1px); }
+.world-card-btn--primary {
+  background: linear-gradient(100deg, #66e0ff, #4aa9ff);
+  color: #06243a;
+}
+.world-card-btn--primary:hover { filter: brightness(1.08); }
+.world-card-btn--ghost {
+  background: rgba(255,255,255,.08);
+  color: #d8e4f6;
+}
+.world-card-btn--ghost:hover { background: rgba(255,255,255,.16); }
+.world-card-btn.is-on {
+  background: rgba(255, 110, 130, .22);
+  color: #ff97a4;
+  box-shadow: 0 0 0 1px rgba(255,110,130,.35) inset;
+}
+
+/* ---- 统计面板（左下）---- */
+.world-stats {
+  position: absolute; left: 22px; bottom: 22px; z-index: 120;
+  display: flex; gap: 14px; align-items: center;
+  padding: 9px 15px; border-radius: 13px;
+  background: rgba(12, 16, 28, 0.72);
+  border: 1px solid rgba(150, 180, 240, 0.2);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  color: #cfe0f6; font-size: 11.5px; letter-spacing: .5px;
+  pointer-events: none;
+}
+.world-stats b { color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; margin-right: 3px; }
+.world-stats .sep { width: 1px; height: 14px; background: rgba(255,255,255,.14); }
+.world-stats .k-playing { color: #ff8a96; }
+.world-stats .k-online  { color: #7fe6ec; }
+.world-stats .k-offline { color: #9aa8c2; }
+
+/* ---- 快捷键提示（右下）---- */
+.world-hints {
+  position: absolute; right: 22px; bottom: 22px; z-index: 120;
+  display: flex; gap: 10px; align-items: center;
+  padding: 8px 13px; border-radius: 12px;
+  background: rgba(12, 16, 28, 0.6);
+  border: 1px solid rgba(150, 180, 240, 0.16);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: rgba(190, 208, 235, .68); font-size: 11px; letter-spacing: .4px;
+  pointer-events: none;
+}
+.world-hints kbd {
+  display: inline-block; min-width: 18px; padding: 1px 5px;
+  border-radius: 5px; text-align: center;
+  background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14);
+  color: #dce7f8; font-size: 10px; font-family: inherit;
+}
+
+/* ---- 欢迎 toast（顶部居中）---- */
+.world-toast {
+  position: absolute; left: 50%; top: 96px; z-index: 300;
+  transform: translate(-50%, -12px);
+  padding: 11px 20px; border-radius: 13px;
+  background: rgba(16, 22, 38, 0.9);
+  border: 1px solid rgba(120, 200, 255, 0.28);
+  box-shadow: 0 16px 44px rgba(0,0,0,.5), 0 0 24px rgba(90,180,255,.18);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: #e8f2ff; font-size: 13px; letter-spacing: .6px;
+  opacity: 0; pointer-events: none;
+  transition: opacity .28s ease, transform .28s cubic-bezier(.22,1,.36,1);
+}
+.world-toast.is-in { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---- 烟花画布（全屏，加色）---- */
+.world-fireworks {
+  position: absolute; inset: 0; z-index: 260;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+/* ---- 加载态 ---- */
+.world-loading {
+  position: absolute; inset: 0; z-index: 150;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; color: rgba(220, 232, 250, .82);
+  font-size: 13px; letter-spacing: 3px;
+  pointer-events: none;
+  transition: opacity .5s ease;
+}
+.world-loading.is-out { opacity: 0; }
+.world-loading-ring {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 2px solid rgba(120, 190, 255, .22);
+  border-top-color: #7cc8ff;
+  animation: world-spin 1s linear infinite;
+}
+@keyframes world-spin { to { transform: rotate(360deg); } }
+
+/* ---- 品牌标题：让 ON AIR 与标题不打架 ---- */
+.world-on-air { top: 28px; right: 26px; }
+.world-earth-title { top: 26px; }
+
+/* 快捷键条按钮（可点，不只是提示） */
+.world-hint-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px; border: 1px solid rgba(255,255,255,.12);
+  border-radius: 9px; background: rgba(255,255,255,.06);
+  color: rgba(210, 226, 246, .88); font-size: 11px; letter-spacing: .4px;
+  cursor: pointer; font-family: inherit;
+  transition: background .16s ease, border-color .16s ease, color .16s ease, transform .12s ease;
+}
+.world-hint-btn:hover { background: rgba(255,255,255,.14); border-color: rgba(150,190,255,.35); color: #fff; }
+.world-hint-btn:active { transform: translateY(1px); }
+.world-hint-btn.is-on {
+  background: rgba(90, 190, 255, .22);
+  border-color: rgba(90, 190, 255, .5);
+  color: #bfe8ff;
+  box-shadow: 0 0 14px rgba(90, 190, 255, .28);
+}
+.world-hint-btn kbd {
+  display: inline-block; min-width: 18px; padding: 1px 5px;
+  border-radius: 5px; text-align: center;
+  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.16);
+  color: #e6eefc; font-size: 10px; font-family: inherit;
+}
+
+.world-card-watch {
+  margin-top: 4px;
+  font-size: 11.5px;
+  letter-spacing: .5px;
+  color: rgba(126, 220, 255, 0.85);
+}
+
+
+/* ============================================================
+   A1/A2: 「+ 创建放映」主按钮 + 创建面板
+   ============================================================ */
+.world-create-btn {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  z-index: 180;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 11px 18px;
+  border: 1px solid rgba(120, 200, 255, .35);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(40,120,220,.85), rgba(60,160,240,.9));
+  color: #fff;
+  font-size: 13px; font-weight: 600; letter-spacing: .6px;
+  font-family: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 22px rgba(40,140,255,.38);
+  transition: transform .15s ease, box-shadow .2s ease, filter .15s ease;
+}
+.world-create-btn:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 6px 28px rgba(40,140,255,.5);
+  transform: translateY(-1px);
+}
+.world-create-btn:active { transform: translateY(1px) scale(.98); }
+.world-create-btn.is-open {
+  background: linear-gradient(135deg, rgba(60,80,120,.85), rgba(80,100,140,.9));
+  border-color: rgba(160,180,220,.3);
+}
+.world-create-btn-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.22);
+  font-size: 16px; line-height: 1; font-weight: 400;
+}
+
+.world-create-panel {
+  width: 300px;
+  background: rgba(18, 24, 40, 0.92);
+  border: 1px solid rgba(120, 170, 255, 0.18);
+  border-radius: 18px;
+  padding: 18px 18px 16px;
+  box-shadow: 0 16px 48px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04) inset;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: rgba(226,236,252,.95);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(12px) scale(.96);
+  transition: opacity .22s ease, transform .22s ease;
+}
+.world-create-panel.is-in {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.world-create-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.world-create-title {
+  font-size: 15px; font-weight: 700; letter-spacing: .6px;
+  color: #fff;
+}
+.world-create-close {
+  width: 26px; height: 26px;
+  border: none; border-radius: 8px;
+  background: rgba(255,255,255,.08);
+  color: rgba(200,214,240,.8); font-size: 16px; line-height: 1;
+  cursor: pointer;
+}
+.world-create-close:hover { background: rgba(255,255,255,.16); color: #fff; }
+.world-create-label {
+  display: block;
+  margin: 10px 0 5px;
+  font-size: 11px; letter-spacing: .6px;
+  color: rgba(170,195,230,.7);
+}
+.world-create-input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid rgba(120,170,255,.18);
+  border-radius: 10px;
+  background: rgba(255,255,255,.06);
+  color: #fff;
+  font-size: 13px; font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color .15s ease, background .15s ease;
+}
+.world-create-input:focus {
+  border-color: rgba(100,180,255,.5);
+  background: rgba(255,255,255,.1);
+}
+.world-create-input::placeholder { color: rgba(150,175,210,.45); }
+.world-create-perm { display: flex; gap: 8px; }
+.world-create-perm-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: 1px solid rgba(120,170,255,.16);
+  border-radius: 10px;
+  background: rgba(255,255,255,.05);
+  color: rgba(190,210,240,.75);
+  font-size: 12px; font-family: inherit;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.world-create-perm-btn:hover {
+  background: rgba(255,255,255,.1);
+  color: #fff;
+}
+.world-create-perm-btn.is-on {
+  background: rgba(60,150,255,.28);
+  border-color: rgba(80,170,255,.55);
+  color: #cfe8ff;
+  font-weight: 600;
+}
+.world-create-note {
+  margin-top: 8px;
+  font-size: 10.5px; line-height: 1.5;
+  color: rgba(150,175,215,.55);
+}
+.world-create-submit {
+  width: 100%;
+  margin-top: 16px;
+  padding: 11px 0;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #2f8fff, #44b0ff);
+  color: #fff;
+  font-size: 13px; font-weight: 700; letter-spacing: .8px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter .15s ease, transform .12s ease;
+}
+.world-create-submit:hover { filter: brightness(1.1); }
+.world-create-submit:active { transform: translateY(1px); }
+.world-create-submit:disabled {
+  opacity: .55; cursor: not-allowed; filter: none;
+}
+
+
+/* B2: 卡片实时同步状态行 */
+.world-card-live {
+  margin-top: 6px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(60, 180, 120, 0.14);
+  border: 1px solid rgba(80, 200, 140, 0.22);
+  font-size: 11px;
+  letter-spacing: .4px;
+  color: rgba(130, 230, 170, 0.92);
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* D1: 创建面板隐私说明 */
+.world-create-privacy-link {
+  display: block;
+  margin-top: 10px;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: rgba(150, 190, 240, 0.55);
+  font-size: 11px;
+  letter-spacing: .3px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+.world-create-privacy-link:hover { color: rgba(180, 210, 255, 0.85); }
+.world-create-privacy {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(120,170,255,.1);
+}
+.world-create-privacy-row {
+  margin-bottom: 7px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: rgba(170, 195, 230, 0.6);
+}
+.world-create-privacy-row:last-child { margin-bottom: 0; }
+.world-create-privacy-row b {
+  color: rgba(200, 220, 250, 0.85);
+  font-weight: 600;
+}

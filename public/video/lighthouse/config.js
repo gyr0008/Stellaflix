@@ -1,16 +1,15 @@
 /*
- * Stellaflix 影视模块 — 灯塔模式 · 运行配置 (Phase 4 对照 hearthere.live 重建)
+ * Stellaflix 影视模块 — 灯塔模式 · 运行配置
  *
- * 集中管理灯塔模式的全局开关与地图密钥，供 globe.js 与 view.js 读取。
- *  - LH.config.online  ：是否接入真实边缘（Cloudflare Worker + WebRTC）。默认 false（离线演示）。
- *  - LH.MAP_CONFIG.mapTilerKey ：MapTiler API Key。
- *      留空 → 世界页 3D 地球不显示地表地理，仅渲染「近黑太空 + 发光信标 + 大气辉光」
- *      （与 hearthere.live 的离线观感一致，但不含大陆/海洋贴图）。
- *      填入有效 Key → deck.gl GlobeView 经 MVTLayer 拉取 MapTiler v3 矢量瓦片，
- *      在真 3D 球体上渲染陆地/海洋/国界几何（矢量暗色地球，与参考站 hearthere.live 一致）。
+ * 集中管理灯塔模式的全局开关与地球底座参数。
+ *  - LH.config.online ：是否接入真实边缘（Cloudflare Worker + WebRTC）。默认 false（离线演示）。
+ *  - LH.MAP_CONFIG    ：地球底座参数，供 view.js / 世界页渲染层读取。
  *
- *  填 Key 方式：把本文件 LH.MAP_CONFIG.mapTilerKey 改为你的 MapTiler Key，
- *  或在 index.html 加载前由宿主注入 window.StellaflixVideo.lighthouse.MAP_CONFIG.mapTilerKey。
+ * 底座说明（路线 A · Cesium + 免 key 底图）：
+ *  - 第一版走 Esri 卫星影像，无需任何 API Key；Esri 不可达时由渲染层自动降级到 OSM。
+ *  - 不再使用 MapTiler，故本文件不持有任何地图厂商密钥。
+ *  - 若将来启用 Cesium ion / Google Photorealistic 3D，密钥由用户在设置里自行填写并写入
+ *    LH.MAP_CONFIG.cesiumToken / LH.MAP_CONFIG.googleKey，严禁把真实密钥提交进源码。
  */
 (function (global) {
   'use strict';
@@ -21,19 +20,23 @@
   LH.config = LH.config || {};
   if (typeof LH.config.online === 'undefined') LH.config.online = false;
 
-  // 地图密钥与底图偏好
+  // 地球底座偏好
   LH.MAP_CONFIG = LH.MAP_CONFIG || {};
-  // MapTiler Key：https://www.maptiler.com/ 注册后获取。留空则无地表贴图。
-  LH.MAP_CONFIG.mapTilerKey = LH.MAP_CONFIG.mapTilerKey || 'nMcdjIXAW4OMjZZnckds';
-  // 地表风格：'vector'（MapTiler 矢量暗色，默认，与参考站 hearthere.live 一致）。
-  //   deck.gl GlobeView 经 MVTLayer 拉取 MapTiler v3 矢量瓦片，渲染陆地/海洋/国界几何。
-  LH.MAP_CONFIG.basemap = LH.MAP_CONFIG.basemap || 'vector';
 
-  // 地球初始视角（经度/纬度/缩放）。zoom 0~1 看到完整球体
+  // 底图档位：'esri'（默认，免 key）/ 'osm'（降级）/ 'photoreal'（需用户自备 token）
+  LH.MAP_CONFIG.basemap = LH.MAP_CONFIG.basemap || 'esri';
+
+  // 可选的高阶底图凭证（默认留空；运行时由用户设置注入，不硬编码）
+  if (LH.MAP_CONFIG.cesiumToken == null) LH.MAP_CONFIG.cesiumToken = '';
+  if (LH.MAP_CONFIG.googleKey == null) LH.MAP_CONFIG.googleKey = '';
+
+  // 地球初始视角（WGS84 经纬度 + 高度米，对齐 Cesium camera.setView）
   LH.MAP_CONFIG.initialView = LH.MAP_CONFIG.initialView || {
-    longitude: 10, latitude: 20, zoom: 0.6,
-    minZoom: 0, maxZoom: 6
+    longitude: 10,
+    latitude: 20,
+    height: 18000000
   };
+
   // 自转（度/秒）；0 关闭。参考站地球缓慢自转
   LH.MAP_CONFIG.autoRotate = LH.MAP_CONFIG.autoRotate != null ? LH.MAP_CONFIG.autoRotate : 4;
 

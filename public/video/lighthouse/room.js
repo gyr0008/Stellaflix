@@ -61,14 +61,31 @@
   };
 
   // Host：创建房间（写 /rooms/{code}）
-  RoomSession.prototype.createAsHost = function (discovery) {
+  // 兼容两种签名：
+  //   createAsHost(true|false)           —— 旧版：仅 discovery
+  //   createAsHost({discovery,title,name,lon,lat}) —— 新版：带地图元数据
+  RoomSession.prototype.createAsHost = function (opts) {
     var self = this;
     self.role = 'host';
     self._set('creating');
     var code = generateRoomCode(6);
-    return edge.createRoom(code, discovery).then(function (res) {
+    var discovery = true;
+    var meta = null;
+    if (typeof opts === 'boolean' || opts == null) {
+      discovery = opts !== false;
+    } else if (typeof opts === 'object') {
+      discovery = opts.discovery !== false;
+      meta = opts;
+    }
+    return edge.createRoom(code, meta || discovery).then(function (res) {
       self.code = code;
       self.discovery = discovery;
+      if (meta) {
+        self.title = meta.title || null;
+        self.roomName = meta.name || null;
+        self.lon = meta.lon;
+        self.lat = meta.lat;
+      }
       self._set('active', { code: code });
       return res;
     });

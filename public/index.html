@@ -2067,19 +2067,25 @@
     "video/page-browse-3d-grid.js",
     "video/back-to-top.js",
 "video/page-home.js",
+"video/lighthouse/security.js",
+"video/lighthouse/edge-local.js",
+"video/lighthouse/state.js",
+"video/lighthouse/room.js",
+"video/lighthouse/webrtc.js",
+"video/lighthouse/sync.js",
+"video/lighthouse/ui.js",
+"video/world-params.js",
+"video/world-globe.js",
+"video/world-boundaries.js",
+"video/world-lighthouse-model.js",
+"video/world-lighthouse-deck.js",
+"video/world-social.js",
+"video/world-ui.js",
+"video/world-map-actions.js",
+"video/world-data.js",
+"video/world-room.js",
+"video/world-sync.js",
 "video/page-world.js",
-    // "video/lighthouse/state.js",          // 灯塔模块已暂停，待新3D地球实现
-    // "video/lighthouse/security.js",
-    // "video/lighthouse/geo.js",
-    // "video/lighthouse/edge.js",
-    // "video/lighthouse/room.js",
-    // "video/lighthouse/sync.js",
-    // "video/lighthouse/webrtc.js",
-    // "video/lighthouse/beacon-view.js",
-    // "video/lighthouse/mock.js",
-    // "video/lighthouse/globe.js",
-    // "video/lighthouse/ui.js",
-    // "video/lighthouse/view.js",
     "video/kazumi/rule-schema.js",
     "video/kazumi/url-utils.js",
     "video/kazumi/http-client.js",
@@ -2185,6 +2191,9 @@
  <script src="js/agent-video-tools.js"></script>
  <script src="js/music-agent-command.js"></script>
  <script src="js/platform-playlist-import.js"></script>
+
+ <!-- 世界页 hearthere parity 步骤①：globe SDK ESM 桥接（@maptiler/sdk 3.9.0 + maplibre 5.6.2） -->
+ <script type="module" src="video/world-globe-esm.js"></script>
 
  <!-- 第三方音源：模态 DOM -->
  <div id="custom-source-modal-overlay" class="custom-source-modal-overlay" data-open="0" aria-hidden="true">

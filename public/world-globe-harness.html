@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>world-globe harness (Task 2 手工验证)</title>
+<!--
+  静态验证沙床：绕开 Electron/路由，直接在浏览器打开本文件即可人工确认
+  MapLibre globe + deck.gl 底座链路。步骤：
+    1) npm start 后访问 http://localhost:<port>/world-globe-harness.html
+       （或双击本文件；瓦片走 https 直连，file:// 下应同样可拉）
+    2) 预期：满窗卫星地球（center [104,35]，zoom 2.5），可拖拽 / 滚轮缩放
+    3) 状态行逐条打印 vendor 注入 → map idle → deck overlay 就绪
+  本任务（Task 2）约定 overlay layers 为空数组；灯塔/边界/交互层在 Task 4-6 接入。
+-->
+<link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css" />
+<style>
+  html, body { margin: 0; height: 100%; background: #05060a; overflow: hidden; }
+  #host { position: absolute; inset: 0; pointer-events: auto; touch-action: none; }
+  #status {
+    position: fixed; left: 8px; bottom: 8px; z-index: 10;
+    color: #9fe; font: 12px/1.5 monospace; white-space: pre-wrap;
+    background: rgba(0,0,0,.5); padding: 6px 10px; border-radius: 6px;
+    max-width: 90vw; pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<div id="status">booting…</div>
+
+<!-- vendor 注入顺序即依赖顺序：loaders.gl obj 依附 core 的 loaders 全局，必须 core→obj -->
+<script src="vendor/loaders/loaders.gl.core.min.js"></script>
+<script src="vendor/loaders/loaders.gl.obj.min.js"></script>
+<script src="vendor/maplibre/maplibre-gl.min.js"></script>
+<script src="vendor/deck.gl/deck.gl.min.js"></script>
+
+<script>
+(function () {
+  'use strict';
+  var out = document.getElementById('status');
+  function log(msg) { out.textContent += '\n' + msg; }
+  function fail(msg) { out.textContent += '\n[FAIL] ' + msg; console.error('[harness]', msg); }
+
+  log('vendor: loaders=' + (typeof loaders) + ' OBJLoader=' +
+    !!(window.loaders && window.loaders.OBJLoader) +
+    ' maplibregl=' + (typeof maplibregl) + ' deck=' + (typeof deck));
+  if (typeof maplibregl === 'undefined' || !maplibregl.Map) { fail('maplibregl 缺失'); return; }
+  if (typeof deck === 'undefined' || !deck.MapboxOverlay) { fail('deck.MapboxOverlay 缺失'); return; }
+
+  // 与 world-globe.js STYLE_ESRI 逐字一致（esri 档）
+  var STYLE_ESRI = {
+    version: 8,
+    projection: { type: 'globe' },
+    sources: {
+      imagery: {
+        type: 'raster',
+        tiles: [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+        ],
+        tileSize: 256
+      }
+    },
+    layers: [{ id: 'imagery', type: 'raster', source: 'imagery' }]
+  };
+
+  var map = new maplibregl.Map({
+    container: 'host',
+    style: STYLE_ESRI,
+    center: [104, 35],
+    zoom: 2.5,
+    pitch: 0
+  });
+  var settled = false;
+  map.on('error', function (e) {
+    console.warn('[harness] map error', e && e.error ? e.error.message : e);
+    if (!settled) fail('底图加载出错（检查网络/瓦片可达性）');
+  });
+  map.on('idle', function () {
+    if (settled) return;
+    settled = true;
+    log('map idle — globe 渲染就绪（拖拽/滚轮验证交互）');
+    try {
+      var overlay = new deck.MapboxOverlay({ layers: [], pickable: true,
+        glOptions: { preserveDrawingBuffer: true } });
+      map.addControl(overlay);
+      log('deck.MapboxOverlay 已挂载（layers=[]，Task 4 起填充）');
+      log('OK：若可见卫星球体且可交互，Step 6 通过');
+    } catch (e) { fail('MapboxOverlay 挂载失败: ' + e.message); }
+  });
+  setTimeout(function () { if (!settled) fail('12s 超时：map 未 idle（网络或 WebGL 不可用）'); }, 12000);
+})();
+</script>
+</body>
+</html>

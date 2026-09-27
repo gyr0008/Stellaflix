@@ -366,6 +366,11 @@
 
   function close() {
     if (!S.overlay) return;
+    // 世界页独立化（2026-09-27）：退出浏览层（goHome/✕/Esc 栈底/切音乐态）必卸载
+    // 当前 router 分页——page-world 依赖 unmount 摘 body.sfv-world-page 并销毁
+    // globe/deck/轮询；此前沿用「close 不 unmount」旧路径，从世界页点首页会
+    // 同时留下地球泄漏与类残留（首页星空被一并藏掉）。
+    if (SFV.router && typeof SFV.router.leave === 'function') SFV.router.leave();
     // T157→重审：退出浏览层（含所有分页）时清除 body.sfv-browse-active，
     // 解除浏览态标记；#top-right 胶囊因 T157 重审后已不再依赖该 class 切换显示，
     // 清理该标记主要用于状态同步与后续样式命中。
@@ -467,8 +472,8 @@
       var p = SFV.router ? SFV.router.current() : null;
       if (p && typeof p.back === 'function' && p.back() === true) return;
       // D1 修复：page 模式无内部子视图可消费返回时，← 应关闭覆盖层回到首页（此前为 no-op，
-      // 用户点 ← 无任何反应，只能靠 ✕ 或切 tab）。先 unmount 当前 page（如电影页回收 3D 海报墙）再 close。
-      if (p && typeof p.unmount === 'function') { try { p.unmount(); } catch (e) {} }
+      // 用户点 ← 无任何反应，只能靠 ✕ 或切 tab）。unmount 当前页统一由 close()→router.leave()
+      // 负责（世界页独立化 2026-09-27，不再在此手动 p.unmount 防双卸载）。
       close();
       return;
     }

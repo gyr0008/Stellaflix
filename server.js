@@ -429,6 +429,12 @@ const {
 } = require('./cuefield/feedback-log');
 const { planCuefieldTransitionFromCache } = require('./cuefield/stellaflix-bridge');
 const agentApi = require('./agent-api');
+// 世界页数据代理（M4）：Radio Browser / USGS / CelesTrak 免 key 源
+const worldApi = require('./world-api');
+// 世界页「一起看」房间信令（M5）：本地内存房间 + 轮询信箱
+const worldRoomApi = require('./world-room-api');
+// 世界页地图瓦片内存缓存（LRU，最多 600 片 ≈ 10MB）
+const mapTileCache = new Map();
 const platformPlaylistImport = require('./platform-playlist-import');
 // 平台歌单导入的跨平台匹配桥：sp/qs/am 导入歌曲无 Stellaflix 原生 id，
 // 用 netease cloudsearch 按歌名+歌手匹配出可播版本；匹配不上的歌保留
@@ -584,6 +590,7 @@ applySystemCertificateAuthorities();
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js':   'application/javascript',
+  '.mjs':  'application/javascript',
   '.css':  'text/css',
   '.json': 'application/json',
   '.png':  'image/png',
@@ -5513,6 +5520,76 @@ const server = http.createServer(async (req, res) => {
   if (pn.startsWith('/api/') && isCrossSiteWrite(req)) {
     console.warn('[Origin-Guard] blocked', req.method, pn, 'origin=' + (req.headers.origin || '-'), 'sec-fetch-site=' + (req.headers['sec-fetch-site'] || '-'));
     sendJSON(res, { error: 'FORBIDDEN_ORIGIN', message: 'Cross-site write to local API is not allowed' }, 403);
+    return;
+  }
+
+
+  // ---------- 世界页数据源（M4 内容已移除，保留接口说明） ----------
+  if (pn === '/api/world/beacons' || pn === '/api/world/quakes' || pn === '/api/world/satellites') {
+    sendJSON(res, { ok: false, error: 'REMOVED', message: '内容数据源已移除；放映房间见 /api/rooms' }, 404);
+    return;
+  }
+
+  // ---------- 世界页「一起看」房间信令（M5） ----------
+  if (pn === '/api/rooms' || pn.startsWith('/api/room')) {
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      sendJSON(res, { error: 'METHOD_NOT_ALLOWED' }, 405);
+      return;
+    }
+    await worldRoomApi.handle(req, res, url, sendJSON);
+    return;
+  }
+
+  // ---------- 世界页地图瓦片代理（同源，消除 CORS / 网络不稳） ----------
+  // GET /api/map-tile/{z}/{y}/{x}
+  if (pn.startsWith('/api/map-tile/')) {
+    const parts = pn.split('/').filter(Boolean); // ['api','map-tile',z,y,x]
+    const z = parseInt(parts[2], 10);
+    const y = parseInt(parts[3], 10);
+    const x = parseInt(parts[4], 10);
+    if (!Number.isInteger(z) || !Number.isInteger(y) || !Number.isInteger(x) ||
+        z < 0 || z > 19 || y < 0 || x < 0) {
+      sendJSON(res, { ok: false, error: 'BAD_TILE' }, 400);
+      return;
+    }
+    const tileKey = z + '/' + y + '/' + x;
+    const cached = mapTileCache.get(tileKey);
+    if (cached) {
+      res.writeHead(200, {
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'public, max-age=86400',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(cached);
+      return;
+    }
+    const tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + z + '/' + y + '/' + x;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      const resp = await fetch(tileUrl, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        sendJSON(res, { ok: false, error: 'TILE_HTTP_' + resp.status }, 502);
+        return;
+      }
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (buf.length > 0 && buf.length < 2 * 1024 * 1024) {
+        mapTileCache.set(tileKey, buf);
+        if (mapTileCache.size > 600) {
+          const firstKey = mapTileCache.keys().next().value;
+          mapTileCache.delete(firstKey);
+        }
+      }
+      res.writeHead(200, {
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'public, max-age=86400',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(buf);
+    } catch (e) {
+      sendJSON(res, { ok: false, error: 'TILE_FETCH_FAIL', message: e && e.message }, 502);
+    }
     return;
   }
 

@@ -1651,6 +1651,25 @@ body:has(#sfv-browse.sfv-browse--page.sfv-show) #empty-home {
   background: var(--sfv-cat-bg, #faf8f5) !important;
   pointer-events: auto !important;
 }
+/* ===== 世界页独立化（2026-09-27 用户要求：不再与首页共用同一套相机/3D 空间）=====
+   body.sfv-world-page 由 page-world mount/unmount 挂摘（router.leave 保证退出
+   浏览层必经过 unmount）。方案 D 让 --page 分页透明复用首页星空，对世界页是
+   错误语义——地球本应自带暗色底；且 .sfv-browse-body 的 transparent !important
+   曾把 applyHostChrome 的行内 #05060a 静默压制（CSS !important > 行内），即
+   「世界页背景还是首页 3D 粒子星空」的根因。此处用更高特异度 + 后置规则翻盘：
+   覆盖层与宿主切实色底，并整块隐藏首页 three.js 画布（backgroundStarRiverParticles
+   1400 粒子就活在这套共享 scene/camera 里，世界页挂载期间一律不参与）。 */
+body.sfv-world-page .sfv-browse.sfv-browse--page {
+  background: #05060a !important;
+}
+body.sfv-world-page .sfv-browse--page .sfv-browse-body {
+  background-color: #05060a !important;
+}
+body.sfv-world-page #canvas-container {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 /* T132(路径①)：内容区 flush 铺满 .sfv-browse（左右内缩清零，底色铺满全宽，消除"窗口缩进"感）；
    顶部 58px 给固定 #search-box 让位（内容不被玻璃栏遮），底部 22px 留白。
    对齐 stellaflix-app 参考：内容层 padding 顶部给固定导航让位、左右 0。 */

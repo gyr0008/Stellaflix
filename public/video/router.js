@@ -54,10 +54,21 @@
   function currentId() { return currentPageId; }
   function listIds() { return order.slice(); }
 
+  // 退出分页态（浏览层关闭/goHome/切音乐态）：卸载当前页并清 id。
+  // 清 id 保证幂等——close() 统一经 leave() 卸载后，调用方无需再手动 unmount。
+  function leave() {
+    var cur = pages[currentPageId];
+    currentPageId = null;
+    if (cur && typeof cur.unmount === 'function') {
+      try { cur.unmount(); } catch (e) {}
+    }
+  }
+
   var api = {
     register: register,
     setHost: setHost,
     go: go,
+    leave: leave,
     current: current,
     currentId: currentId,
     listIds: listIds

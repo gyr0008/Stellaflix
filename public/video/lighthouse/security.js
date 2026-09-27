@@ -26,7 +26,6 @@
   CFG.edgeEndpoint = CFG.edgeEndpoint || '';
   CFG.turnstileSitekey = CFG.turnstileSitekey || '';
   CFG.securitySecret = CFG.securitySecret || '';
-  if (CFG.mapTilerKey == null) CFG.mapTilerKey = '';
   CFG.geoFallback = CFG.geoFallback || 'https://ipapi.co/json/';
 
   var DEVICE_ID_KEY = 'stellaflix-lighthouse-deviceid';

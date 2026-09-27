@@ -676,6 +676,73 @@ body.video-space-active.desktop-shell #desktop-titlebar #custom-source-btn:hover
 body.video-space-active.desktop-shell #desktop-titlebar #diy-mode-btn:hover{background:rgba(255,83,103,.10)!important;border-color:rgba(255,83,103,.34)!important;color:#fff}
 body.video-space-active.desktop-shell #desktop-titlebar #diy-mode-btn.on{background:rgba(255,83,103,.13)!important;border-color:rgba(255,83,103,.50)!important;color:#fff!important;box-shadow:0 12px 34px rgba(255,83,103,.09),inset 0 1px 0 rgba(255,255,255,.08)!important}
 
+/* ===== 世界页窗口控制悬浮胶囊（2026-09-27 用户方案：默认隐藏 + 悬停角落浮现）=====
+   长条病根：#desktop-titlebar 满宽 fixed 44px（本文件 465 段），左半 .desktop-drag-region
+   带 -webkit-app-region:drag + pointer-events:auto → 世界页地球顶部 44px 被当成拖窗区。
+   此处只在世界页（body.sfv-world-page 由 page-world mount/unmount 挂摘）把长条收成右上角
+   170×12 感应窄条，− □ × 做成悬停才显现的独立玻璃胶囊。
+   层级：.sfv-browse--page 覆盖层 z-index:2147482000（player.css:1501）远高于基础段的 500，
+   且 #desktop-window-shell 因 transform/clip-path 自成层叠上下文（本文件 411 段）—— 标题栏
+   留在 shell 内时 z-index 再高也出不了这道墙，自抬无效 → 挂载期由 page-world liftTitlebar()
+   把它 reparent 到 body（同 bottom-bar / track-detail-modal 先例），此处 z-index 才真正生效。
+   胶囊 top:8 + height:34 = 42 < #top-right 的 58（本文件 691 段），两者不重叠。 */
+body.desktop-shell.sfv-world-page #desktop-titlebar {
+  left: auto;
+  width: 170px;
+  right: 24px;
+  top: 8px;
+  height: 12px;
+  padding: 0;
+  z-index: 2147482095;
+  pointer-events: auto !important;
+  -webkit-app-region: no-drag;
+}
+
+body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-drag-region {
+  display: none !important;
+}
+
+body.desktop-shell.sfv-world-page #desktop-titlebar #visual-guide-btn,
+body.desktop-shell.sfv-world-page #desktop-titlebar #update-entry,
+body.desktop-shell.sfv-world-page #desktop-titlebar #custom-source-btn,
+body.desktop-shell.sfv-world-page #desktop-titlebar #diy-mode-btn {
+  display: none !important;
+}
+
+body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 34px;
+  padding: 0 8px;
+  gap: 4px;
+  border-radius: 17px;
+  background: rgba(8, 10, 16, .72);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .08);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-app-region: drag;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .16s ease, visibility 0s linear .16s;
+}
+
+body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  -webkit-app-region: no-drag !important;
+}
+
+body.desktop-shell.sfv-world-page #desktop-titlebar:hover .desktop-window-controls {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  transition: opacity .16s ease, visibility 0s;
+}
+/* ===== 世界页悬浮胶囊 end ===== */
+
 body.desktop-shell #search-area {
   top: -92px
 }
