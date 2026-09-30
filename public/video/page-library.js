@@ -65,9 +65,9 @@
       try { SFV.posterWall.unmount(); } catch (e) { /* ignore */ }
     }
     if (global.document && global.document.body) global.document.body.classList.remove('sfv-library-page');
-    if (SFV.onlineShared && SFV.onlineShared.overlay && SFV.onlineShared.overlay.classList) {
-      SFV.onlineShared.overlay.classList.remove('sfv-library-chrome');
-    }
+    // 注意：不得在此移除 overlay 的 sfv-library-chrome —— 主题类由 online-nav 各出口统一切换；
+    // router 同页重进（详情返回→goToNav('library')→go 先 unmount 当前=library）会误删刚加上的类，
+    // 导致 .sfv-browse--fullscreen 露出乳白底+顶栏（2026-09-25 白色外圈事故）。
   }
 
   function back() {

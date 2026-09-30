@@ -418,6 +418,20 @@
     resizeListeners.length = 0;
   }
 
+  // 左上浮动返回钮：复刻片库页 hex-wall 的 .sfv-plex-back 玻璃圆钮（player.css），与 Esc 同入口
+  function buildBackButton() {
+    var back = el('button', 'sfv-plex-back');
+    back.type = 'button';
+    back.setAttribute('aria-label', '返回');
+    back.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">' +
+      '<path d="M14.5 6 L8.5 12 L14.5 18" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '</svg>';
+    back.addEventListener('click', function () {
+      if (SFV.online && SFV.online.goBack) SFV.online.goBack();
+    });
+    return back;
+  }
+
   function render(host, data) {
     currentHost = host || currentHost;
     if (!currentHost) return;
@@ -427,6 +441,7 @@
 
     currentHost.innerHTML = '';
     var page = el('div', 'sfv-wh-page');
+    page.appendChild(buildBackButton());
     currentHost.appendChild(page);
 
     if (!all.length) { page.appendChild(buildEmpty(false)); return; }

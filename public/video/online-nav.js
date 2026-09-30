@@ -24,7 +24,13 @@
 
   // ---------------------------------------------------------------- 构建
   function ensure() {
-    if (S.overlay) return;
+    if (S.overlay) {
+      // 自愈（2026-09-26 片库空白根因）：首次 ensure 早于 router.js 就绪时 setHost 被守卫跳过，
+      // 而 overlay 幂等不再重建 → host 永久 null，router.go 静默 return，所有页面页永不挂载。
+      // setHost 仅赋值、幂等，可安全重注入。
+      if (SFV.router && typeof SFV.router.setHost === 'function' && S.bodyEl) SFV.router.setHost(S.bodyEl);
+      return;
+    }
     S.overlay = el('div', 'sfv-browse');
     S.overlay.id = 'sfv-browse';
 
@@ -379,6 +385,10 @@
     if (S.cleanupOrphanFloaters) S.cleanupOrphanFloaters();
     destroyDetail();
     closeOverlayAnimated();
+    // 片单弹窗暂存态：整退回首页时丢弃（防「隐藏但 open」僵尸态；焦点归还由弹窗 close 处理）
+    if (SFV.homeCollectionsOverlay && typeof SFV.homeCollectionsOverlay.discardParked === 'function') {
+      SFV.homeCollectionsOverlay.discardParked();
+    }
     unlockBodyScroll();
     S.stack.length = 0; S.current = null;
     S.uiMode = 'view'; S.activePageId = null;
@@ -480,15 +490,36 @@
     if (S.stack.length <= 1) {
       var bottom = S.stack[0];
       // D9 修复：返回目标以详情 view 自身的 from 标记判定，不再依赖易残留的全局 _detailOrigin。
-      // 仅当栈底为详情且 from==='search' 时才逐级回到搜索页；其余（分类/片单/独立详情）一律关闭回首页。
+      // 仅当栈底为详情且 from==='search' 时才逐级回到搜索页；from==='collections' 复原暂存的片单弹窗；
+      // 其余（分类/独立详情）一律关闭回首页。
       if (bottom && bottom.mode === 'detail' && bottom.from === 'search') {
         S.restoreSearchPage();
+        return;
+      }
+      if (bottom && bottom.mode === 'detail' && bottom.from === 'collections') {
+        restoreCollectionsPage();
         return;
       }
       close(); return;
     }
     S.stack.pop();
     render(S.stack[S.stack.length - 1]);
+  }
+
+  // 片单弹窗→详情→返回：收浏览层并复原「暂存」的弹窗二级页（对齐 restoreSearchPage 范式：
+  // 仅复原可见性，不重建、不清空；弹窗本体在 home-collections-overlay.resumeFromDetail）
+  function restoreCollectionsPage() {
+    destroyDetail();
+    closeOverlayAnimated();
+    if (SFV.homeCollectionsOverlay && typeof SFV.homeCollectionsOverlay.resumeFromDetail === 'function') {
+      SFV.homeCollectionsOverlay.resumeFromDetail();
+    }
+    S.stack.length = 0;
+    S.current = null;
+    S.uiMode = 'view';
+    S.activePageId = null;
+    S._detailOrigin = null;
+    unlockBodyScroll();
   }
 
   function render(v) {

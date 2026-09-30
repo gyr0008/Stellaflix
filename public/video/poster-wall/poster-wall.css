@@ -14,13 +14,14 @@
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 
-/* 强制片库页深色，避免被乳白全屏样式盖住 */
+/* 强制片库页深色，避免被乳白全屏样式盖住；
+   背景可被 page-bg-diy 的 --sfv-library-bg 覆盖（纯色/自定义图片），默认=红蓝渐变影院底 */
 .sfv-library-chrome.sfv-browse--fullscreen,
 .sfv-library-chrome.sfv-browse--fullscreen.sfv-browse--fullscreen {
-  background:
+  background: var(--sfv-library-bg,
     radial-gradient(circle at 14% 10%, rgba(253, 92, 71, 0.13), transparent 32%),
     radial-gradient(circle at 86% 84%, rgba(106, 72, 255, 0.15), transparent 36%),
-    #070707 !important;
+    #070707) !important;
   color: #f7f4ee !important;
   clip-path: inset(0 round 34px) !important;
 }
@@ -34,6 +35,49 @@
 .sfv-library-host {
   color: #f7f4ee !important;
   background: transparent !important;
+}
+
+/* 片库自定义图片壁纸：不再直接铺 overlay 背景（filter 会连海报文字一起糊），
+   改由 ::before 承载原图正常展示（不虚化，壁纸画面可见），::after 压 25% 深黑轻蒙版
+   兜底卡片文字可读。两层均 z-index:-1 沉入 .sfv-library-page-inner（z=0 栈）之下，无需逐卡提层。 */
+.sfv-library-chrome::before,
+.sfv-library-chrome::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.sfv-library-chrome::before {
+  background: var(--sfv-library-bg-image, none) center / cover no-repeat;
+  filter: none;
+}
+
+.sfv-library-chrome::after {
+  background: rgba(7, 7, 7, 0.25);
+}
+
+/* 片库全页面覆盖（2026-09-25 裁定）：剥掉占位页时代的容器 padding/描边，
+   墙铺满 overlay（窗口圆角由 .sfv-browse--fullscreen 的 clip-path 承接）；
+   刷新按钮浮在墙左下角，不再独占一行高度。 */
+.sfv-library-chrome .sfv-library-page-inner {
+  position: relative;
+  padding: 0;
+  gap: 0;
+}
+
+.sfv-library-chrome .sfv-library-wall-host {
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+}
+
+.sfv-library-chrome .sfv-library-foot {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  z-index: 7;
 }
 
 .sfv-library-page-inner {
@@ -139,7 +183,7 @@
   position: absolute;
   inset: 0;
   z-index: 6;
-  border: 2px solid rgba(253, 92, 71, 0.85);
+  border: 2px solid var(--sfv-library-accent, rgba(253, 92, 71, 0.85));
   border-radius: 12px;
   pointer-events: none;
 }
@@ -229,9 +273,9 @@
 }
 
 .sfv-hex-btn--primary {
-  background: rgba(253, 92, 71, 0.92);
+  background: var(--sfv-library-accent, rgba(253, 92, 71, 0.92));
   border-color: transparent;
-  color: #fff;
+  color: var(--sfv-library-accent-text, #fff);
 }
 
 .sfv-hex-btn:hover { filter: brightness(1.08); }

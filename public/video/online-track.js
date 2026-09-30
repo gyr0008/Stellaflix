@@ -151,7 +151,7 @@
           }
         });
         cover.appendChild(img);
-      } else cover.textContent = '🎬';
+      } else cover.textContent = it.orphan ? 'Stella' : '🎬';
 
       // hover 浮层：底部片名（默认隐藏，hover 滑入）
       var overlay = S.el('div', 'sfv-plex-card__cap');

@@ -37,8 +37,13 @@
     draining: false,    // 无 rAF 环境下同步排空动画，防递归爆栈
     commitTimer: null,
     loadToken: 0,
+    loading: false,     // 异步拉取在途标记：refresh 节流用，防连点重复发全量 TMDB 请求
     progressiveMounted: false,
-    lastOpen: { id: null, at: 0 }
+    lastOpen: { id: null, at: 0 },
+    vp: { w: 1280, h: 720 }, // 视口缓存：避免每帧读 clientWidth 触发 Forced reflow
+    onWinResize: null,
+    hostRO: null,
+    layoutRetry: null
   };
 
   // Folia 四档表逐值照抄：GridView.tsx resolveGridViewCardBox（<768 / <1440 / <2000 / ≥2000）
@@ -59,12 +64,45 @@
       maxDistance: 660, lodStart: 450, lodEnd: 510, gap: 18 };
   }
 
-  function viewportSize() {
+  function syncViewport() {
     var host = state.host;
-    return {
-      w: (host && host.clientWidth) || 1280,
-      h: (host && host.clientHeight) || 720
-    };
+    // host 未布局完时 client* 为 0：保留上次有效值，而不是写死 1280×720
+    var w = (host && host.clientWidth) || 0;
+    var h = (host && host.clientHeight) || 0;
+    if (w > 0 && h > 0) {
+      state.vp = { w: w, h: h };
+    } else if (!(state.vp && state.vp.w > 0 && state.vp.h > 0)) {
+      state.vp = { w: 1280, h: 720 };
+    }
+    return state.vp;
+  }
+
+  function viewportSize() {
+    return state.vp;
+  }
+
+  // 布局完成后补一帧：0 尺寸挂载 / HexGrid 晚到都能收敛到可显示状态
+  function scheduleLayoutRetry() {
+    if (!global.requestAnimationFrame) {
+      syncViewport();
+      applyFrames();
+      return;
+    }
+    if (state.layoutRetry != null) return;
+    state.layoutRetry = global.requestAnimationFrame(function () {
+      state.layoutRetry = null;
+      if (!state.host) return;
+      syncViewport();
+      var next = pickMetrics(state.vp.w);
+      var prev = state.metrics;
+      if (!prev || prev.spacingX !== next.spacingX || prev.spacingY !== next.spacingY) {
+        state.metrics = next;
+        rebuildCoords();
+      } else {
+        state.metrics = next;
+      }
+      applyFrames();
+    });
   }
 
   function frameOptions() {
@@ -82,7 +120,8 @@
       viewportHeight: vp.h,
       cardWidth: m.cardW,
       cardHeight: m.cardH,
-      visibilityBuffer: m.gap
+      // 缓冲取半个蜂窝间距：边缘卡不再 0↔1 闪断 display（原 gap=18px 过紧）
+      visibilityBuffer: Math.min(m.spacingX, m.spacingY) / 2
     };
   }
 
@@ -165,6 +204,7 @@
   function openItem(item) {
     var A = SFV.posterWallAdapter;
     if (!A) return;
+    if (state.suppressClick) return; // 拖拽后误触发的 click/dblclick
     var now = Date.now();
     if (state.lastOpen.id === item.id && now - state.lastOpen.at < 500) return;
     state.lastOpen = { id: item.id, at: now };
@@ -204,7 +244,12 @@
   function applyFrames() {
     var HexGrid = global.StellaflixHexGrid;
     var HexCard = global.StellaflixHexCard;
-    if (!state.world || !HexGrid || !HexCard || !state.coords.length) return;
+    if (!state.world || !state.coords.length) return;
+    // 几何模块晚到（index-loader 异步拼接）：不要静默空墙，下一帧重试
+    if (!HexGrid || !HexCard) {
+      scheduleLayoutRetry();
+      return;
+    }
 
     var dx = state.offset.dx;
     var dy = state.offset.dy;
@@ -395,6 +440,50 @@
 
   // ---------- 输入 ----------
 
+  function releaseCapture(field, ev) {
+    if (!ev || ev.pointerId == null) return;
+    try {
+      if (field.releasePointerCapture) field.releasePointerCapture(ev.pointerId);
+    } catch (e) { /* already released */ }
+  }
+
+  function attachResize() {
+    // host 自身尺寸变化（flex 收缩/展开）比 window.resize 更关键
+    try {
+      if (global.ResizeObserver && state.host) {
+        detachHostRO();
+        state.hostRO = new global.ResizeObserver(function () {
+          if (!state.host) return;
+          syncViewport();
+          scheduleLayoutRetry();
+        });
+        state.hostRO.observe(state.host);
+      }
+    } catch (e) { /* 老引擎无 RO，走 window.resize */ }
+    if (!global.addEventListener) return;
+    detachResize();
+    state.onWinResize = function () {
+      if (!state.host) return;
+      syncViewport();
+      scheduleLayoutRetry();
+    };
+    global.addEventListener('resize', state.onWinResize);
+  }
+
+  function detachResize() {
+    if (state.onWinResize && global.removeEventListener) {
+      global.removeEventListener('resize', state.onWinResize);
+    }
+    state.onWinResize = null;
+  }
+
+  function detachHostRO() {
+    if (state.hostRO) {
+      try { state.hostRO.disconnect(); } catch (e) {}
+      state.hostRO = null;
+    }
+  }
+
   function attachInput() {
     var field = state.field;
     field.addEventListener('wheel', function (ev) {
@@ -419,12 +508,15 @@
         var item = state.items[state.focusIndex];
         if (item) openItem(item);
       } else if (ev.key === 'Escape') {
-        if (SFV.online && SFV.online.goBack) SFV.online.goBack();
+        goBackHome();
       }
     });
 
     field.addEventListener('pointerdown', function (ev) {
       if (ev.button !== undefined && ev.button !== 0) return;
+      // 同一时刻只允许一组拖拽监听，防止 lostpointercapture 后叠多层 onMove 抢写 offset
+      if (state.dragCleanup) state.dragCleanup();
+
       var startX = ev.clientX;
       var startY = ev.clientY;
       var baseX = state.offset.dx;
@@ -435,9 +527,22 @@
       var lastT = Date.now();
       var vx = 0;
       var vy = 0;
+      var captured = false;
       state.anim = null;
       state.wheelTarget = null;
       state.drag = true;
+      // 拖拽超过阈值后 click 不得再当「选中/开详情」（否则甩动松手会误开详情）
+      state.suppressClick = false;
+
+      // 指针捕获：仅在确认是拖拽后再捕。pointerdown 就 capture 会把 click
+      // 重定向到 field，卡片自身的 click 收不到 → 无法选中/进详情。
+      function captureIfNeeded() {
+        if (captured) return;
+        captured = true;
+        try {
+          if (field.setPointerCapture && ev.pointerId != null) field.setPointerCapture(ev.pointerId);
+        } catch (e) { /* test sandbox / older engine */ }
+      }
 
       function onMove(moveEv) {
         moved += Math.abs(moveEv.clientX - lastX) + Math.abs(moveEv.clientY - lastY);
@@ -448,16 +553,31 @@
         lastX = moveEv.clientX;
         lastY = moveEv.clientY;
         lastT = now;
-        state.offset.dx = baseX + (moveEv.clientX - startX);
-        state.offset.dy = baseY + (moveEv.clientY - startY);
+        if (moved >= 6) {
+          captureIfNeeded();
+          state.suppressClick = true;
+        }
+        // 拖拽过程即时钳制，避免越界后可见集清空、片单墙消失
+        var t = clampTarget(baseX + (moveEv.clientX - startX), baseY + (moveEv.clientY - startY));
+        state.offset.dx = t.x;
+        state.offset.dy = t.y;
         requestFrame();
       }
-      function onUp() {
+
+      function cleanup() {
         field.removeEventListener('pointermove', onMove);
         field.removeEventListener('pointerup', onUp);
         field.removeEventListener('pointercancel', onUp);
+        field.removeEventListener('lostpointercapture', onUp);
+        releaseCapture(field, ev);
+        if (state.dragCleanup === cleanup) state.dragCleanup = null;
         state.drag = false;
-        if (moved < 6) return; // 视作点击，交给 click 处理
+      }
+
+      function onUp() {
+        if (!state.dragCleanup) return; // 已清理则忽略（pointerup/lostpointercapture 双触发）
+        cleanup();
+        if (moved < 6) return; // 视作点击，交给 click 处理（offset 已在 onMove 钳制）
         // 惯性甩动目标钳制到边界，越界时以边界弹簧回弹（Folia dragConstraints 语义）
         var t = clampTarget(state.offset.dx + vx * 0.18, state.offset.dy + vy * 0.18);
         state.anim = {
@@ -466,13 +586,17 @@
         };
         requestFrame();
       }
+
+      state.dragCleanup = cleanup;
       field.addEventListener('pointermove', onMove);
       field.addEventListener('pointerup', onUp);
       field.addEventListener('pointercancel', onUp);
+      field.addEventListener('lostpointercapture', onUp);
     });
   }
 
   function onCardActivate(index) {
+    if (state.suppressClick) return; // 拖拽松手后的合成 click，不当选中/详情
     if (index === state.focusIndex) {
       var item = state.items[index];
       if (item) openItem(item);
@@ -500,14 +624,34 @@
     state._committedIndex = null;
   }
 
+  function goBackHome() {
+    if (SFV.online && SFV.online.goBack) SFV.online.goBack();
+  }
+
+  // 左上浮动返回钮：复用详情页 .sfv-plex-back 玻璃圆钮样式（player.css），与 Esc 同入口
+  function buildBackButton() {
+    var doc = d();
+    var back = doc.createElement('button');
+    back.type = 'button';
+    back.className = 'sfv-plex-back';
+    back.setAttribute('aria-label', '返回');
+    back.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">' +
+      '<path d="M14.5 6 L8.5 12 L14.5 18" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '</svg>';
+    back.addEventListener('click', goBackHome);
+    return back;
+  }
+
   function mountSync(host, items) {
     var doc = d();
+    if (state.dragCleanup) state.dragCleanup();
     clearHost(host);
     state.host = host;
+    syncViewport();
     state.items = items || [];
     state.focusIndex = 0;
     state.offset = { dx: 0, dy: 0 };
-    state.metrics = pickMetrics(viewportSize().w);
+    state.metrics = pickMetrics(state.vp.w);
     rebuildCoords();
 
     var field = doc.createElement('div');
@@ -517,13 +661,17 @@
     world.className = 'sfv-hex-world';
     field.appendChild(world);
     host.appendChild(field);
+    host.appendChild(buildBackButton());
     state.field = field;
     state.world = world;
 
     attachInput();
+    attachResize();
 
     applyFrames();
     commitFocus();
+    // overlay 刚从 display:none 切到 flex 时 host 常为 0 尺寸：布局完成后补帧，避免卡被 overflow 裁光
+    scheduleLayoutRetry();
     host.setAttribute('data-sfv-library-wall', 'ready');
     host.setAttribute('data-hex-count', String(state.items.length));
     return true;
@@ -583,7 +731,9 @@
 
     state.loadToken += 1;
     var token = state.loadToken;
+    state.loading = true;
     state.host = host;
+    syncViewport();
     state.progressiveMounted = false;
     clearHost(host);
     host.innerHTML = '<div class="sfv-hex-loading">正在从 TMDB 拉取多品类海报…</div>';
@@ -602,6 +752,7 @@
       }
     }).then(function (res) {
       if (token !== state.loadToken || state.host !== host) return false;
+      state.loading = false;
       if (res.keyMissing && (!res.items || !res.items.length)) {
         state.items = [];
         clearHost(host);
@@ -615,6 +766,7 @@
       return mountSync(host, res.items || []);
     })['catch'](function (err) {
       if (token !== state.loadToken) return false;
+      state.loading = false;
       if (global.console) console.warn('[hexWall] load failed', err);
       clearHost(host);
       renderEmpty(host, 'empty');
@@ -634,7 +786,15 @@
 
   function unmount() {
     state.loadToken += 1;
+    state.loading = false;
     state.enteredKeys = {};
+    if (state.dragCleanup) state.dragCleanup();
+    detachResize();
+    detachHostRO();
+    if (state.layoutRetry != null && global.cancelAnimationFrame) {
+      global.cancelAnimationFrame(state.layoutRetry);
+    }
+    state.layoutRetry = null;
     if (state.rafId != null && global.cancelAnimationFrame) cancelAnimationFrame(state.rafId);
     state.rafId = null;
     if (state.commitTimer) clearTimeout(state.commitTimer);
@@ -650,11 +810,16 @@
     state.offset = { dx: 0, dy: 0 };
     state.anim = null;
     state.drag = null;
+    state.dragCleanup = null;
     state.wheelTarget = null;
   }
 
   function refresh() {
-    if (!state.host) return Promise.resolve(false);
+    if (!state.host) {
+      toast('海报墙尚未加载，请稍后再试');
+      return Promise.resolve(false);
+    }
+    if (state.loading) return Promise.resolve(false);
     return mount(state.host);
   }
 

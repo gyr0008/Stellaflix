@@ -160,6 +160,8 @@ test('在看：全部为孤儿键时也渲染网格与占位卡（不再提前 r
   S.renderTrackPage();
   const cards = trackCards(S);
   assert.strictEqual(cards.length, 1, '仅孤儿键时也必须出占位卡');
+  const cover = cards[0].querySelector('.sfv-track-card-cover');
+  assert.strictEqual(cover.textContent, 'Stella', '占位卡封面文案为 Stella（非 🎬）');
 });
 
 test('占位卡：不绑详情点击，但状态按钮可循环至「未追」完成自助清理', async () => {

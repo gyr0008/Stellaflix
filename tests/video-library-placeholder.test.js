@@ -81,6 +81,58 @@ test('page-library.js 注册 router id=library 并预留墙挂载点', () => {
   assert.strictEqual(sandbox.StellaflixVideo.pageLibrary.id, 'library');
 });
 
+test('page-library unmount 不得移除 overlay 的 sfv-library-chrome（详情返回同页重进保深色整屏）', () => {
+  const mkClassList = (set) => ({
+    add(c) { set.add(c); },
+    remove(c) { set.delete(c); },
+    toggle(c, on) {
+      if (on === undefined) { set.has(c) ? set.delete(c) : set.add(c); }
+      else if (on) set.add(c);
+      else set.delete(c);
+    },
+    contains(c) { return set.has(c); }
+  });
+  const mkNode = () => {
+    const set = new Set();
+    const node = {
+      tagName: 'div', style: {}, children: [],
+      classList: mkClassList(set),
+      setAttribute() {},
+      appendChild(c) { node.children.push(c); return c; },
+      addEventListener() {},
+    };
+    return node;
+  };
+  const overlayCls = new Set(['sfv-browse', 'sfv-show', 'sfv-browse--fullscreen', 'sfv-library-chrome']);
+  const sandbox = {
+    console,
+    document: {
+      createElement: mkNode,
+      getElementById() { return null; },
+      body: { classList: mkClassList(new Set()) },
+    },
+  };
+  sandbox.window = sandbox;
+  sandbox.global = sandbox;
+  let wallUnmounted = 0;
+  sandbox.StellaflixVideo = {
+    router: { register() {} },
+    ui: { setTitle() {}, setBrowseChrome() {} },
+    onlineShared: { overlay: { classList: mkClassList(overlayCls) } },
+    posterWall: { mount() {}, unmount() { wallUnmounted++; } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(read('public/video/page-library.js'), sandbox, { filename: 'page-library.js' });
+
+  const page = sandbox.StellaflixVideo.pageLibrary;
+  page.mount(mkNode());
+  page.unmount();
+
+  assert.ok(wallUnmounted >= 1, 'unmount 仍应回收海报墙实例');
+  // 主题类由 online-nav 各出口统一切换；此处误删会让 router 同页重进（详情←返回）露出乳白底+顶栏
+  assert.ok(overlayCls.has('sfv-library-chrome'), 'unmount 后 overlay 应保留 sfv-library-chrome');
+});
+
 test('online 链路：openLibrary 绑定 + goToNav 支持 library 全屏标题', () => {
   const coll = read('public/video/online-collections.js');
   assert.match(coll, /function openLibrary/);
@@ -95,6 +147,14 @@ test('online 链路：openLibrary 绑定 + goToNav 支持 library 全屏标题',
   assert.match(nav, /key === 'library'/);
   assert.match(nav, /片库/);
   assert.match(nav, /sfv-library-chrome/);
+});
+
+test('片库全页面覆盖：去容器 padding/描边，刷新按钮浮墙不占行', () => {
+  const css = read('public/video/poster-wall/poster-wall.css');
+  assert.match(css, /\.sfv-library-chrome\s+\.sfv-library-page-inner\s*\{[^}]*padding:\s*0/, 'chrome 下 page-inner padding 应归零');
+  assert.match(css, /\.sfv-library-chrome\s+\.sfv-library-wall-host\s*\{[^}]*border-radius:\s*0/, 'chrome 下 wall-host 应去圆角');
+  assert.match(css, /\.sfv-library-chrome\s+\.sfv-library-wall-host\s*\{[^}]*border:\s*0/, 'chrome 下 wall-host 应去描边');
+  assert.match(css, /\.sfv-library-chrome\s+\.sfv-library-foot\s*\{[^}]*position:\s*absolute/, 'foot 应绝对定位浮在墙上，不再占列高');
 });
 
 test('片库占位样式与双态隔离注释存在', () => {
