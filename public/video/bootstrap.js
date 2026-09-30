@@ -36,6 +36,12 @@
           try { SFV.online.goHome(); }
           catch (e) { if (global.console) console.warn('[SFV-boot] goHome failed:', e); }
           _done = true;
+          // 放行 03-splash.js 秒启动黑屏 gate：影视首页已接管，reveal 不再暴露骨架
+          try {
+            if (global.dispatchEvent && global.CustomEvent) {
+              global.dispatchEvent(new global.CustomEvent('sfv:home-boot-ready'));
+            }
+          } catch (e2) { }
           return;
         }
         if (++_attempts < 200) setTimeout(tryEnsureHome, 100);

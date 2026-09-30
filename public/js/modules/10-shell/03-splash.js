@@ -657,6 +657,21 @@ document.addEventListener('DOMContentLoaded', function () {
   if (!s) return;
   markAppPerf('dom-content-loaded');
   if (startupFastSkipPreference) {
+    // 秒启动+启动默认空间=影视：影视接管（SFV.online.goHome）要等 40+ 个串行
+    // requestIdleCallback 脚本加载完，立即 reveal 会把半改写的音乐 home 骨架完整暴露 ~1s。
+    // 黑屏保持到 'sfv:home-boot-ready'（bootstrap goHome 成功后派发）或超时兜底。
+    // 超时必须有：影视链任一脚本抛错时事件永不到达，纯等待=永久黑屏。
+    if (document.documentElement.classList.contains('video-space-active')) {
+      var fastSkipEntered = false;
+      function fastSkipEnter() {
+        if (fastSkipEntered) return;
+        fastSkipEntered = true;
+        dismissSplash({ instant: true });
+      }
+      window.addEventListener('sfv:home-boot-ready', fastSkipEnter);
+      setTimeout(fastSkipEnter, 800);
+      return;
+    }
     dismissSplash({ instant: true });
     return;
   }

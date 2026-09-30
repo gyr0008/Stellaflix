@@ -16,17 +16,23 @@
     document.documentElement.classList.add('video-space-active');
     document.body.classList.add('video-space-active');
     document.body.classList.add('sfv-home-boot');
-    // 静态音乐 HTML 卡片改写成影视 5 卡默认文案（与 video/home-cards.js cardDefs 对齐）。
+    // 静态音乐 HTML 卡片改写成影视 5 卡默认文案（与 video/home-cards.js cardDefs 零计数态对齐）。
     // 完整 action / 封面 / 接着看轨仍等 SFV.home.render() 接管；这里只保证首屏不出现音乐文案。
     var cards = document.querySelectorAll('#empty-home .home-grid .home-card');
     var defs = [
       { label: 'LIKED', title: '心动', sub: '进入浏览厅 · 挑片即看' },
-      { label: 'LISTS', title: '片单', sub: '想看的全放进来' },
+      { label: 'LIBRARY', title: '片库', sub: '海报墙筹备中' },
       { label: 'TRACKING', title: '追片', sub: '标记想看的片子' },
       { label: 'HISTORY', title: '历史', sub: '看过的会记在这里' },
       { label: 'MUSIC', title: '音乐空间', sub: '返回音乐空间 · 听歌' }
     ];
-    for (var i = 0; i < cards.length && i < defs.length; i++) {
+    for (var i = 0; i < cards.length; i++) {
+      if (i >= defs.length) {
+        // 静态 HTML 多出的卡（如第 6 张「影视空间」入口）：影视 cardDefs 只有 5 卡，
+        // 骨架期直接隐藏，否则与第 5 张「音乐空间」并存（SFV.home.render() 前的空窗）。
+        cards[i].style.display = 'none';
+        continue;
+      }
       var l = cards[i].querySelector('.home-card-label');
       var t = cards[i].querySelector('.home-card-title');
       var s = cards[i].querySelector('.home-card-sub');
