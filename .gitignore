@@ -92,3 +92,21 @@ screenshots/
 
 # git worktrees (SDD 隔离工作区)
 .worktrees/
+
+# B1 bundle 产物（用户裁决暂不入库；改模块后 npm run bundle 现场生成）
+public/js/bundles/
+
+# 会话临时取证/调查产物（不入库、不删除）
+/_scratch/
+/_cesium.tgz
+/_cesium_meta.json
+/_cesium_scene.js
+/_cesium_skybox.js
+/_cesium_stars.js
+/_art_*.png
+/_crop_*.png
+/_grid_*.png
+/_doc_pdf.txt
+/_hearthere_assets/
+/_hearthere_index.html
+/tests/_probe_e.js
