@@ -402,6 +402,9 @@ function isHomeBlankDismissClick(e) {
     '#source-fallback-notice',
     '.modal-mask',
     '.modal',
+    // 导入歌单弹窗（#sf-ppi-mask）：Home 空白关闭跑在捕获阶段，弹窗自身的冒泡拦截
+    // 拦不住它，必须在这里豁免——点暗区只关弹窗，不连带关 Home
+    '#sf-ppi-mask',
     '.track-detail-modal',
     '.cover-color-pop',
     '.color-lab-pop',
@@ -409,7 +412,6 @@ function isHomeBlankDismissClick(e) {
     // （home 空白关闭跑在 document 捕获阶段，若不拦截，点四面板遮罩会先 dismissHome）
     '.sfv-bgm-modal-overlay',
     '.sfv-bgm-modal',
-    '.sfv-bgm-tl-sheet-mask',
     '.sfv-bgm-tl-sheet',
     '.sfv-picker-backdrop',
     '.sfv-picker',

@@ -2098,6 +2098,18 @@
     return controlDiyVisualFromTool(parsed, message);
   }
 
+  // 小M面板 z-index(31990/32000) 高于导入弹窗遮罩(31500)，必须先关面板再开弹窗，防遮挡
+  function openPlaylistImportEntry() {
+    pendingSharedPlaylistImport = false;
+    window.setTimeout(function () {
+      if (panel) {
+        panel.classList.remove('show');
+        panel.setAttribute('aria-hidden', 'true');
+      }
+      if (typeof window.openPlatformPlaylistImport === 'function') window.openPlatformPlaylistImport();
+    }, 120);
+  }
+
   async function importSharedPlaylistFromCommand(message) {
     var tools = window.StellaflixAgentMusicTools;
     if (!tools || typeof tools.parse_shared_playlist_import_command !== 'function' || typeof tools.import_shared_playlist !== 'function') return null;
@@ -2113,16 +2125,9 @@
       return { ok:true, canceled:true, message:'已取消导入歌单' };
     }
     if (openEntry) {
-      pendingSharedPlaylistImport = false;
       addMessage('assistant', '已为你打开导入歌单入口。');
       setStatus('', 'success');
-      window.setTimeout(function () {
-        if (panel) {
-          panel.classList.remove('show');
-          panel.setAttribute('aria-hidden', 'true');
-        }
-        if (typeof window.openPlatformPlaylistImport === 'function') window.openPlatformPlaylistImport();
-      }, 120);
+      openPlaylistImportEntry();
       return { ok:true, opened:true, message:'已打开导入歌单入口' };
     }
     var parsed = tools.parse_shared_playlist_import_command(text);
@@ -2932,7 +2937,8 @@
           '<button class="music-agent-submit" type="submit">发送</button></form>' +
           '<div class="music-agent-status" role="status" aria-live="polite">无需 API：播放、界面、设置和明确的软件控制均在本地执行。</div>' +
           '<div class="music-agent-examples"><button class="music-agent-example" type="button" data-agent-daily-recommendation data-agent-example="">试着对我说：播放一首歌</button>' +
-          '<button class="music-agent-example" type="button" data-agent-daily-movie data-agent-example="">今日影视</button></div>' +
+          '<button class="music-agent-example" type="button" data-agent-daily-movie data-agent-example="">今日影视</button>' +
+          '<button class="music-agent-example" type="button" data-agent-action="playlist-import" title="打开平台/本地歌单导入面板">导入歌单</button></div>' +
         '</div>' +
         '<div class="music-agent-settings-view" hidden><form class="music-agent-settings-form">' +
           '<label class="music-agent-enable"><span><b>启用 AI 对话</b><small>关闭后仍可使用本地播放、歌单和 DIY 设置</small></span><input type="checkbox" name="enabled"><i aria-hidden="true"></i></label>' +
@@ -2993,6 +2999,8 @@
         input.value = example.getAttribute('data-agent-example') || '';
         input.focus();
       }
+      var importAction = event.target.closest('[data-agent-action="playlist-import"]');
+      if (importAction && !busy) openPlaylistImportEntry();
     });
     panel.querySelector('.music-agent-form').addEventListener('submit', function (event) { event.preventDefault(); runCommand(input.value); });
     document.addEventListener('keydown', function (event) {
