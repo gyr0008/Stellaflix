@@ -2,7 +2,7 @@
  * Stellaflix 影视模块 — 播放编排器 (play-orchestrator)
  *
  * 从 online.js 抽出的单集播放唯一真相源（P4 消债）：
- *   play(view, ep, play) 统一处理
+ *   play(view, ep, road) 统一处理
  *     - 进度/历史记录（recordMeta/recordHistory，由 online.js 注入）
  *     - CMS 直链播放 / Kazumi 解析后内嵌(embed)或直链分支
  *     - 剧集导航（setPlaylist/setPlayEpisodeAt）、连播（registerNextEpisode）
@@ -22,6 +22,7 @@
 
   var deps = {};
   function init(d) { deps = d || {}; }
+  var playSeq = 0; // C2：起播序号令牌。快速连点两集时，旧请求的解析回调不得覆盖新起播（对齐 Kazumi _playbackSessions.begin 会话令牌）。
   // 安全取依赖：未注入时降级为空函数，避免播放链路抛错。
   function dep(name) {
     var fn = deps[name];
@@ -51,10 +52,13 @@
 
   /**
    * 下一集连播钩子（仅 play 管道使用）。
+   * 注意：线路参数必须叫 road 而非 play——若叫 play 会遮蔽外层 play() 函数名，
+   * 导致回调里 play(...) 实际调用的是线路对象，抛 TypeError: play is not a function
+   * （2026-09-26 实锤的选集切不动根因）。
    */
-  function registerNextEpisode(view, ep, play) {
+  function registerNextEpisode(view, ep, road) {
     if (!SFV.player || typeof SFV.player.setPlayNext !== 'function') return;
-    var list = (play && play.episodes) ? play.episodes : null;
+    var list = (road && road.episodes) ? road.episodes : null;
     if (!list || !list.length) { SFV.player.setPlayNext(null); return; }
     var i = -1;
     for (var k = 0; k < list.length; k++) {
@@ -65,7 +69,7 @@
     if (!nextEp || !nextEp.url) { SFV.player.setPlayNext(null); return; }        // 下一集无地址
     SFV.player.setPlayNext(function () {
       dep('toast')('自动播放：' + (nextEp.name || ('第' + (nextEp.index + 1) + '集')));
-      play(view, nextEp, play);
+      play(view, nextEp, road); // 此处 play(...) 现在正确解析回编排器 play() 函数
     });
   }
 
@@ -73,12 +77,14 @@
    * 单集播放入口（唯一真相源）。
    * @param {Object} view 影片视图（含 source.id/vodId/title/pic/year/key 等）
    * @param {Object} ep   单集（含 url/index/name）
-   * @param {Object} [play] 当前线路（含 episodes 列表，用于连播/选集导航）
+   * @param {Object} [road] 当前线路（含 episodes 列表，用于连播/选集导航）。
+   *   命名铁律：不得改回 play——参数会遮蔽本函数名，回调里 play(...) 会变成调用线路对象。
    * @param {Object} [opt] 阶段3 扩展：{ plays:[{from,episodes}], fromIndex } 全部线路，供播放器线路切换
    */
-  function play(view, ep, play, opt) {
+  function play(view, ep, road, opt) {
     if (!ep || !ep.url) { dep('toast')('该集无播放地址'); return; }
-    var plays = (opt && opt.plays) ? opt.plays : (play ? [play] : null);
+    var mySeq = ++playSeq; // C2：本次起播令牌，仅最新一次 play 的异步回调可继续
+    var plays = (opt && opt.plays) ? opt.plays : (road ? [road] : null);
     var fromIndex = (opt && typeof opt.fromIndex === 'number') ? opt.fromIndex : 0;
     // 记录返回目标：此刻浏览层尚未关闭，view._origin 可判定是否来自历史页
     dep('captureReturn')(view);
@@ -142,9 +148,9 @@
       if (SFV.player && SFV.player.setMeta) SFV.player.setMeta({ key: id, seriesKey: view.key, tmdbKey: view.tmdbKey || (SFV.model && SFV.model.canonicalTrackKey ? SFV.model.canonicalTrackKey(view) : null) || null, seriesTitle: view.title || '', cover: coverUrl, subtitle: sourceName });
       // 剧集导航：供底部控制器 prev/next 键使用（无剧集则清空）
       if (SFV.player && SFV.player.setPlaylist) {
-        if (play && play.episodes) {
-          SFV.player.setPlaylist(play.episodes, ep.index);
-          if (SFV.player.setPlayEpisodeAt) SFV.player.setPlayEpisodeAt(function (i, e) { play(view, e, play, { plays: plays, fromIndex: fromIndex }); });
+        if (road && road.episodes) {
+          SFV.player.setPlaylist(road.episodes, ep.index);
+          if (SFV.player.setPlayEpisodeAt) SFV.player.setPlayEpisodeAt(function (i, e) { play(view, e, road, { plays: plays, fromIndex: fromIndex }); });
         } else {
           SFV.player.setPlaylist(null, -1);
           if (SFV.player.setPlayEpisodeAt) SFV.player.setPlayEpisodeAt(null);
@@ -187,7 +193,7 @@
           }
         });
       }
-      registerNextEpisode(view, ep, play); // 必须在 open 之后：open 会清空 playNext 钩子
+      registerNextEpisode(view, ep, road); // 必须在 open 之后：open 会清空 playNext 钩子
       console.log('[SFV-FREEZE] M11 doPlay before close');
       closeBrowseBehindPlayer();           // 播放器已可见后关闭浏览层，杜绝首页星空空窗
       console.log('[SFV-FREEZE] M12 doPlay done');
@@ -205,11 +211,11 @@
         SFV.player.openEmbed(embedUrl, { id: embedId, title: embedTitle, cover: dep('resolvePic')(view), subtitle: sourceName });
         // embed 也要注入剧集导航：否则多集规则源在 iframe 模式下切集无反应
         if (SFV.player.setPlaylist) {
-          if (play && play.episodes && play.episodes.length) {
-            SFV.player.setPlaylist(play.episodes, ep.index);
+          if (road && road.episodes && road.episodes.length) {
+            SFV.player.setPlaylist(road.episodes, ep.index);
             if (SFV.player.setPlayEpisodeAt) {
               SFV.player.setPlayEpisodeAt(function (i, e) {
-                play(view, e, play, { plays: plays, fromIndex: fromIndex });
+                play(view, e, road, { plays: plays, fromIndex: fromIndex });
               });
             }
           } else {
@@ -229,7 +235,7 @@
             SFV.player.setRoads(null, -1, null);
           }
         }
-        registerNextEpisode(view, ep, play);
+        registerNextEpisode(view, ep, road);
         closeBrowseBehindPlayer(); // 播放器（含 iframe）已可见后关闭浏览层
       } else {
         doPlay(embedUrl); // 无嵌入能力时降级为原始地址直连
@@ -247,7 +253,7 @@
       // 超时兜底：30s 内 resolvePlayUrl 未返回则降级
       var resolveDone = false;
       var resolveTimer = setTimeout(function () {
-        if (!resolveDone) {
+        if (!resolveDone && mySeq === playSeq) {
           resolveDone = true;
           console.warn('[Kazumi] resolvePlayUrl 超时降级, url=' + String(ep.url).slice(0, 120));
           dep('toast')('播放地址解析超时，尝试原始地址');
@@ -255,7 +261,7 @@
         }
       }, 30000);
       SFV.kazumi.resolvePlayUrl(ep.url, view.ruleName || '').then(function (resolved) {
-        if (resolveDone) return; // 已被超时处理
+        if (resolveDone || mySeq !== playSeq) return; // 已被超时处理，或已被更新一次起播取代（C2）
         resolveDone = true;
         clearTimeout(resolveTimer);
         if (resolved && resolved.url) {
@@ -280,7 +286,7 @@
           }
         }
       }).catch(function (e) {
-        if (resolveDone) return;
+        if (resolveDone || mySeq !== playSeq) return; // C2：陈旧回调丢弃
         resolveDone = true;
         clearTimeout(resolveTimer);
         console.warn('[Kazumi] 播放页解析异常:', e.message);

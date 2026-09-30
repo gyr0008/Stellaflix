@@ -104,12 +104,14 @@
     var prevKey = playbackSession.currentKey;
     var mySeq = ++switchSeq;
     playbackSession.switching = true;
+    playbackSession.switchStartedAt = Date.now(); // C1：切换开始时刻，供 isSwitchActive 过期判定
     toast('正在切换片源…');
 
     function fail(msg) {
       if (mySeq !== switchSeq) return;
       if (playbackSession) {
         playbackSession.switching = false;
+        playbackSession.switchStartedAt = 0;
         playbackSession.currentKey = prevKey; // 回滚到真实在播源
       }
       toast(msg || '切换片源失败，已保持原片源');
@@ -185,10 +187,26 @@
     if (playbackSession._switchConfirmKey) {
       playbackSession.currentKey = playbackSession._switchConfirmKey;
       playbackSession.switching = false;
+      playbackSession.switchStartedAt = 0;
       playbackSession._switchConfirmKey = null;
       playbackSession._switchConfirmSeq = null;
       playbackSession._switchFail = null;
     }
+  }
+  /**
+   * C1：切换锁是否仍然有效（会话式判定，替代裸布尔读取）。
+   * 任何路径漏掉 confirm/fail 时，锁超过 30s 自动失效解锁，
+   * 杜绝「正在切换片源，请稍候」永久吞掉选集/片源点击（对齐 Kazumi 会话令牌语义）。
+   */
+  function isSwitchActive() {
+    if (!playbackSession || !playbackSession.switching) return false;
+    var started = playbackSession.switchStartedAt || 0;
+    if (Date.now() - started > 30000) {
+      playbackSession.switching = false;
+      playbackSession.switchStartedAt = 0;
+      return false;
+    }
+    return true;
   }
   /** 编排器/解析失败时调用：回滚高亮。 */
   function failPlaybackSwitch(msg) {
@@ -678,6 +696,147 @@
     return indexed.map(function (x) { return { play: x.play, fromIndex: x.fromIndex, score: x.score }; });
   }
 
+  // ---------------------------------------------------------------- 续播候选池
+  // 续播（历史/接着看）起播时也必须写入完整候选池，否则播放器「选集→片源」
+  // 面板只有当前一个源、无法热切换（2026-09-30 修复）。
+
+  /**
+   * 续播池标题召回口径：与 fallbackSearch 原始规则同构（全等/前缀互含），
+   * 但两侧先过 cleanTitleForAgg 清洗——「你的名字 (2016)」与「你的名字。」归一同键；
+   * 子串噪声的最终排除由面板 candidatesForPanel 的严格匹配分支负责（与详情页路径同分层）。
+   */
+  function resumeTitleMatched(itemTitle, query) {
+    var q = String(query || '').trim();
+    if (!q) return true;
+    if (SFV.SearchFilterCore && typeof SFV.SearchFilterCore.cleanTitleForAgg === 'function') {
+      var cq = SFV.SearchFilterCore.cleanTitleForAgg(q);
+      var ct = SFV.SearchFilterCore.cleanTitleForAgg(itemTitle);
+      if (!cq || !ct) return false;
+      return ct === cq || ct.indexOf(cq) === 0 || cq.indexOf(ct) === 0;
+    }
+    var norm = function (s) { return String(s || '').trim().toLowerCase().replace(/[。．.\s]+$/g, ''); };
+    var nq = norm(q), nt = norm(itemTitle);
+    return !!nt && (nt === nq || nt.indexOf(nq) === 0 || nq.indexOf(nt) === 0);
+  }
+
+  /**
+   * 单源单元搜索结果 → 标准候选（cms 键=cms:<sourceId>:<vodId>，kazumi 键=kz:<rule>:<src>，
+   * 形态对齐 normalizeUnitItems，供面板直接热切换）。
+   */
+  function resumeCandidatesFromItems(u, items, title) {
+    var kind = (u && u.kind) || 'cms';
+    var out = [];
+    var seen = {};
+    (items || []).forEach(function (it) {
+      if (!it || !it.title) return;
+      if (!resumeTitleMatched(it.title, title)) return;
+      var c;
+      if (kind === 'kazumi') {
+        var ruleName = it.ruleName || (u.ref && u.ref.name) || '';
+        if (!it.src) return;
+        c = {
+          id: 'kz:' + ruleName + ':' + it.src,
+          label: ruleName || 'Kazumi',
+          sub: (it.title || '') + (it.year ? ' (' + it.year + ')' : ''),
+          title: it.title || '',
+          kind: 'kazumi', ruleName: ruleName, group: ruleName || 'Kazumi',
+          isEmbed: D.classifyCandidateEmbed({ kind: 'kazumi', ruleName: ruleName, _ref: it }),
+          _ref: it,
+          sourceKey: 'kazumi:' + ruleName
+        };
+      } else {
+        var v = (it.variants && it.variants.length) ? it.variants[0] : it;
+        if (!v || !v.sourceId || v.vodId == null || v.vodId === '') return;
+        c = {
+          id: 'cms:' + v.sourceId + ':' + v.vodId,
+          label: (v.sourceName || v.sourceId || 'CMS'),
+          sub: (it.title || '') + (it.year ? ' (' + it.year + ')' : ''),
+          title: it.title || '',
+          kind: 'cms', group: (v.sourceName || v.sourceId || 'CMS'),
+          isEmbed: D.classifyCandidateEmbed({ kind: 'cms', _ref: v }),
+          _ref: { sourceId: v.sourceId, vodId: v.vodId, sourceName: v.sourceName || '' },
+          sourceKey: 'cms:' + v.sourceId
+        };
+      }
+      if (seen[c.id]) return;
+      seen[c.id] = 1;
+      out.push(c);
+    });
+    return out;
+  }
+
+  /** 当前在播源 → 与池内同构的候选（id 含 vodId，保证与搜索候选去重/高亮口径一致）。 */
+  function buildResumeCandidate(v2, title) {
+    var sid = (v2.source && v2.source.id) || '';
+    var id = sid ? ('cms:' + sid + ':' + (v2.vodId != null ? v2.vodId : '')) : (v2.key || 'resume');
+    return {
+      id: id,
+      sourceKey: sid ? ('cms:' + sid) : id,
+      label: (v2.source && v2.source.name) || title || '当前源',
+      sub: title || (v2.title || ''),
+      title: title || v2.title || '',
+      kind: 'cms',
+      group: (v2.source && v2.source.name) || 'CMS',
+      isEmbed: D.classifyCandidateEmbed({ kind: 'cms', _ref: v2 }),
+      _ref: { sourceId: sid, vodId: v2.vodId, sourceName: v2.source && v2.source.name }
+    };
+  }
+
+  function mergeResumeCandidates(primary, extra) {
+    var out = [];
+    var seen = {};
+    [].concat(primary || [], extra || []).forEach(function (c) {
+      var key = candKeyOf(c);
+      if (!key || seen[key]) return;
+      seen[key] = 1;
+      out.push(c);
+    });
+    return out;
+  }
+
+  /**
+   * 全单元补池搜索（与详情页弹窗同一 collectSourceUnits 单元集）：
+   * CMS 逐源 + Kazumi 逐规则并发，单源失败/超时不影响其余源入池。
+   * opts.skipCms：兜底路径已有 CMS 聚合搜索结果时，只补搜 Kazumi，杜绝重复打 CMS。
+   */
+  function resumeSearchPool(title, opts) {
+    opts = opts || {};
+    var units = collectSourceUnits();
+    if (opts.skipCms) units = units.filter(function (u) { return u.kind !== 'cms'; });
+    if (!units.length) return Promise.resolve([]);
+    var jobs = units.map(function (u) {
+      var p;
+      if (u.kind === 'cms') {
+        p = (SFV.sources && typeof SFV.sources.search === 'function')
+          ? SFV.sources.search(title, { sources: [u.ref], pg: 1, timeout: 12000 })
+          : Promise.resolve(null);
+      } else {
+        p = (SFV.kazumi && typeof SFV.kazumi.searchRule === 'function')
+          ? SFV.kazumi.searchRule(u.ref.name, title)
+          : Promise.resolve(null);
+      }
+      return Promise.resolve(p)
+        .then(function (res) { return resumeCandidatesFromItems(u, res && res.items, title); })
+        .catch(function () { return []; });
+    });
+    return Promise.all(jobs).then(function (lists) {
+      return mergeResumeCandidates([], [].concat.apply([], lists));
+    });
+  }
+
+  /**
+   * 起播后后台补池：结果到达即增量并入会话候选池。
+   * 不挡起播；会话已换代（切片/切换起播）则整段丢弃；失败静默保持现状。
+   */
+  function augmentResumeSession(v2, title, opts) {
+    var sess = playbackSession;
+    if (!sess || sess.view !== v2) return;
+    resumeSearchPool(title, opts).then(function (pool) {
+      if (!playbackSession || playbackSession !== sess) return;
+      if (pool.length) sess.candidates = mergeResumeCandidates(sess.candidates, pool);
+    });
+  }
+
   // ---------------------------------------------------------------- 智能恢复播放
   // 供「历史记录 / 接着看」点击调用：跳过详情页，直接起播。
   // 策略：
@@ -693,7 +852,7 @@
     // lastVodId 有效判定：排除 null/undefined/空字符串；vodId=0 视为有效（CMS id 从 1 开始，但防御性兼容）
     function hasVodId(v) { return v != null && v !== ''; }
     // 统一起播函数：拿到 plays 后再决定起播集
-    var startPlay = function (v2, plays, fromIndex) {
+    var startPlay = function (v2, plays, fromIndex, poolCandidates) {
       if (!plays || !plays.length || !plays[fromIndex] || !plays[fromIndex].episodes || !plays[fromIndex].episodes.length) {
         toast('未找到「' + title + '」的可用播放源');
         return;
@@ -716,18 +875,12 @@
           lastPlayEpisodeIndex: ep.index,
         });
       }
-      // 续播也写入播放会话，播放器「选集」面板可标出当前片源
-      var resumeKey = v2.source && v2.source.id
-        ? ((String(v2.source.id).indexOf('kazumi:') === 0 ? '' : 'cms:') + v2.source.id)
-        : (v2.key || '');
-      beginPlaybackSession(v2, [{
-        id: resumeKey || (v2.key || 'resume'),
-        sourceKey: resumeKey || (v2.key || 'resume'),
-        label: (v2.source && v2.source.name) || title || '当前源',
-        sub: title,
-        kind: 'cms',
-        _ref: { sourceId: v2.source && v2.source.id, vodId: v2.vodId, sourceName: v2.source && v2.source.name }
-      }], resumeKey || (v2.key || 'resume'));
+      // 续播也写入播放会话：候选池=在播源+本轮搜索到的全部同名候选，
+      // 播放器「选集」面板据此列出全部片源并标出正在播放的那一个
+      var currentCand = buildResumeCandidate(v2, title);
+      beginPlaybackSession(v2, mergeResumeCandidates([currentCand], poolCandidates), currentCand.id);
+      // 后台补齐全单元候选（CMS+Kazumi）；兜底路径已含 CMS 聚合结果，只补搜 Kazumi
+      augmentResumeSession(v2, title, poolCandidates ? { skipCms: true } : {});
       if (plays.length === 1 && target.episodes.length === 1) {
         doPlayEpisode(v2, ep, target);
       } else {
@@ -810,6 +963,9 @@
           }
         }
         if (!candidates.length) candidates = sres.items.slice(0, 1);
+        // 全部同名候选转标准候选池：首个可播候选起播时也把其余候选写入会话，
+        // 供播放器「选集→片源」热切换（修复池内只有当前 1 源）
+        var poolCandidates = resumeCandidatesFromItems({ kind: 'cms' }, candidates, title);
         // 串行尝试每个候选，首个有播放列表即起播（避免并发风暴）
         var q = candidates.slice();
         function next() {
@@ -834,7 +990,7 @@
               vodId: variant.vodId,
               _origin: rec._origin
             };
-            startPlay(v2, dres.plays, fromIndex);
+            startPlay(v2, dres.plays, fromIndex, poolCandidates);
           }).catch(function () { next(); });
         }
         next();
@@ -868,6 +1024,7 @@
     clearPlaybackSession: clearPlaybackSession,
     candidatesForPanel: candidatesForPanel,
     switchPlaybackSource: switchPlaybackSource,
+    isSwitchActive: isSwitchActive,
     confirmPlaybackSwitch: confirmPlaybackSwitch,
     failPlaybackSwitch: failPlaybackSwitch,
     candKeyOf: candKeyOf
