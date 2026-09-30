@@ -755,6 +755,22 @@ function isPrivateHost(hostname) {
   return false; // 域名放行（影视源为公网自定义域名）
 }
 
+// Bangumi 镜像等上游的错误体形态不统一：可能是 {"message":"..."}，
+// 也可能是 {"error":{"code":"...","message":"..."}}（error 为对象时直接取值会得到 [object Object]）。
+function extractUpstreamErrorDetail(text) {
+  const t = String(text == null ? '' : text).trim();
+  if (!t) return '';
+  try {
+    const j = JSON.parse(t);
+    if (j && typeof j === 'object') {
+      if (typeof j.message === 'string' && j.message) return j.message;
+      if (j.error && typeof j.error === 'object' && typeof j.error.message === 'string') return j.error.message;
+      if (typeof j.error === 'string' && j.error) return j.error;
+    }
+  } catch (e) { /* 非 JSON：原样返回文本 */ }
+  return t;
+}
+
 // ---------- Cookie 持久化 ----------
 const COOKIE_ATTRIBUTE_NAMES = new Set(['path', 'domain', 'expires', 'max-age', 'samesite', 'secure', 'httponly']);
 function collectCookiePair(picked, key, value) {
@@ -8080,18 +8096,35 @@ const server = http.createServer(async (req, res) => {
       if (rawPayload.length > 4096) { res.writeHead(413); res.end('Payload Too Large'); return; }
 
       // 优先 Kazumi 镜像 api.kazumi.fyi（国内可直连，无需代理）；官方 api.bgm.tv 需代理，作最后兜底。
-      const candidates = [
+      // 启动方可经 STELLAFLIX_BANGUMI_SEARCH_UPSTREAMS（逗号分隔 URL）覆盖源列表；
+      // 每个覆盖 URL 仍过 isPrivateHost 守卫（SSRF 面不扩大）。
+      let candidates = [
         { url: 'https://api.kazumi.fyi/v0/search/subjects', label: 'api.kazumi.fyi' },
         { url: 'https://api.bgm.tv/v0/search/subjects', label: 'api.bgm.tv' },
       ];
+      const upstreamOverride = String(process.env.STELLAFLIX_BANGUMI_SEARCH_UPSTREAMS || '').trim();
+      if (upstreamOverride) {
+        const parsed = [];
+        for (const raw of upstreamOverride.split(',')) {
+          const u = raw.trim();
+          if (!u) continue;
+          try {
+            const pu = new URL(u);
+            if (isPrivateHost(pu.hostname)) { console.warn('[BangumiSearch] 覆盖源被 SSRF 守卫拦截：' + u); continue; }
+            parsed.push({ url: u, label: pu.hostname });
+          } catch (e) { console.warn('[BangumiSearch] 覆盖源 URL 非法：' + u); }
+        }
+        if (parsed.length) candidates = parsed;
+      }
       let up = null;
-      let lastErr = null;
+      const failures = [];
       for (let ci = 0; ci < candidates.length; ci++) {
+        const label = candidates[ci].label;
         try {
           const cu = new URL(candidates[ci].url);
           cu.searchParams.set('limit', String(limit));
           cu.searchParams.set('offset', String(offset));
-          if (isPrivateHost(cu.hostname)) { lastErr = 'Forbidden host ' + cu.hostname; continue; }
+          if (isPrivateHost(cu.hostname)) { failures.push({ label, error: 'forbidden-host' }); continue; }
           const r = await fetchWithTimeout(cu.toString(), {
             method: 'POST',
             headers: {
@@ -8102,16 +8135,28 @@ const server = http.createServer(async (req, res) => {
             body: rawPayload,
           }, 12000);
           if (r.ok) { up = r; break; }
-          lastErr = '上游 ' + candidates[ci].label + ' 返回 ' + r.status;
-          console.warn('[BangumiSearch] ' + lastErr + '，尝试下一源');
+          // 提取上游错误体里的 message（如镜像 401 invalid request signature），便于定位
+          let detail = '';
+          try { detail = extractUpstreamErrorDetail((await r.text()).slice(0, 300)); } catch (e2) {}
+          detail = String(detail).trim();
+          failures.push({ label, status: r.status, ...(detail ? { message: detail } : {}) });
+          console.warn('[BangumiSearch] 上游 ' + label + ' 返回 ' + r.status + (detail ? ' (' + detail + ')' : '') + '，尝试下一源');
         } catch (e) {
-          lastErr = (e && e.message) || String(e);
-          console.warn('[BangumiSearch] 源 ' + candidates[ci].label + ' 失败：' + lastErr);
+          const msg = (e && e.message) || String(e);
+          failures.push({ label, error: msg });
+          console.warn('[BangumiSearch] 源 ' + label + ' 失败：' + msg);
         }
       }
       if (!up) {
-        console.error('[BangumiSearch] 全部源失败：', lastErr);
-        res.writeHead(502); res.end(); return;
+        const lastErr = failures.length ? failures[failures.length - 1] : { error: 'no-upstream' };
+        console.error('[BangumiSearch] 全部源失败：', JSON.stringify(failures));
+        sendJSON(res, {
+          error: 'bangumi_search_upstream_failed',
+          message: '全部源失败: ' + failures.map((f) => f.label + ' ' + (f.status != null ? 'HTTP ' + f.status : f.error)).join('; '),
+          sources: failures,
+          hint: '镜像搜索需 Kazumi 官方签名凭证（本应用无）；api.bgm.tv 需代理——启动前设置 HTTPS_PROXY 指向本机代理即可启用官方兜底',
+        }, 502);
+        return;
       }
       const text = await up.text();
       res.writeHead(up.status, {

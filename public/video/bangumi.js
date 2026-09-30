@@ -11,13 +11,18 @@
  * 数据源（对齐 Kazumi ApiEndpoints）：
  *   - 当季主路径：https://next.bgm.tv/p1/calendar   （bangumiAPINextDomain + bangumiCalendar）
  *   - 当季兜底  ：https://api.bgm.tv/calendar       （v0 旧路径）
+ *   - 往季主路径：https://api.kazumi.fyi/kazumi/v1/calendar/season?start=&end=
+ *                 （对应 Kazumi BangumiApi.getBangumiMirrorSeasonCalendar，免签名）
  *   - 往季回退  ：POST /api/bangumi/search -> api.bgm.tv/v0/search/subjects
  *                 （对应 Kazumi BangumiApi.getCalendarBySearch；本项目的 /api/proxy 是
- *                   GET-only，故往季 POST 走新增的专用路由 server.js:/api/bangumi/search）
+ *                   GET-only，故往季 POST 走新增的专用路由 server.js:/api/bangumi/search。
+ *                   注意：镜像上的该搜索端点需 Kazumi 官方签名凭证，本项目无 -> 常 401，
+ *                   仅当有 HTTPS_PROXY 时经官方 api.bgm.tv 才能真正兜住）
  *
  * 对外：
- *   SFV.bangumi.getCalendar()         -> Promise<{ calendar, error }>  索引 0..6 = 周一..周日
- *   SFV.bangumi.getCalendarBySearch() -> Promise<{ calendar, error }>  指定季度窗口
+ *   SFV.bangumi.getCalendar()           -> Promise<{ calendar, error }>  当季，索引 0..6 = 周一..周日
+ *   SFV.bangumi.getSeasonCalendar()     -> Promise<{ calendar, error, source }>  往季（镜像优先）
+ *   SFV.bangumi.getCalendarBySearch()   -> Promise<{ calendar, error }>  指定季度窗口（搜索分支）
  *
  * @license GPL-3.0（与 Kazumi 上游一致）
  */
@@ -33,6 +38,8 @@
   var BANGUMI_MIRROR = 'https://api.kazumi.fyi';
   var BANGUMI_CALENDAR_MIRROR_NEXT = BANGUMI_MIRROR + '/p1/calendar';
   var BANGUMI_CALENDAR_MIRROR_V0 = BANGUMI_MIRROR + '/calendar';
+  // 往季主路径：镜像季度时间表（Kazumi ApiEndpoints.bangumiMirrorSeasonCalendar）
+  var BANGUMI_SEASON_MIRROR = BANGUMI_MIRROR + '/kazumi/v1/calendar/season';
 
   // ---- 图片重写（移植自 Kazumi bangumi_image_url_rewriter.dart）----
   function _isApiImage(u) {
@@ -229,7 +236,30 @@
     return { calendar: [], error: lastErr || 'calendar-fetch-failed', source: null };
   }
 
-  // ---- 取数：往季（POST /api/bangumi/search）----
+  // ---- 取数：往季（镜像季度端点为主，POST 搜索为回退） ----
+  /**
+   * Kazumi 镜像季度时间表（对应 BangumiApi.getBangumiMirrorSeasonCalendar）：
+   *   GET {mirror}/kazumi/v1/calendar/season?start=&end=  -> json['1']..json['7']，每项取 .subject
+   * 免签名（区别于需 Kazumi 官方凭证的 POST /v0/search/subjects），国内可直连。
+   * @param {Array<string>} range ['YYYY-MM-DD','YYYY-MM-DD'] 来自 bangumiSeason.toSeasonStartAndEnd()
+   */
+  async function getSeasonCalendarMirror(range) {
+    var url = BANGUMI_SEASON_MIRROR + '?start=' + encodeURIComponent(range[0]) +
+      '&end=' + encodeURIComponent(range[1]);
+    try {
+      var json = await fetchCalendarJSON(url, 12000);
+      var cal = parseCalendarJSON(json);
+      var total = cal.reduce(function (n, a) { return n + a.length; }, 0);
+      // 形态异常（键不为 1..7）或空表都视为失败，交给搜索分支兜底
+      if (!total) return { calendar: cal, error: 'mirror-season-empty', source: null };
+      return { calendar: cal, error: null, source: 'mirror-season' };
+    } catch (e) {
+      var msg = (e && e.message) || String(e);
+      console.warn('[Bangumi] 镜像季度端点失败:', msg);
+      return { calendar: [], error: msg, source: null };
+    }
+  }
+
   /**
    * 取指定季度窗口的放送表（对齐 Kazumi BangumiApi.getCalendarBySearch）。
    * @param {Array<string>} range ['YYYY-MM-DD','YYYY-MM-DD'] 来自 bangumiSeason.toSeasonStartAndEnd()
@@ -256,7 +286,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      if (!resp.ok) {
+        // server 全源失败时返回 { error, message, sources } —— 提取 message 让 UI 能展示真实原因
+        var respText = await resp.text();
+        var detail = '';
+        try { detail = String((JSON.parse(respText) || {}).message || ''); } catch (e2) { detail = respText.slice(0, 200); }
+        detail = detail.trim();
+        throw new Error('HTTP ' + resp.status + (detail ? ' ' + detail : ''));
+      }
       var json = JSON.parse(await resp.text());
       var list = [];
       (json.data || []).forEach(function (j) {
@@ -276,11 +313,15 @@
   }
 
   /**
-   * 季度切换统一入口（对齐 Kazumi TimelineController.getSchedulesBySeason 的非镜像分支）：
-   * 循环 4 次 × limit 20 累积，逐桶 addAll。
+   * 季度切换统一入口（对齐 Kazumi TimelineController._getSchedulesBySeason）：
+   *   1) 镜像季度端点（免签，主路径）；
+   *   2) 失败则回退 POST 搜索分支，循环 4 次 × limit 20 累积，逐桶 addAll。
    * @param {Array<string>} range
    */
   async function getSeasonCalendar(range) {
+    var mirror = await getSeasonCalendarMirror(range);
+    if (!mirror.error) return mirror;
+
     var maxTime = 4;
     var limit = 20;
     var acc = [[], [], [], [], [], [], []];
@@ -294,6 +335,7 @@
       if (got < limit) break;
     }
     var total = acc.reduce(function (n, a) { return n + a.length; }, 0);
+    // 一条都没抓到且存在错误：error 必须上浮（7 个空桶 length===7，调用方无法凭长度区分失败与真空）
     if (!total && err) return { calendar: acc, error: err, source: null };
     return { calendar: acc, error: null, source: 'search' };
   }

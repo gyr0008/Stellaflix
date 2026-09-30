@@ -51,6 +51,8 @@
 
   var _host = null;        // 当前挂载宿主
   var _seasonSheet = null; // 时间机器面板
+  var _seasonSheetAnchor = null; // 打开面板的季度按钮：toggle 与外点判定要靠它
+  var _sheetRemoveTimer = 0; // 收起动画期间的延迟摘除
 
   // ---------------------------------------------------------------- 工具
   function el(tag, cls, text) {
@@ -180,7 +182,12 @@
     seasonBtn.type = 'button';
     seasonBtn.appendChild(el('span', 'sfv-bgm-tl-season-text', _state.seasonString || '—'));
     seasonBtn.appendChild(el('span', 'sfv-bgm-tl-season-caret', '▾'));
-    seasonBtn.addEventListener('click', function () { openSeasonSheet(wrap); });
+    seasonBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      // 再点一次 = 向上收起。外点监听已放行按钮，切换判定只能在这一处做。
+      if (_seasonSheet) { closeSeasonSheet(); return; }
+      openSeasonSheet(wrap, seasonBtn);
+    });
     head.appendChild(seasonBtn);
 
     // 排序
@@ -239,6 +246,11 @@
     return tabs;
   }
 
+  /** 桶内条目总数（往季失败时 getSeasonCalendar 返回 7 个空桶，length 判不出空） */
+  function totalItems(data) {
+    return (data || []).reduce(function (n, a) { return n + (a ? a.length : 0); }, 0);
+  }
+
   /** 单日网格 */
   function buildBody(wrap) {
     var body = el('div', 'sfv-bgm-tl-body');
@@ -247,8 +259,16 @@
       body.appendChild(el('div', 'sfv-bgm-tl-ph', '加载中…'));
       return body;
     }
-    if (_state.error && (!_state.data || !_state.data.length)) {
-      body.appendChild(el('div', 'sfv-bgm-tl-ph', 'Bangumi 日历加载失败：' + esc(_state.error)));
+    if (_state.error && !totalItems(_state.data)) {
+      var errBox = el('div', 'sfv-bgm-tl-error');
+      errBox.appendChild(el('div', 'sfv-bgm-tl-ph', 'Bangumi 日历加载失败：' + esc(_state.error)));
+      var retry = el('button', 'sfv-bgm-tl-retry', '重试');
+      retry.type = 'button';
+      retry.addEventListener('click', function () {
+        load(function () { render(wrap); });
+      });
+      errBox.appendChild(retry);
+      body.appendChild(errBox);
       return body;
     }
     if (!_state.data || !_state.data.length) {
@@ -347,22 +367,24 @@
   }
 
   // ---------------------------------------------------------------- 时间机器
-  function openSeasonSheet(wrap) {
+  // 按钮下拉形态（2026-09-27 用户方案）：点季度按钮后面板锚定按钮正下方挂 body，
+  // 不再全屏遮罩；点面板外/Esc/再次点按钮均关闭。
+  var _sheetDocClick = null;
+  var _sheetDocKey = null;
+  function openSeasonSheet(wrap, anchor) {
     closeSeasonSheet();
+    // 收起动画还没播完就再点开：先硬摘残留节点，避免两份面板叠影
+    var stale = doc.querySelector('.sfv-bgm-tl-sheet');
+    if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
     if (!SFV.bangumiSeason) return;
 
-    var mask = el('div', 'sfv-bgm-tl-sheet-mask');
-    _seasonSheet = mask;
-
+    var btn = anchor || wrap;
     var sheet = el('div', 'sfv-bgm-tl-sheet');
+    _seasonSheet = sheet;
+    _seasonSheetAnchor = btn;
 
     var head = el('div', 'sfv-bgm-tl-sheet-head');
     head.appendChild(el('div', 'sfv-bgm-tl-sheet-title', '时间机器'));
-    head.appendChild(el('div', 'sfv-bgm-tl-sheet-sub', '按季度回到任意放送季'));
-    var closeBtn = el('button', 'sfv-bgm-tl-sheet-close', '×');
-    closeBtn.type = 'button';
-    closeBtn.addEventListener('click', closeSeasonSheet);
-    head.appendChild(closeBtn);
     sheet.appendChild(head);
 
     var list = el('div', 'sfv-bgm-tl-sheet-list');
@@ -387,16 +409,50 @@
     });
     sheet.appendChild(list);
 
-    mask.appendChild(sheet);
-    mask.addEventListener('click', function (e) { if (e.target === mask) closeSeasonSheet(); });
-    (doc.body || doc.documentElement).appendChild(mask);
+    (doc.body || doc.documentElement).appendChild(sheet);
+    // 面板挂 body：不拦冒泡的话，面板内点击会落到背后 .sfv-bgm-modal-overlay 的
+    // target===overlay 判定链路上（虽不成立，但防其它遮罩类监听误伤）
+    sheet.addEventListener('click', function (e) { e.stopPropagation(); });
+    var r = btn.getBoundingClientRect();
+    // 面板宽度对齐「2026年夏季新番 ▾」（用户 2026-09-27）；按钮矩形宽为 0 时兜底
+    var w = Math.max(140, Math.round(r.width || 140));
+    sheet.style.width = w + 'px';
+    sheet.style.top = Math.max(12, Math.min((r.bottom || 0) + 6, global.innerHeight - 40)) + 'px';
+    sheet.style.left = Math.max(12, Math.min(r.left || 12, global.innerWidth - w - 12)) + 'px';
+
+    _sheetDocClick = function (e) {
+      // 点按钮归按钮的 toggle 管：本监听在捕获阶段先跑，若这里也关，第二次点击就变成
+      // 「先关后开」看起来无反应
+      if (_seasonSheetAnchor && _seasonSheetAnchor.contains(e.target)) return;
+      if (!sheet.contains(e.target)) closeSeasonSheet();
+    };
+    // 下拉后注册、弹窗 Esc 监听先注册 → 必须 stopPropagation，避免一次 Esc 连面板带弹窗一起关
+    _sheetDocKey = function (e) {
+      if (e.key === 'Escape' || e.keyCode === 27) {
+        e.stopPropagation();
+        closeSeasonSheet();
+      }
+    };
+    setTimeout(function () {
+      doc.addEventListener('click', _sheetDocClick, true);
+      doc.addEventListener('keydown', _sheetDocKey, true);
+    }, 0);
   }
 
   function closeSeasonSheet() {
-    if (_seasonSheet && _seasonSheet.parentNode) {
-      try { _seasonSheet.parentNode.removeChild(_seasonSheet); } catch (e) {}
-    }
+    var sheet = _seasonSheet;
     _seasonSheet = null;
+    _seasonSheetAnchor = null;
+    if (_sheetDocClick) { doc.removeEventListener('click', _sheetDocClick, true); _sheetDocClick = null; }
+    if (_sheetDocKey) { doc.removeEventListener('keydown', _sheetDocKey, true); _sheetDocKey = null; }
+    if (!sheet || !sheet.parentNode) return;
+    // 反向播 140ms 收拢动画后再摘节点（向上收起）；动画期间再点开由 openSeasonSheet 硬摘
+    sheet.classList.add('is-closing');
+    if (_sheetRemoveTimer) clearTimeout(_sheetRemoveTimer);
+    _sheetRemoveTimer = setTimeout(function () {
+      _sheetRemoveTimer = 0;
+      if (sheet.parentNode) sheet.parentNode.removeChild(sheet);
+    }, 160);
   }
 
   function onSeasonSelected(wrap, date) {
@@ -499,7 +555,11 @@
     (doc.body || doc.documentElement).appendChild(overlay);
 
     _modalEsc = function (ev) {
-      if (ev.key === 'Escape' || ev.keyCode === 27) closePopup();
+      if (ev.key !== 'Escape' && ev.keyCode !== 27) return;
+      // 时间机器下拉打开时 Esc 归下拉处理（下拉 stopPropagation 后本监听本不该见到，
+      // 此处守卫防注册顺序差异导致一次 Esc 连面板带弹窗一起关）
+      if (_seasonSheet) return;
+      closePopup();
     };
     doc.addEventListener('keydown', _modalEsc, true);
 

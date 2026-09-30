@@ -14,9 +14,9 @@
   padding: 18px 18px 20px;
   display: flex;
   flex-direction: column;
-  /* 对齐音乐态「电台/歌单」面板背景容器：金色渐变 + 金边 + 18px 圆角 */
+  /* 对齐音乐态「电台/歌单」面板背景容器：深色渐变 + 白边 + 18px 圆角 */
   background: linear-gradient(180deg, rgba(24, 23, 26, 0.96), rgba(12, 11, 12, 0.92));
-  border: 1px solid rgba(244, 210, 138, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 18px;
   box-shadow: 0 26px 90px rgba(0, 0, 0, .56), 0 0 0 1px rgba(255, 255, 255, .035), inset 0 1px 0 rgba(255, 255, 255, .07);
   color: #fff;
@@ -69,8 +69,8 @@
   padding: 8px 6px;
 }
 .sfv-bgm-day.is-today {
-  border-color: rgba(0, 245, 212, .4);
-  background: rgba(0, 245, 212, .05);
+  border-color: rgba(255, 255, 255, .4);
+  background: rgba(255, 255, 255, .05);
 }
 .sfv-bgm-day-head {
   text-align: center;
@@ -80,7 +80,7 @@
   padding: 4px 0 8px;
   letter-spacing: 1px;
 }
-.sfv-bgm-day.is-today .sfv-bgm-day-head { color: #7df5e6; }
+.sfv-bgm-day.is-today .sfv-bgm-day-head { color: #fff; }
 .sfv-bgm-day-empty { text-align: center; color: rgba(255, 255, 255, .3); padding: 16px 0; }
 .sfv-bgm-day-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -89,14 +89,14 @@
   position: relative;
   border-radius: 10px;
   overflow: hidden;
-  background: rgba(255, 255, 255, .05);
+  background: #26242a;
   border: 1px solid rgba(255, 255, 255, .07);
   cursor: pointer;
   transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
 }
 .sfv-bgm-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(0, 245, 212, .4);
+  border-color: rgba(255, 255, 255, .4);
   box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
 }
 .sfv-bgm-poster {
@@ -147,9 +147,9 @@
 .sfv-bgm-badge.st-watched { background: rgba(76, 217, 130, .85); color: #06210f; }
 .sfv-bgm-badge.st-abandoned { background: rgba(244, 67, 89, .85); }
 
-/* 弹层 */
+/* 弹层（z 高于弹窗遮罩 2147482000 与时间机器 2147482010，铁律 < 2147482099） */
 .sfv-bgm-pop {
-  z-index: 2147482000;
+  z-index: 2147482020;
   width: 260px;
   background: rgba(22, 26, 34, .96);
   border: 1px solid rgba(255, 255, 255, .12);
@@ -180,7 +180,7 @@
 .sfv-bgm-pop-state:hover { background: rgba(255, 255, 255, .14); }
 .sfv-bgm-pop-state svg { width: 16px; height: 16px; flex: 0 0 auto; }
 .sfv-bgm-pop-state .lbl { flex: 1 1 auto; text-align: left; }
-.sfv-bgm-pop-state.active { background: rgba(0, 245, 212, .18); border-color: rgba(0, 245, 212, .5); color: #d6fff8; }
+.sfv-bgm-pop-state.active { background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .5); color: #fff; }
 .sfv-bgm-pop-state.st-watching.active { background: rgba(33, 150, 243, .8); border-color: rgba(33,150,243,.9); }
 .sfv-bgm-pop-state.st-planToWatch.active { background: rgba(255, 179, 71, .9); color: #2a1c00; }
 .sfv-bgm-pop-state.st-watched.active { background: rgba(76, 217, 130, .85); color: #06210f; }
@@ -203,7 +203,7 @@
   justify-content: center;
   padding: 0;
   /* 对齐音乐态「音乐电台」面板的遮罩背景 */
-  background: radial-gradient(circle at 50% 48%, rgba(244, 210, 138, .07), transparent 34%), rgba(0, 0, 0, 0.78);
+  background: radial-gradient(circle at 50% 48%, rgba(255, 255, 255, .07), transparent 34%), rgba(0, 0, 0, 0.78);
   box-sizing: border-box;
 }
 .sfv-bgm-modal {
@@ -221,7 +221,7 @@
   overflow: hidden;
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(24, 23, 26, 0.96), rgba(12, 11, 12, 0.92));
-  border: 1px solid rgba(244, 210, 138, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 26px 90px rgba(0, 0, 0, .56), 0 0 0 1px rgba(255, 255, 255, .035), inset 0 1px 0 rgba(255, 255, 255, .07);
   color: #fff;
 }
