@@ -9,9 +9,11 @@
   "private": true,
   "scripts": {
     "test": "node tests/run-all.js",
+    "bundle": "node scripts/bundle-modules.js",
+    "bundle:check": "node scripts/bundle-modules.js --check",
     "start": "electron .",
-    "build:win": "electron-builder --win nsis",
-    "build:win:dir": "electron-builder --win dir",
+    "build:win": "node scripts/bundle-modules.js --check && electron-builder --win nsis",
+    "build:win:dir": "node scripts/bundle-modules.js --check && electron-builder --win dir",
     "build:win:internal-beta": "electron-builder --config electron-builder.internal-beta.json --win nsis --publish never"
   },
   "build": {

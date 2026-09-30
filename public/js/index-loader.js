@@ -150,16 +150,20 @@
     'js/modules/12-expose-inline-globals.js',
   ];
 
-  function readModule(path) {
+  function readModuleAt(url, version) {
     const request = new XMLHttpRequest();
-    request.open('GET', path + (path.indexOf('?') >= 0 ? '&' : '?') + 'v=' + moduleCacheBust, false);
+    request.open('GET', url + (url.indexOf('?') >= 0 ? '&' : '?') + 'v=' + encodeURIComponent(version), false);
     request.send(null);
 
     if ((request.status < 200 || request.status >= 300) && request.status !== 0) {
-      throw new Error('Failed to load Stellaflix module: ' + path + ' (' + request.status + ')');
+      throw new Error('Failed to load Stellaflix module: ' + url + ' (' + request.status + ')');
     }
 
     return request.responseText;
+  }
+
+  function readModule(path) {
+    return readModuleAt(path, moduleCacheBust);
   }
 
   // ==== Fix (final architecture): 全局裸 try/catch + 模块纯拼接（零 IIFE 包裹、零 per-module try/catch）。
@@ -175,12 +179,56 @@
   //   → try/catch 仍在最外层包裹：单模块 sync 异常统一 catch + 记录 [Startup FATAL]
   //   → try 块末尾写 `__stellaflixStartupFailSafeDone = true`：正常启动成功时 splash
   //     failsafe 定时器看到标记就跳过，不再 2.5s 必强退 logo
-  var modulesSource;
+  // ==== B1: bundle 模式（默认）— 15 个连续段 bundle 替代 112 次逐文件 XHR。 ====
+  // 读 js/bundles/bundle-manifest.json（构建产物，scripts/bundle-modules.js 生成）。
+  // ?dev=1 强制走原逐文件模式（开发改模块后无需先重建 bundle）。
+  // 任一环节失败（manifest 缺失 / JSON 损坏 / 某段 404）→ 自动回退原逐文件模式，绝不半途硬崩。
+  // 红线：manifest.groups 段序在构建时已保证与 modulePaths 逐位一致（顺序守恒校验），
+  //       此处只按数组顺序拼接，不做任何排序/去重/压缩。
+  // 新鲜度守卫：manifest 展平结果必须与上方 modulePaths 逐位相同 —— 有人改了数组却忘了
+  //       跑 npm run bundle（产物过期）时，旧 bundle 少/多/换了模块，静默执行才是灾难，
+  //       这里判定不一致就回退逐文件，功能永远跟最新源码走。
+  var modulesSource = '';
+  var bundleModeUsed = false;
   try {
-    modulesSource = modulePaths.map(readModule).join('\n');
-  } catch (readErr) {
-    modulesSource = 'throw new Error("Module read failed: ' + String(readErr && readErr.message ? readErr.message : readErr) + '");\n';
+    var forceDevModules = false;
+    try { forceDevModules = /[?&]dev=1\b/.test(window.location.search); } catch (e) {}
+    if (!forceDevModules) {
+      var bundleManifest = JSON.parse(readModule('js/bundles/bundle-manifest.json'));
+      var bundleGroups = bundleManifest && Array.isArray(bundleManifest.groups) ? bundleManifest.groups : [];
+      var bundleModules = [];
+      for (var gIdx = 0; gIdx < bundleGroups.length; gIdx++) {
+        var gModules = bundleGroups[gIdx] && bundleGroups[gIdx].modules;
+        if (Array.isArray(gModules)) bundleModules = bundleModules.concat(gModules);
+      }
+      var bundleModulesMatch = bundleGroups.length > 0 &&
+        bundleModules.length === modulePaths.length &&
+        bundleModules.every(function (m, i) { return m === modulePaths[i]; });
+      if (!bundleModulesMatch) {
+        try { console.warn('[Startup] Bundle 产物与 modulePaths 不一致（过期？跑 npm run bundle 重建），回退逐文件模式。'); } catch (e) {}
+      } else {
+        // bundle 段用 manifest.builtAt 作版本而不是 Date.now：重建产物才换 URL，
+        // 同一版本内多次刷新/重开窗口才可能命中缓存（manifest 本身仍每次取最新）。
+        var bundleVersion = String(bundleManifest.builtAt || moduleCacheBust);
+        for (var bundleIdx = 0; bundleIdx < bundleGroups.length; bundleIdx++) {
+          modulesSource += readModuleAt(bundleGroups[bundleIdx].file, bundleVersion) + '\n';
+        }
+        bundleModeUsed = true;
+      }
+    }
+  } catch (bundleErr) {
+    try { console.warn('[Startup] Bundle mode unavailable, falling back to per-file modules:', bundleErr && bundleErr.message ? bundleErr.message : bundleErr); } catch (e) {}
+    modulesSource = '';
+    bundleModeUsed = false;
   }
+  if (!bundleModeUsed) {
+    try {
+      modulesSource = modulePaths.map(readModule).join('\n');
+    } catch (readErr) {
+      modulesSource = 'throw new Error("Module read failed: ' + String(readErr && readErr.message ? readErr.message : readErr) + '");\n';
+    }
+  }
+  try { window.__stellaflixBundleMode = bundleModeUsed; } catch (e) {}
   const script = document.createElement('script');
   script.text =
     'try {\n' +
