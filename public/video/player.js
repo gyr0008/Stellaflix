@@ -413,6 +413,22 @@
     var b = getDoc().body;
     if (b) b.classList.remove('video-player-idle');
   }
+  // 最近一次指针位置（wireIdle onMove 维护；指针离窗时清空）。供方案 B 的
+  // 「悬停豁免」判定：到点隐藏前先看指针是否仍在控制栏/唤醒带内。
+  var lastPointerPos = null;
+  // 方案B（2026-09-26 用户拍板）：指针是否停留在「控制栏本体 ±18px ∪ 底部 120px 唤醒带」内。
+  // 与 pointInBar 的命中容差/唤醒带宽一致；区别于 pointInBar 的是它不依赖 idle 态——
+  // 控制栏可见（非 idle）时同样生效，用于阻止「鼠标停在条上 3s 后条在指针底下自己藏掉」。
+  function pointerInWakeZone() {
+    if (!lastPointerPos) return false;
+    var bar = getDoc().getElementById('bottom-bar');
+    if (!bar) return false;
+    var r = bar.getBoundingClientRect();
+    var x = lastPointerPos.x, y = lastPointerPos.y;
+    if (x >= r.left - 18 && x <= r.right + 18 && y >= r.top - 18 && y <= r.bottom + 18) return true;
+    var h = global.innerHeight || 0;
+    return !!(h && y >= h - 120);
+  }
   function armHideTimer(delayMs) {
     // 自动隐藏关闭：控制条常驻，不得进入 idle
     if (!isControlsAutoHideOn()) {
@@ -423,6 +439,9 @@
     hideTimer = setTimeout(function () {
       if (!isControlsAutoHideOn()) return;
       if (overlay && SFV.state && SFV.state.getSpace() === 'video') {
+        // 方案B：指针仍停留在控制栏/唤醒带内 → 不隐藏，顺延计时（对齐音乐态
+        // controlsHovering 豁免语义，修复「悬停时条在指针底下自己消失」）。
+        if (pointerInWakeZone()) { armHideTimer(3000); return; }
         overlay.classList.add('sfv-idle');
         var bb = getDoc().body;
         if (bb && bb.classList.contains('video-player-active')) bb.classList.add('video-player-idle');
@@ -435,6 +454,8 @@
       if (!overlay) return;
       var x = e.clientX, y = e.clientY;
       if (e.touches && e.touches[0]) { x = e.touches[0].clientX; y = e.touches[0].clientY; }
+      // 方案B：记录指针位置，供 armHideTimer 到点时的悬停豁免判定（pointerInWakeZone）
+      lastPointerPos = { x: x, y: y };
       // =====【修复2026-09-06 17:38】控制条显示改为命中制 =====
       // 原逻辑：任意 pointermove 都 preemptive 解除 idle + 续 timer（"主流播放器"任意点亮）。
       // 新需求：仅当鼠标命中控制栏 live rect 或 idle 时的底部 120px 唤醒带，才解除 idle + 续 3s 隐藏计时；
@@ -442,6 +463,11 @@
       // 注意：pointInBar 在 idle 分支已退化到「屏幕底部 120px 唤醒带 ∪ live rect」，
       // 故不再需要「任意移动都先点亮」的兜底；该兜底只用于解决历史 idle 命中盒错位，已不再相关。
       var near = pointInBar(x, y);
+      // =====【2026-09-27 用户拍板：全屏态同样维持命中制】=====
+      // 09-26 曾加「全屏任意移动点亮」旁路，与 09-06 命中制设计冲突，已按用户要求撤销：
+      // 窗口/全屏统一「仅命中控制栏 live rect ∪ 底部 120px 唤醒带才点亮」
+      // （tests/player-hit-wake-fullscreen-parity.test.js）。
+      // 进入全屏瞬间仍点亮一次控制条（onFullscreenChange 复位），3s 后按命中制管理。
       if (!near) {
         // 自动隐藏关闭：即使指针离开控制栏也保持常驻（防残留 idle）
         if (!isControlsAutoHideOn()) {
@@ -462,6 +488,11 @@
     getDoc().addEventListener('mousemove', onMove);
     getDoc().addEventListener('touchstart', onMove, { passive: true });
     getDoc().addEventListener('resize', function () { barHitRect = null; });
+    // 方案B：指针离开窗口时清空记录，避免「鼠标从底边移出窗口后控制条因
+    // 残留的唤醒带内坐标而永不隐藏」。
+    getDoc().addEventListener('mouseout', function (e) {
+      if (!e.relatedTarget) lastPointerPos = null;
+    });
   }
 
   function setPlayIcon(playing) {
@@ -948,6 +979,14 @@
     if (!d || !d.body) return;
     var fs = !!d.fullscreenElement || d.body.classList.contains('desktop-fullscreen');
     d.body.classList.toggle('sfv-fullscreen', fs);
+    // =====【修复2026-09-26 全屏进入复位】=====
+    // 影视态进入全屏瞬间强制点亮控制条（用户刚点了全屏键，条应可见），
+    // 自动隐藏开启时续接 3s 计时后正常淡出；避免「一点全屏条就被 3s 前的旧计时藏掉」。
+    // 仅影视态生效，不触碰音乐态全屏时的控制条行为。
+    if (fs && d.body.classList.contains('video-player-active')) {
+      forceControlsVisible();
+      if (isControlsAutoHideOn()) armHideTimer(3000);
+    }
   }
   if (global.addEventListener) {
     global.addEventListener('fullscreenchange', onFullscreenChange);

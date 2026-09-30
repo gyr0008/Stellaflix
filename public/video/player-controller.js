@@ -546,12 +546,18 @@
       ? SFV.detailSource.candKeyOf
       : function (c) { return (c && (c.id || c.sourceKey)) || ''; };
     // 不把 currentKey 硬对齐到 sources[0]：那会把高亮错贴到无关源上
-    var switching = !!(session && session.switching);
+    // C1：切换锁改会话式判定（30s 无 confirm/fail 自动解锁），漏回调不再永久吞点击
+    var switching = (SFV.detailSource && typeof SFV.detailSource.isSwitchActive === 'function')
+      ? SFV.detailSource.isSwitchActive()
+      : !!(session && session.switching);
     var hasTracks = !!(tracks && tracks.length);
     var hasRoads = !!(roads && roads.length > 1);
     var hasSources = !!(sources && sources.length);
     if (!hasTracks && !hasRoads && !hasSources) { toast('当前没有可选片源'); return; }
     var curIdx = (pl && typeof pl.index === 'number') ? pl.index : -1;
+    // 方案A（对齐 Kazumi visibleRoad 模型）：线路区只切换「看哪条线路的列表」，
+    // 剧集列表按 visibleRoad 渲染；初始可见线路 = 正在播的线路。
+    var visibleRoad = (roadFromIndex >= 0 && roadFromIndex < ((roads && roads.length) || 0)) ? roadFromIndex : 0;
     var panel = d.createElement('div');
     panel.className = 'sfv-episode-panel';
     var hd = d.createElement('div');
@@ -582,16 +588,17 @@
           sub.textContent = item.sub;
           btn.appendChild(sub);
         }
-        if (item.current) {
+        if (item.disabled) btn.disabled = true;
+        if (item.current && item.badge) {
           var badge = d.createElement('span');
           badge.className = 'sfv-ep-item-badge';
-          badge.textContent = '播放中';
+          badge.textContent = item.badge;
           btn.appendChild(badge);
         }
         btn.addEventListener('click', function (ev) {
           ev.preventDefault(); ev.stopPropagation();
           if (item.onClick) item.onClick();
-          closeEpisodePanel();
+          if (!item.keepOpen) closeEpisodePanel();
         });
         list.appendChild(btn);
       });
@@ -599,89 +606,119 @@
       panel.appendChild(sec);
     }
 
-    // ---- 片源（跨源候选，与详情页多源面板同源数据）----
-    if (hasSources) {
-      var srcItems = sources.map(function (c) {
-        var key = candKey(c);
-        var label = c.label || c.group || '片源';
-        // 唯一高亮：严格等于 currentKey（用 id，不用 sourceKey）
-        var isCur = !!(currentKey && key && key === currentKey);
-        return {
-          label: label,
-          sub: c.sub || '',
-          current: isCur,
-          onClick: function () {
-            if (isCur || switching) return;
-            if (SFV.detailSource && typeof SFV.detailSource.switchPlaybackSource === 'function') {
-              SFV.detailSource.switchPlaybackSource(c);
-            } else if (SFV.detailSource && typeof SFV.detailSource.playCandidate === 'function') {
-              SFV.detailSource.playCandidate(c, session.view, null);
-            } else {
-              toast('片源切换组件未就绪');
+    // 方案A（对齐 Kazumi EpisodeSelectionPanel）：三个分区封装为 builder，
+    // 点「线路」只切换可见线路并整板重建（不触发播放、不做集名对齐）。
+    function buildSections() {
+      // ---- 片源（跨源候选，与详情页多源面板同源数据）----
+      if (hasSources) {
+        var srcItems = sources.map(function (c) {
+          var key = candKey(c);
+          var label = c.label || c.group || '片源';
+          // 唯一高亮：严格等于 currentKey（用 id，不用 sourceKey）
+          var isCur = !!(currentKey && key && key === currentKey);
+          return {
+            label: label,
+            sub: c.sub || '',
+            current: isCur,
+            badge: '播放中',
+            onClick: function () {
+              if (isCur || switching) return;
+              if (SFV.detailSource && typeof SFV.detailSource.switchPlaybackSource === 'function') {
+                SFV.detailSource.switchPlaybackSource(c);
+              } else if (SFV.detailSource && typeof SFV.detailSource.playCandidate === 'function') {
+                SFV.detailSource.playCandidate(c, session.view, null);
+              } else {
+                toast('片源切换组件未就绪');
+              }
             }
-          }
-        };
-      });
-      addSection('片源', srcItems);
-    }
+          };
+        });
+        addSection('片源', srcItems);
+      }
 
-    // ---- 线路（当前源内的多线路热切换）----
-    if (hasRoads) {
-      var roadItems = roads.map(function (p, i) {
-        var eps = (p && p.episodes) || [];
-        var label = (p && p.from) || ('线路 ' + (i + 1));
-        var isCur = (i === (roadFromIndex | 0));
-        return {
-          label: label,
-          sub: eps.length ? (eps.length + ' 集') : '',
-          current: isCur,
-          onClick: function () {
-            if (isCur) return;
-            var curName = null;
-            if (hasTracks && curIdx >= 0 && tracks[curIdx]) curName = tracks[curIdx].name || null;
-            var epIdx = 0;
-            if (curName != null && SFV.detail && typeof SFV.detail.alignEpisodeByIdentifier === 'function') {
-              var aligned = SFV.detail.alignEpisodeByIdentifier(roads, i, curName, curIdx);
-              if (aligned) epIdx = aligned.episodeIndex;
-              else { toast('该线路无对应集'); return; }
+      // ---- 线路（可见线路选择器：只切列表不播放，对齐 Kazumi _selectRoad）----
+      if (hasRoads) {
+        var roadItems = roads.map(function (p, i) {
+          var eps = (p && p.episodes) || [];
+          var isCur = (i === visibleRoad);
+          var isPlaying = (i === (roadFromIndex | 0));
+          return {
+            label: (p && p.from) || ('线路 ' + (i + 1)),
+            sub: (eps.length ? (eps.length + ' 集') : '') + (isPlaying ? ' · 播放中' : ''),
+            current: isCur,
+            keepOpen: true,
+            onClick: function () {
+              if (isCur) return;
+              visibleRoad = i;
+              rebuildSections();
             }
-            if (SFV.player && typeof SFV.player.switchRoad === 'function') {
-              var ok = SFV.player.switchRoad(i, epIdx);
-              if (!ok) toast('线路切换失败');
-            }
-          }
-        };
-      });
-      addSection('线路', roadItems);
-    }
+          };
+        });
+        addSection('线路', roadItems);
+      }
 
-    // ---- 剧集 ----
-    if (hasTracks) {
-      var epItems = tracks.map(function (ep, i) {
-        return {
-          label: (ep && ep.name) ? ep.name : ('第' + (i + 1) + '集'),
-          current: (i === curIdx),
-          onClick: function () {
-            if (i === curIdx) {
-              toast('已在播放该集');
-              return;
+      // ---- 剧集（按可见线路渲染；跨线路直选，不做集名对齐）----
+      var epList = null;
+      var isPlayingRoad = false;
+      if (roads && roads.length) {
+        epList = (roads[visibleRoad] && roads[visibleRoad].episodes) || [];
+        isPlayingRoad = (visibleRoad === (roadFromIndex | 0));
+      } else if (hasTracks) {
+        epList = tracks;
+        isPlayingRoad = true;
+      }
+      if (epList && epList.length) {
+        var epItems = epList.map(function (ep, i) {
+          var cur = isPlayingRoad && (i === curIdx);
+          return {
+            label: (ep && ep.name) ? ep.name : ('第' + (i + 1) + '集'),
+            current: cur,
+            badge: '播放中',
+            onClick: function () {
+              if (cur) {
+                toast('已在播放该集');
+                return;
+              }
+              if (switching) { toast('正在切换片源，请稍候'); return; }
+              var ok;
+              if (isPlayingRoad) {
+                // 本线路内切集：沿用 playlist 快路径
+                ok = SFV.player && typeof SFV.player.playEpisodeAt === 'function'
+                  ? SFV.player.playEpisodeAt(i) : false;
+              } else {
+                // 跨线路直选：直接按目标线路第 i 集起播（编排器 roadSwitchFn 单一入口），
+                // 不再走 alignEpisodeByIdentifier 集名对齐——对齐失败即拒绝正是电影切不动线路的根因。
+                ok = SFV.player && typeof SFV.player.switchRoad === 'function'
+                  ? SFV.player.switchRoad(visibleRoad, i) : false;
+              }
+              if (!ok) toast('切换剧集失败');
+              else toast(isPlayingRoad ? '正在切换剧集…' : '正在切换线路与剧集…');
             }
-            if (switching) { toast('正在切换片源，请稍候'); return; }
-            var ok = SFV.player && typeof SFV.player.playEpisodeAt === 'function'
-              ? SFV.player.playEpisodeAt(i) : false;
-            if (!ok) toast('切换剧集失败');
-            else toast('正在切换剧集…');
-          }
-        };
-      });
-      addSection(hasSources || hasRoads ? '选集' : '', epItems);
+          };
+        });
+        addSection(hasSources || hasRoads ? '选集' : '', epItems);
+      } else if (hasRoads) {
+        // 空态文案（对齐 Kazumi「这条线路暂无剧集」）
+        addSection('选集', [{ label: '这条线路暂无剧集', disabled: true }]);
+      }
     }
+    function rebuildSections() {
+      while (panel.childNodes.length > 1) panel.removeChild(panel.lastChild); // 保留标题，整板重建分区
+      buildSections();
+    }
+    buildSections();
 
     var anchor = $('sfv-ctrl-ep') || (e && e.currentTarget) || null;
     // 面板必须挂载到影视态顶层覆盖层（或 body），不能放在底部控制栏内部，
     // 否则会被 #bottom-bar 的边界/clip-path/overflow 裁剪，导致右侧面板看不到。
     var mount = $('sfv-overlay') || doc.body;
     mount.appendChild(panel);
+    // C3 对齐 Kazumi「定位当前集」：打开面板时把正在播的那一集滚进可视区
+    var curBtn = panel.querySelector('.sfv-ep-item.is-current');
+    if (curBtn && typeof curBtn.scrollIntoView === 'function') {
+      try { curBtn.scrollIntoView({ block: 'nearest' }); }
+      catch (e0) { try { curBtn.scrollIntoView(); } catch (e1) {} }
+    }
     epPanel = panel;
     epAnchorEl = anchor;
     doc.addEventListener('pointerdown', onEpDocDown, true);
