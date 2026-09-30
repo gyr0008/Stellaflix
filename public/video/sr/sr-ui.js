@@ -210,7 +210,17 @@
       if (s && s.preset !== 'off') updateStats(s);
       else updateStats(null);
     });
-    SFV.srEngine.onDegrade(function (avgMs, presetId) {
+    SFV.srEngine.onDegrade(function (avgMs, presetId, reason) {
+      // 非测量降级（watchdog/compile-timeout）：avgMs 是引擎内部哨兵值而非帧耗时，
+      // 拼进文案会出现「渲染约 9999 ms/帧」的误导弹窗；此两类原因只弹这一次。
+      if (reason === 'watchdog') {
+        toast('画质增强初始化失败，已回退原生播放');
+        return;
+      }
+      if (reason === 'compile-timeout') {
+        toast('画质增强编译超时，已自动关闭以避免卡死（可手动切换更轻量档位）');
+        return;
+      }
       if (saved.autoDegrade) {
         var next = SFV.srPresets.degrade(presetId);
         if (next) {

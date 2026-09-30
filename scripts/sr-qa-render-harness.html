@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SR QA render harness (temporary)</title>
+<style>
+  #sfv-overlay { position: fixed; left: 0; top: 0; width: 1920px; height: 1080px; }
+  .sfv-sr-canvas { width: 100%; height: 100%; display: block; }
+</style>
+<script src="/video/sr/sr-engine-core.js"></script>
+<script src="/video/sr/sr-hook-adapter.js"></script>
+<script src="/video/sr/sr-presets.js"></script>
+<script src="/video/sr/sr-engine.js"></script>
+</head>
+<body>
+<div id="sfv-overlay"></div>
+<script>
+(function () {
+  'use strict';
+  var SFV = window.StellaflixVideo;
+  var W = 1920, H = 1080;
+
+  function mkCanvas(w, h) {
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  }
+
+  // 合成"动画风"测试图：大面积平涂 + 锐利斜边 + 细线 + 渐变带
+  function drawPattern(ctx, w, h) {
+    ctx.fillStyle = '#78c8ff'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#3fa34d';
+    ctx.beginPath(); ctx.moveTo(0, h); ctx.lineTo(w, 0); ctx.lineTo(w, h); ctx.closePath(); ctx.fill();
+    var g = ctx.createLinearGradient(0, 0, w, 0);
+    g.addColorStop(0, '#ff0000'); g.addColorStop(1, '#0000ff');
+    ctx.fillStyle = g; ctx.fillRect(0, h * 0.42, w, h * 0.08);
+    ctx.strokeStyle = '#101010'; ctx.lineWidth = Math.max(2, w / 320);
+    for (var i = 0; i < 5; i++) {
+      ctx.beginPath();
+      ctx.moveTo(w * 0.08 + i * w * 0.18, h * 0.05);
+      ctx.lineTo(w * 0.2 + i * w * 0.18, h * 0.95);
+      ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(w * 0.5, h * 0.5, h * 0.28, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#ffffff';
+    for (var x = 0; x < w; x += Math.max(2, Math.round(w / 240))) {
+      ctx.beginPath(); ctx.moveTo(x + 0.5, h * 0.05); ctx.lineTo(x + 0.5, h * 0.3); ctx.stroke();
+    }
+  }
+
+  function makeSource(srcW, srcH) {
+    var gt = mkCanvas(W, H);
+    drawPattern(gt.getContext('2d'), W, H);
+    var low = mkCanvas(srcW, srcH);
+    var lctx = low.getContext('2d');
+    lctx.drawImage(gt, 0, 0, srcW, srcH); // 降采样 = 模拟低清片源
+    // 引擎按 video 语义读 videoWidth/videoHeight；canvas 是合法 texImage2D 源且内容恒可用
+    low.videoWidth = srcW; low.videoHeight = srcH;
+    low.currentTime = 0; low.paused = false; low.readyState = 4;
+    low.getVideoPlaybackQuality = function () { return { totalVideoFrames: 0, droppedVideoFrames: 0 }; };
+    return { gt: gt, low: low };
+  }
+
+  function gray(px, i) { return 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]; }
+
+  function sharpness(px, w, h) {
+    var s = 0, n = 0;
+    for (var y = 1; y < h - 1; y++) {
+      for (var x = 1; x < w - 1; x++) {
+        var i = (y * w + x) * 4;
+        s += Math.abs(gray(px, i + 4) - gray(px, i - 4)) + Math.abs(gray(px, i + w * 4) - gray(px, i - w * 4));
+        n++;
+      }
+    }
+    return s / n;
+  }
+
+  function psnr(a, b) {
+    var mse = 0, n = 0;
+    for (var i = 0; i < a.length; i += 4) {
+      for (var k = 0; k < 3; k++) {
+        var d = a[i + k] - b[i + k];
+        mse += d * d; n++;
+      }
+    }
+    mse /= n;
+    return mse === 0 ? 99 : 10 * Math.log10(255 * 255 / mse);
+  }
+
+  function flipY(px, w, h) {
+    var out = new Uint8Array(px.length), row = w * 4;
+    for (var y = 0; y < h; y++) out.set(px.subarray(y * row, (y + 1) * row), (h - 1 - y) * row);
+    return out;
+  }
+
+  function toPx(canvas) {
+    var d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    return new Uint8Array(d.data.buffer.slice(0));
+  }
+
+  var S = null;
+
+  window.qaInit = function (presetId, srcW, srcH) {
+    srcW = srcW || 640; srcH = srcH || 360;
+    S = makeSource(srcW, srcH);
+    SFV.player = { getVideoEl: function () { return S.low; } };
+    return SFV.srPresets.load(presetId).then(function (def) {
+      SFV.srEngine.setPreset(def);
+      SFV.srEngine.renderFrame(); // 触发 compileChain 后的首次规划
+      var st = SFV.srEngine.getStatus();
+      return JSON.stringify({
+        status: st.status, preset: st.preset,
+        totalPasses: (SFV.srEngine._state.parsed || {}).passes
+          ? SFV.srEngine._state.parsed.passes.length : 0,
+        activePasses: (SFV.srEngine._state.activePlan || []).length,
+        canvas: SFV.srEngine._state.canvas
+          ? [SFV.srEngine._state.canvas.width, SFV.srEngine._state.canvas.height] : null,
+        paintedFrames: SFV.srEngine._state.paintedFrames,
+      });
+    });
+  };
+
+  window.qaMeasure = function () {
+    var canvas = SFV.srEngine._state.canvas;
+    if (!canvas) throw new Error('no sr canvas');
+    SFV.srEngine.renderFrame(); // 同一任务内绘制+读回，避开 preserveDrawingBuffer:false 的清空
+    var gl = SFV.srEngine._state.core.gl;
+    var cw = canvas.width, ch = canvas.height;
+    var px = new Uint8Array(cw * ch * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    var sr = flipY(px, cw, ch);
+
+    // 双线性基线 = SR 关闭时浏览器自己的放大路径
+    var bl = mkCanvas(cw, ch);
+    bl.getContext('2d').drawImage(S.low, 0, 0, cw, ch);
+    var blPx = toPx(bl);
+
+    var gtC = mkCanvas(cw, ch);
+    gtC.getContext('2d').drawImage(S.gt, 0, 0, cw, ch);
+    var gtPx = toPx(gtC);
+
+    // 中心区域单独测（避开黑边）
+    function crop(p, w, x0, y0, ww, hh) {
+      var out = new Uint8Array(ww * hh * 4);
+      for (var y = 0; y < hh; y++) {
+        out.set(p.subarray(((y0 + y) * w + x0) * 4, ((y0 + y) * w + x0 + ww) * 4), y * ww * 4);
+      }
+      return out;
+    }
+    var x0 = Math.floor(cw * 0.1), y0 = Math.floor(ch * 0.1);
+    var ww = Math.floor(cw * 0.8), hh = Math.floor(ch * 0.8);
+    var srC = crop(sr, cw, x0, y0, ww, hh), blC = crop(blPx, cw, x0, y0, ww, hh), gtC2 = crop(gtPx, cw, x0, y0, ww, hh);
+
+    return JSON.stringify({
+      size: [cw, ch],
+      sharpness_full: { sr: +sharpness(sr, cw, ch).toFixed(3), bilinear: +sharpness(blPx, cw, ch).toFixed(3), groundTruth: +sharpness(gtPx, cw, ch).toFixed(3) },
+      sharpness_center: { sr: +sharpness(srC, ww, hh).toFixed(3), bilinear: +sharpness(blC, ww, hh).toFixed(3), groundTruth: +sharpness(gtC2, ww, hh).toFixed(3) },
+      psnr_vs_truth: { sr: +psnr(srC, gtC2).toFixed(2), bilinear: +psnr(blC, gtC2).toFixed(2) },
+    });
+  };
+})();
+</script>
+</body>
+</html>

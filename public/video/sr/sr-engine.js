@@ -410,8 +410,9 @@
       if (!state.running) return;
       if (state.paintedFrames <= 0) {
         try { console.warn('[SFV SR] 渲染看门狗超时：3s 内未出首帧，自动降级关闭画质增强恢复画面'); } catch (e) {}
-        try { if (SFV.srUi && SFV.srUi.toast) SFV.srUi.toast('画质增强初始化失败，已回退原生播放'); } catch (e) {}
-        try { if (state.degradeCb) state.degradeCb(9999, state.presetId); } catch (e) {}
+        // 弹窗文案归 sr-ui 统一负责（degradeCb 带 reason）：引擎再 toast 会双弹，
+        // 且 9999 只是"非测量降级"哨兵值，不是实测帧耗时。
+        try { if (state.degradeCb) state.degradeCb(9999, state.presetId, 'watchdog'); } catch (e) {}
         stop('watchdog-no-render');
         return;
       }
@@ -504,13 +505,13 @@
     } catch (e) {
       if (e && e.code === 'SR_COMPILE_TIMEOUT') {
         try { console.warn('[SFV SR]', e.message); } catch (_) {}
-        try { if (SFV.srUi && SFV.srUi.toast) SFV.srUi.toast('画质增强编译超时，已自动关闭以避免卡死（您可稍后手动切换关闭档或其他更轻量档位）'); } catch (_) {}
+        // 弹窗归 sr-ui（degradeCb 带 reason），引擎不再自发 toast 防双弹
         // 安全降级：复位 SR 预设状态 + 停止渲染
         state.preset = null; state.presetId = 'off';
         state.parsed = null; state.sig = ''; state.activePlan = null; state.frameTimes = [];
         // 通过 setTimeout 异步停止，避免在 start/setPreset 调用栈中途修改 running 状态导致问题
         try { _gSetTimeout(function () { if (state.running) stop('compile-timeout'); }, 0); } catch (_) {}
-        if (state.degradeCb) { try { state.degradeCb(SR_COMPILE_DEADLINE_MS, state.presetId); } catch (_) {} }
+        if (state.degradeCb) { try { state.degradeCb(SR_COMPILE_DEADLINE_MS, state.presetId, 'compile-timeout'); } catch (_) {} }
         emitStats();
         return false;
       }
