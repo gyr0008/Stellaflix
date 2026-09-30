@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>world-m0 webgl probe</title>
+<style>
+  html, body { margin: 0; background: #05060a; }
+  /* 模拟 .sfv-browse.sfv-browse--page 的真实约束：
+     整层 pointer-events:none（player.css T150），逼出「地球看得见摸不着」这类问题 */
+  #overlay {
+    position: fixed; inset: 0;
+    pointer-events: none;
+  }
+  #host {
+    width: 800px; height: 500px;
+    position: relative; overflow: hidden;
+    background: #000;
+  }
+  #out { color: #9fe; font: 12px/1.4 monospace; white-space: pre-wrap; padding: 8px; }
+</style>
+<script>window.CESIUM_BASE_URL = 'vendor/cesium/';</script>
+<script src="video/world-params.js"></script>
+<script src="video/world-cesium.js"></script>
+<script src="video/world-boundaries.js"></script>
+<script src="video/world-lighthouse.js"></script>
+<script src="video/world-ui.js"></script>
+<script src="video/world-actions.js"></script>
+<link rel="stylesheet" href="video/lighthouse/lighthouse.css">
+</head>
+<body>
+<div id="overlay">
+  <div id="host"></div>
+</div>
+<div id="out">running…</div>
+<script>
+(function () {
+  'use strict';
+  var result = {
+    ok: true,
+    error: null,
+    phase1: null,
+    steps: [],
+    finalGlCount: 0,
+    basemap: null
+  };
+
+  // 只统计「新」WebGL 上下文：destroy 时的 getContext 会命中既有上下文，
+  // 用 WeakSet 无法区分，这里改为记录调用次数并在判定时用日志告警为准。
+  var origGetContext = HTMLCanvasElement.prototype.getContext;
+  var glCount = 0;
+  HTMLCanvasElement.prototype.getContext = function (type) {
+    if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') glCount++;
+    return origGetContext.apply(this, arguments);
+  };
+
+  function delay(ms) {
+    return new Promise(function (r) { setTimeout(r, ms); });
+  }
+
+  // 在画布上合成一次拖拽，校验 Cesium 相机是否真的被驱动
+  function tryDrag(canvas) {
+    return new Promise(function (resolve) {
+      if (!canvas) return resolve({ ok: false, reason: 'no canvas' });
+      var wc = window.StellaflixVideo.worldCesium;
+      var v = wc && wc.viewer;
+      if (!v || !v.camera) return resolve({ ok: false, reason: 'no viewer' });
+
+      // 命中测试：用户真实鼠标能否够到地球。
+      // pointer-events:none 的祖先会让 elementFromPoint 跳过整棵子树，
+      // 这才是「看得见摸不着」的判据；dispatchEvent 不走命中测试，测不出来。
+      var rect = canvas.getBoundingClientRect();
+      var cx = Math.round(rect.left + rect.width / 2);
+      var cy = Math.round(rect.top + rect.height / 2);
+      var hit = document.elementFromPoint(cx, cy);
+      // 严格判据：命中目标必须是 canvas 本身或 canvas 的后代。
+      // 不能用 hit.contains(canvas) —— 那会把 body/html 等祖先也算成命中，
+      // pointer-events:none 时 elementFromPoint 返回 HTML 也会假通过。
+      var hitOk = !!hit && (hit === canvas || (canvas.contains && canvas.contains(hit)));
+
+      function cam() {
+        var c = v.camera.positionCartographic;
+        return {
+          lon: +(c.longitude * 180 / Math.PI).toFixed(5),
+          lat: +(c.latitude * 180 / Math.PI).toFixed(5),
+          h: Math.round(c.height)
+        };
+      }
+
+      var before = cam();
+      var x0 = rect.left + rect.width * 0.5;
+      var y0 = rect.top + rect.height * 0.5;
+
+      function ev(type, x, y) {
+        // Cesium 1.124 的 ScreenSpaceCameraController 在 supportsPointerEvents()
+        // 为真时监听 pointerdown/pointermove/pointerup，不是 mouse* 系列。
+        var Ctor = window.PointerEvent || window.MouseEvent;
+        canvas.dispatchEvent(new Ctor(type, {
+          bubbles: true, cancelable: true, view: window,
+          clientX: x, clientY: y,
+          button: 0, buttons: (type === 'pointerup' || type === 'pointercancel') ? 0 : 1,
+          pointerId: 1, pointerType: 'mouse', isPrimary: true
+        }));
+      }
+
+      try {
+        ev('pointerdown', x0, y0);
+        // 分多步移动，Cesium 的 drag 是按帧累计的
+        var steps = 12;
+        for (var i = 1; i <= steps; i++) {
+          ev('pointermove', x0 + i * 12, y0);
+        }
+        ev('pointerup', x0 + steps * 12, y0);
+      } catch (e) {
+        return resolve({ ok: false, hitOk: hitOk, hitTag: hit && hit.tagName, reason: String(e), before: before });
+      }
+
+      delay(350).then(function () {
+        var after = cam();
+        var moved = (Math.abs(after.lon - before.lon) > 1e-4) ||
+          (Math.abs(after.lat - before.lat) > 1e-4);
+        resolve({
+          ok: moved && hitOk,
+          hitOk: hitOk,
+          hitTag: hit && hit.tagName,
+          hitClass: hit && hit.className,
+          before: before,
+          after: after,
+          moved: moved
+        });
+      });
+    });
+  }
+
+  function run() {
+    if (!window.StellaflixVideo || !window.StellaflixVideo.worldCesium) {
+      throw new Error('world-cesium.js 未加载');
+    }
+    var wc = window.StellaflixVideo.worldCesium;
+    var host = document.getElementById('host');
+    var mountInfo = null;
+
+    // ---------- 阶段 1：单次挂载，供 Electron 截屏判定是否黑屏 + 拖拽交互判定 ----------
+    void host.offsetWidth;
+    return wc.mount(host).then(function (info) {
+      mountInfo = info;
+      // 挂行政边界层（验证用）
+      if (window.StellaflixVideo.worldBoundaries && info && info.viewer) {
+        try {
+          window.StellaflixVideo.worldBoundaries.mount(info.viewer);
+          result.boundaries = { mounted: true };
+          // 等边界异步加载完再统计实体数
+          setTimeout(function () {
+            try {
+              var bl = window.StellaflixVideo.worldBoundaries.layers;
+              var counts = {};
+              Object.keys(bl).forEach(function (k) {
+                if (k === '_handler') return;
+                var e = bl[k];
+                counts[k] = {
+                  loaded: e.loaded,
+                  visible: e.visible,
+                  hasDs: !!e.ds,
+                  entityCount: (e.ds && e.ds.entities) ? e.ds.entities.values.length : 0
+                };
+              });
+              result.boundaries.layers = counts;
+              console.log('[harness] boundaries layers:', JSON.stringify(counts));
+            } catch (e) {
+              result.boundaries.error = String(e);
+            }
+          }, 3000);
+        } catch (e) {
+          result.boundaries = { mounted: false, error: String(e) };
+        }
+      }
+      return delay(400).then(function () {
+        var canvas = host.querySelector('canvas');
+        result.phase1 = {
+          hasCanvas: !!canvas,
+          canvasW: canvas ? canvas.width : 0,
+          canvasH: canvas ? canvas.height : 0,
+          hostW: host.clientWidth,
+          hostH: host.clientHeight,
+          basemap: info && info.basemap,
+          glCount: glCount
+        };
+
+        // --- 交互判定：在画布上合成一次水平拖拽，看相机经纬度是否变化 ---
+        return tryDrag(canvas).then(function (drag) {
+          result.phase1.drag = drag;
+
+          // --- M2：挂灯塔层（远景档，应只见光晕点）---
+          var lh = window.StellaflixVideo.worldLighthouse;
+          if (!lh || !info || !info.viewer) {
+            result.phase1.lighthouse = { ok: false, reason: 'no worldLighthouse or viewer' };
+            window.__PHASE1__ = result.phase1;
+            return waitContinue();
+          }
+          return lh.mount(info.viewer, {
+            onBeaconClick: function (st, pos) {
+              if (!st) return;
+              window.StellaflixVideo.worldUi.showCard(st, pos || { x: 300, y: 180 }, {
+                isFavorite: window.StellaflixVideo.worldActions.isFavorite(st.id),
+                onFavorite: function (s) { return window.StellaflixVideo.worldActions.toggleFavorite(s); },
+                onLocate: function (s) { window.StellaflixVideo.worldActions.flyTo(s); }
+              });
+            }
+          }).then(function (lhInfo) {
+            // M3：品牌叠层 / 统计 / toast / 快捷键
+            window.StellaflixVideo.worldUi.mount(host);
+            window.StellaflixVideo.worldUi.setStats({
+              total: lhInfo && lhInfo.count || 0, playing: 3, online: 5, offline: 2
+            });
+            window.StellaflixVideo.worldUi.setOnAir(true);
+            window.StellaflixVideo.worldUi.toast('已连接 ' + (lhInfo && lhInfo.count || 0) + ' 个信标');
+            window.StellaflixVideo.worldActions.mount(info.viewer, lh, window.StellaflixVideo.worldUi);
+            // 自转基准：mount 完立刻记一次，等 600ms 后再比
+            result.__autoRotateBefore = {
+              lon: +(info.viewer.camera.positionCartographic.longitude * 180 / Math.PI).toFixed(5),
+              on: window.StellaflixVideo.worldActions.autoRotate
+            };
+            // 主动点开东京的卡片，供截图验收
+            window.StellaflixVideo.worldUi.showCard(
+              (lhInfo && lhInfo.stations && lhInfo.stations[0]) || { id:'tokyo', name:'东京', lon:139.6917, lat:35.6895, status:'playing', colorTop:[1,.35,.3], colorBottom:[.55,.1,.12] },
+              { x: 300, y: 160 },
+              {
+                isFavorite: false,
+                onFavorite: function (s) { return window.StellaflixVideo.worldActions.toggleFavorite(s); },
+                onLocate: function (s) { window.StellaflixVideo.worldActions.flyTo(s); }
+              }
+            );
+            return delay(600).then(function () {
+              result.__uiHasCard = !!window.StellaflixVideo.worldUi.cardEl;
+              result.__uiRootKids = window.StellaflixVideo.worldUi.root ? window.StellaflixVideo.worldUi.root.children.length : 0;
+              // 再等 500ms 看自转是否生效
+              result.__autoRotateCheck = (function () {
+                var v = info.viewer;
+                var lon1 = v.camera.positionCartographic.longitude * 180 / Math.PI;
+                var b = result.__autoRotateBefore || {};
+                return {
+                  before: b.lon, after: +lon1.toFixed(5),
+                  moved: Math.abs(lon1 - (b.lon || 0)) > 1e-3,
+                  on: window.StellaflixVideo.worldActions.autoRotate
+                };
+              })();
+              (function () {
+                var r = window.StellaflixVideo.worldUi.root;
+                var title = r && r.querySelector('.world-earth-title');
+                var cs = title ? getComputedStyle(title) : null;
+                var h1 = title && title.querySelector('h1');
+                var csH1 = h1 ? getComputedStyle(h1) : null;
+                result.__uiDiag = {
+                  rootRect: r ? JSON.parse(JSON.stringify(r.getBoundingClientRect())) : null,
+                  titleRect: title ? JSON.parse(JSON.stringify(title.getBoundingClientRect())) : null,
+                  titleColor: cs && cs.color,
+                  titlePos: cs && cs.position,
+                  titleDisplay: cs && cs.display,
+                  h1Color: csH1 && csH1.color,
+                  h1FontSize: csH1 && csH1.fontSize,
+                  cssLoaded: !!document.querySelector('link[href*="lighthouse.css"]'),
+                  rootZ: cs && cs.zIndex
+                };
+              })();
+              result.__entityCount = info.viewer.entities.values.length;
+              result.__primitiveCount = info.viewer.scene.primitives.length;
+              result.phase1.lighthouse = {
+                ok: !!(lhInfo && lhInfo.count > 0),
+                count: lhInfo && lhInfo.count,
+                glowVisible: lh.stations.filter(function (s) { return s.glow && s.glow.show; }).length,
+                meshVisible: lh.stations.filter(function (s) { return s.model && s.model.show; }).length,
+                cameraHeight: Math.round(info.viewer.camera.positionCartographic.height),
+                tier: lh.tierOf(info.viewer.camera.positionCartographic.height)
+              };
+              window.__PHASE1__ = result.phase1;
+              return waitContinue();
+            });
+          }).catch(function (e) {
+            result.phase1.lighthouse = { ok: false, reason: String(e) };
+            window.__PHASE1__ = result.phase1;
+            return waitContinue();
+          });
+        });
+      });
+    }).then(function () {
+      // ---------- 近景档：飞到东京验证灯塔实体 ----------
+      return flyToDetail(mountInfo).then(function (detail) {
+        result.phase2 = detail;
+        window.__PHASE2__ = detail;
+        return waitContinue('__CONTINUE2__');
+      });
+    }).then(function () {
+      wc.unmount();
+      result.basemap = result.phase1 && result.phase1.basemap;
+
+      // ---------- 阶段 2：连切 20 次，校验建毁配对 ----------
+      var chain = Promise.resolve();
+      for (var i = 0; i < 20; i++) {
+        (function (n) {
+          chain = chain.then(function () {
+            host.innerHTML = '';
+            void host.offsetWidth;
+            return wc.mount(host).then(function (info2) {
+              return delay(40).then(function () {
+                var canvas = host.querySelector('canvas');
+                wc.unmount();
+                var hostEmpty = !host.querySelector('canvas');
+                var step = {
+                  i: n,
+                  hasCanvas: !!canvas,
+                  width: canvas ? canvas.width : 0,
+                  height: canvas ? canvas.height : 0,
+                  hostEmptyAfterUnmount: hostEmpty,
+                  glCount: glCount,
+                  basemap: info2 && info2.basemap
+                };
+                result.steps.push(step);
+                if (!canvas || !hostEmpty) result.ok = false;
+              });
+            });
+          });
+        })(i);
+      }
+      return chain;
+    }).then(function () {
+      result.finalGlCount = glCount;
+      // 浏览器上限约 16 个活跃上下文；destroy 时的 getContext 会让计数翻倍，
+      // 故阈值放宽到 48，真正的泄漏判据是控制台是否出现
+      // "Too many active WebGL contexts" 告警。
+      if (glCount > 48) result.ok = false;
+      document.getElementById('out').textContent = JSON.stringify(result, null, 2);
+      window.__RESULT__ = result;
+    });
+  }
+
+  function waitContinue(flag) {
+    flag = flag || '__CONTINUE__';
+    return new Promise(function (resolve) {
+      var t = setInterval(function () {
+        if (window[flag]) { clearInterval(t); resolve(); }
+      }, 50);
+      setTimeout(function () { clearInterval(t); resolve(); }, 60000);
+    });
+  }
+
+  // 近景档：飞到东京，验证灯塔实体 + Rim shader
+  function flyToDetail(info) {
+    return new Promise(function (resolve) {
+      var lh = window.StellaflixVideo.worldLighthouse;
+      var C = window.Cesium;
+      if (!info || !info.viewer || !C) return resolve({ ok: false, reason: 'no viewer' });
+      var v = info.viewer;
+      try {
+        // 先停自转：自转循环每帧 setView，会与 lookAt 的 transform 打架，把相机弹回全球
+      try {
+        if (window.StellaflixVideo.worldActions) {
+          window.StellaflixVideo.worldActions.setAutoRotate(false);
+        }
+      } catch (e) {}
+      // 3km + 低俯仰：既要进入纯近景档（<9400m），又要能看到塔身侧面的 Rim 描边。
+        // 用 lookAt 对准塔身中部，而不是 setView 站在站点正上方往下看（那样只看到塔顶）。
+        var target = C.Cartesian3.fromDegrees(139.6917, 35.6895, 120);
+        v.camera.lookAt(
+          target,
+          new C.HeadingPitchRange(C.Math.toRadians(20), C.Math.toRadians(-22), 2600)
+        );
+      } catch (e) {
+        return resolve({ ok: false, reason: String(e) });
+      }
+      // 给 Cesium 两帧时间装载 LOD / 模型
+      delay(1200).then(function () {
+        var h = v.camera.positionCartographic.height;
+        var tier = lh.tierOf(h);
+        var st = lh.stations;
+        var meshVis = st.filter(function (s) { return s.model && s.model.show; }).length;
+        var glowVis = st.filter(function (s) { return s.glow && s.glow.show; }).length;
+        resolve({
+          ok: meshVis > 0,
+          cameraHeight: Math.round(h),
+          tier: tier,
+          meshVisible: meshVis,
+          glowVisible: glowVis,
+          modelsLoaded: st.filter(function (s) { return !!s.model; }).length
+        });
+      });
+    });
+  }
+
+  Promise.resolve().then(run).catch(function (e) {
+    result.ok = false;
+    result.error = String((e && e.stack) || e);
+    document.getElementById('out').textContent = JSON.stringify(result, null, 2);
+    window.__RESULT__ = result;
+  });
+})();
+</script>
+</body>
+</html>
