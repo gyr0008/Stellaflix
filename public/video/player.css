@@ -26,6 +26,18 @@ html {
   transform: none !important;
 }
 
+/* T142 延伸：放大/全屏/桌面壁纸模式下窗口已是矩形，
+   html 层必须与其余满铺层同步释放圆角裁切，否则四角被 34px 圆角切出缺口。
+   对齐 Mineradio index.css 四态释放（desktop-maximized / desktop-fullscreen /
+   desktop-wallpaper-mode / html:fullscreen）。 */
+html:fullscreen,
+html:has(body.desktop-maximized),
+html:has(body.desktop-fullscreen),
+html:has(body.desktop-wallpaper-mode) {
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+}
+
 /* 浅色页（心动/追片/片单/历史/全屏浏览）——角落颜色匹配页面底色。
    分类页（追片/历史）默认乳白 #faf8f5；玻璃颜色切换时由 JS 同步设置 html 背景。 */
 html:has(.sfv-browse--page),
@@ -87,6 +99,14 @@ body.video-player-active > .sfv-picker-backdrop {
 body.video-space-active > .sfv-picker,
 body.video-player-active > .sfv-picker {
   z-index: 2147483501;
+}
+/* 时间机器下拉与追番弹层同样挂 body：上面把每周新番遮罩抬到 2147483500 后，
+   它们自带的 2147482010/2147482020 会反被遮罩盖住（影视态「点季度条无反应」根因）。 */
+body.video-space-active > .sfv-bgm-tl-sheet,
+body.video-player-active > .sfv-bgm-tl-sheet,
+body.video-space-active > .sfv-bgm-pop,
+body.video-player-active > .sfv-bgm-pop {
+  z-index: 2147483502;
 }
 /* 第三方音源面板（custom-source-modal-overlay 默认 z-index:9990）
    影视态下同样低于顶栏，点顶栏会穿透；抬到登录弹窗同级。 */
@@ -415,6 +435,17 @@ body.video-space-active .sfv-capsule-search-btn {
   pointer-events: auto !important;
   align-items: center;
   justify-content: center;
+}
+/* 追片/历史等源页：隐藏全局搜索胶囊，避免「页面背后」的入口被点到后直接跳搜索页。
+   仅隐藏搜索钮本身（Home/登录仍保留）。选择器跟内容走：
+   - 历史页 .sfv-wh-page（openPage('history') 挂载后出现；进详情后 bodyEl 重建即消失）
+   - 追片页 .sfv-track-tabs（renderTrackPage 常驻；离开追片后消失）
+   汇联·世界·电影·动漫等分页仍按 T157 保留搜索入口。 */
+body.video-space-active:has(.sfv-browse.sfv-show .sfv-wh-page) .sfv-capsule-search-btn,
+body.video-space-active:has(.sfv-browse.sfv-show .sfv-track-tabs) .sfv-capsule-search-btn {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 /* 影视态也隐藏音乐搜索相关的 mode-tabs */
 body.video-space-active #search-mode-tabs {
@@ -1529,6 +1560,10 @@ html:fullscreen body.video-space-active #sfv-search-page {
   padding: 8px 12px; border-radius: 10px; background: rgba(255,255,255,.04);
   border: 1px solid rgba(255,255,255,.07);
 }
+/* 空 note 必须零占位：online-nav.js:62 创建时不带 display:none，只有 setNote('') 才隐藏，
+   从未调用 setNote 的分页（世界页）于是留下一条 18px 空玻璃带（8+8 padding + 1+1 border，
+   --page 覆盖层 padding 归零后落在 (2,4) 满宽）。!important 压过 setNote 的行内 display:block。 */
+.sfv-browse-note:empty { display: none !important; }
 .sfv-browse-sub { font-size: 12px; color: rgba(255,255,255,.5); margin: 6px 2px; }
 
 .sfv-browse-body {

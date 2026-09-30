@@ -19,11 +19,28 @@
   if (!S) { throw new Error('[SFV online-search] onlineShared 未加载，请检查 index.html 加载顺序'); }
   var doc = S.d();
 
+  // ---- 追片/历史源页：全局搜索胶囊应隐藏且不可触发（页面泄露修复）----
+  // 判定跟 CSS 同一套信号：.sfv-wh-page=历史页，.sfv-track-tabs=追片页。
+  function isSourcePageCapsuleSearchBlocked() {
+    try {
+      if (!doc || !doc.querySelector) return false;
+      return !!(doc.querySelector('.sfv-browse.sfv-show .sfv-wh-page') ||
+                doc.querySelector('.sfv-browse.sfv-show .sfv-track-tabs'));
+    } catch (e) { return false; }
+  }
+  S.isSourcePageCapsuleSearchBlocked = isSourcePageCapsuleSearchBlocked;
+
   // ---- 开关 ----
   function toggleSearchPage() {
     console.log('[SFV-Search] toggleSearchPage called, 当前状态=' + (S.isSearchPageOpen() ? '已打开' : '已关闭'));
     if (S.isSearchPageOpen()) closeSearchPage();
-    else openSearchPage();
+    else {
+      if (isSourcePageCapsuleSearchBlocked()) {
+        console.log('[SFV-Search] 追片/历史源页：拒绝打开搜索页');
+        return;
+      }
+      openSearchPage();
+    }
   }
 
   function openSearchPage() {
@@ -266,6 +283,8 @@
 
     // (1d) 坐标兜底
     function isOverSearchBtn(x, y) {
+      // 追片/历史源页：胶囊已隐藏，坐标兜底不得再命中（页面泄露修复）
+      if (isSourcePageCapsuleSearchBlocked()) return false;
       var btn = doc.getElementById ? doc.getElementById('sfv-capsule-search-btn') : null;
       if (!btn) return false;
       // 隐藏按钮/不在布局中的按钮（display:none / 0x0）就不参与坐标命中，
