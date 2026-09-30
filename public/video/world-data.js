@@ -118,6 +118,25 @@
     });
   }
 
+  // A4（修复轮⑥）：真实房间与演示灯塔 merge 共存（用户裁决）。
+  // 旧语义「真实≥1 → 全量替换」会把 10 座演示灯塔从地球上抹掉，
+  // 用户感知为「创建了灯塔，其他灯塔全没了」。现真实在前、按 roomId 去重。
+  function mergeWithDemo(realRooms) {
+    var seen = {};
+    var out = [];
+    (realRooms || []).forEach(function (r) {
+      if (!r) return;
+      if (r.roomId) seen['rid:' + r.roomId] = true;
+      if (r.id) seen['id:' + r.id] = true;
+      out.push(r);
+    });
+    DEMO_ROOMS.forEach(function (d) {
+      if (seen['rid:' + d.roomId] || seen['id:' + d.id]) return;
+      out.push(d);
+    });
+    return out;
+  }
+
   /**
    * 拉取开放的「一起看」房间。
    * @param {object} opts { limit }
@@ -127,7 +146,7 @@
     opts = opts || {};
     return get('api/rooms', 12000).then(function (j) {
       if (j && j.ok && Array.isArray(j.rooms)) {
-        var rooms = j.rooms.map(normalize).filter(Boolean);
+        var rooms = mergeWithDemo(j.rooms.map(normalize).filter(Boolean));
         if (opts.limit) rooms = rooms.slice(0, opts.limit);
         if (rooms.length) {
           lastResult = { ok: true, count: rooms.length, rooms: rooms, source: '本地房间信令', degraded: false };

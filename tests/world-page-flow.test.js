@@ -4,14 +4,14 @@
  * 世界页 Task 6 — page-world 接线流程（public/video/page-world.js）
  * 运行：node --test tests/world-page-flow.test.js
  *
- * vm 沙箱装假 SFV（worldGlobe/deck/worldUi/boundaries/data/mapActions 桩），
- * 跑真实 page-world.js 的注册路由 mount/unmount，断言交互契约：
- *  (a) 点击命中站点 → setSelected + flyTo，卡片只在该飞行的 moveend 之后打开
- *      （hearthere :19620-19650 token 模式）
- *  (b) 被取代飞行的 moveend 不开旧卡片（token 不等 → 直接摘监听）
- *  (c) unmount 取消在途飞行 token + 停自转（worldMapActions.unmount）
+ * vm 沙箱装假 SFV（worldGlobe/deck/worldUi/worldHtPanel/boundaries/data/mapActions 桩），
+ * 跑真实 page-world.js 的注册路由 mount/unmount，断言交互契约（④-4 起 hearthere 逐字）：
+ *  (a) 点击命中站点 → setSelected → ht-panel 即点即开（wt :19638 It('station')
+ *      先于相机动作）→ deck.flyToStation 独立飞行（card→fly 顺序）
+ *  (b) 换台点击：面板即时替换为最新站点（无 moveend 开卡环节）
+ *  (c) unmount 卸载面板 + 停自转（worldMapActions.unmount）
  *  (d) 房间轮询走 deck.refreshStations，不再回老 worldLighthouse
- * 悬停 cursor / 空点关卡片也在此契约内。
+ * 悬停 cursor / 空白点击 no-op（Us :19793-19851 命中空即 return）也在此契约内。
  */
 
 const test = require('node:test');
@@ -63,6 +63,7 @@ function makeFakeMap() {
     emit(ev, e) { (handlers[ev] || []).slice().forEach((h) => h(e || {})); },
     getZoom() { return 13; },
     getBearing() { return 0; },
+    getCenter() { return { lng: 10.5, lat: 20.25 }; },
     getCanvas() { return canvas; },
     project(lngLat) { return { x: 400, y: 300 }; },
     flyTo(o) { log.flyTo.push(o); return map; },
@@ -81,27 +82,40 @@ function setup() {
   const calls = {
     globeUnmounted: 0, deckMounted: [], deckUnmounted: 0, deckSetSelected: [],
     deckRefresh: [], deckApplyTier: [], oldLighthouseMounted: 0, oldLighthouseRefresh: 0,
-    actionsMounts: [], actionsUnmounted: 0, flyTo: [], showCard: [], hideCard: 0,
-    toasts: [], stats: [], boundariesUnmounted: 0, order: [], roomPollHandlers: []
+    actionsMounts: [], actionsUnmounted: 0, flyTo: [], panelOpened: [], panelClosed: 0,
+    panelUnmounted: 0, toasts: [], stats: [], boundariesUnmounted: 0, order: [], roomPollHandlers: [],
+    createHostCalls: []
   };
 
   const ui = {
-    mounted: false, cardEl: null,
+    mounted: false,
     mount() { this.mounted = true; return dom.document.createElement('div'); },
-    unmount() { this.mounted = false; this.cardEl = null; },
+    unmount() { this.mounted = false; },
     showLoading() {}, hideLoading() {},
     toast(m) { calls.toasts.push(m); },
     setStats(s) { calls.stats.push(s); },
     setOnAir() {}, setOnAirHandler(fn) { ui._onAir = fn; },
     setHintHandler(fn) { ui._hint = fn; },
     setCreateHandler(fn) { ui._create = fn; },
-    setRotateState() {}, fireworksCanvas() { return null; },
-    showCard(st, pos, opts) {
-      calls.showCard.push({ st, pos, opts });
+    setRotateState() {}, fireworksCanvas() { return null; }
+  };
+
+  // 假 ht-panel（④-4）：open 即同步记账（对应 wt It('station') 先于飞行），
+  // close 计次；__station 由 buildPanel 挂真实面板上，桩这里直接带上。
+  const panel = {
+    _current: null,
+    mount() { calls.order.push('panel-mount'); },
+    unmount() { calls.panelUnmounted++; this._current = null; },
+    open(st, opts) {
+      calls.panelOpened.push({ st, opts });
       calls.order.push('card');
-      this.cardEl = { getAttribute: (k) => (k === 'data-station-id' ? st.id : null) };
+      this._current = { __station: st };
     },
-    hideCard() { calls.hideCard++; this.cardEl = null; }
+    close() { calls.panelClosed++; this._current = null; },
+    isOpen() { return !!this._current; },
+    // :19973 ge.some(playing && id!==)
+    canGoNextStation(list, id) { return (list || []).some((k) => k.status === 'playing' && k.id !== id); },
+    panelEl() { return this._current; }
   };
 
   const deck = {
@@ -114,6 +128,7 @@ function setup() {
     unmount() { calls.deckUnmounted++; },
     refreshStations(rooms) { calls.deckRefresh.push(rooms); return { count: rooms.length }; },
     setSelected(id) { calls.deckSetSelected.push(id); },
+    flyToStation(st) { calls.flyTo.push(st); calls.order.push('fly'); },
     applyTier(z) { calls.deckApplyTier.push(z); },
     getState() { return { stations: STATIONS, selectedId: null, visible: true }; },
     pickStation(x, y) { return deck._picked; }
@@ -148,6 +163,7 @@ function setup() {
       unmount() { calls.globeUnmounted++; }
     },
     worldUi: ui,
+    worldHtPanel: panel,
     worldBoundaries: { mount() {}, unmount() { calls.boundariesUnmounted++; } },
     // 老 Cesium 灯塔/行为模块：Task 6 起 page-world 不得再调 mount/refreshStations
     worldLighthouse: {
@@ -161,7 +177,7 @@ function setup() {
     worldRoom: {
       setMapRefreshHandler(fn) { calls.roomPollHandlers.push(fn); },
       leave() {}, joinWatchRoom() { return Promise.resolve(); },
-      createHost() { return Promise.resolve(); }
+      createHost(o) { calls.createHostCalls.push(o); return Promise.resolve(); }
     }
   };
 
@@ -177,7 +193,7 @@ function setup() {
     for (let i = 0; i < (n || 25); i++) await Promise.resolve();
   };
 
-  return { page, host, map, overlay, deck, ui, acts, calls, intervals, flush, SFV: sandbox.StellaflixVideo };
+  return { page, host, map, overlay, deck, ui, acts, panel, calls, intervals, flush, SFV: sandbox.StellaflixVideo };
 }
 
 test('mount 流程：globe→ui→boundaries→deck(map,overlay)，老 worldLighthouse 不再挂载', async () => {
@@ -200,7 +216,7 @@ test('mount 流程：globe→ui→boundaries→deck(map,overlay)，老 worldLigh
   await t.flush();
 });
 
-test('(a) 点击命中：setSelected + flyTo 先行，卡片只在 moveend 后打开（fly→end→card）', async () => {
+test('(a) 点击命中：setSelected → 面板即点即开 → 相机独立飞行（card→fly，wt :19638 顺序逐字）', async () => {
   const t = setup();
   t.page.mount(t.host, {});
   await t.flush();
@@ -210,22 +226,20 @@ test('(a) 点击命中：setSelected + flyTo 先行，卡片只在 moveend 后�
   await t.flush();
 
   assert.deepEqual(t.calls.deckSetSelected, ['r1'], '命中即 setSelected');
-  assert.deepEqual(t.calls.flyTo.map((s) => s.id), ['r1'], 'flyTo 应飞向该站');
-  assert.equal(t.calls.showCard.length, 0, '飞行途中不开卡');
-  assert.ok(t.calls.order.indexOf('fly') > t.calls.order.indexOf('deck-mount'), 'flyTo 应在 deck 挂载之后');
-
-  t.calls.order.push('end');
-  t.map.emit('moveend');
-  await t.flush();
-  assert.equal(t.calls.showCard.length, 1, 'moveend 后卡片打开');
-  assert.equal(t.calls.showCard[0].st.id, 'r1');
-  assert.deepEqual(t.calls.showCard[0].pos, { x: 400, y: 300 }, '卡片锚点取 moveend 后的投影位置');
-  const tail = t.calls.order.slice(t.calls.order.indexOf('fly'));
-  assert.deepEqual(tail, ['fly', 'end', 'card'], '顺序契约：fly → moveend → card');
+  assert.equal(t.calls.panelOpened.length, 1, '点击即开面板（不等飞行落地）');
+  assert.equal(t.calls.panelOpened[0].st.id, 'r1');
+  assert.deepEqual(t.calls.flyTo.map((s) => s.id), ['r1'], '相机飞向该站');
+  const tail = t.calls.order.slice(t.calls.order.indexOf('deck-mount') + 1);
+  assert.ok(tail.indexOf('card') < tail.indexOf('fly'), '面板先于飞行（It(station) 先于 zn）');
+  const opts = t.calls.panelOpened[0].opts;
+  assert.equal(typeof opts.onAction, 'function', 'CTA 动作回调应接线');
+  assert.equal(typeof opts.onFavorite, 'function', '收藏星回调应接线');
+  assert.equal(opts.isFavorite, false);
+  assert.equal(opts.canGoNext, false, 'r1 是唯一 playing 台 → 无下一个（:19973 ge.some(playing && id!==)）');
   t.page.unmount();
 });
 
-test('(b) 被取代飞行：过期飞行绝不开出旧站点卡片，只开最新站且仅一次', async () => {
+test('(b) 换台点击：面板即时替换为最新站点，无落地开卡环节', async () => {
   const t = setup();
   t.page.mount(t.host, {});
   await t.flush();
@@ -236,30 +250,15 @@ test('(b) 被取代飞行：过期飞行绝不开出旧站点卡片，只开最�
   t.deck._picked = STATIONS[1];
   t.map.emit('click', { point: { x: 2, y: 2 } });
   await t.flush();
-  assert.equal(t.calls.showCard.length, 0, '两段飞行均未落地：不开卡');
 
-  // token 契约：moveend 到来时只可能开出「最新 pending 站点」的卡片——
-  // 被飞行 2 取代后的杂散 moveend（maplibre 中断旧动画时同样派发 moveend，
-  // 事件无飞行身份）不得打开 r1 的过期卡片（token1 !== flySeq → 直接自摘）。
-  t.map.emit('moveend');
-  await t.flush();
-  assert.equal(t.calls.showCard.filter((c) => c.st.id === 'r1').length, 0,
-    '被取代飞行(r1)的 moveend 不得打开过期卡片（token 校验）');
-
-  // 飞行 2 落地：开 r2 卡片，且只开这一次（一次性监听消费后自摘）
-  t.map.emit('moveend');
-  await t.flush();
-  const r2cards = t.calls.showCard.filter((c) => c.st.id === 'r2');
-  assert.ok(r2cards.length >= 1, '最新飞行落地的 moveend 应打开 r2 卡片');
-  t.map.emit('moveend');
-  await t.flush();
-  assert.equal(t.calls.showCard.length, r2cards.length,
-    '杂散 moveend 不得重复开卡（一次性监听消费后自摘）');
-  assert.equal(t.calls.showCard.every((c) => c.st.id === 'r2'), true, '全程未出现 r1 过期卡片');
+  assert.equal(t.calls.panelOpened.length, 2, '两次点击各开一次（替换语义在真面板 clearShell）');
+  assert.equal(t.calls.panelOpened[1].st.id, 'r2', '最后命中的是最新站点');
+  assert.deepEqual(t.calls.deckSetSelected, ['r1', 'r2']);
+  assert.deepEqual(t.calls.flyTo.map((s) => s.id), ['r1', 'r2'], '两次点击各自发起飞行');
   t.page.unmount();
 });
 
-test('(c) unmount 取消在途飞行 token 并停自转循环（worldMapActions.unmount）', async () => {
+test('(c) unmount 卸载面板并停自转循环（worldMapActions.unmount）', async () => {
   const t = setup();
   t.page.mount(t.host, {});
   await t.flush();
@@ -268,11 +267,12 @@ test('(c) unmount 取消在途飞行 token 并停自转循环（worldMapActions.
   t.map.emit('click', { point: { x: 5, y: 5 } });
   await t.flush();
   assert.equal(t.calls.flyTo.length, 1);
+  assert.equal(t.panel.isOpen(), true, '前置：面板开着');
 
   t.page.unmount();
-  t.map.emit('moveend');
   await t.flush();
-  assert.equal(t.calls.showCard.length, 0, 'unmount 后迟到的 moveend 不得开卡');
+  assert.equal(t.panel.isOpen(), false, 'unmount 必须收掉面板');
+  assert.equal(t.calls.panelUnmounted, 1, 'unmount 链应卸载 worldHtPanel');
   assert.equal(t.calls.actionsUnmounted, 1, '行为层 unmount 必须被调（内部停 rAF 自转循环）');
   assert.equal(t.calls.deckUnmounted, 1);
   assert.equal(t.calls.globeUnmounted, 1);
@@ -299,7 +299,7 @@ test('(d) 房间轮询走 deck.refreshStations，不再回老 worldLighthouse', 
   t.page.unmount();
 });
 
-test('悬停 pointer / 空点关卡片（Esc 语义）', async () => {
+test('悬停 pointer / 空白点击 no-op（Us :19826：命中为空不关面板）', async () => {
   const t = setup();
   t.page.mount(t.host, {});
   await t.flush();
@@ -311,16 +311,74 @@ test('悬停 pointer / 空点关卡片（Esc 语义）', async () => {
   t.map.emit('mousemove', { point: { x: 9, y: 9 } });
   assert.equal(t.map.canvas.style.cursor, '', '离开站点应恢复');
 
-  // 开卡后点空处 → 关卡片
+  // 开面板后点空处 = hearthere 语义：no-op，面板保持开着
   t.deck._picked = STATIONS[0];
   t.map.emit('click', { point: { x: 1, y: 1 } });
-  t.map.emit('moveend');
   await t.flush();
-  assert.equal(t.calls.showCard.length, 1);
-  const before = t.calls.hideCard;
+  assert.equal(t.calls.panelOpened.length, 1);
   t.deck._picked = null;
   t.map.emit('click', { point: { x: 2, y: 2 } });
-  assert.ok(t.calls.hideCard > before, '点空处应关卡片');
+  assert.equal(t.calls.panelClosed, 0, '空白点击不得关面板（旧「点空处即关」已退役）');
+  assert.equal(t.calls.panelOpened.length, 1, '空白点击也不得重复开');
+  assert.equal(t.panel.isOpen(), true);
+  t.page.unmount();
+});
+
+test('CTA 接线：tune_in→joinWatchRoom（收听态重开）/ stop→leave / next_station→换台', async () => {
+  const t = setup();
+  const joinIds = [];
+  let leaveCount = 0;
+  t.SFV.worldRoom.joinWatchRoom = function (st) { joinIds.push(st.id); return Promise.resolve(); };
+  t.SFV.worldRoom.leave = function () { leaveCount++; };
+  // 换台靶子：:19973 逐字语义只在 playing 信标间跳转，本用例需 r2 也是 playing
+  t.deck.getState = () => ({
+    stations: [STATIONS[0], Object.assign({}, STATIONS[1], { status: 'playing' })],
+    selectedId: null, visible: true
+  });
+  t.page.mount(t.host, {});
+  await t.flush();
+
+  // r1（playing）CTA = tune_in → 进入房间
+  t.deck._picked = STATIONS[0];
+  t.map.emit('click', { point: { x: 1, y: 1 } });
+  await t.flush();
+  t.calls.panelOpened[0].opts.onAction('tune_in');
+  await t.flush();
+  assert.deepEqual(joinIds, ['r1'], 'tune_in 走 worldRoom.joinWatchRoom');
+  assert.equal(t.calls.panelOpened.length, 2, '入房后面板以收听态重开（stop 态）');
+  assert.equal(t.calls.panelOpened[1].opts.listeningStationId, 'r1');
+
+  // stop → 退房并关面板（It(null) 等价），非重开
+  t.calls.panelOpened[1].opts.onAction('stop');
+  assert.equal(leaveCount, 1, 'stop 走 worldRoom.leave');
+  assert.equal(t.calls.panelClosed, 1, 'stop 后面板关闭（收听态清空 = It(null)）');
+  assert.equal(t.calls.panelOpened.length, 2, 'stop 不再重开面板');
+
+  // 重开 r1（已非收听）→ next_station 跳到另一座非收听信标（r2）
+  t.map.emit('click', { point: { x: 3, y: 3 } });
+  await t.flush();
+  const before = t.calls.panelOpened.length;
+  t.calls.panelOpened[before - 1].opts.onAction('next_station');
+  await t.flush();
+  assert.equal(t.calls.panelOpened.length, before + 1, 'next_station 开出 r2 面板');
+  assert.equal(t.calls.panelOpened[before].st.id, 'r2');
+  assert.deepEqual(t.calls.deckSetSelected, ['r1', 'r1', 'r2'], '选中态：点卡一次一 setSelected，换台跳到 r2（tune_in 重开不重复 setSelected）');
+  t.page.unmount();
+});
+
+test('Esc（ESC 快捷键）关面板 = It(null) 语义', async () => {
+  const t = setup();
+  t.page.mount(t.host, {});
+  await t.flush();
+
+  t.deck._picked = STATIONS[0];
+  t.map.emit('click', { point: { x: 1, y: 1 } });
+  await t.flush();
+  assert.equal(t.panel.isOpen(), true);
+  t.ui._hint('esc');
+  assert.equal(t.panel.isOpen(), false, 'ESC 快捷键应关面板');
+  t.ui._hint('esc');
+  assert.equal(t.panel.isOpen(), false, '重复 ESC 幂等不抛');
   t.page.unmount();
 });
 
@@ -387,5 +445,24 @@ test('统计/快捷键语义保留：setStats 按 deck 状态计数，hint reset
   assert.equal(resetCalls, 1, 'reset 走行为层 resetView');
   assert.equal(rotateArg, false, 'rotate 切到关（挂载桩默认 autoRotate=true → 取反 false）');
   assert.ok(t.calls.toasts.length >= 1, 'toast 语义保留');
+  t.page.unmount();
+});
+
+test('A2（修复轮⑥）：创建放映缺坐标时取当前视野中心，绝不落 (0,0) 零点岛', async () => {
+  const t = setup();
+  t.page.mount(t.host, {});
+  await t.flush();
+  assert.equal(typeof t.ui._create, 'function', 'setCreateHandler 应接线');
+
+  // 世界 UI 契约：创建面板只收片名/城市名/权限，不带经纬度（world-ui.js:297-307）
+  t.ui._create({ title: '测试片', name: '济宁', discovery: true });
+  assert.equal(t.calls.createHostCalls.length, 1, 'createHandler 应转给 worldRoom.createHost');
+  const o = t.calls.createHostCalls[0];
+  assert.equal(o.lon, 10.5, 'lon 应回填当前地图视野中心（fake getCenter lng=10.5）');
+  assert.equal(o.lat, 20.25, 'lat 应回填当前地图视野中心（fake getCenter lat=20.25）');
+
+  // 显式给了坐标则原样透传
+  t.ui._create({ title: 'X', name: 'Y', lon: 139.69, lat: 35.69, discovery: true });
+  assert.equal(t.calls.createHostCalls[1].lon, 139.69, '显式坐标不得被覆盖');
   t.page.unmount();
 });

@@ -247,17 +247,26 @@ test('unmount 停掉自转 rAF 循环：之后再泵帧不产生 easeTo', () => 
   assert.equal(sandbox._raf.pending(), 0, '不应遗留 rAF 排队');
 });
 
-test('键盘回归：Esc 关卡片 / A 切自转 / F 收藏选中信标 / 输入框内不拦截', () => {
+test('键盘回归：Esc 关面板 / A 切自转 / F 收藏选中信标 / 输入框内不拦截', () => {
   const sandbox = makeSandbox();
   const map = makeFakeMap();
   const ui = makeUiStub();
-  ui.cardEl = { getAttribute: () => 'a' };
   const deck = makeDeckStub(STATIONS, 'a');
+  // ④-4 换代：关卡片面从 worldUi.cardEl/hideCard 迁到 worldHtPanel（It(null) 语义）
+  const panel = {
+    closed: 0, _open: true,
+    isOpen() { return panel._open; },
+    close() { if (panel._open) { panel.closed++; panel._open = false; } },
+    panelEl() { return panel._open ? { __station: STATIONS[0] } : null; }
+  };
   const acts = loadActions(sandbox);
+  sandbox.StellaflixVideo.worldHtPanel = panel;
   acts.mount(map, { ui, deck });
 
-  fireKey(sandbox, 'Escape');
-  assert.equal(ui.calls.hideCard.length, 1, '卡片开着时 Esc 应关卡片');
+  let escConsumed = false;
+  fireKey(sandbox, 'Escape', { preventDefault() { escConsumed = true; } });
+  assert.equal(panel.closed, 1, '面板开着时 Esc 应关面板');
+  assert.equal(escConsumed, true, '关面板的 Esc 必须吃掉事件（不冒泡给 App）');
 
   const before = acts.autoRotate;
   fireKey(sandbox, 'a');
@@ -269,8 +278,10 @@ test('键盘回归：Esc 关卡片 / A 切自转 / F 收藏选中信标 / 输入
   fireKey(sandbox, 'f');
   assert.equal(acts.isFavorite('a'), false, 'F 对 deck 选中信标取反收藏');
 
-  ui.cardEl = null;
-  fireKey(sandbox, 'Escape'); // 卡片已关：放行，不 consume（幂等不抛即可）
+  escConsumed = false;
+  fireKey(sandbox, 'Escape', { preventDefault() { escConsumed = true; } });
+  assert.equal(panel.closed, 1, '面板已关：不再重复 close');
+  assert.equal(escConsumed, false, '面板已关的 Esc 放行给 App（关闭浏览层）');
 
   let consumed = false;
   fireKey(sandbox, 'r', {

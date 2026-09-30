@@ -35,17 +35,26 @@ function block(selector) {
   return m ? m[1] : null;
 }
 
-test('世界页：#desktop-titlebar 收缩为右上角 170×12 感应窄条（不再满宽 44px 长条）', () => {
+test('世界页：感应区逐边 == 浮现后的胶囊（触发面积＝三个按钮那块，不再是 170×12 细条）', () => {
   const b = block(SCOPE + '\\s+#desktop-titlebar');
   assert.ok(b, '必须有 body.desktop-shell.sfv-world-page #desktop-titlebar 规则');
   assert.match(b, /left:\s*auto/, '左边必须放开，否则仍是满宽长条');
-  assert.match(b, /width:\s*170px/);
-  assert.match(b, /right:\s*24px/);
   assert.match(b, /top:\s*8px/);
-  assert.match(b, /height:\s*12px/, '感应带高度压到 12px，地球顶部只剩 12px 死区');
-  assert.match(b, /pointer-events:\s*auto/, 'display:none 的元素收不到 hover，感应条必须常驻可命中');
-  assert.match(b, /-webkit-app-region:\s*no-drag/, '感应条本体不得是拖窗区，否则 hover 唤不出胶囊');
+  assert.match(b, /right:\s*24px/);
+  assert.match(b, /pointer-events:\s*auto/, 'display:none 的元素收不到 hover，感应区必须常驻可命中');
+  assert.match(b, /-webkit-app-region:\s*no-drag/, '感应区本体不得是拖窗区，否则 hover 唤不出胶囊');
   assert.match(b, /z-index:\s*21474820\d\d/, '必须抬到 .sfv-browse--page(2147482000) 之上，否则胶囊被地球盖住');
+
+  // 面积契约（用户 2026-09-30 裁决）：感应矩形逐边等于胶囊，不硬编码数字，全部从供体/本页反推
+  const pill = stripComments(block(SCOPE + '\\s+#desktop-titlebar\\s+\\.desktop-window-controls'));
+  const btnRow = stripComments(playerCss.match(/\.sfv-plex-win button\s*\{([^}]*)\}/)[1]);
+  const btnW = Number(/width:\s*(\d+)px/.exec(btnRow)[1]);
+  const borderW = Number(/border:\s*(\d+)px/.exec(pill)[1]);
+  const pillH = Number(/height:\s*(\d+)px/.exec(pill)[1]);
+  assert.strictEqual(Number(/width:\s*(\d+)px/.exec(b)[1]), 3 * btnW + 2 * borderW,
+    '感应宽＝3 颗按钮 + 左右胶囊边框（胶囊可见多宽，触发就多大，不留 42px 空转死区）');
+  assert.strictEqual(Number(/height:\s*(\d+)px/.exec(b)[1]), pillH,
+    '感应高＝胶囊高（鼠标在胶囊内任意处都不收回；12px 细条时按不准）');
 });
 
 test('世界页：.desktop-drag-region 整块摘除（44px 吞点击横带消失，地球顶部恢复可拖）', () => {
@@ -250,3 +259,75 @@ test('page-world：非桌面外壳（浏览器态）不动 titlebar，二次 mou
   assert.strictEqual(dom2.titlebar.parentNode, dom2.shell, '二次 unmount 幂等，仍回到 shell');
 });
 
+
+// ============================================================
+//  换皮（2026-09-30 用户裁决：「保留悬停，只换皮」+「ON AIR 外壳复用 hearthere」）
+//  供体 = 电影详情页右上 −□× 玻璃胶囊 .sfv-plex-win（player.css:3399-3424）
+//  只搬材质/几何：感应条 170×12、liftTitlebar reparent、:hover 显现、drag/no-drag
+//  一概不动 —— 上面 5 条断言继续守着行为面。
+// ============================================================
+const playerCss = fs.readFileSync(path.join(root, 'public/video/player.css'), 'utf8');
+const donorBar = playerCss.match(/\.sfv-plex-win\s*\{([^}]*)\}/)[1];
+const donorBtn = playerCss.match(/\.sfv-plex-win button\s*\{([^}]*)\}/)[1];
+
+// 供体与本页规则都带 /* */ 注释；声明可能紧跟在注释之后，故比对前先剥注释
+function stripComments(t) { return t.replace(/\/\*[\s\S]*?\*\//g, ''); }
+function declOf(blockText, prop) {
+  const m = stripComments(blockText).match(new RegExp('(?:^|;)\\s*' + prop + ':\\s*([^;]+);'));
+  return m ? m[1].trim() : null;
+}
+function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function declares(blockText, prop, value) {
+  return new RegExp('(?:^|;)\\s*' + prop + ':\\s*' + esc(value) + '\\s*(?:;|$)').test(stripComments(blockText));
+}
+
+test('换皮·胶囊：6 条材质声明必须逐字等于供体 .sfv-plex-win', () => {
+  const b = block(SCOPE + '\\s+#desktop-titlebar\\s+\\.desktop-window-controls');
+  ['height', 'border-radius', 'background', 'border', 'backdrop-filter', 'box-shadow'].forEach((prop) => {
+    const want = declOf(donorBar, prop);
+    assert.ok(want, '供体 .sfv-plex-win 缺 ' + prop + '（供体变了，本测试需同步）');
+    assert.ok(declares(b, prop, want), prop + ' 必须逐字复用供体值：' + want);
+  });
+});
+
+test('换皮·按钮：38×30 透明底逐字复用供体，hover 不加底色只放大 svg 1.06', () => {
+  const btn = block(SCOPE + '\\s+#desktop-titlebar\\s+\\.desktop-window-btn');
+  ['width', 'height', 'background'].forEach((prop) => {
+    const want = declOf(donorBtn, prop);
+    assert.ok(declares(btn, prop, want), prop + ' 必须等于供体值：' + want);
+  });
+  const hover = block(SCOPE + '\\s+#desktop-titlebar\\s+\\.desktop-window-btn:hover');
+  assert.ok(hover, '缺世界页 .desktop-window-btn:hover');
+  // !important 是必需的：本文件 672-675 影视空间段用 rgba(4,8,10,.42)!important 压在 hover 上
+  assert.match(hover, /background:\s*transparent\s*!important/);
+  const hoverSvg = block(SCOPE + '\\s+#desktop-titlebar\\s+\\.desktop-window-btn:hover svg');
+  assert.ok(hoverSvg, '缺世界页 hover svg 规则');
+  assert.match(hoverSvg, /transform:\s*scale\(1\.06\)/);
+});
+
+test('换皮·配色：不得照搬供体的深黑图标（世界页底 #05060a，黑图标＝隐形）', () => {
+  const b = stripComments(block(SCOPE + '\\s+#desktop-titlebar\\s+\\.desktop-window-controls'));
+  assert.ok(!/#0d121a/.test(b), '供体 color:#0d121a 只适合海报亮底，世界页必须换成浅色 token');
+  assert.match(b, /color:\s*rgba\(224,\s*250,\s*255,/);
+});
+
+test('换皮·让位：胶囊长到 50px 后 ON AIR 必须移出胶囊矩形，并复用 hearthere 深玻璃外壳', () => {
+  const bar = block(SCOPE + '\\s+#desktop-titlebar');
+  const pill = block(SCOPE + '\\s+#desktop-titlebar\\s+\\.desktop-window-controls');
+  const pillBottom = Number(bar.match(/top:\s*(\d+)px/)[1]) + Number(pill.match(/height:\s*(\d+)px/)[1]);
+  const air = block(SCOPE + '\\s+\\.world-on-air');
+  assert.ok(air, '缺世界页 .world-on-air 规则');
+  const top = Number(air.match(/top:\s*(\d+)px/)[1]);
+  assert.ok(top >= pillBottom, 'ON AIR 顶边(' + top + ') 不得落在胶囊矩形内（胶囊下沿 ' + pillBottom + '）');
+  assert.match(air, /background:\s*var\(--surface-control-overlay\)/, '外壳底色取自 .ht-icon-btn--overlay');
+  assert.match(air, /border-radius:\s*var\(--shape-pill-radius\)/);
+  assert.match(air, /backdrop-filter:\s*blur\(var\(--effect-pill-blur\)\)/);
+  assert.ok(!/pointer-events:\s*none/.test(air), 'ON AIR 是可点按钮（world-ui.js:58 pointer-events:auto），不得置 none');
+});
+
+test('作用域纪律（换皮后）：新规则仍全部限定在 sfv-world-page，且未误伤其它页面', () => {
+  ['.world-on-air', '.desktop-window-btn:hover'].forEach((sel) => {
+    assert.ok(css.includes('body.desktop-shell.sfv-world-page #desktop-titlebar ' + sel) ||
+      css.includes('body.desktop-shell.sfv-world-page ' + sel), '换皮规则缺世界页全限定：' + sel);
+  });
+});

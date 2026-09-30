@@ -255,7 +255,10 @@ function loadSandbox(opts) {
     clearTimeout: () => {},
     deck: {
       SimpleMeshLayer: record('rim'),
-      ScatterplotLayer: record('glow')
+      ScatterplotLayer: record('glow'),
+      // ④-3 头像层基类桩（本沙箱 zoom=10：ensureLayerClasses 建类但不实例化）
+      IconLayer: makeLayerStubCtor('icon'),
+      CompositeLayer: makeLayerStubCtor('composite')
     },
     loaders: {
       // 可控 deferred：测试手动放行解析，钉死「URL 形态 → 对象形态」两拍
@@ -278,7 +281,7 @@ const station = (id, lon, extra) => Object.assign({
   colorTop: [223, 204, 251], colorBottom: [150, 200, 254]
 }, extra || {});
 
-test('组装顺序与常驻性逐字（ht :13501-13538）：glow → warmup → expanded-batch；Bt 关门时只余 glow+warmup', async () => {
+test('组装顺序与常驻性逐字（ht :13501-13538）：glow → avatar(④-3) → warmup → expanded-batch；Bt 关门时只余 glow+avatar+warmup', async () => {
   const env = loadSandbox();
   const map = new env.FakeMap(10);
   await env.api.mount(map, env.overlay, {
@@ -287,12 +290,12 @@ test('组装顺序与常驻性逐字（ht :13501-13538）：glow → warmup → 
   const last = env.setPropsCalls[env.setPropsCalls.length - 1];
   // vm 跨 realm 数组：JSON 规范化后比较（原型不参与）
   assert.strictEqual(JSON.stringify(last.map((l) => l.props.id)),
-    JSON.stringify(['station-glow-layer', 'lighthouse-warmup-layer']),
-    'zoom=10（Bt 关）应只剩光晕层 + 预热层（:13523 门限）');
+    JSON.stringify(['station-glow-layer', 'station-avatar-layer', 'lighthouse-warmup-layer']),
+    'zoom=10（Bt 关）应只剩光晕层 + 头像层（④-3 :13506）+ 预热层（:13523 门限）');
   assert.strictEqual(last[0].props.visible, true, '光晕层恒 visible（:13504）');
   assert.strictEqual(last[0].props.pickable, false, '光晕层不可拾取（:10992）');
-  assert.strictEqual(last[1].props.pickable, false, '预热层不可拾取（:13520）');
-  assert.strictEqual(last[1].props.layerOpacity ?? last[1].props.getLayerOpacity(), 0.001,
+  assert.strictEqual(last[2].props.pickable, false, '预热层不可拾取（:13520）');
+  assert.strictEqual(last[2].props.layerOpacity ?? last[2].props.getLayerOpacity(), 0.001,
     '预热层 opacity .001（Xm）');
 
   // 升 zoom 越 11.5：expanded 批进入，位置在 warmup 之后（:13534-13538）
@@ -300,8 +303,8 @@ test('组装顺序与常驻性逐字（ht :13501-13538）：glow → warmup → 
   map.emit('zoom');
   const layers2 = env.setPropsCalls[env.setPropsCalls.length - 1];
   assert.strictEqual(JSON.stringify(layers2.map((l) => l.props.id)),
-    JSON.stringify(['station-glow-layer', 'lighthouse-warmup-layer', 'lighthouse-expanded-batch']));
-  const batch = layers2[2];
+    JSON.stringify(['station-glow-layer', 'station-avatar-layer', 'lighthouse-warmup-layer', 'lighthouse-expanded-batch']));
+  const batch = layers2[3];
   assert.strictEqual(batch.props.pickable, true, 'zo() 默认 pickable（:11494）');
   assert.ok(Math.abs(batch.props.getLayerOpacity() - ((11.6 - 11.5) / 2)) < 1e-9,
     'layerOpacity = ds(zoom).detailOpacity（11.6 → 0.05）');
@@ -329,9 +332,11 @@ test('expanded-batch 数据 = 谓词命中集（:13262 + :13497 visibleIds 交�
   env.api.unmount();
 });
 
-test('入场机制逐字：rAF 逐帧推进退役；expanded 批 entranceProgress 恒 1（:13538），扫描动画由 transitions 承载', async () => {
-  assert.ok(!/requestAnimationFrame/.test(CODE),
-    'hearthere 无 rAF 逐帧 setProps（:13515-13538 全批恒 1），自研入场循环必须退役（步骤③裁决）');
+test('入场机制逐字：自研入场 rAF 循环退役；expanded 批 entranceProgress 恒 1（:13538），扫描动画由 transitions 承载', async () => {
+  // ④-5a 修订守卫面：hearthere 本就有特效帧循环 _e.current=requestAnimationFrame(se)（:13576-13755），
+  // 步骤③禁的是「自研入场逐帧推进」（archive: state.raf=requestAnimationFrame(step)→entranceProgress 每帧改值）。
+  assert.ok(!/requestAnimationFrame\(\s*step\s*\)/.test(CODE),
+    '自研入场 rAF 循环（step 每帧推进）必须退役（步骤③裁决）；特效驱动 rAF 归 ④-5a');
   assert.ok(!/ENTRANCE_FLIP_MS|runEntrance/.test(CODE), '自研翻转机制整体退役');
   const env = loadSandbox();
   const map = new env.FakeMap(14);
@@ -381,7 +386,7 @@ test('OBJ 行为面：层收到的已解析 mesh 必须含顶点（URL 直喂 pa
     setTimeout: (fn) => { fn(); return 1; },
     clearTimeout: () => {},
     TextEncoder,
-    deck: { SimpleMeshLayer: rec('rim'), ScatterplotLayer: rec('glow') },
+    deck: { SimpleMeshLayer: rec('rim'), ScatterplotLayer: rec('glow'), IconLayer: makeLayerStubCtor('icon'), CompositeLayer: makeLayerStubCtor('composite') },
     loaders: {
       // 真实 vendored 语义：仅 ArrayBuffer 输入产出几何；字符串按内容解析（0 顶点）
       parse: (data) => Promise.resolve(

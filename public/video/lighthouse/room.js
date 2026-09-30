@@ -78,7 +78,9 @@
       meta = opts;
     }
     return edge.createRoom(code, meta || discovery).then(function (res) {
-      self.code = code;
+      // 修复轮⑦：服务端恒自生成房间码（world-room-api POST /api/room 忽略 body.code），
+      // 会话必须采用响应码 —— 沿用客户端自生码会让 signal/close/join 全打在不存在的码上
+      self.code = (res && res.code) || code;
       self.discovery = discovery;
       if (meta) {
         self.title = meta.title || null;
@@ -86,7 +88,7 @@
         self.lon = meta.lon;
         self.lat = meta.lat;
       }
-      self._set('active', { code: code });
+      self._set('active', { code: self.code });
       return res;
     });
   };

@@ -123,15 +123,52 @@
   var roomContainer = null;
   var _roomData = null;        // 最近一次数据（用于 update 合并）
   var _roomCb = {};            // 回调集合（首次 show 注入，update 复用）
+  // A3（修复轮⑥）：增量更新所需的节点引用表。此前 updateRoomPanel 整面
+  // replaceChild 重建，20s/3s 刷新会吞掉进行中的点击（审批按钮）、
+  // 丢昵称输入框焦点。现在节点身份保持稳定，只改文本/徽标/行增删。
+  var roomRefs = null;
 
-  function roomBadge(status) {
-    var map = { accepted: ['已加入', 'ok'], pending: ['等待审批', 'wait'], rejected: ['已拒绝', 'no'], connected: ['已连接', 'ok'] };
-    var b = map[status] || ['—', 'wait'];
-    var e = el('span', 'lh-room-badge lh-room-badge--' + b[1], b[0]);
-    return e;
+  var BADGE_MAP = { accepted: ['已加入', 'ok'], pending: ['等待审批', 'wait'], rejected: ['已拒绝', 'no'], connected: ['已连接', 'ok'] };
+  function setBadge(badgeEl, status) {
+    var b = BADGE_MAP[status] || ['—', 'wait'];
+    badgeEl.className = 'lh-room-badge lh-room-badge--' + b[1];
+    badgeEl.textContent = b[0];
+  }
+
+  function addMemberRow(list, s, m) {
+    var row = el('div', 'lh-room-member');
+    var name = el('span', 'lh-room-member-name', m.name || m.id || '匿名灯塔');
+    var badge = el('span', 'lh-room-badge');
+    setBadge(badge, m.status);
+    row.appendChild(name); row.appendChild(badge);
+    var ok = null, no = null;
+    if (s.role === 'host') {
+      ok = el('button', 'lh-room-approve', '接受');
+      ok.type = 'button';
+      ok.addEventListener('click', function () { if (_roomCb.onApprove) _roomCb.onApprove(m.id); });
+      no = el('button', 'lh-room-reject', '拒绝');
+      no.type = 'button';
+      no.addEventListener('click', function () { if (_roomCb.onReject) _roomCb.onReject(m.id); });
+      row.appendChild(ok); row.appendChild(no);
+      if (m.status !== 'pending') { ok.style.display = 'none'; no.style.display = 'none'; }
+    }
+    roomRefs.rows[m.id] = { row: row, name: name, badge: badge, ok: ok, no: no };
+    list.appendChild(row);
+  }
+
+  function syncEmptyRow(s) {
+    var list = roomRefs.listEl;
+    var has = !!(s.members && s.members.length);
+    if (has) {
+      if (roomRefs.emptyEl && roomRefs.emptyEl.parentNode) roomRefs.emptyEl.parentNode.removeChild(roomRefs.emptyEl);
+      return;
+    }
+    if (!roomRefs.emptyEl) roomRefs.emptyEl = el('div', 'lh-room-empty', s.role === 'host' ? '等待他人加入…' : '等待房主确认…');
+    list.appendChild(roomRefs.emptyEl);
   }
 
   function buildRoomPanel(s) {
+    roomRefs = { builtOn: null, rows: {}, codeEl: null, statusEl: null, countNumEl: null, toggEl: null, leaveBtn: null, listEl: null, emptyEl: null };
     var p = el('div', 'lh-room-panel');
     p.appendChild((function () {
       var h = el('div', 'lh-room-head');
@@ -147,14 +184,16 @@
     var codeRow = el('div', 'lh-room-code-row');
     if (s.role === 'host') {
       codeRow.appendChild(el('span', 'lh-room-code-label', '房间码'));
-      codeRow.appendChild(el('span', 'lh-room-code', s.code || '------'));
+      roomRefs.codeEl = el('span', 'lh-room-code', s.code || '------');
+      codeRow.appendChild(roomRefs.codeEl);
       var copy = el('button', 'lh-room-copy', '复制');
       copy.type = 'button';
       copy.addEventListener('click', function () { if (_roomCb.onCopy) _roomCb.onCopy(s.code); });
       codeRow.appendChild(copy);
     } else {
       codeRow.appendChild(el('span', 'lh-room-code-label', '已加入'));
-      codeRow.appendChild(el('span', 'lh-room-code', s.code || '------'));
+      roomRefs.codeEl = el('span', 'lh-room-code', s.code || '------');
+      codeRow.appendChild(roomRefs.codeEl);
     }
     p.appendChild(codeRow);
 
@@ -169,47 +208,33 @@
     p.appendChild(nickRow);
 
     // 状态行
-    p.appendChild(el('div', 'lh-room-status', s.statusText || ''));
+    roomRefs.statusEl = el('div', 'lh-room-status', s.statusText || '');
+    p.appendChild(roomRefs.statusEl);
 
     // 人数 2/4
     var count = el('div', 'lh-room-count');
-    count.appendChild(el('span', 'lh-room-count-num', (s.members ? s.members.filter(function (m) { return m.status === 'accepted' || m.status === 'connected'; }).length : 0) + ' / 4'));
+    roomRefs.countNumEl = el('span', 'lh-room-count-num', (s.members ? s.members.filter(function (m) { return m.status === 'accepted' || m.status === 'connected'; }).length : 0) + ' / 4');
+    count.appendChild(roomRefs.countNumEl);
     count.appendChild(el('span', 'lh-room-count-label', ' 在线成员'));
     p.appendChild(count);
 
     // 公开灯塔开关（双方：控制本端 beacon 是否出现在他人世界地图）
-    var togg = el('button', 'lh-room-toggle' + (s.isPublic ? ' is-on' : ''), s.isPublic ? '公开灯塔：开' : '公开灯塔：关');
-    togg.type = 'button';
-    togg.addEventListener('click', function () {
+    roomRefs.toggEl = el('button', 'lh-room-toggle' + (s.isPublic ? ' is-on' : ''), s.isPublic ? '公开灯塔：开' : '公开灯塔：关');
+    roomRefs.toggEl.type = 'button';
+    roomRefs.toggEl.addEventListener('click', function () {
       var nv = !s.isPublic; s.isPublic = nv;
-      togg.classList.toggle('is-on', nv);
-      togg.textContent = nv ? '公开灯塔：开' : '公开灯塔：关';
+      roomRefs.toggEl.classList.toggle('is-on', nv);
+      roomRefs.toggEl.textContent = nv ? '公开灯塔：开' : '公开灯塔：关';
       if (_roomCb.onTogglePrivacy) _roomCb.onTogglePrivacy(nv);
     });
-    p.appendChild(togg);
+    p.appendChild(roomRefs.toggEl);
     p.appendChild(el('div', 'lh-room-note', '关闭后你的灯塔不再出现在他人世界地图（仍可凭房间码一起看）。'));
 
     // 成员列表
-    var list = el('div', 'lh-room-members');
-    (s.members || []).forEach(function (m) {
-      var row = el('div', 'lh-room-member');
-      row.appendChild(el('span', 'lh-room-member-name', m.name || m.id || '匿名灯塔'));
-      row.appendChild(roomBadge(m.status));
-      if (s.role === 'host' && m.status === 'pending') {
-        var ok = el('button', 'lh-room-approve', '接受');
-        ok.type = 'button';
-        ok.addEventListener('click', function () { if (_roomCb.onApprove) _roomCb.onApprove(m.id); });
-        var no = el('button', 'lh-room-reject', '拒绝');
-        no.type = 'button';
-        no.addEventListener('click', function () { if (_roomCb.onReject) _roomCb.onReject(m.id); });
-        row.appendChild(ok); row.appendChild(no);
-      }
-      list.appendChild(row);
-    });
-    if (!(s.members && s.members.length)) {
-      list.appendChild(el('div', 'lh-room-empty', s.role === 'host' ? '等待他人加入…' : '等待房主确认…'));
-    }
-    p.appendChild(list);
+    roomRefs.listEl = el('div', 'lh-room-members');
+    (s.members || []).forEach(function (m) { addMemberRow(roomRefs.listEl, s, m); });
+    syncEmptyRow(s);
+    p.appendChild(roomRefs.listEl);
 
     // 离开 / 关闭 + 网络诊断 + 聊天
     var foot = el('div', 'lh-room-foot');
@@ -223,12 +248,13 @@
     chat.addEventListener('click', function () { if (_roomCb.onOpenChat) _roomCb.onOpenChat(); });
     footRow.appendChild(chat);
     foot.appendChild(footRow);
-    var leave = el('button', 'lh-room-leave', s.role === 'host' ? '关闭房间' : '离开房间');
-    leave.type = 'button';
-    leave.addEventListener('click', function () { if (_roomCb.onLeave) _roomCb.onLeave(); });
-    foot.appendChild(leave);
+    roomRefs.leaveBtn = el('button', 'lh-room-leave', s.role === 'host' ? '关闭房间' : '离开房间');
+    roomRefs.leaveBtn.type = 'button';
+    roomRefs.leaveBtn.addEventListener('click', function () { if (_roomCb.onLeave) _roomCb.onLeave(); });
+    foot.appendChild(roomRefs.leaveBtn);
     p.appendChild(foot);
 
+    roomRefs.builtOn = p;
     return p;
   }
 
@@ -248,19 +274,52 @@
     requestAnimationFrame(function () { if (roomEl) roomEl.classList.add('lh-room-panel--in'); });
   }
 
-  // 增量更新：仅数据变化，回调沿用首次注入
+  // A3（修复轮⑥）：增量更新 —— 同一批 DOM 节点上改文本/徽标/行增删，
+  // 回调沿用首次注入；仅当引用表与当前面板失配（异常态）才退回整面重建。
   function updateRoomPanel(data) {
     if (!roomEl || !roomContainer) return;
+    if (!roomRefs || roomRefs.builtOn !== roomEl) {
+      _roomData = Object.assign({}, _roomData, data);
+      var fresh = buildRoomPanel(_roomData);
+      roomContainer.replaceChild(fresh, roomEl);
+      roomEl = fresh;
+      requestAnimationFrame(function () { if (roomEl) roomEl.classList.add('lh-room-panel--in'); });
+      return;
+    }
     _roomData = Object.assign({}, _roomData, data);
-    var fresh = buildRoomPanel(_roomData);
-    roomContainer.replaceChild(fresh, roomEl);
-    roomEl = fresh;
-    requestAnimationFrame(function () { if (roomEl) roomEl.classList.add('lh-room-panel--in'); });
+    var s = _roomData;
+    if (roomRefs.codeEl) roomRefs.codeEl.textContent = s.code || '------';
+    if (roomRefs.statusEl) roomRefs.statusEl.textContent = s.statusText || '';
+    var online = (s.members || []).filter(function (m) { return m.status === 'accepted' || m.status === 'connected'; }).length;
+    if (roomRefs.countNumEl) roomRefs.countNumEl.textContent = online + ' / 4';
+    if (roomRefs.toggEl) {
+      roomRefs.toggEl.classList.toggle('is-on', !!s.isPublic);
+      roomRefs.toggEl.textContent = s.isPublic ? '公开灯塔：开' : '公开灯塔：关';
+    }
+    if (roomRefs.leaveBtn) roomRefs.leaveBtn.textContent = s.role === 'host' ? '关闭房间' : '离开房间';
+    var seen = {};
+    (s.members || []).forEach(function (m) {
+      seen[m.id] = true;
+      var r = roomRefs.rows[m.id];
+      if (!r) { addMemberRow(roomRefs.listEl, s, m); return; }
+      r.name.textContent = m.name || m.id || '匿名灯塔';
+      setBadge(r.badge, m.status);
+      var show = s.role === 'host' && m.status === 'pending';
+      if (r.ok) { r.ok.style.display = show ? '' : 'none'; r.no.style.display = show ? '' : 'none'; }
+    });
+    Object.keys(roomRefs.rows).forEach(function (id) {
+      if (seen[id]) return;
+      var r = roomRefs.rows[id];
+      if (r.row.parentNode) r.row.parentNode.removeChild(r.row);
+      delete roomRefs.rows[id];
+    });
+    syncEmptyRow(s);
   }
 
   function hideRoomPanel() {
     if (roomEl && roomEl.parentNode) roomEl.parentNode.removeChild(roomEl);
     roomEl = null;
+    roomRefs = null;
   }
 
   // ============================================================

@@ -68,11 +68,24 @@ test('getState 空态契约（Task 6 消费面）', () => {
   assert.equal(typeof s.visible, 'boolean');
 });
 
-test('接线：pickStation 经 overlay.pickObject radius 10（Task 6 契约，步骤④换分档拾取）', () => {
-  assert.match(SRC, /pickObject\(\{ x: x, y: y, radius: 10 \}\)/);
+test('接线：步骤④分档拾取经 SFV.worldPick（旧 overlay.pickObject radius:10 已退役）', () => {
+  assert.ok(!/radius:\s*10/.test(SRC), 'Task 6 定半径 10 拾取必须退役（om/_c 分档取代）');
+  assert.match(SRC, /SFV\.worldPick/, 'pickStation 必须懒取 SFV.worldPick（world-pick.js 纯函数面）');
+  assert.match(SRC, /shouldGpuPick\(/, '低倍只 CPU、≥11.5 GPU 先行（py :16695-16697）');
+  assert.match(SRC, /gpuPick\(/, 'GPU 档接 om（:11691-11705）');
+  assert.match(SRC, /cpuPick\(/, 'CPU 兜底接 _c（:16645-16662）');
   for (const fn of ['mount', 'unmount', 'refreshStations', 'setSelected', 'applyTier', 'getState', 'pickStation']) {
     assert.ok(new RegExp('\\b' + fn + '\\b').test(SRC), `应提供 ${fn}`);
   }
+});
+
+test('index.html 注册 world-pick.js 且先于 world-lighthouse-deck.js（分档拾取纯函数面）', () => {
+  const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
+  const iPick = html.indexOf('"video/world-pick.js"');
+  const iDeck = html.indexOf('"video/world-lighthouse-deck.js"');
+  assert.ok(iPick >= 0, 'world-pick.js 应在 SFV_SCRIPTS 中');
+  assert.ok(iPick < iDeck, 'world-pick.js 必须先于 deck（deck.pickStation 懒取 SFV.worldPick）');
+  assert.strictEqual((html.match(/video\/world-pick\.js"/g) || []).length, 1);
 });
 
 test('浏览器装载面：挂 SFV.worldLighthouseDeck 且契约函数齐全、未 mount 时 getState 可用', () => {
@@ -91,17 +104,17 @@ test('浏览器装载面：挂 SFV.worldLighthouseDeck 且契约函数齐全、�
   assert.strictEqual(api.pickStation(1, 1), null, '无 overlay 时 pickStation 应安全返回 null');
 });
 
-test('index.html 按序注册 world-lighthouse-model.js / world-lighthouse-deck.js（都在 world-ui.js 之前）', () => {
+test('index.html 注册 world-lighthouse-deck.js（先于 world-ui.js）；步骤⑤退役面已摘除', () => {
   const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
-  const iModel = html.indexOf('"video/world-lighthouse-model.js"');
   const iDeck = html.indexOf('"video/world-lighthouse-deck.js"');
   const iUi = html.indexOf('"video/world-ui.js"');
-  assert.ok(iModel >= 0 && iDeck >= 0 && iUi >= 0, '三个模块都应在 SFV_SCRIPTS 中');
+  assert.ok(iDeck >= 0 && iUi >= 0, 'deck/world-ui 都应在 SFV_SCRIPTS 中');
   assert.ok(!/video\/world-lighthouse\.js"/.test(html), '旧 Cesium 灯塔面应已摘除（Task 9 归档 _archive/）');
-  assert.ok(iModel < iDeck, 'world-lighthouse-model.js 应先于 world-lighthouse-deck.js');
   assert.ok(iDeck < iUi, 'world-lighthouse-deck.js 应先于 world-ui.js');
   assert.strictEqual((html.match(/video\/world-lighthouse-deck\.js/g) || []).length, 1);
-  assert.strictEqual((html.match(/video\/world-lighthouse-model\.js/g) || []).length, 1);
+  // 步骤⑤：程序化灯塔几何（真 OBJ 取代）与自绘边界层（MapTiler 样式取代）归档，装载链不得再引用
+  assert.ok(!/video\/world-lighthouse-model\.js"/.test(html), 'world-lighthouse-model.js 已归档 _archive/（步骤③退役，⑤落盘）');
+  assert.ok(!/video\/world-boundaries\.js"/.test(html), 'world-boundaries.js 已归档 _archive/（步骤②退役，⑤落盘）');
 });
 
 // ---------------- Task 6 回归：mount epoch token（沙箱桩随步骤③补全） ----------------
@@ -111,7 +124,10 @@ function loadContractSandbox() {
     console, Promise,
     deck: {
       SimpleMeshLayer: class { constructor(props) { this.props = props; } },
-      ScatterplotLayer: class { constructor(props) { this.props = props; } }
+      ScatterplotLayer: class { constructor(props) { this.props = props; } },
+      // 步骤④-3：ensureLayerClasses 需要头像层基类在场（空站表不实例化）
+      IconLayer: class { constructor(props) { this.props = props; } },
+      CompositeLayer: class { constructor(props) { this.props = props; } }
     }
   };
   sandbox.window = sandbox;

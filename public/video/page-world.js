@@ -7,15 +7,16 @@
  *   unmount → 完整销毁地图与 WebGL 上下文
  *
  * Task 6（世界页大翻版）接线序：
- *   worldGlobe.mount → worldUi.mount
+ *   worldGlobe.mount → worldUi.mount → worldHtPanel.mount(host)
  *   → worldLighthouseDeck.mount(info.map, info.overlay, {stations,onBeaconClick,onHover})
- *   → worldMapActions.mount(info.map, {ui,deck})（flyTo/快捷键/自转，maplibre 面）
- *   交互契约（hearthere :19620-19650 token 模式）：
- *     点地图 → deck.pickStation 命中 → setSelected + flyTo(zoom16/pitch60/2800ms)
- *     → 卡片只在该飞行的 map 'moveend' 后打开；被取代飞行/切页后的 moveend 不开卡；
- *     点空处（卡片开着）→ 关卡片；悬停命中 → canvas cursor=pointer。
- *   旧 Cesium 面（world-cesium / world-lighthouse / world-actions）已退役，
- *   Task 9 移入 video/_archive/（不删除；启动链与 read 路径测试已同步摘除）。
+ *   → worldMapActions.mount(info.map, {ui,deck})（快捷键/自转，maplibre 面）
+ *   交互契约（步骤④-4 起按 hearthere 逐字）：
+ *     点地图 → deck.pickStation 命中 → wt（:19638-19653）：setSelected 选中
+ *     → ht-panel 即点即开（It('station') 同步于相机动作之前）→ 相机独立飞行（zn :19600-19637）；
+ *     空白点击 = Us（:19793-19851）命中为空即 return 的 no-op（不关面板）；
+ *     悬停命中 → canvas cursor=pointer。
+ *     旧自研面（world-ui 的 .world-card 卡片、点空处关卡、落地后开卡 token）
+ *     随「删」裁决整条退役，样式入 video/_archive/。
  * 非渲染资产保留在 video/lighthouse/（config/security/edge-local/state/room/webrtc/sync/ui；
  *   死渲染项 view/mock/geo/edge 同批归档 _archive/）。
  */
@@ -30,10 +31,25 @@
   var onAirCursor = -1;
   var roomPollTimer = 0;
 
-  // Task 6 交互面：当前绑定了 click/mousemove 的 maplibre map 与飞行 token
+  // 交互面（④-4）：当前绑定了 click/mousemove 的 maplibre map；
+  // 面板侧状态机：打开中的信标 id / 已「进入房间」的信标 id（Wf 的 e）
   var boundMap = null;
   var boundHandlers = null;
-  var flySeq = 0;
+  var openStationId = null;
+  var listeningStationId = null;
+
+  // A2（修复轮⑥）：当前地图视野中心（城市级）。maplibre getCenter() 返回 {lng,lat}，
+  // 兼容 [lng,lat] 数组形状；未绑定地图或取不到时返回 null，由调用方兜底。
+  function mapViewCenter() {
+    try {
+      var c = boundMap && boundMap.getCenter && boundMap.getCenter();
+      if (!c) return { lng: null, lat: null };
+      if (Array.isArray(c)) return { lng: c[0], lat: c[1] };
+      return { lng: c.lng != null ? c.lng : c.lon, lat: c.lat };
+    } catch (e) {
+      return { lng: null, lat: null };
+    }
+  }
 
   // 房间上球：每 20s 增量刷新开放房间（只增/删/改，绝不重建模型）
   // Task 6：刷新改推给 deck 层（老 worldLighthouse 不再接收）
@@ -72,7 +88,10 @@
   }
 
   // ============================================================
-  //  Task 6 交互层：点击拾取 → flyTo → moveend 开卡（token 模式）
+  //  ④-4 交互层（hearthre 逐字）：点击命中 → 选中 + 即点即开面板（wt
+  //  :19638-19653，It('station') 先于相机动作）→ 相机独立飞行；空白点击
+  //  为 no-op（Us :19793-19851，命中为空即 return，不关面板）。
+  //  旧自研面（点图投卡 / 落地开卡 / 宿主卡片 DOM 辅助）已退役，见头注释。
   // ============================================================
 
   function setHoverCursor(on) {
@@ -81,84 +100,105 @@
     if (canvas && canvas.style) canvas.style.cursor = on ? 'pointer' : '';
   }
 
-  // deck 站点 {position:[lon,lat]} → 卡片层（world-ui 读 st.lon/st.lat）形状
-  function stationView(st) {
-    if (!st) return st;
-    var v = {};
-    for (var k in st) { if (Object.prototype.hasOwnProperty.call(st, k)) v[k] = st[k]; }
-    if (Array.isArray(st.position)) {
-      if (v.lon == null) v.lon = st.position[0];
-      if (v.lat == null) v.lat = st.position[1];
-    }
-    return v;
+  function deckStations() {
+    if (!SFV.worldLighthouseDeck || typeof SFV.worldLighthouseDeck.getState !== 'function') return [];
+    var s = SFV.worldLighthouseDeck.getState() || {};
+    return s.stations || [];
   }
 
-  function openStationCard(st, clickPos) {
-    if (!SFV.worldUi || typeof SFV.worldUi.showCard !== 'function' || !st) return;
-    var pos = clickPos || null;
-    if (boundMap && typeof boundMap.project === 'function' && Array.isArray(st.position)) {
-      try {
-        var p = boundMap.project(st.position);
-        if (p && p.x != null) pos = p; // moveend 后按站点投影锚定卡片
-      } catch (e) { /* 保留点击点兜底 */ }
-    }
-    SFV.worldUi.showCard(stationView(st), pos, {
+  function findStation(id) {
+    var list = deckStations();
+    for (var n = 0; n < list.length; n++) { if (list[n].id === id) return list[n]; }
+    return null;
+  }
+
+  function panelOpen(st, extra) {
+    if (!SFV.worldHtPanel || typeof SFV.worldHtPanel.open !== 'function' || !st) return;
+    var opts = {
+      listeningStationId: listeningStationId,
       isFavorite: SFV.worldMapActions ? SFV.worldMapActions.isFavorite(st.id) : false,
-      onFavorite: function (s2) {
-        return SFV.worldMapActions ? SFV.worldMapActions.toggleFavorite(s2) : false;
-      },
-      onLocate: function (s2) {
-        flyToStation(s2, null);
-      },
-      // M5：进入「一起看」房间（room.js + webrtc.js）
-      onJoin: function (s2) {
-        if (!SFV.worldRoom || !SFV.worldRoom.joinWatchRoom) {
-          if (SFV.worldUi) SFV.worldUi.toast('房间模块未加载');
-          return;
-        }
-        SFV.worldRoom.joinWatchRoom(s2, hostEl).catch(function () {});
+      canGoNext: SFV.worldHtPanel.canGoNextStation(deckStations(), st.id),  // :19973
+      onFavorite: function () { toggleFavorite(st); },
+      onAction: function (action) { handleCta(action, st); }
+    };
+    if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) opts[k] = extra[k];
+    openStationId = st.id;
+    SFV.worldHtPanel.open(st, opts);
+  }
+
+  function closePanel() { // It(null) 等价（:19971）
+    openStationId = null;
+    if (SFV.worldHtPanel && typeof SFV.worldHtPanel.close === 'function') SFV.worldHtPanel.close();
+  }
+
+  function panelStation() {
+    var p = SFV.worldHtPanel && SFV.worldHtPanel.panelEl && SFV.worldHtPanel.panelEl();
+    return p && p.__station ? p.__station : null;
+  }
+
+  function toggleFavorite(st) { // 卡片收藏星与快捷键 R 段收藏同一入口
+    if (!SFV.worldMapActions || !st) return;
+    SFV.worldMapActions.toggleFavorite(st);
+    if (SFV.worldHtPanel.isOpen() && panelStation() && panelStation().id === st.id) panelOpen(st);
+  }
+
+  function flyTo(st) {
+    if (SFV.worldLighthouseDeck && SFV.worldLighthouseDeck.flyToStation) SFV.worldLighthouseDeck.flyToStation(st);
+  }
+
+  function handleCta(action, st) {
+    if (action === 'tune_in') { // 进入房间（M5：local room.js + webrtc.js 替代 Supabase 面）
+      if (!SFV.worldRoom || !SFV.worldRoom.joinWatchRoom) {
+        if (SFV.worldUi) SFV.worldUi.toast('房间模块未加载');
+        return;
       }
-    });
-  }
-
-  // 电影感飞行 + 延迟开卡：token 自增；每个飞行注册一次性 moveend，
-  // 落地时 token 已被更新的飞行取代（或页面已切走）则只摘监听不开卡。
-  function flyToStation(st, clickPos) {
-    if (!st) return;
-    var map = boundMap;
-    var token = ++flySeq;
-    var mountId = seq;
-    if (map && typeof map.on === 'function' && typeof map.off === 'function') {
-      var onEnd = function () {
-        map.off('moveend', onEnd);
-        if (token !== flySeq || mountId !== seq) return; // 被取代/已切走：过期飞行不开卡
-        openStationCard(st, clickPos);
-      };
-      map.on('moveend', onEnd);
+      SFV.worldRoom.joinWatchRoom(st, hostEl).then(function () {
+        listeningStationId = st.id;
+        panelOpen(findStation(st.id) || st);
+      }).catch(function () {});
+      return;
     }
-    if (SFV.worldMapActions && SFV.worldMapActions.flyTo) SFV.worldMapActions.flyTo(st);
+    if (action === 'stop') {
+      if (SFV.worldRoom && SFV.worldRoom.leave) SFV.worldRoom.leave();
+      listeningStationId = null;
+      closePanel(); // sp 无收听态后自动关面板 = It(null) 等价（:19971）
+      return;
+    }
+    if (action === 'next_station') { nextPlayingStation(); return; }
+    // offline / idle：Wf 已把按钮置禁用，点击不达此处
   }
 
-  // beacon 命中统一入口：选中（deck 尺寸分级 290）→ 飞行 → moveend 开卡
-  function openStation(st, screenPos) {
+  // 下一个电台（:19973 u 支路语义：跳到另一座正在放映的信标）
+  function nextPlayingStation() {
+    if (!SFV.worldHtPanel) return;
+    var list = deckStations();
+    var playing = [];
+    for (var i = 0; i < list.length; i++) if (list[i].status === 'playing') playing.push(list[i]);
+    var next = null;
+    for (var j = 0; j < playing.length; j++) {
+      if (next) break;
+      if (playing[j].id !== openStationId && playing[j].id !== listeningStationId) next = playing[j];
+    }
+    if (!next) { if (SFV.worldUi) SFV.worldUi.toast('没有下一个正在放映的信标'); return; }
+    openStation(next);
+  }
+
+  // wt（:19638-19653）：选中 → 开面板 → 相机飞行（顺序逐字：面板先于飞行）
+  function openStation(st) {
     if (!st) return;
     if (SFV.worldLighthouseDeck && SFV.worldLighthouseDeck.setSelected) {
       SFV.worldLighthouseDeck.setSelected(st.id);
     }
-    flyToStation(st, screenPos || null);
+    panelOpen(st);
+    flyTo(st);
   }
 
   function onMapClick(e) {
     var deck = SFV.worldLighthouseDeck;
     if (!deck || !e || !e.point || typeof deck.pickStation !== 'function') return;
     var st = deck.pickStation(e.point.x, e.point.y);
-    if (st) {
-      openStation(st, e.point);
-    } else if (SFV.worldUi && SFV.worldUi.cardEl) {
-      // 点空处 = Esc 语义：卡片开着则关闭
-      flySeq++; // 取消在途飞行的开卡
-      SFV.worldUi.hideCard();
-    }
+    if (st) openStation(st);
+    // 命中为空 = Us（:19826 je 为 null）：no-op，不关面板
   }
 
   function onMapHover(e) {
@@ -326,8 +366,13 @@
           SFV.worldUi.showLoading('正在连接放映房间…');
         }
 
+        // ④-4：ht-panel 外壳（.nav-bar 挂页面宿主，:3189-3345 Rd 逐字）
+        if (SFV.worldHtPanel && typeof SFV.worldHtPanel.mount === 'function') {
+          SFV.worldHtPanel.mount(host);
+        }
+
         // 步骤②：自绘行政边界层退役 —— MapTiler HearThereMap 样式自带 Country border，
-        // 且 hearthere 无独立边界层（SFV.worldBoundaries 不再挂载；模块留档 _archive 步骤⑤处理）
+        // 且 hearthere 无独立边界层（SFV.worldBoundaries 不再挂载；步骤⑤已归档 _archive/）
 
         // M5：拉取开放的「一起看」房间；拉不到就降级演示房间
         var roomsPromise = (SFV.worldData && SFV.worldData.fetchRooms)
@@ -349,9 +394,9 @@
 
             return SFV.worldLighthouseDeck.mount(info.map, info.overlay, {
               stations: stations,
-              onBeaconClick: function (st, screenPos) {
+              onBeaconClick: function (st) {
                 if (mySeq !== seq || !st) return;
-                openStation(st, screenPos || null);
+                openStation(st);
               },
               onHover: function (st) {
                 if (mySeq !== seq) return;
@@ -394,23 +439,20 @@
                 }
                 onAirCursor = (onAirCursor + 1) % playingList.length;
                 var target = playingList[onAirCursor];
-                flyToStation(target, null); // Task 6 本地 flyTo（含 moveend 开卡）
+                openStation(target); // wt：选中 + 即点即开面板 + 飞行
                 SFV.worldUi.toast('跳到「' + target.name + '」');
               });
 
               // 右下快捷键条：四项都可点（Esc/R/F/A，行为层在 world-map-actions）
               SFV.worldUi.setHintHandler(function (act) {
-                if (act === 'esc') { SFV.worldUi.hideCard(); return; }
+                if (act === 'esc') { closePanel(); return; }
                 if (act === 'reset') {
                   if (SFV.worldMapActions) SFV.worldMapActions.resetView();
                   return;
                 }
                 if (act === 'favorite') {
-                  if (!SFV.worldMapActions) return;
-                  var card = SFV.worldUi.cardEl;
-                  var id = card && card.getAttribute && card.getAttribute('data-station-id');
-                  var cur = id ? freshStation(id) : null;
-                  if (cur) SFV.worldMapActions.toggleFavorite(cur);
+                  var cur = openStationId != null ? freshStation(openStationId) : null;
+                  if (cur) toggleFavorite(cur);
                   else SFV.worldUi.toast('先点一座信标，再收藏');
                   return;
                 }
@@ -430,9 +472,15 @@
                     if (SFV.worldUi) SFV.worldUi.toast('房间模块未加载');
                     return;
                   }
-                  // 城市级坐标（不含精确位置）；未填城市则用 0,0
-                  var lon = opts.lon != null ? opts.lon : 0;
-                  var lat = opts.lat != null ? opts.lat : 0;
+                  // 城市级坐标（不含精确位置）；面板未带坐标时取当前地图视野中心，绝不落 (0,0) 零点岛
+                  var lon = opts.lon, lat = opts.lat;
+                  if (lon == null || lat == null) {
+                    var c = mapViewCenter();
+                    if (lon == null) lon = c.lng;
+                    if (lat == null) lat = c.lat;
+                  }
+                  if (lon == null) lon = 0;
+                  if (lat == null) lat = 0;
                   SFV.worldRoom.createHost({
                     title: opts.title,
                     name: opts.name,
@@ -478,12 +526,16 @@
       });
     },
     unmount: function () {
-      seq++;          // 作废所有在途闭包（含飞行 onEnd 的 mountId 校验）
-      flySeq++;       // 取消在途飞行的开卡（Task 6：unmount 即废 token）
+      seq++;          // 作废所有在途闭包（含 deck 飞行 token 的挂载代校验）
       setWorldPageClass(false);
       liftTitlebar(false);
       stopRoomPolling();
       unbindMapInteractions();
+      openStationId = null;
+      listeningStationId = null;
+      if (SFV.worldHtPanel && typeof SFV.worldHtPanel.unmount === 'function') {
+        SFV.worldHtPanel.unmount();
+      }
       if (SFV.worldRoom && typeof SFV.worldRoom.leave === 'function') {
         SFV.worldRoom.leave();
       }

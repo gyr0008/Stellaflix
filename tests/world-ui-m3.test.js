@@ -31,7 +31,7 @@ test('index.html：M3 换代后启动链 —— 旧渲染项摘除，world-socia
   assert.ok(!/video\/world-cesium\.js/.test(html), 'world-cesium.js 应已摘除（归档 _archive/）');
 });
 
-test('world-ui.js 提供品牌叠层 / ON AIR / 统计 / toast / 卡片 / 加载 / 烟花画布', () => {
+test('world-ui.js 提供品牌叠层 / ON AIR / 统计 / toast / 加载 / 烟花画布（卡片面已退役）', () => {
   const src = read('public/video/world-ui.js');
   // Task 9 口号改版（用户裁决：听→看）：新口号必须在；旧英文标题/旧副标题仍禁
   assert.match(src, /看看世界都在看什么/, '新口号必须挂出');
@@ -49,22 +49,17 @@ test('world-ui.js 提供品牌叠层 / ON AIR / 统计 / toast / 卡片 / 加载
   // toast
   assert.match(src, /world-toast/);
   assert.match(src, /function toast\(/);
-  // 卡片
-  assert.match(src, /world-card/);
-  assert.match(src, /world-card-bar/);
-  assert.match(src, /world-card-status/);
-  assert.match(src, /data-act", "favorite"|data-act', 'favorite'/);
-  assert.match(src, /data-act', 'locate'/);
-  assert.match(src, /data-act', 'join'/);
-  assert.match(src, /开始观看/);
-  assert.ok(!/data-act', 'listen'/.test(src), '不得再有收听按钮');
+  // ④-4 换代：旧 world-card 面整条退役（用户裁决「删」），开卡由 world-ht-panel 接管
+  assert.ok(!/world-card/.test(src), 'world-ui 不再挂旧卡片面');
+  assert.ok(!/function showCard/.test(src), 'showCard 已退役（卡片归 ht-panel）');
+  assert.ok(!/function hideCard/.test(src), 'hideCard 已退役');
   // 加载态
   assert.match(src, /world-loading/);
   assert.match(src, /showLoading/);
   // 烟花画布
   assert.match(src, /world-fireworks/);
   // 导出
-  for (const fn of ['mount', 'unmount', 'showCard', 'hideCard', 'toast', 'setStats', 'setOnAir', 'showLoading', 'hideLoading', 'fireworksCanvas']) {
+  for (const fn of ['mount', 'unmount', 'toast', 'setStats', 'setOnAir', 'showLoading', 'hideLoading', 'fireworksCanvas']) {
     assert.ok(new RegExp('\\b' + fn + '\\b').test(src), `应导出 ${fn}`);
   }
 });
@@ -110,24 +105,28 @@ test('world-actions.js（已归档 _archive/）保留旧 Cesium 面回归：快�
   }
 });
 
-test('lighthouse.css 含 M3 视觉（卡片/统计/hints/toast/加载/烟花）', () => {
+test('lighthouse.css 含 M3 视觉（统计/hints/toast/加载/烟花），旧卡片样式已归档', () => {
   const css = read('public/video/lighthouse/lighthouse.css');
   for (const cls of [
-    'world-card', 'world-card-bar', 'world-card-status', 'world-card-actions',
     'world-stats', 'world-hints', 'world-toast', 'world-fireworks',
-    'world-loading', 'world-on-air', 'world-earth-title'
+    'world-loading', 'world-on-air'
   ]) {
     assert.ok(css.includes('.' + cls), `CSS 应含 .${cls}`);
   }
+  // ④-4：.world-card* 已整块归档 _archive/world-card.pre-hearthere-20260927.css
+  assert.ok(!/world-card/.test(css), 'lighthouse.css 不得再有旧卡片样式');
   // 毛玻璃质感（hearthere 的关键词）
   assert.match(css, /backdrop-filter/);
   assert.match(css, /world-pulse/);
 });
 
-test('page-world.js 把 onBeaconClick 接到卡片，并在 unmount 时清理 M3', () => {
+test('page-world.js 把 onBeaconClick 接到 ht-panel 卡片，并在 unmount 时清理 M3', () => {
   const src = read('public/video/page-world.js');
   assert.match(src, /onBeaconClick/);
-  assert.match(src, /worldUi\.showCard/);
+  // ④-4 换代：开卡面从 worldUi.showCard 迁到 SFV.worldHtPanel.open/close
+  assert.match(src, /worldHtPanel\.open/);
+  assert.match(src, /worldHtPanel\.close/);
+  assert.ok(!/showCard/.test(src), '旧 showCard 接线已退役');
   // Task 6 反转（行为层换代）：收藏/挂载面从 Cesium 时代 worldActions 迁到
   // maplibre 版 worldMapActions（worldActions.* 四条 → worldMapActions.* 四条）。
   assert.match(src, /worldMapActions\.isFavorite/);
@@ -138,8 +137,9 @@ test('page-world.js 把 onBeaconClick 接到卡片，并在 unmount 时清理 M3
   // 欢迎 toast + 统计（房间语义）
   assert.match(src, /发现 .* 个放映房间/);
   assert.match(src, /setStats/);
-  // 主按钮是「一起看」，不是电台收听
-  assert.match(src, /onJoin/);
+  // CTA 主按钮走本地房间语义（tune_in → joinWatchRoom），不是电台收听
+  assert.match(src, /'tune_in'/);
+  assert.match(src, /joinWatchRoom/);
   assert.ok(!/onListen/.test(src), '不得再有 onListen（电台已移除）');
   assert.ok(!/worldRadio/.test(src), '不得再引用 worldRadio（已移除）');
   assert.match(src, /fetchRooms/);

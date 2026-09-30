@@ -24,6 +24,7 @@
   var _nickname = '匿名灯塔';
   var _public = true;
   var _onMapRefresh = null;
+  var memberPollTimer = 0;
 
   function ensureLH() {
     LH = SFV.lighthouse;
@@ -53,6 +54,45 @@
 
   function setMapRefreshHandler(fn) {
     _onMapRefresh = typeof fn === 'function' ? fn : null;
+  }
+
+  // A3（修复轮⑥）：网络诊断数据面 —— 与 LH.ui.buildDiagPanel 的字段契约对齐
+  function diagnosticsPayload() {
+    var links = [];
+    try {
+      if (rtcSession && rtcSession.links) {
+        Object.keys(rtcSession.links).forEach(function (k) {
+          links.push({ peer: k, state: (rtcSession.links[k] && rtcSession.links[k].status) || 'unknown' });
+        });
+      }
+    } catch (e) {}
+    var stun = [];
+    try {
+      ((LH && LH.config && LH.config.iceServers) || []).forEach(function (s) {
+        if (s && s.urls) stun.push(String(s.urls));
+      });
+    } catch (e) {}
+    var endpoint = '';
+    try {
+      endpoint = (LH && LH.config && LH.config.localEdge) ||
+        ((typeof location !== 'undefined' && location.origin ? location.origin : 'http://127.0.0.1:3000') + '/api');
+    } catch (e) {}
+    var vid = null;
+    try { vid = SFV.worldSync && SFV.worldSync.currentVideo; } catch (e) {}
+    return {
+      mode: '本地信令 + WebRTC 直连',
+      online: !!(roomSession && roomSession.code),
+      endpoint: endpoint,
+      stun: stun,
+      broadcasting: !!(rtcSession && roomSession && roomSession.role === 'host'),
+      resolveUrl: vid ? (vid.url || vid.title || null) : null,
+      links: links
+    };
+  }
+
+  function showDiagnosticsPanel() {
+    if (!container || !LH || !LH.ui || !LH.ui.showDiagnostics) return;
+    try { LH.ui.showDiagnostics(diagnosticsPayload(), container); } catch (e) {}
   }
 
   // 由 RoomSession 的事件刷新面板
@@ -85,7 +125,7 @@
         _public = !_public;
         refreshPanel();
       },
-      onDiagnostics: function () {},
+      onDiagnostics: function () { showDiagnosticsPanel(); },
       onOpenChat: function () { openChat(); },
       onApprove: function (guestId) {
         if (roomSession && roomSession.approve) roomSession.approve(guestId);
@@ -102,6 +142,12 @@
       messages: (SFV.worldSync && SFV.worldSync.chatLog) ? SFV.worldSync.chatLog.slice() : [],
       onSend: function (t) {
         if (SFV.worldSync && SFV.worldSync.sendChat) SFV.worldSync.sendChat(t);
+        // A3（修复轮⑥）：无链路时 sendViaRtc 静默丢弃 —— 给用户诚实反馈
+        var n = 0;
+        try { if (rtcSession && rtcSession.links) n = Object.keys(rtcSession.links).length; } catch (e) {}
+        if (!n && SFV.worldUi && SFV.worldUi.toast) {
+          SFV.worldUi.toast('已发送 · 房间里暂时没有其他观众，消息只有自己可见');
+        }
       },
       onClose: function () { if (LH && LH.ui && LH.ui.hideChat) LH.ui.hideChat(); }
     };
@@ -170,6 +216,9 @@
   function startRtc() {
     if (!roomSession || !roomSession.code) return;
     if (!LH.webrtc || !LH.webrtc.RtcSession) return;
+    // A3（修复轮⑥）：status=active 事件与建房 .then 双入口都触发 startRtc，
+    // 不设防会开出两个 RtcSession = 两份 250ms 信令轮询（限流风暴燃料）
+    if (rtcSession) return;
     try {
       rtcSession = new LH.webrtc.RtcSession({
         role: roomSession.role,
@@ -203,6 +252,49 @@
     } catch (e) {
       console.warn('[world-room] RTC 启动失败', e);
     }
+  }
+
+  // ---- 成员轮询（A3 修复轮⑥）----
+  // roomSession.members 此前只初始化从不填充：Host 面板永远「等待他人加入…」，
+  // 接受/拒绝按钮根本不渲染；Guest 审批通过后也无人告知、卡在 pending 不建 RTC。
+  // 3s 拉 GET /api/room/:code：已存在的房间在 A1 后不走限流，可安全轮询。
+  function pollRoomState() {
+    if (!roomSession || !roomSession.code) return;
+    if (!LH || !LH.edge || !LH.edge.getRoom) return;
+    var code = roomSession.code;
+    LH.edge.getRoom(code).then(function (room) {
+      if (!roomSession || roomSession.code !== code) return;
+      if (!room || !room.exists) { onRoomGone(); return; }
+      var self = deviceId();
+      var guests = (room.guests || [])
+        .filter(function (g) { return g.status !== 'rejected'; })
+        .map(function (g) { return { id: g.deviceId, name: g.nickname || '匿名灯塔', status: g.status }; });
+      var changed = JSON.stringify(guests) !== JSON.stringify(roomSession.members || []);
+      roomSession.members = guests;
+      if (roomSession.role === 'guest') {
+        var mine = null;
+        (room.guests || []).forEach(function (g) { if (g.deviceId === self) mine = g; });
+        if (mine && mine.status === 'accepted' && roomSession.status !== 'active') {
+          roomSession._set('active'); // 事件处理器负责 startRtc + refreshPanel
+          return;
+        }
+        if (mine && mine.status === 'rejected') {
+          roomSession._set('rejected', { reason: 'host-rejected' });
+          return;
+        }
+      }
+      if (changed) refreshPanel();
+    }).catch(function (err) {
+      if (err && err.code === 404 && roomSession && roomSession.code === code) onRoomGone();
+    });
+  }
+  function startMemberPolling() {
+    stopMemberPolling();
+    if (!LH || !LH.edge || !LH.edge.getRoom) return;
+    memberPollTimer = setInterval(pollRoomState, 3000);
+  }
+  function stopMemberPolling() {
+    if (memberPollTimer) { clearInterval(memberPollTimer); memberPollTimer = 0; }
   }
 
   // ---- 主流程 ----
@@ -239,6 +331,8 @@
     var code = st && (st.roomId || st.id);
     return roomSession.joinAsGuest(code, { nickname: _nickname }).then(function () {
       openPanel();
+      // A3：观众侧轮询审批结果（accepted → 自动建 RTC）
+      startMemberPolling();
       return roomSession;
     }).catch(function (err) {
       // 房间不存在 → 我来当主播，把这座灯塔变成我的放映
@@ -260,6 +354,8 @@
         openPanel();
         // B1：建房后立刻上球
         refreshMap();
+        // A3：主播侧轮询成员，pending 观众进面板
+        startMemberPolling();
         return roomSession;
       }).catch(function (e2) {
         if (SFV.worldUi) SFV.worldUi.toast('创建失败：' + (e2 && e2.message || e2));
@@ -320,6 +416,8 @@
       openPanel();
       // B1：建房后立刻上球，不等 20s 轮询
       refreshMap();
+      // A3：主播侧轮询成员，pending 观众进面板
+      startMemberPolling();
       return roomSession;
     }).catch(function (e) {
       if (SFV.worldUi) SFV.worldUi.toast('创建失败：' + (e && e.message || e));
@@ -337,19 +435,47 @@
     var wasHost = roomSession && roomSession.role === 'host';
     var code = roomSession && roomSession.code;
     // B3：主播先关服务端房间，让它从地图消失
+    // A3（修复轮⑥）：removeRoom 失败不再被吞 —— 提示用户房间可能仍在
+    var closeP = null;
     if (wasHost && code && LH && LH.edge && LH.edge.removeRoom) {
-      try { LH.edge.removeRoom(code); } catch (e) {}
+      try { closeP = LH.edge.removeRoom(code); } catch (e) {}
     }
+    cleanupLocal(wasHost ? '放映已结束' : '已离开放映房间', closeP);
+  }
+
+  function cleanupLocal(okMsg, closeP) {
+    stopMemberPolling();
     if (SFV.worldSync && typeof SFV.worldSync.reset === 'function') SFV.worldSync.reset();
     try { if (rtcSession && rtcSession.close) rtcSession.close(); } catch (e) {}
     rtcSession = null;
     if (LH && LH.ui && LH.ui.hideRoomPanel) { try { LH.ui.hideRoomPanel(); } catch (e) {} }
+    // 修复轮⑦：聊天/诊断浮层挂在同一容器，房间面板收起后它们会变孤儿悬浮（E2E 实测）
+    if (LH && LH.ui && LH.ui.isChatOpen && LH.ui.isChatOpen() && LH.ui.hideChat) { try { LH.ui.hideChat(); } catch (e) {} }
+    if (LH && LH.ui && LH.ui.isDiagnosticsOpen && LH.ui.isDiagnosticsOpen() && LH.ui.hideDiagnostics) { try { LH.ui.hideDiagnostics(); } catch (e) {} }
     roomSession = null;
     // B1：刷地图，让已关闭的房间从球上消失
     refreshMap();
     // B2：清掉卡片实时状态
     updateCardLive();
-    if (SFV.worldUi) SFV.worldUi.toast(wasHost ? '放映已结束' : '已离开放映房间');
+    if (closeP && typeof closeP.then === 'function') {
+      closeP.then(function (ok) {
+        if (SFV.worldUi) {
+          SFV.worldUi.toast(ok === false
+            ? '结束放映失败：房间未能从服务端删除，灯塔可能仍对他人可见，请稍后重试'
+            : okMsg);
+        }
+      }, function () {
+        if (SFV.worldUi) SFV.worldUi.toast('结束放映失败：房间未能从服务端删除，请稍后重试');
+      });
+    } else if (SFV.worldUi) {
+      SFV.worldUi.toast(okMsg);
+    }
+  }
+
+  // 轮询发现服务端房间已消失（重启/TTL/主播关闭）：本地同步收场
+  function onRoomGone() {
+    var wasHost = roomSession && roomSession.role === 'host';
+    cleanupLocal(wasHost ? '放映已结束' : '该放映已结束');
   }
 
   SFV.worldRoom = {
@@ -361,5 +487,7 @@
     setMapRefreshHandler: setMapRefreshHandler,
     get session() { return roomSession; },
     get rtc() { return rtcSession; },
+    // world-sync.sendChat 一直引用 worldRoom.nickname，此前无导出恒走 ||'我' 兜底
+    get nickname() { return _nickname; },
   };
 })(typeof window !== 'undefined' ? window : this);

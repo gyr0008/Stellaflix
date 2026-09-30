@@ -16,7 +16,6 @@
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
 
   var root = null;        // 世界页内的 UI 容器（绝对定位铺满）
-  var cardEl = null;
   var toastTimer = 0;
   var toastEl = null;
   var statsEl = null;
@@ -40,11 +39,6 @@
     if (cls) e.className = cls;
     if (text != null) e.textContent = text;
     return e;
-  }
-
-  function fmtCoord(v, pos, neg) {
-    var n = Number(v) || 0;
-    return Math.abs(n).toFixed(3) + '°' + (n >= 0 ? pos : neg);
   }
 
   // ============================================================
@@ -119,10 +113,8 @@
   // ============================================================
   function socialStationId() {
     try {
-      if (cardEl) {
-        var id = cardEl.getAttribute && cardEl.getAttribute('data-station-id');
-        if (id) return String(id);
-      }
+      var p = SFV.worldHtPanel && SFV.worldHtPanel.panelEl && SFV.worldHtPanel.panelEl();
+      if (p && p.__station && p.__station.id != null) return String(p.__station.id);
       var s = SFV.worldRoom && SFV.worldRoom.session;
       return s && s.code ? 'room-' + s.code : '';
     } catch (e) { return ''; }
@@ -365,22 +357,6 @@
     createHandler = typeof fn === 'function' ? fn : null;
   }
 
-  /**
-   * B2：更新卡片上的实时同步状态行
-   * @param {string} text  状态文案，空字符串则隐藏
-   */
-  function updateCardLive(text) {
-    if (!cardEl) return;
-    var liveEl = cardEl.querySelector('[data-live]');
-    if (!liveEl) return;
-    if (text) {
-      liveEl.textContent = text;
-      liveEl.style.display = '';
-    } else {
-      liveEl.style.display = 'none';
-    }
-  }
-
   function setStats(s) {
     if (!statsEl) return;
     s = s || {};
@@ -398,131 +374,6 @@
     statsEl.appendChild(mk('在线', s.online || 0, 'k-online'));
     statsEl.appendChild(el('span', 'sep'));
     statsEl.appendChild(mk('离线', s.offline || 0, 'k-offline'));
-  }
-
-  // ============================================================
-  //  信标卡片
-  // ============================================================
-  var STATUS_TEXT = { playing: '正在放映', online: '在线', offline: '离线' };
-
-  function hideCard() {
-    if (cardEl && cardEl.parentNode) cardEl.parentNode.removeChild(cardEl);
-    cardEl = null;
-  }
-
-  /**
-   * @param {object} st   信标 { id,name,lon,lat,status,colorTop,colorBottom }
-   * @param {object} pos  { x,y } 容器内坐标（卡片左上锚点）
-   * @param {object} opts { isFavorite, onFavorite, onLocate }
-   */
-  function showCard(st, pos, opts) {
-    opts = opts || {};
-    hideCard();
-    if (!st || !root) return;
-
-    var c = el('div', 'world-card');
-    c.setAttribute('data-station-id', st.id);
-
-    var bar = el('div', 'world-card-bar');
-    var top = st.colorTop || [1, 1, 1];
-    var bot = st.colorBottom || [0.3, 0.3, 0.3];
-    var toCss = function (a) {
-      return 'rgb(' + Math.round(a[0] * 255) + ',' + Math.round(a[1] * 255) + ',' + Math.round(a[2] * 255) + ')';
-    };
-    bar.style.background = 'linear-gradient(180deg, ' + toCss(top) + ', ' + toCss(bot) + ')';
-    c.appendChild(bar);
-
-    var body = el('div', 'world-card-body');
-
-    var row = el('div', 'world-card-row');
-    var statusCls = 'world-card-status world-card-status--' + (st.status || 'online');
-    var status = el('span', statusCls);
-    status.appendChild(el('span', 'dot'));
-    status.appendChild(document.createTextNode(STATUS_TEXT[st.status] || '在线'));
-    row.appendChild(status);
-
-    var close = el('button', 'world-card-close', '×');
-    close.type = 'button';
-    close.setAttribute('aria-label', '关闭');
-    close.addEventListener('click', function (e) {
-      e.stopPropagation();
-      hideCard();
-    });
-    row.appendChild(close);
-    body.appendChild(row);
-
-    body.appendChild(el('div', 'world-card-name', st.name || '未命名放映'));
-    if (st.title || st.people) {
-      var meta = el('div', 'world-card-watch');
-      meta.textContent = (st.people ? st.people + ' 人一起看' : '') +
-        (st.title ? (st.people ? ' · ' : '') + st.title : '');
-      body.appendChild(meta);
-    }
-    // B2：实时同步状态行（人数 / 播放状态），由 updateCardLive 驱动
-    var liveEl = el('div', 'world-card-live');
-    liveEl.setAttribute('data-live', '1');
-    if (opts.liveText) liveEl.textContent = opts.liveText;
-    else liveEl.style.display = 'none';
-    body.appendChild(liveEl);
-
-    body.appendChild(el('div', 'world-card-geo',
-      fmtCoord(st.lat, 'N', 'S') + '  ' + fmtCoord(st.lon, 'E', 'W')));
-
-    var actions = el('div', 'world-card-actions');
-
-    var favBtn = el('button', 'world-card-btn world-card-btn--ghost');
-    favBtn.type = 'button';
-    favBtn.setAttribute('data-act', 'favorite');
-    favBtn.textContent = opts.isFavorite ? '♥ 已收藏' : '♡ 收藏';
-    if (opts.isFavorite) favBtn.classList.add('is-on');
-    favBtn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var now = opts.onFavorite ? opts.onFavorite(st) : !opts.isFavorite;
-      favBtn.textContent = now ? '♥ 已收藏' : '♡ 收藏';
-      favBtn.classList.toggle('is-on', !!now);
-    });
-    actions.appendChild(favBtn);
-
-    // 一起看：进入该信标的放映房间（M5 接 lighthouse/room.js）
-    var joinBtn = el('button', 'world-card-btn world-card-btn--primary');
-    joinBtn.type = 'button';
-    joinBtn.setAttribute('data-act', 'join');
-    joinBtn.textContent = opts.isInRoom ? '⏸ 已在房间' : '▶ 开始观看';
-    if (opts.isInRoom) joinBtn.classList.add('is-on');
-    joinBtn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      if (opts.onJoin) opts.onJoin(st);
-    });
-    actions.appendChild(joinBtn);
-
-    var locBtn = el('button', 'world-card-btn world-card-btn--ghost');
-    locBtn.type = 'button';
-    locBtn.setAttribute('data-act', 'locate');
-    locBtn.textContent = '◎ 定位';
-    locBtn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      if (opts.onLocate) opts.onLocate(st);
-    });
-    actions.appendChild(locBtn);
-
-    body.appendChild(actions);
-    c.appendChild(body);
-
-    root.appendChild(c);
-
-    // 定位：贴着点击点，越界就夹回容器内
-    var W = root.clientWidth || 800, H = root.clientHeight || 600;
-    var cw = c.offsetWidth || 264, ch = c.offsetHeight || 200;
-    var x = (pos && pos.x != null ? pos.x : W / 2) + 18;
-    var y = (pos && pos.y != null ? pos.y : H / 2) - ch / 2;
-    x = Math.max(10, Math.min(x, W - cw - 10));
-    y = Math.max(10, Math.min(y, H - ch - 10));
-    c.style.left = x + 'px';
-    c.style.top = y + 'px';
-
-    // 下一帧再加 .is-in，触发过渡
-    requestAnimationFrame(function () { c.classList.add('is-in'); });
-    cardEl = c;
   }
 
   // ============================================================
@@ -602,7 +453,6 @@
   function unmount() {
     clearTimeout(toastTimer);
     unbindSocial();
-    hideCard();
     hideCreatePanel();
     if (loadingEl && loadingEl.parentNode) loadingEl.parentNode.removeChild(loadingEl);
     loadingEl = null;
@@ -632,8 +482,6 @@
   SFV.worldUi = {
     mount: mount,
     unmount: unmount,
-    showCard: showCard,
-    hideCard: hideCard,
     toast: toast,
     setStats: setStats,
     setOnAir: setOnAir,
@@ -643,14 +491,12 @@
     setCreateHandler: setCreateHandler,
     showCreatePanel: showCreatePanel,
     hideCreatePanel: hideCreatePanel,
-    updateCardLive: updateCardLive,
     showLoading: showLoading,
     hideLoading: hideLoading,
     fireworksCanvas: fireworksCanvasEl,
     // Task 8 社交层导出面（挂尾部，不动既有表面）
     setFireworkStock: setFireworkStock,
     setFireworkProjector: setFireworkProjector,
-    get root() { return root; },
-    get cardEl() { return cardEl; }
+    get root() { return root; }
   };
 })(typeof window !== 'undefined' ? window : this);

@@ -218,8 +218,9 @@
       var s = deck.getState();
       if (s && s.selectedId != null) id = s.selectedId;
     }
-    if (id == null && ui && ui.cardEl && ui.cardEl.getAttribute) {
-      id = ui.cardEl.getAttribute('data-station-id');
+    if (id == null && SFV.worldHtPanel && SFV.worldHtPanel.isOpen()) {
+      var p = SFV.worldHtPanel.panelEl();
+      if (p && p.__station) id = p.__station.id;
     }
     if (id == null) return null;
     if (deck && typeof deck.getState === 'function') {
@@ -235,8 +236,8 @@
     if (!map || isTyping(e)) return;
     var k = e.key;
     if (k === 'Escape') {
-      // 只有卡片开着才吃掉 Esc；否则放行给 App（关闭浏览层）
-      if (ui && ui.cardEl) { ui.hideCard(); consume(e); }
+      // 只有面板开着才吃掉 Esc；否则放行给 App（关闭浏览层）
+      if (SFV.worldHtPanel && SFV.worldHtPanel.isOpen()) { SFV.worldHtPanel.close(); consume(e); }
       return;
     }
     if (k === 'r' || k === 'R' || e.code === 'KeyR') {

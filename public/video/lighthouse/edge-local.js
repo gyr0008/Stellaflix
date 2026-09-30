@@ -45,13 +45,15 @@
   function post(path, body) {
     return fetch(endpoint() + path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      // 修复轮⑥ A1：带设备头让服务端 D2 限流按 deviceId 分桶，
+      // 不再全员挤进 'anon' 一桶互伤
+      headers: { 'content-type': 'application/json', 'x-device-id': deviceId() },
       body: JSON.stringify(body || {})
     }).then(handleStatus).then(function (r) { return r.json(); });
   }
 
   function get(path) {
-    return fetch(endpoint() + path, { method: 'GET' })
+    return fetch(endpoint() + path, { method: 'GET', headers: { 'x-device-id': deviceId() } })
       .then(handleStatus).then(function (r) { return r.json(); });
   }
 
@@ -106,9 +108,11 @@
   }
 
   function removeRoom(code) {
+    // A3（修复轮⑥）：失败不再 catch 成 true —— 谎报成功会留下幽灵灯塔，
+    // 调用方（world-room.leave）据布尔值如实提示
     return post('/' + encodeURIComponent(code) + '/close', {
       deviceId: deviceId()
-    }).catch(function () { return true; });
+    }).then(function () { return true; }, function () { return false; });
   }
 
   function removeBeacon() { return Promise.resolve(true); }
@@ -148,11 +152,13 @@
       }
     };
 
+    var miss404 = 0; // 修复轮⑥ A1：房间已消失的止血计数（429 不计，恢复后要能续上）
     (function poll() {
       if (closed) return;
       get('/' + encodeURIComponent(code) + '/signal?deviceId=' + encodeURIComponent(deviceId()) + '&since=' + since)
         .then(function (j) {
           if (closed) return;
+          miss404 = 0;
           if (j && Array.isArray(j.items)) {
             for (var i = 0; i < j.items.length; i++) {
               since = Math.max(since, j.items[i].seq || 0);
@@ -164,7 +170,17 @@
           if (j && typeof j.seq === 'number') since = Math.max(since, j.seq);
           setTimeout(poll, 250);
         })
-        .catch(function () { setTimeout(closed ? 0 : poll, 800); });
+        .catch(function (err) {
+          if (closed) return;
+          // 连续 2 次 404 = 房间已从服务端消失（重启/TTL/close），
+          // 自停防孤儿页签把 D2 not-found 计数打满形成全局 429 风暴
+          if (err && err.code === 404 && ++miss404 >= 2) {
+            closed = true;
+            self.readyState = 3;
+            return;
+          }
+          setTimeout(poll, 800);
+        });
     })();
 
     return self;

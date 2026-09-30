@@ -609,85 +609,6 @@
  * 视觉对齐 hearthere：深空玻璃 + 柔光 + 脉冲，克制不花哨。
  * ============================================================ */
 
-/* ---- 信标卡片（复用 .lh-card 玻璃骨架，补颜色条与收藏态）---- */
-.world-card {
-  position: absolute;
-  z-index: 220;
-  width: 264px;
-  border-radius: 16px;
-  overflow: hidden;
-  background: rgba(12, 16, 28, 0.92);
-  border: 1px solid rgba(150, 180, 240, 0.26);
-  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.04) inset;
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  color: #eaf1ff;
-  opacity: 0;
-  transform: translateY(8px) scale(0.97);
-  transition: opacity .22s cubic-bezier(.22,1,.36,1), transform .22s cubic-bezier(.22,1,.36,1);
-  pointer-events: auto;
-}
-.world-card.is-in { opacity: 1; transform: translateY(0) scale(1); }
-
-.world-card-bar { height: 5px; width: 100%; }
-.world-card-body { padding: 13px 15px 15px; }
-
-.world-card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.world-card-status {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 10.5px; letter-spacing: .6px; font-weight: 700;
-  padding: 3px 9px; border-radius: 999px;
-}
-.world-card-status .dot { width: 6px; height: 6px; border-radius: 50%; }
-.world-card-status--playing { background: rgba(255,90,110,.16); color: #ff8a96; }
-.world-card-status--playing .dot { background: #ff5a6e; animation: world-pulse 1.4s infinite; }
-.world-card-status--online  { background: rgba(92,225,230,.15); color: #7fe6ec; }
-.world-card-status--online .dot { background: #5ce1e6; }
-.world-card-status--offline { background: rgba(120,135,165,.16); color: #9aa8c2; }
-.world-card-status--offline .dot { background: #6b7793; }
-
-.world-card-close {
-  width: 24px; height: 24px; border: none; border-radius: 50%;
-  background: rgba(255,255,255,.08); color: #cfdcf2;
-  font-size: 15px; line-height: 1; cursor: pointer; flex-shrink: 0;
-}
-.world-card-close:hover { background: rgba(255,255,255,.18); }
-
-.world-card-name {
-  margin-top: 10px;
-  font-size: 20px; font-weight: 600; letter-spacing: .5px;
-  color: #f6f9ff; line-height: 1.25;
-}
-.world-card-geo {
-  margin-top: 5px; font-size: 11.5px; letter-spacing: .4px;
-  color: rgba(190, 208, 235, .72);
-  font-variant-numeric: tabular-nums;
-}
-
-.world-card-actions { display: flex; gap: 8px; margin-top: 13px; }
-.world-card-btn {
-  flex: 1; padding: 9px 0; border: none; border-radius: 11px;
-  font-size: 12.5px; font-weight: 600; cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-  transition: filter .16s ease, transform .16s ease, background .16s ease;
-}
-.world-card-btn:active { transform: translateY(1px); }
-.world-card-btn--primary {
-  background: linear-gradient(100deg, #66e0ff, #4aa9ff);
-  color: #06243a;
-}
-.world-card-btn--primary:hover { filter: brightness(1.08); }
-.world-card-btn--ghost {
-  background: rgba(255,255,255,.08);
-  color: #d8e4f6;
-}
-.world-card-btn--ghost:hover { background: rgba(255,255,255,.16); }
-.world-card-btn.is-on {
-  background: rgba(255, 110, 130, .22);
-  color: #ff97a4;
-  box-shadow: 0 0 0 1px rgba(255,110,130,.35) inset;
-}
-
 /* ---- 统计面板（左下）---- */
 .world-stats {
   position: absolute; left: 22px; bottom: 22px; z-index: 120;
@@ -794,12 +715,6 @@
   color: #e6eefc; font-size: 10px; font-family: inherit;
 }
 
-.world-card-watch {
-  margin-top: 4px;
-  font-size: 11.5px;
-  letter-spacing: .5px;
-  color: rgba(126, 220, 255, 0.85);
-}
 
 
 /* ============================================================
@@ -945,19 +860,6 @@
   opacity: .55; cursor: not-allowed; filter: none;
 }
 
-
-/* B2: 卡片实时同步状态行 */
-.world-card-live {
-  margin-top: 6px;
-  padding: 5px 9px;
-  border-radius: 8px;
-  background: rgba(60, 180, 120, 0.14);
-  border: 1px solid rgba(80, 200, 140, 0.22);
-  font-size: 11px;
-  letter-spacing: .4px;
-  color: rgba(130, 230, 170, 0.92);
-  font-variant-numeric: tabular-nums;
-}
 
 
 /* D1: 创建面板隐私说明 */

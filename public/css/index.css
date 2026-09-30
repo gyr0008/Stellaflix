@@ -680,18 +680,22 @@ body.video-space-active.desktop-shell #desktop-titlebar #diy-mode-btn.on{backgro
    长条病根：#desktop-titlebar 满宽 fixed 44px（本文件 465 段），左半 .desktop-drag-region
    带 -webkit-app-region:drag + pointer-events:auto → 世界页地球顶部 44px 被当成拖窗区。
    此处只在世界页（body.sfv-world-page 由 page-world mount/unmount 挂摘）把长条收成右上角
-   170×12 感应窄条，− □ × 做成悬停才显现的独立玻璃胶囊。
+   128×50 感应块（与浮现后的胶囊逐边重合），− □ × 做成悬停才显现的独立玻璃胶囊。
    层级：.sfv-browse--page 覆盖层 z-index:2147482000（player.css:1501）远高于基础段的 500，
    且 #desktop-window-shell 因 transform/clip-path 自成层叠上下文（本文件 411 段）—— 标题栏
    留在 shell 内时 z-index 再高也出不了这道墙，自抬无效 → 挂载期由 page-world liftTitlebar()
    把它 reparent 到 body（同 bottom-bar / track-detail-modal 先例），此处 z-index 才真正生效。
-   胶囊 top:8 + height:34 = 42 < #top-right 的 58（本文件 691 段），两者不重叠。 */
+   胶囊 top:8 + height:50 = 58，正好停在 #top-right 账号胶囊的 58 上沿（本文件 691 段），不重叠；
+   纵向同时压住 ON AIR（lighthouse.css:691 top:28）→ 段末把 ON AIR 下移到 66 并配 hearthere 深玻璃外壳。 */
 body.desktop-shell.sfv-world-page #desktop-titlebar {
   left: auto;
-  width: 170px;
+  /* 触发面积＝胶囊面积（用户 2026-09-30 裁决）：宽 128 = 3×38 按钮 + 左右 7px 胶囊边，
+     高 50 = 胶囊高。原 170×12 的问题：胶囊可见 128×50 却只有顶端 12px 能唤出，按不准；
+     代价＝地球顶部的点击死区从 2040px² 变成 6400px²（形状由细长条变成方块，横向还少占 42px）。 */
+  width: 128px;
   right: 24px;
   top: 8px;
-  height: 12px;
+  height: 50px;
   padding: 0;
   z-index: 2147482095;
   pointer-events: auto !important;
@@ -713,14 +717,22 @@ body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-controls {
   position: absolute;
   top: 0;
   right: 0;
-  height: 34px;
-  padding: 0 8px;
-  gap: 4px;
-  border-radius: 17px;
-  background: rgba(8, 10, 16, .72);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .08);
-  backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  /* 皮 = 电影详情页右上 −□× 胶囊 .sfv-plex-win（player.css:3399），以下 6 条材质逐字照搬。
+     几何核算（全局 box-sizing:border-box，本文件 6 行）：50 = 7 + 36 + 7，按钮 30 高居中；
+     宽 = 3×38 + 2×7 = 128px，落在 170px 感应条内，右缘仍对齐 right:24。 */
+  height: 50px;
+  padding: 0;
+  gap: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,.06);
+  border: 7px solid rgba(255,255,255,.06);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 2px 10px rgba(0,0,0,.16);
+  /* 差异①（唯一有意不照搬的一条）：供体 color:#0d121a 是深黑，贴的是电影详情页的海报亮底；
+     世界页底 #05060a（page-world.js applyHostChrome）→ 黑图标＝隐形，改用标题栏浅色 token。 */
+  color: rgba(224, 250, 255, .72);
   -webkit-app-region: drag;
   opacity: 0;
   visibility: hidden;
@@ -729,10 +741,59 @@ body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-controls {
 }
 
 body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-btn {
-  width: 30px;
+  /* 皮 = .sfv-plex-win button（player.css:3413）：38×30、无边框、透明底 */
+  width: 38px;
   height: 30px;
-  border-radius: 9px;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  transition: background .15s ease;
   -webkit-app-region: no-drag !important;
+}
+
+body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-btn svg {
+  transition: transform .15s ease;
+  transform-origin: center;
+}
+
+/* 皮 = .sfv-plex-win button:hover（player.css:3422-3423）：hover 不上底色，只把图标放大 1.06。
+   !important 是必需的：本文件 672-675 影视空间段以 background:rgba(4,8,10,.42)!important 命中同一条
+   .desktop-window-btn:hover（特异度与本页规则相同，靠 !important 取胜）。 */
+body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-btn:hover {
+  background: transparent !important;
+  color: inherit !important;
+  transform: none;
+}
+
+body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-btn:hover svg {
+  transform: scale(1.06);
+}
+
+/* 同上：压掉基础段 .desktop-window-btn.close:hover 的红底（本文件 551 段） */
+body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-btn.close:hover {
+  background: transparent !important;
+}
+
+body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-window-btn:active {
+  background: rgba(224, 250, 255, .18) !important;
+}
+
+/* 差异②（让位）：胶囊由 34px 长到 50px 后，矩形变成 y 8~58，正好罩住原 top:28 的 ON AIR。
+   ON AIR 不是装饰文字而是可点按钮（world-ui.js:58 显式 pointer-events:auto，点击循环跳到在播信标，
+   page-world.js:430）→ 不挪就是吃点击。外壳逐条复用 hearthere 浮层按钮 .ht-icon-btn--overlay
+   （world-ht-panel.css:54），令牌在同文件 :root，index.html:36 全站引入。 */
+body.desktop-shell.sfv-world-page .world-on-air {
+  top: 66px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--shape-pill-radius);
+  background: var(--surface-control-overlay);
+  backdrop-filter: blur(var(--effect-pill-blur));
+  -webkit-backdrop-filter: blur(var(--effect-pill-blur));
+}
+
+body.desktop-shell.sfv-world-page .world-on-air:hover {
+  background: var(--surface-control-overlay-hover);
 }
 
 body.desktop-shell.sfv-world-page #desktop-titlebar:hover .desktop-window-controls {
