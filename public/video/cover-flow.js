@@ -327,6 +327,18 @@
     syncPosition(position + delta, false);
   }
 
+  // 按键/按钮/点击卡片统一走此入口：设 target 后交给 animateToTarget 逐帧插值，
+  // 与滑动路径同一动画驱动。delta 折算到 ±total/2 保证环形最短路径。
+  function stepTo(nextPosition) {
+    if (settleId !== null) { global.clearTimeout(settleId); settleId = null; }
+    var total = items.length || 1;
+    var delta = nextPosition - position;
+    if (delta > total / 2) delta -= total;
+    if (delta < -total / 2) delta += total;
+    target = wrapPosition(position + delta);
+    animateToTarget();
+  }
+
   // ============================================================
   //  加载（TMDB 分页；接近末端追加）
   // ============================================================
@@ -427,8 +439,8 @@
   }
   function onKeyDown(e) {
     if (!e) return;
-    if (e.key === 'ArrowRight') syncPosition(position + 1);
-    else if (e.key === 'ArrowLeft') syncPosition(position - 1);
+    if (e.key === 'ArrowRight') next();
+    else if (e.key === 'ArrowLeft') prev();
     else if (e.key === 'Enter' && items[activeIndex] && onSelect) onSelect(items[activeIndex], activeIndex);
   }
 
@@ -477,11 +489,11 @@
     loadItems = onSelect = onActiveChange = null;
   }
 
-  function next() { syncPosition(position + 1); }
-  function prev() { syncPosition(position - 1); }
+  function next() { stepTo(position + 1); }
+  function prev() { stepTo(position - 1); }
   function goTo(i) {
     if (!items.length) return;
-    syncPosition(i);
+    stepTo(i);
   }
   function getActive() { return items[activeIndex] || null; }
   function setActiveChange(cb) { onActiveChange = cb; }
