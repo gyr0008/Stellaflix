@@ -300,21 +300,23 @@ async function handle(req, res, url, sendJSON) {
     return;
   }
 
-  // D2：房间码防暴力 —— 先检查限流
+  // D2：房间码防暴力 —— 限流只管「未命中」流量（修复轮⑥ A1）。
+  // 旧序是 rateCheck 先于存在性校验：全局锁定期内连房主对自己房间的
+  // GET/close/signal 也被 429 误伤 —— 关不掉房变幽灵灯塔、孤儿轮询
+  // 越重试越锁的死循环根源。命中既有房间一律直接放行。
   const deviceIdForRate = String((req.headers && req.headers['x-device-id']) || '');
-  const rate = rateCheck(deviceIdForRate || 'anon');
-  if (!rate.ok) {
-    sendJSON(res, {
-      ok: false,
-      error: 'RATE_LIMITED',
-      message: '请求过于频繁，请 ' + rate.retryAfter + ' 秒后再试',
-      retryAfter: rate.retryAfter
-    }, 429);
-    return;
-  }
-
   const room = getRoom(code);
   if (!room) {
+    const rate = rateCheck(deviceIdForRate || 'anon');
+    if (!rate.ok) {
+      sendJSON(res, {
+        ok: false,
+        error: 'RATE_LIMITED',
+        message: '请求过于频繁，请 ' + rate.retryAfter + ' 秒后再试',
+        retryAfter: rate.retryAfter
+      }, 429);
+      return;
+    }
     // D2：记录失败查找
     rateRecordFailure(deviceIdForRate || 'anon');
     sendJSON(res, { ok: false, exists: false, error: 'NOT_FOUND', message: '房间不存在或已过期' }, 404);
