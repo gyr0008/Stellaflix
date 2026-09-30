@@ -30,6 +30,16 @@
     { value: '#e8edf3', label: '浅蓝灰' },
     { value: '#f0e8ef', label: '浅藕' }
   ];
+  // 片库深色影院语境专用色板（2026-09-25 裁定）。首项「红蓝渐变」= 现有默认背景，
+  // 选中时不落变量、由 poster-wall.css 的 var(--sfv-library-bg, 默认渐变) 承接。
+  var LIBRARY_BG_PRESETS = [
+    { type: 'gradient', label: '红蓝渐变', swatch: 'radial-gradient(circle at 30% 25%, rgba(253,92,71,.5), transparent 60%), radial-gradient(circle at 75% 75%, rgba(106,72,255,.55), transparent 60%), #070707' },
+    { type: 'color', value: '#000000', label: '纯黑', swatch: '#000000' },
+    { type: 'color', value: '#14121a', label: '炭黑', swatch: '#14121a' },
+    { type: 'color', value: '#0b1626', label: '深蓝', swatch: '#0b1626' },
+    { type: 'color', value: '#17102a', label: '暗紫', swatch: '#17102a' },
+    { type: 'color', value: '#1c1410', label: '深棕', swatch: '#1c1410' }
+  ];
 
   // ---------------------------------------------------------------- 持久化（按页隔离）
   function load(pageId) {
@@ -59,8 +69,9 @@
     // activePageId 仍残留上一页 id，若仅凭 activePageId 判定会误判仍停在该源页，导致右下角
     // 「背景」按钮泄漏到详情页。故以当前视图 mode 为准：detail 视图一律视为非 DIY 页。
     if (S.current && S.current.mode === 'detail') return null;
-    // Router 页（movie/anime/world/huilians/collections/history）由 activePageId 识别；
-    // 除 collections / history 外，其它 router 页一律不挂 DIY 玻璃背景。category 页 activePageId 为 null。
+    // Router 页（世界 / 首页 / 汇联 / 片库 等）由 activePageId 识别；
+    // 除 collections / history / library 外，其它 router 页一律不挂 DIY 玻璃背景。category 页 activePageId 为 null。
+    if (S.activePageId === 'library' && S.overlay && S.overlay.classList.contains('sfv-library-chrome')) return 'library';
     if (S.activePageId && S.activePageId !== 'collections' && S.activePageId !== 'history') return null;
     var cur = S.current || null;
     if (cur && cur.mode === 'category') {
@@ -88,6 +99,98 @@
     var c = hexToRgb(hex); if (!c) return hex;
     return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + alpha + ')';
   }
+
+  // ---------------------------------------------------------------- 选中态强调色（色相跟随背景，亮度强制对比）
+  function relLuminance(c) {
+    return (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255;
+  }
+  function rgbToHsl(c) {
+    var r = c.r / 255, g = c.g / 255, b = c.b / 255;
+    var mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+    var h = 0, s = 0;
+    if (mx !== mn) {
+      var d = mx - mn;
+      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+      if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+      else if (mx === g) h = ((b - r) / d + 2) / 6;
+      else h = ((r - g) / d + 4) / 6;
+    }
+    return { h: h * 360, s: s, l: l };
+  }
+  function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360 / 360;
+    function f(p, q, t) {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    }
+    if (s === 0) { var v = l * 255; return { r: v, g: v, b: v }; }
+    var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    var p = 2 * l - q;
+    return { r: f(p, q, h + 1 / 3) * 255, g: f(p, q, h) * 255, b: f(p, q, h - 1 / 3) * 255 };
+  }
+  function toHex(c) {
+    return '#' + [c.r, c.g, c.b].map(function (v) {
+      return Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0');
+    }).join('');
+  }
+  // 核心规则：sceneDark（背景整体偏暗）→ 提亮到 L≈.92 的浅强调（深字）；否则压暗到 L≈.16（白字）。
+  // 无彩色底/主色（s<.12）保持中性（纯白/近黑），有彩则保留色相、饱和度限幅 [.25,.55] 防刺眼。
+  function accentFromColor(c, sceneDark) {
+    var hsl = rgbToHsl(c);
+    var s = hsl.s < 0.12 ? 0 : Math.min(Math.max(hsl.s, 0.25), 0.55);
+    return {
+      accent: toHex(hslToRgb(hsl.h, s, sceneDark ? 0.92 : 0.16)),
+      text: sceneDark ? '#15131a' : '#ffffff'
+    };
+  }
+  function resolveAccentForColor(hex) {
+    var c = hexToRgb(hex);
+    if (!c) return null;
+    return accentFromColor(c, relLuminance(c) < 0.45);
+  }
+  // RGBA 像素 → {accent, text}：明暗按全图平均亮度判定，色相取饱和像素分桶的最高分主色
+  function computeImageAccent(data, w, h) {
+    var buckets = {}, best = null, bestScore = 0;
+    var sumR = 0, sumG = 0, sumB = 0, n = 0;
+    for (var i = 0; i + 3 < data.length; i += 4) {
+      var r = data[i], g = data[i + 1], b = data[i + 2];
+      sumR += r; sumG += g; sumB += b; n++;
+      var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      var sat = mx === 0 ? 0 : (mx - mn) / mx;
+      if (sat < 0.12) continue;
+      var key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+      var bk = buckets[key] || (buckets[key] = { r: 0, g: 0, b: 0, c: 0 });
+      bk.r += r; bk.g += g; bk.b += b; bk.c++;
+      var score = bk.c * (0.5 + sat);
+      if (score > bestScore) { bestScore = score; best = bk; }
+    }
+    if (!n) return null;
+    var avg = { r: sumR / n, g: sumG / n, b: sumB / n };
+    var dom = best ? { r: best.r / best.c, g: best.g / best.c, b: best.b / best.c } : avg;
+    return accentFromColor(dom, relLuminance(avg) < 0.45);
+  }
+  // 上传时一次性提取（dataURL 无跨域污染；沙箱/老环境无 Image 时静默跳过）
+  function extractImageAccent(src, cb) {
+    if (typeof Image !== 'function') return;
+    var img = new Image();
+    img.onload = function () {
+      try {
+        var side = 36;
+        var cv = document.createElement('canvas');
+        cv.width = side; cv.height = side;
+        var ctx = cv.getContext && cv.getContext('2d');
+        if (!ctx || !ctx.drawImage || !ctx.getImageData) return;
+        ctx.drawImage(img, 0, 0, side, side);
+        var a = computeImageAccent(ctx.getImageData(0, 0, side, side).data, side, side);
+        if (a) cb(a);
+      } catch (e) {}
+    };
+    img.src = src;
+  }
+
   function setPageBgColor(color, host) {
     // 同步 host 实底（.sfv-browse 或 #sfv-search-page）、html 兜底背景（填满 clip-path 圆角裁切区）。
     // html 走 --page-bg-diy 变量由样式表承接，不能用内联 background !important：
@@ -143,6 +246,10 @@
       // 清理 overlay 上的背景层
       if (S.overlay) {
         S.overlay.classList.remove('sfv-page-bg-diy');
+        S.overlay.style.removeProperty('--sfv-library-bg');
+        S.overlay.style.removeProperty('--sfv-library-bg-image');
+        S.overlay.style.removeProperty('--sfv-library-accent');
+        S.overlay.style.removeProperty('--sfv-library-accent-text');
         var olayer = S.overlay.querySelector(':scope > .sfv-page-bg-layer');
         if (olayer) { try { olayer.parentNode.removeChild(olayer); } catch (e) {} }
       }
@@ -159,6 +266,38 @@
     }
     var pref = load(pageId);
     var isHistory = pageId === 'history';
+
+    // 片库：深色影院语境，不挂浅色玻璃层、不写乳白四角色；
+    // 背景统一落 overlay 的 --sfv-library-bg 变量，由 poster-wall.css var() 承接（渐变=默认不落变量）。
+    if (pageId === 'library') {
+      host.classList.remove('sfv-page-bg-diy');
+      var lLayer = host.querySelector(':scope > .sfv-page-bg-layer');
+      if (lLayer && lLayer.parentNode) { try { lLayer.parentNode.removeChild(lLayer); } catch (e) {} }
+      clearPageBgColor(host);
+      var libBg = '';
+      var libImg = '';
+      if (pref && pref.type === 'color' && pref.value) libBg = pref.value;
+      else if (pref && pref.type === 'image' && pref.value) libImg = 'url("' + pref.value + '")';
+      if (libBg) host.style.setProperty('--sfv-library-bg', libBg);
+      else host.style.removeProperty('--sfv-library-bg');
+      // 图片壁纸走 ::before 虚化层（直接铺 overlay 背景会把海报文字一起糊掉）
+      if (libImg) host.style.setProperty('--sfv-library-bg-image', libImg);
+      else host.style.removeProperty('--sfv-library-bg-image');
+      // 选中态强调色：纯色预设即时换算；图片用上传时缓存的主色适配结果（无缓存走 CSS 珊瑚红 fallback）
+      var accent = null;
+      if (pref && pref.type === 'color' && pref.value) accent = resolveAccentForColor(pref.value);
+      else if (pref && pref.type === 'image' && pref.accent) accent = { accent: pref.accent, text: pref.accentText || '#15131a' };
+      if (accent) {
+        host.style.setProperty('--sfv-library-accent', accent.accent);
+        host.style.setProperty('--sfv-library-accent-text', accent.text);
+      } else {
+        host.style.removeProperty('--sfv-library-accent');
+        host.style.removeProperty('--sfv-library-accent-text');
+      }
+      observeOverlay();
+      return;
+    }
+
     // 片单/追片/搜索/历史统一乳白兜底四角（对齐片单页浅色实底语境）。
     var catBg = '#faf8f5';
 
@@ -280,6 +419,15 @@
       reader.onload = function () {
         save({ type: 'image', value: reader.result }, pid);
         apply(); refreshStatus(); paintSwatches();
+        // 片库壁纸：上传时一次性提取主色并缓存进偏好（异步；换偏好后旧回调自动作废）
+        if (pid === 'library') {
+          extractImageAccent(reader.result, function (a) {
+            var cur = load(pid);
+            if (!cur || cur.type !== 'image' || cur.value !== reader.result) return;
+            cur.accent = a.accent; cur.accentText = a.text;
+            save(cur, pid); apply();
+          });
+        }
       };
       reader.readAsDataURL(f);
     });
@@ -297,7 +445,8 @@
     var titleEl = MODAL.querySelector('.sfv-bg-diy-title');
     if (titleEl) {
       titleEl.textContent = (pid === 'collections' ? '片单背景' :
-        (pid === 'track' ? '追片背景' : (pid === 'search' ? '搜索背景' : '历史背景')));
+        (pid === 'track' ? '追片背景' : (pid === 'search' ? '搜索背景' :
+        (pid === 'library' ? '片库背景' : '历史背景'))));
     }
     // 四页统一开放预设色板（追片/历史/片单/搜索）
     var colorSec = MODAL.querySelector('.sfv-bg-diy-colors');
@@ -309,25 +458,30 @@
   function closeModal() { if (MODAL) MODAL.classList.remove('show'); }
   function isModalOpen() { return !!MODAL && MODAL.classList.contains('show'); }
 
-  // 预设色板渲染（根据当前页 pref 高亮选中项）
+  // 预设色板渲染（根据当前页 pref 高亮选中项）；片库用深色 6 档，其余页用浅色 6 档
   function paintSwatches() {
     if (!MODAL) return;
     var wrap = MODAL.querySelector('.sfv-bg-diy-swatches');
     if (!wrap) return;
     var pid = _modalPageId || getDiyPageId();
     var pref = load(pid);
-    var cur = (pref && pref.type === 'color') ? pref.value : null;
+    var presets = (pid === 'library') ? LIBRARY_BG_PRESETS : COLOR_PRESETS.map(function (c) {
+      return { type: 'color', value: c.value, label: c.label, swatch: c.value };
+    });
     wrap.innerHTML = '';
-    COLOR_PRESETS.forEach(function (c) {
+    presets.forEach(function (p) {
+      var on = p.type === 'gradient'
+        ? (!pref || pref.type === 'gradient')
+        : !!(pref && pref.type === p.type && pref.value === p.value);
       var b = document.createElement('button');
       b.type = 'button';
-      b.className = 'sfv-bg-diy-swatch' + (cur === c.value ? ' on' : '');
-      b.style.background = c.value;
-      b.title = c.label;
-      b.setAttribute('aria-label', c.label);
+      b.className = 'sfv-bg-diy-swatch' + (on ? ' on' : '');
+      b.style.background = p.swatch;
+      b.title = p.label;
+      b.setAttribute('aria-label', p.label);
       b.addEventListener('click', function () {
-        var p = _modalPageId || getDiyPageId();
-        save({ type: 'color', value: c.value }, p);
+        var pageId = _modalPageId || getDiyPageId();
+        save(p.type === 'gradient' ? { type: 'gradient' } : { type: 'color', value: p.value }, pageId);
         apply(); paintSwatches(); refreshStatus();
       });
       wrap.appendChild(b);
@@ -342,8 +496,11 @@
     if (!status) return;
     var active = !!(pref && (pref.type === 'color' || pref.type === 'image'));
     status.classList.toggle('active', active);
+    var isLibrary = pid === 'library';
     status.textContent = (pref && pref.type === 'image') ? '当前：自定义图片'
       : (pref && pref.type === 'color') ? '当前：自定义背景色'
+      : (isLibrary && (!pref || pref.type === 'gradient')) ? '当前：红蓝渐变（默认）'
+      : (pref && pref.type === 'gradient') ? '当前：红蓝渐变'
       : '当前：默认玻璃背景';
   }
 
@@ -444,6 +601,8 @@
     sync: sync,
     apply: apply,
     getDiyPageId: getDiyPageId,
+    resolveAccentForColor: resolveAccentForColor,
+    computeImageAccent: computeImageAccent,
     openModal: openModal,
     closeModal: closeModal,
     isModalOpen: isModalOpen,
