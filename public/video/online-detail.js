@@ -244,7 +244,8 @@
     S.ensureOverlayShown();
     var view = Object.assign({}, meta, { mode: 'detail', meta: meta });
     // 优先保留 meta 自带的 from（如播放器返回重建的详情已带正确来源）；否则按本次消费的来源判定
-    if (view.from == null) view.from = (_origin === 'search' ? 'search' : 'browse');
+    // collections：片单弹窗二级页条目 → 详情，返回须复原暂存的弹窗（restoreCollectionsPage）
+    if (view.from == null) view.from = (_origin === 'search' || _origin === 'collections') ? _origin : 'browse';
     S.pushView(view);
     return;
   }

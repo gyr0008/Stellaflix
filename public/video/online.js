@@ -95,6 +95,9 @@
     openBrowse: openCategory,
     playEpisode: playEpisode,
     openDetailFromMeta: openDetailFromMeta,
+    // 详情来源打标出口（片单弹窗等外部入口）：进详情前置入 _detailOrigin，
+    // openDetailFromMeta/openDetail 消费一次即清，返回栈据此判定复原目标
+    setDetailOrigin: function (o) { S._detailOrigin = o || null; },
     applyGridDiyToBody: applyGridDiyToBody,
     openLibrary: S.openLibrary,
     openCalendar: S.openCalendar,
@@ -125,6 +128,11 @@
   // 全局搜索切换入口：供 HTML inline onclick、捕获监听器、pointer 兜底统一调用，带 350ms 去抖
   var _lastGlobalToggle = 0;
   global._sfvTryToggleSearch = function _sfvTryToggleSearch() {
+    // 追片/历史源页：全局搜索胶囊已隐藏（页面泄露修复），任何入口一律不跳搜索页
+    if (S.isSourcePageCapsuleSearchBlocked && S.isSourcePageCapsuleSearchBlocked()) {
+      console.log('[SFV-Search] 追片/历史源页：忽略全局搜索入口');
+      return;
+    }
     var now = Date.now();
     if (now - _lastGlobalToggle < 350) {
       console.log('[SFV-Search] 全局切换去抖：跳过重复触发');

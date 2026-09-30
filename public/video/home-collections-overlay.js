@@ -32,7 +32,7 @@
   ];
   function overlayTabs() { return OVERLAY_TABS.map(function (t) { return { id: t.id, label: t.label }; }); }
 
-  var state = { open: false, parked: false, previousFocus: null, activeTab: 'featured', defs: [], collection: null };
+  var state = { open: false, parked: false, previousFocus: null, activeTab: 'featured', defs: [], collection: null, listScroll: 0 };
   var controlsBound = false;
 
   function esc(s) {
@@ -322,9 +322,15 @@
       html += '<div class="home-video-collections-items-loading">加载中…</div>';
     }
     list.innerHTML = html;
+    // 二级页与一级列表共用同一个滚动容器（#home-video-collections-list）：
+    // innerHTML 替换不会重置 scrollTop，异步再渲染也可能带入旧位置 → 详情页强制回顶
+    list.scrollTop = 0;
   }
 
   function openCollectionDetail(def) {
+    // 进二级页前记下一级列表的滚动位置，返回时恢复（方案 C：进入回顶 / 返回还原）
+    var cur = document.getElementById('home-video-collections-list');
+    state.listScroll = cur ? cur.scrollTop : 0;
     state.collection = { def: def, items: null, error: '' };
     renderItemsPage();
     if (def.type === 'placeholder') {
@@ -359,6 +365,11 @@
     }
     renderTabs();
     renderList();
+    // 返回一级列表：恢复进二级页前的滚动位置（scrollTop 保留值会因内容变矮被浏览器钳制，
+    // 表现为「退出内容层后弹窗莫名下滑」→ 渲染后显式还原，listScroll=0 即回顶）
+    var list = document.getElementById('home-video-collections-list');
+    if (list) list.scrollTop = state.listScroll || 0;
+    state.listScroll = 0;
   }
 
   function openItemDetail(idStr) {
@@ -369,8 +380,36 @@
       if (col.items[i] && String(col.items[i].id) === idStr) { it = col.items[i]; break; }
     }
     if (!it || !SFV.online || typeof SFV.online.openDetailFromMeta !== 'function') return;
-    closeHomeVideoCollectionsOverlay();
+    // 不整关弹窗而是「暂存」：详情页退出时经 online-nav.restoreCollectionsPage →
+    // resumeFromDetail 原样恢复本片单二级页（对齐搜索页 restoreSearchPage 范式）
+    if (typeof SFV.online.setDetailOrigin === 'function') SFV.online.setDetailOrigin('collections');
+    parkForDetail();
     SFV.online.openDetailFromMeta(it);
+  }
+
+  // 暂存：只收起 mask，保留 state.open / state.collection / 二级页 DOM 与滚动
+  function parkForDetail() {
+    var mask = document.getElementById('home-video-collections-mask');
+    if (!mask) return;
+    mask.classList.remove('show');
+    mask.setAttribute('aria-hidden', 'true');
+    state.parked = true;
+  }
+
+  // 详情页 ←/Esc 返回：仅复原可见性，不重建、不清空（未 park 时为空操作）
+  function resumeFromDetail() {
+    if (!state.parked) return;
+    var mask = document.getElementById('home-video-collections-mask');
+    state.parked = false;
+    if (!mask) return;
+    mask.classList.add('show');
+    mask.setAttribute('aria-hidden', 'false');
+  }
+
+  // 浏览层整退（✕/回首页）：丢弃暂存态，防「隐藏但 state.open」僵尸残留
+  function discardParked() {
+    if (!state.parked) return;
+    closeHomeVideoCollectionsOverlay();
   }
 
   function openCollectionById(id) {
@@ -385,6 +424,7 @@
     mask.classList.remove('show');
     mask.setAttribute('aria-hidden', 'true');
     state.open = false;
+    state.parked = false;
     // 整窗关闭即回一级：下次打开不残留二级页
     state.collection = null;
     var modal = document.querySelector('.home-video-collections-modal');
@@ -453,6 +493,8 @@
     });
     document.addEventListener('keydown', function (event) {
       if (!state.open) return;
+      // 暂存态=详情页在上层：Esc/Tab 归浏览层处置，弹窗不得劫持
+      if (state.parked) return;
       if (event.key === 'Tab') { trapTabFocus(event); return; }
       if (event.key !== 'Escape') return;
       // 二级页在场时 Esc 先回一级，再按一次才关整个弹窗
@@ -465,6 +507,11 @@
     bindHomeVideoCollectionsControls();
     var mask = document.getElementById('home-video-collections-mask');
     if (!mask) return;
+    // 上次若停在二级页（含 park 残留被整退的路径），重开一律回一级列表
+    // 整窗重开不恢复旧滚动位置：先清 listScroll，让 closeCollectionDetail 落回顶部
+    state.listScroll = 0;
+    if (state.collection) closeCollectionDetail();
+    state.parked = false;
     state.previousFocus = document.activeElement;
     state.open = true;
     renderTabs();
@@ -480,6 +527,8 @@
   SFV.homeCollectionsOverlay = {
     open: openHomeVideoCollectionsOverlay,
     close: closeHomeVideoCollectionsOverlay,
+    resumeFromDetail: resumeFromDetail,
+    discardParked: discardParked,
     OVERLAY_TABS: overlayTabs()
   };
   SFV.homeCollectionsOverlay.overlayTabs = overlayTabs;
