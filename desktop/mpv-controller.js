@@ -102,6 +102,26 @@ function _genId() {
   return 'mpv-' + (_nextId++) + '-' + crypto.randomBytes(3).toString('hex');
 }
 
+/**
+ * I5：把原生窗口句柄解码为 mpv --wid 可确定解析的十进制字符串。
+ * win.getNativeWindowHandle() 返回 HWND 的小端字节 Buffer（Win64 为 8 字节零填充）；
+ * 旧实现 toString('hex') 有双重错误：无 0x 前缀的裸字节串会被 mpv 的 strtoll 按十进制误读，
+ * 且小端字节序与整数表示相反——mpv 因此挂到错误/不存在的窗口，嵌入播放静默失效。
+ * opts.hwnd 兼容数字/十进制字符串传入；无法识别时返回 null（不传 --wid，mpv 自开窗口）。
+ */
+function _hwndToDecimal(hwnd) {
+  if (Buffer.isBuffer(hwnd)) {
+    if (hwnd.length >= 8) return String(Number(hwnd.readBigUInt64LE(0)));
+    if (hwnd.length >= 4) return String(hwnd.readUInt32LE(0));
+    let n = 0;                                   // 异常短 Buffer：逐字节小端累加兜底
+    for (let i = 0; i < hwnd.length; i++) n += hwnd[i] * Math.pow(256, i);
+    return String(n);
+  }
+  if (typeof hwnd === 'number' && Number.isFinite(hwnd)) return String(Math.trunc(hwnd));
+  if (typeof hwnd === 'string' && /^[0-9a-fA-Fx]+$/.test(hwnd)) return String(Number(hwnd));
+  return null;
+}
+
 // -----------------------------------------------------------------------
 //  IPC socket 连接
 // -----------------------------------------------------------------------
@@ -157,7 +177,9 @@ function createPlayer(opts) {
       '--hr-seek-framedrop=no',
       '--input-ipc-server=' + pipePath,
     ];
-    if (opts.hwnd) args.push('--wid=' + opts.hwnd.toString('hex'));
+    // I5：句柄十进制解码后再传（详见 _hwndToDecimal），不改其余参数拼接顺序
+    const wid = _hwndToDecimal(opts.hwnd);
+    if (wid) args.push('--wid=' + wid);
     if (opts.title) args.push('--force-media-title=' + opts.title);
     // 边播边删：缓存控制
     args.push('--demuxer-max-bytes=128MiB');

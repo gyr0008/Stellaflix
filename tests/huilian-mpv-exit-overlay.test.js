@@ -19,9 +19,17 @@ const realOs = require('node:os');
 const realPath = require('node:path');
 const EventEmitter = require('node:events').EventEmitter;
 
-function loadMpv() {
+/**
+ * vm 载入 mpv-controller 源码 + stub require（child_process/net/fs/electron）。
+ * opts.nativeHandle 覆盖 FakeOverlayWin.getNativeWindowHandle 返回值
+ * （默认 8 字节小端 Buffer；I5 测以不同形态句柄核验 --wid 参数拼接）。
+ * spawnCalls 记录 child_process.spawn 收到的 args 数组，供断言 --wid= 实参。
+ */
+function loadMpv(options) {
+  const opts = options || {};
   const createdWins = [];
   const procs = [];
+  const spawnCalls = [];
 
   class FakeOverlayWin extends EventEmitter {
     constructor(config) {
@@ -33,8 +41,12 @@ function loadMpv() {
     setIgnoreMouseEvents() {}
     loadURL() { return Promise.resolve(); }
     show() { this.shown = true; }
-    // 64 位 HWND 句柄（小端字节序 Buffer），供 --wid 与 hwnd.toString('hex') 使用
-    getNativeWindowHandle() { return Buffer.from([0x2a, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]); }
+    // 原生窗口句柄：默认 64 位小端 Buffer；I5 测经 opts.nativeHandle 注入 4 字节 Buffer / 数字 / 字符串
+    getNativeWindowHandle() {
+      return opts.nativeHandle !== undefined
+        ? opts.nativeHandle
+        : Buffer.from([0x2a, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    }
     setBounds() {}
     destroy() { this.destroyed = true; this.emit('closed'); }
   }
@@ -69,7 +81,7 @@ function loadMpv() {
     },
   };
   const fakeCp = {
-    spawn: () => { const p = new FakeProc(); procs.push(p); return p; },
+    spawn: (cmd, args) => { spawnCalls.push(args); const p = new FakeProc(); procs.push(p); return p; },
     spawnSync: () => ({ status: 0 }),
   };
   const fakeElectron = { BrowserWindow: FakeOverlayWin };
@@ -90,7 +102,7 @@ function loadMpv() {
   vm.runInContext(src, sandbox, { filename: 'mpv-controller.js' });
   const mpv = sandbox.module.exports;
   mpv.setConfig({ mpv: { enableLogging: false } });
-  return { mpv, procs, createdWins };
+  return { mpv, procs, createdWins, spawnCalls };
 }
 
 test('I2 desktop：mpv 进程退出 → _cleanupHandle 销毁 overlay 窗口并移除句柄', async () => {
@@ -123,4 +135,54 @@ test('I2 desktop：进程退出后渲染层 destroyOverlay 走安全 no-op（句
   // 句柄消失后 destroyOverlay 应返回 false（不抛），供渲染层停播安全收尾
   const ok = await mpv.destroyOverlay(playerId);
   assert.strictEqual(ok, false, '句柄缺失时 destroyOverlay 返回 false（player not found 语义来源）');
+});
+
+// ---------------------------------------------------------------------------
+// I5：--wid 句柄编码 —— Buffer 小端解码为十进制 HWND 数值
+// 旧实现 toString('hex') 输出裸十六进制字节串：mpv strtoll(base 0) 把「5634…」当十进制解析 →
+// 数值错误；且即便按十六进制解读，小端字节序与整数表示相反 → 嵌入句柄必然错乱、嵌入播放失效。
+// ---------------------------------------------------------------------------
+
+/** 取 spawn 实参数组中的 --wid= 项（缺省 null）。 */
+function widArg(args) {
+  const hit = (args || []).filter((a) => String(a).indexOf('--wid=') === 0);
+  assert.strictEqual(hit.length, 1, 'spawn 参数应恰有一个 --wid=，实际：' + JSON.stringify(args));
+  return hit[0];
+}
+
+// 0x00123456 的小端字节表示：低字节在前 → [0x56,0x34,0x12,0x00(,0x00×4)]；十进制真值 1193046。
+// （终审指令示例中的 1194070 为十进制笔误：0x00123456 = 1193046。）
+const HWND_DEC = 1193046;
+
+test('I5：8 字节小端 Buffer 句柄（Windows 64 位 getNativeWindowHandle）→ --wid=十进制 HWND', async () => {
+  const buf = Buffer.from([0x56, 0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  assert.strictEqual(Number(buf.readBigUInt64LE(0)), HWND_DEC, '前置：夹具即 0x00123456');
+  const { mpv, spawnCalls } = loadMpv({ nativeHandle: buf });
+  const r = await mpv.createOverlay({ url: 'D:/dl/a.mkv', title: 'a.mkv', x: 0, y: 0, width: 640, height: 360 });
+  assert.strictEqual(r.ok, true, '前置：overlay 应创建成功');
+  assert.strictEqual(widArg(spawnCalls[spawnCalls.length - 1]), '--wid=' + HWND_DEC,
+    '修复后：小端 Buffer 须解码为十进制句柄值，不得再是十六进制字节串');
+});
+
+test('I5：4 字节小端 Buffer 句柄 → --wid=十进制 HWND', async () => {
+  const buf = Buffer.from([0x56, 0x34, 0x12, 0x00]);
+  assert.strictEqual(buf.readUInt32LE(0), HWND_DEC, '前置：夹具即 0x00123456');
+  const { mpv, spawnCalls } = loadMpv({ nativeHandle: buf });
+  const r = await mpv.createOverlay({ url: 'D:/dl/a.mkv', title: 'a.mkv', x: 0, y: 0, width: 640, height: 360 });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(widArg(spawnCalls[spawnCalls.length - 1]), '--wid=' + HWND_DEC);
+});
+
+test('I5：opts.hwnd 已是数字/十进制字符串 → 原样十进制传递，不崩溃', async () => {
+  // 数字/字符串句柄经 createPlayer 直接消费 opts.hwnd 拼 --wid（绕过 createOverlay 的诊断字段，
+  // 后者对真机恒为 Buffer 输入维持既有 toString('hex') 公共形状不动）。
+  const num = loadMpv();
+  await num.mpv.createPlayer({ url: 'D:/dl/a.mkv', hwnd: HWND_DEC });
+  assert.strictEqual(widArg(num.spawnCalls[num.spawnCalls.length - 1]), '--wid=' + HWND_DEC,
+    '数字句柄须原样十进制，且不得因 toString 抛错中断 spawn');
+
+  const str = loadMpv();
+  await str.mpv.createPlayer({ url: 'D:/dl/a.mkv', hwnd: String(HWND_DEC) });
+  assert.strictEqual(widArg(str.spawnCalls[str.spawnCalls.length - 1]), '--wid=' + HWND_DEC,
+    '十进制字符串句柄须原样十进制');
 });

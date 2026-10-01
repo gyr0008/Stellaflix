@@ -18,19 +18,16 @@
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
   var SYNC_INTERVAL_MS = 500;   // 周期兜底同步（brief 允许）
   var MIN_SEND_MS = 100;        // 节流下限：两次 setBounds 至少间隔 100ms
-  // 进度兜底轮询保持窗：time-pos/duration 的 property-change 仅在本机向 mpv 发出 observe_property
-  // 订阅后才会推送；当前仓库 desktop/mpv-controller.js 从不发起该订阅（_eventBroadcast 只转发
-  // mpv 免订阅事件，如 end-file；见其 _handleLine），故这对事件不会送达渲染层，getProperty 轮询
-  // 是常驻兜底（有界成本：500ms tick；duration 取到即停）。若日后接入订阅，事件经本保持窗自动
-  // 接管优先级、轮询让位，两源互不打架。
+  // 进度兜底轮询保持窗：真机 desktop/mpv-controller 从不 observe_property，time-pos/duration 的
+  // property-change 永不送达渲染层（_eventBroadcast 只转发 mpv 免订阅事件），故 getProperty 轮询为常驻
+  // 兜底（500ms tick；duration 取到即停）。若日后接入订阅，事件经本保持窗接管优先级、轮询让位，两源不打架。
   var POLL_EVENT_HOLD_MS = 3000;
   // 容器未布局（0x0，例如 CSS 尚未就位）时的兜底创建尺寸 = 桌面端 createOverlay 默认值
   var DEFAULT_RECT = { x: 0, y: 0, width: 800, height: 450 };
 
   function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
 
-  // I2：mpv 进程已退出/句柄已回收时 command 抛 'player not found: '+id，ipc-video 转 {ok:false,error}；
-  // 该失败语义为「已停止」，删除流程应照常进行（区别于真实停止失败，后者仍须中止以不删磁盘文件）。
+  // I2：'player not found' 语义 = 进程已退出即「已停止」，删除流程照常（真实停止失败仍须中止不删文件）。
   function isPlayerGoneError(msg) { return String(msg || '').indexOf('player not found') >= 0; }
 
   function el(tag, id, cls) {
@@ -55,7 +52,7 @@
     var barNode = null, panelNode = null, toggleBtn = null, seekEl = null, volEl = null;
     var subs = [], timer = null, gen = 0, destroyed = false, cleaned = false,
       ended = false, paused = false, lastRect = null, lastSentAt = -1e9,
-      lastTimeEventAt = -1e9, lastDurEventAt = -1e9;
+      lastTimeEventAt = -1e9, lastDurEventAt = -1e9, curTime = 0, curDur = 0;
 
     function report(res, fallback) { onError((res && res.error) || (res && res.message) || fallback); }
 
@@ -92,9 +89,8 @@
       sendBounds(r);
     }
 
-    // 进度兜底轮询（Important#2）：真机 mpv-controller 从不 subscribe，time-pos/duration 的
-    // property-change 永不送达渲染层，进度条只能靠周期性 getProperty 取。挂在同一 500ms tick 上，
-    // 事件若先到并在保持窗内则让位（applyTime/applyDuration 只由事件写），两源互不打架。
+    // 进度兜底轮询（Important#2）：真机无 property-change → 靠周期 getProperty 取值；事件若到达并在
+    // 保持窗内则让位，两源互不打架（详见上方 POLL_EVENT_HOLD_MS）。
     function pollOne(name, apply) {
       if (typeof player.getProperty !== 'function') return;
       var myGen = gen;
@@ -138,8 +134,10 @@
       if (payload.data && typeof payload.data.value !== 'undefined') return payload.data.value;
       return typeof payload.data !== 'undefined' ? payload.data : null;
     }
-    function applyTime(sec) { if (isNum(sec) && seekEl) seekEl.value = String(sec); }
-    function applyDuration(sec) { if (isNum(sec) && seekEl) seekEl.max = String(Math.max(0, sec)); }
+    function applyTime(sec) { if (isNum(sec)) { curTime = sec; if (seekEl) seekEl.value = String(sec); maybeEnded(); } }
+    function applyDuration(sec) { if (isNum(sec)) { curDur = Math.max(0, sec); if (seekEl) seekEl.max = String(curDur); maybeEnded(); } }
+    // I6：确定性播完判定——time-pos/duration 汇入 curTime/curDur，duration>0 且 time-pos≥duration 即播完。
+    function maybeEnded() { if (!ended && !cleaned && curDur > 0 && curTime >= curDur) handleEnded(); }
     // time-pos/duration 在 mpv 侧以 property-change 携带 name 广播，兼容两种形态
     function onPropertyChange(payload) {
       var name = payload && payload.name;
@@ -151,13 +149,7 @@
       subscribe('time-pos', function (p) { lastTimeEventAt = global.Date.now(); applyTime(eventValue(p)); });
       subscribe('duration', function (p) { lastDurEventAt = global.Date.now(); applyDuration(eventValue(p)); });
       subscribe('property-change', onPropertyChange);
-      subscribe('end-file', function () {
-        ended = true;
-        showPanel('huilian-done-panel', '已播完', [
-          { id: 'huilian-done-del', label: '删任务+删文件', on: deleteTaskAndFiles },
-          { id: 'huilian-done-keep', label: '保留任务', on: function () { keepOnly(); } },
-        ]);
-      });
+      subscribe('end-file', handleEnded);
       subscribe('shutdown', function () {
         if (ended || cleaned) return; // 播完/已清理后的进程退出属预期，不再降级
         showPanel('huilian-degraded-panel', '播放已中断（mpv 进程退出）', [
@@ -184,6 +176,15 @@
       }
       (barNode || container).appendChild(box);
       panelNode = box;
+    }
+    // I6：播完面板统一入口——桌面 end-file 事件与轮询推导皆走此；ended/cleaned 双守卫，每次播放仅弹一次。
+    function handleEnded() {
+      if (ended || cleaned) return;
+      ended = true;
+      showPanel('huilian-done-panel', '已播完', [
+        { id: 'huilian-done-del', label: '删任务+删文件', on: deleteTaskAndFiles },
+        { id: 'huilian-done-keep', label: '保留任务', on: function () { keepOnly(); } },
+      ]);
     }
     function mountDom() {
       var host = (container && container.parentNode) || container;
@@ -290,7 +291,7 @@
     function startOverlay() {
       var myGen = gen;
       var r = rect() || { x: DEFAULT_RECT.x, y: DEFAULT_RECT.y, width: DEFAULT_RECT.width, height: DEFAULT_RECT.height };
-      ended = false; paused = false;
+      ended = false; paused = false; curTime = 0; curDur = 0;
       return Promise.resolve(player.createOverlay({
         url: file.content_path || '', title: file.name || '',
         x: r.x, y: r.y, width: r.width, height: r.height,

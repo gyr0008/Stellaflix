@@ -488,3 +488,43 @@ test('22) I4：有桥 mount 注册、unmount 注销 visibilitychange 监听（�
   t.page.unmount();
   assert.strictEqual((t.doc.listeners.visibilitychange || []).length, 0, 'unmount 应注销监听');
 });
+
+// ---------------------------------------------------------------------------
+// 终审修正波 2：I6 播完面板不依赖 mpv 事件（desktop/mpv-controller 无 observe/property-change 订阅，
+// end-file 在真机不可达）——同一 500ms tick 的轮询值 time-pos ≥ duration 即确定性判定播完。
+// ---------------------------------------------------------------------------
+
+test('23) I6：全程不派发任何 onEvent，仅凭轮询值（time-pos=duration）→ 播完面板出现', async () => {
+  const t = setup({ pollTime: 600, pollDuration: 600 });
+  await playFile(t);
+  assert.strictEqual(t.doc.querySelector('.huilian-done-panel'), null, '前置：尚未 tick 不应出现播完面板');
+  await tick(t, 500); // 兜底 tick：getProperty 轮询 time-pos/duration 各 600
+  const panel = t.doc.querySelector('.huilian-done-panel');
+  assert.ok(panel, '修复后：轮询推得 time-pos≥duration 必须弹出 .huilian-done-panel（真机无 end-file 事件）');
+  assert.ok(t.calls.getProperty.some((c) => c[1] === 'time-pos') &&
+    t.calls.getProperty.some((c) => c[1] === 'duration'), '前置：判定来源应为轮询值');
+  assert.ok(panel.querySelector('#huilian-done-del') && panel.querySelector('#huilian-done-keep'),
+    '面板应含「删任务+删文件/保留任务」，删除安全序仍由 deleteTaskAndFiles 承担');
+  // 播完删任务红线不变：点删 → stopAndClean→delete(hash,true)
+  fire(panel.querySelector('#huilian-done-del'), 'click');
+  await flush();
+  assert.deepStrictEqual(t.order.filter((x) => x[0] === 'stopAndClean' || x[0] === 'delete'),
+    [['stopAndClean', 'mpv-1'], ['delete', 'HASH1', true]], 'I6 弹出面板与既有删任务链路等价');
+});
+
+test('24) I6：面板弹出后继续 tick 不重复弹出（每次播放恰好一次）；未播完值不误弹', async () => {
+  const mid = setup({ pollTime: 300, pollDuration: 600 });
+  await playFile(mid);
+  await tick(mid, 500);
+  await tick(mid, 500);
+  assert.strictEqual(mid.doc.querySelector('.huilian-done-panel'), null, 'time-pos(300)<duration(600) 不得误判播完');
+
+  const t = setup({ pollTime: 600, pollDuration: 600 });
+  await playFile(t);
+  await tick(t, 500);
+  assert.ok(t.doc.querySelector('.huilian-done-panel'), '前置：首轮 tick 应判定播完');
+  await tick(t, 500);
+  await tick(t, 500);
+  assert.strictEqual(t.doc.querySelectorAll('.huilian-done-panel').length, 1,
+    '面板展示期间后续 tick 不得重复弹出/重建');
+});
