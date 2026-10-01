@@ -110,3 +110,6 @@ public/js/bundles/
 /_hearthere_assets/
 /_hearthere_index.html
 /tests/_probe_e.js
+
+# SDD 计划工作区（账本/brief/报告，勿入库）
+.superpowers/
