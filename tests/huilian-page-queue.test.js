@@ -18,6 +18,9 @@ function flush() {
 /**
  * 装载有桥的汇联页：download.* 全部记录调用；state.torrents 可在测试中途改写，
  * 模拟轮询 list() 返回值变化（空 → 认领命中）。
+ * opts.listImpl：自定义 list 返回（可控 Promise，测轮询防重入/过期响应）；
+ * opts.filesReject：files 返回 rejected Promise（测错误上浮）。
+ * setInterval 桩捕获回调（ticks）与周期（delays，Minor#4 断言 2000ms）。
  */
 function setup(options) {
   const opts = options || {};
@@ -32,21 +35,24 @@ function setup(options) {
         },
         list: () => {
           calls.list.push(1);
+          if (opts.listImpl) return opts.listImpl(state);
           return Promise.resolve({ ok: true, data: { torrents: state.torrents } });
         },
         files: (hash) => {
           calls.files.push(hash);
+          if (opts.filesReject) return Promise.reject(new Error('ipc 断开'));
           return Promise.resolve({ ok: true, data: opts.files || { files: [] } });
         },
       },
     },
   });
   const ticks = [];
+  const delays = [];
   const cleared = [];
-  loaded.sandbox.setInterval = (fn) => { ticks.push(fn); return 7; };
+  loaded.sandbox.setInterval = (fn, delay) => { ticks.push(fn); delays.push(delay); return 7; };
   loaded.sandbox.clearInterval = (id) => { cleared.push(id); };
   loaded.page.mount(loaded.host);
-  return Object.assign({}, loaded, { state, calls, ticks, cleared });
+  return Object.assign({}, loaded, { state, calls, ticks, delays, cleared });
 }
 
 /** 加入磁力并轮询到 hash 认领完成，返回认领后的任务行。 */
@@ -129,4 +135,105 @@ test('files(hash) 返回 2 文件 → 渲染两行，progress 0.9 行 data-playa
   assert.strictEqual(fileRows[0].getAttribute('data-playable'), '1', 'progress 0.9 且 size>0 应可播');
   assert.strictEqual(fileRows[1].getAttribute('data-index'), '1');
   assert.strictEqual(fileRows[1].getAttribute('data-playable'), '0', 'progress 0.01 低于 5% 阈值应不可播');
+});
+
+// ---- 复审修正测（Fix round 1） ----
+
+test('add 磁力 → setInterval 周期断言为 2000ms（Minor#4）', async () => {
+  const t = setup();
+  t.doc.querySelector('#huilian-input').value = MAGNET;
+  fire(t.doc.querySelector('#huilian-add'), 'click');
+  await flush();
+  assert.strictEqual(t.ticks.length, 1, '加入后应启动轮询定时器');
+  assert.strictEqual(t.delays[0], 2000, '轮询周期应为 2000ms');
+});
+
+test('轮询防重入：在途 list 未落地时再次 tick 不发起新请求，落地后恢复（Important#1）', async () => {
+  let release;
+  const t = setup({ listImpl: () => new Promise((res) => { release = res; }) });
+  t.doc.querySelector('#huilian-input').value = MAGNET;
+  fire(t.doc.querySelector('#huilian-add'), 'click');
+  await flush();
+  t.ticks[0](); // 首轮请求在途（不可 await：桥 Promise 未落地前 tick 链永不 resolve）
+  await flush();
+  assert.strictEqual(t.calls.list.length, 1);
+  t.ticks[0](); // 定时器再次触发：修复后在途应直接跳过，不并发第二次 list
+  t.ticks[0]();
+  await flush();
+  assert.strictEqual(t.calls.list.length, 1, '在途请求未落地时不得重复发起 list');
+  release({ ok: true, data: { torrents: [] } });
+  await flush();
+  t.ticks[0](); // 落地后下一轮恢复正常（新请求同样在途，不 await）
+  await flush();
+  assert.strictEqual(t.calls.list.length, 2, '在途请求落地后应恢复轮询');
+});
+
+test('轮询过期响应：unmount 后快速重挂，在途响应不得渲染进新页（Important#1）', async () => {
+  let release;
+  const t = setup({ listImpl: () => new Promise((res) => { release = res; }) });
+  t.doc.querySelector('#huilian-input').value = MAGNET;
+  fire(t.doc.querySelector('#huilian-add'), 'click');
+  await flush();
+  t.ticks[0](); // 旧挂载的轮询请求在途
+  await flush();
+  t.page.unmount();
+  t.page.mount(t.host); // 快速重挂：挂载代次递增
+  assert.strictEqual(t.host.querySelectorAll('.huilian-task').length, 0, '前置：新页应无任务行');
+  release({
+    ok: true,
+    data: { torrents: [{ hash: 'HASH1', name: '某电影', state: 'downloading', progress: 0.5 }] },
+  });
+  await flush();
+  assert.strictEqual(
+    t.host.querySelectorAll('.huilian-task').length, 0,
+    '过期代次的响应应被丢弃，不得写回新页面'
+  );
+});
+
+test('files(hash) reject → 错误上浮到 .huilian-error 提示条（Important#2）', async () => {
+  const t = setup({ filesReject: true });
+  const row = await claimRow(t, {
+    hash: 'HASH1', name: '某电影', state: 'downloading',
+    progress: 0.5, dlspeed: 2048, upspeed: 512, url: MAGNET,
+  });
+  assert.ok(row, '前置：任务行应已认领');
+  fire(row, 'click');
+  await flush();
+  assert.deepStrictEqual(t.calls.files, ['HASH1'], '前置：应已请求 files');
+  const err = t.doc.querySelector('.huilian-error');
+  assert.ok(err, '缺少 .huilian-error 提示条节点');
+  assert.ok(
+    err.textContent.indexOf('文件列表') >= 0,
+    'files 失败应上浮文件列表错误文案，实际：' + err.textContent
+  );
+});
+
+test('展开文件行跨 2s 轮询重绘保持，复用缓存不重复请求（Important#3）', async () => {
+  const t = setup({
+    files: {
+      files: [
+        { name: 'a.mkv', progress: 0.9, size: 1048576 },
+        { name: 'b.mkv', progress: 0.01, size: 2048 },
+      ],
+    },
+  });
+  const torrent = {
+    hash: 'HASH1', name: '某电影', state: 'downloading',
+    progress: 0.5, dlspeed: 2048, upspeed: 512, url: MAGNET,
+  };
+  const row = await claimRow(t, torrent);
+  assert.ok(row, '前置：任务行应已认领');
+  fire(row, 'click');
+  await flush();
+  assert.strictEqual(row.querySelectorAll('.huilian-file').length, 2, '前置：首轮应展开两个文件子行');
+  // 再跑一轮轮询（同 hash 进度变化）→ 任务行整体重绘
+  t.state.torrents = [Object.assign({}, torrent, { progress: 0.6 })];
+  await t.ticks[0]();
+  await flush();
+  const row2 = t.doc.querySelector('.huilian-task[data-hash="HASH1"]');
+  assert.notStrictEqual(row2, row, '前置：轮询应已重绘出新任务行节点');
+  const fileRows = row2.querySelectorAll('.huilian-file');
+  assert.strictEqual(fileRows.length, 2, '轮询重绘后展开的文件子行应保持');
+  assert.strictEqual(fileRows[0].getAttribute('data-playable'), '1', '保持后仍可播标记不丢');
+  assert.strictEqual(t.calls.files.length, 1, '重绘应复用缓存文件数据，不得重新请求 files');
 });

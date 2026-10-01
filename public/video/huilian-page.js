@@ -38,10 +38,13 @@
   }
 
   // ---- 页面内部状态（mount 时重置） ----
-  var nodes = null;    // { input, addBtn, browse, list, error }
-  var tasks = [];      // reduceTasks 输出的任务视图行
-  var pending = null;  // 已提交但未认领 hash 的磁力 { magnet }
+  var nodes = null;       // { input, browse, list, error }
+  var tasks = [];         // reduceTasks 输出的任务视图行
+  var pending = null;     // 已提交但未认领 hash 的磁力 { magnet }
   var pollTimer = null;
+  var pollInFlight = false; // 轮询防重入：上一请求未落地时跳过本次 tick
+  var mountGen = 0;         // 挂载代次：mount 递增，在途响应代次不符则丢弃（防 unmount/重挂串扰）
+  var expanded = null;      // 展开态跨轮询保持 { hash, files }；files 为缓存 payload，重绘复用
 
   function showError(message) {
     if (nodes && nodes.error) nodes.error.textContent = message || '';
@@ -60,31 +63,59 @@
     pollTimer = null;
   }
 
-  // ---- 文件子行：展开任务行时按 download.files(hash) 渲染 ----
+  // ---- 文件子行：展开任务行时按 download.files(hash) 渲染，展开态跨轮询重绘保持 ----
+  function findRowNode(hash) {
+    if (!nodes) return null;
+    var kids = nodes.list.children;
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].getAttribute && kids[i].getAttribute('data-hash') === hash) return kids[i];
+    }
+    return null;
+  }
+
+  function makeFilesBox(files) {
+    var q = queue();
+    var box = el('div', { cls: 'huilian-files' });
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i] || {};
+      var fileNode = el('div', { cls: 'huilian-file' });
+      fileNode.setAttribute('data-index', String(i));
+      fileNode.setAttribute('data-playable', (q && q.isPlayable(f)) ? '1' : '0');
+      fileNode.textContent = (f.name || ('文件 ' + i)) + ' · ' + Math.round((f.progress || 0) * 100) + '%';
+      box.appendChild(fileNode);
+    }
+    return box;
+  }
+
+  function openFiles(rowNode, files) {
+    if (!rowNode || rowNode._filesBox || !files) return;
+    var box = makeFilesBox(files);
+    rowNode.appendChild(box);
+    rowNode._filesBox = box;
+  }
+
+  // 落地 files payload：仅当该 hash 仍是当前展开目标（折叠/切换/卸载后丢弃）
+  function applyFiles(hash, files) {
+    if (!expanded || expanded.hash !== hash) return;
+    expanded.files = files;
+    openFiles(findRowNode(hash), files);
+  }
+
   function toggleFiles(hash, rowNode) {
     if (rowNode._filesBox) {
       rowNode.removeChild(rowNode._filesBox);
       rowNode._filesBox = null;
+      expanded = null;
       return;
     }
+    if (expanded && expanded.hash === hash) { expanded = null; return; } // 展开请求在途时再次点击 → 取消展开
     var b = bridge();
     if (!b) return;
+    expanded = { hash: hash, files: null };
     b.download.files(hash).then(function (res) {
       if (!res || !res.ok) { fail(res, '获取文件列表失败'); return; }
-      var q = queue();
-      var files = (res.data && res.data.files) || [];
-      var box = el('div', { cls: 'huilian-files' });
-      for (var i = 0; i < files.length; i++) {
-        var f = files[i] || {};
-        var fileNode = el('div', { cls: 'huilian-file' });
-        fileNode.setAttribute('data-index', String(i));
-        fileNode.setAttribute('data-playable', (q && q.isPlayable(f)) ? '1' : '0');
-        fileNode.textContent = (f.name || ('文件 ' + i)) + ' · ' + Math.round((f.progress || 0) * 100) + '%';
-        box.appendChild(fileNode);
-      }
-      rowNode.appendChild(box);
-      rowNode._filesBox = box;
-    });
+      applyFiles(hash, (res.data && res.data.files) || []);
+    }).catch(function (err) { fail(err, '获取文件列表失败'); }); // IPC reject 统一喂提示条（红线）
   }
 
   function makeTaskRow(row, hash) {
@@ -106,20 +137,30 @@
     for (var i = 0; i < tasks.length; i++) {
       nodes.list.appendChild(makeTaskRow(tasks[i], tasks[i] && tasks[i].hash));
     }
+    // 轮询重绘后恢复展开行：有缓存 payload 直接重开（不重新请求），在途则由落地回调处理
+    if (expanded && expanded.files) {
+      openFiles(findRowNode(expanded.hash), expanded.files);
+    }
   }
 
   // ---- 2s 轮询：download.list → matchHash 认领 → reduceTasks 重绘 ----
   function pollOnce() {
     var b = bridge();
-    if (!b) return Promise.resolve();
+    if (!b || pollInFlight) return Promise.resolve(); // 防重入：上一请求未落地则跳过本轮
+    var gen = mountGen;
+    pollInFlight = true;
     return b.download.list().then(function (res) {
+      if (gen !== mountGen) return; // 过期挂载代次：unmount/重挂后落地，丢弃防状态与画面串扰
+      pollInFlight = false;         // 仅当代次相符才复位，避免过期响应误开新代的并发窗口
       if (!res || !res.ok) { fail(res, '获取任务列表失败'); return; }
       var q = queue();
       var torrents = (res.data && res.data.torrents) || [];
       if (pending && q && q.matchHash(torrents, pending.magnet)) pending = null;
       tasks = q ? q.reduceTasks(torrents) : [];
       render();
-    }).catch(function () { /* 桥异常静默，下轮自动重试 */ });
+    }).catch(function () {
+      if (gen === mountGen) pollInFlight = false; // 桥异常静默，下轮自动重试
+    });
   }
 
   function ensurePolling() {
@@ -161,10 +202,17 @@
     if (!Reader) { showError('当前环境不支持读取 .torrent 文件'); return; }
     var reader = new Reader();
     reader.onload = function () {
+      target.value = ''; // 复位选择框：同一文件修改后可再次选中触发 change
       var text = String(reader.result || '');
       var comma = text.indexOf(',');
       var base64 = comma >= 0 ? text.slice(comma + 1) : text;
-      submitParams(q.makeAddParams('', { base64: base64, name: file.name }));
+      var params = q.makeAddParams('', { base64: base64, name: file.name });
+      if (!params) { showError('读取 .torrent 文件失败：内容为空或文件名缺失'); return; }
+      submitParams(params);
+    };
+    reader.onerror = function () {
+      target.value = '';
+      showError('读取 .torrent 文件失败');
     };
     reader.readAsDataURL(file);
   }
@@ -172,9 +220,11 @@
   function mount(host) {
     if (SFV.ui && SFV.ui.setTitle) SFV.ui.setTitle('汇联');
     if (SFV.ui && SFV.ui.setBrowseChrome) SFV.ui.setBrowseChrome(true);
-    // 重新进入汇联页：重置上一轮状态与轮询（生命周期红线）
+    // 重新进入汇联页：重置上一轮状态与轮询（生命周期红线）；代次递增使旧挂载的在途响应作废
     stopPolling();
+    mountGen += 1;
     nodes = null; tasks = []; pending = null;
+    pollInFlight = false; expanded = null;
     host.innerHTML = '';
     var wrap = el('div', { cls: 'huilian-wrap' });
     var row = el('div', { cls: 'huilian-input-row' });
@@ -202,12 +252,13 @@
     row.appendChild(input); row.appendChild(btn); row.appendChild(browse); row.appendChild(browseBtn);
     wrap.appendChild(row); wrap.appendChild(error); wrap.appendChild(list);
     host.appendChild(wrap);
-    nodes = { input: input, addBtn: btn, browse: browse, list: list, error: error };
+    nodes = { input: input, browse: browse, list: list, error: error };
   }
 
   function unmount() {
     stopPolling();
     nodes = null; tasks = []; pending = null;
+    pollInFlight = false; expanded = null;
     // Task 7 在此接入 overlay 销毁（离开汇联页前必须执行）
   }
 
