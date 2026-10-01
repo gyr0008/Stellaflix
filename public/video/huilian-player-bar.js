@@ -18,8 +18,11 @@
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
   var SYNC_INTERVAL_MS = 500;   // 周期兜底同步（brief 允许）
   var MIN_SEND_MS = 100;        // 节流下限：两次 setBounds 至少间隔 100ms
-  // 进度兜底轮询保持窗：真机 mpv-controller 从不 subscribe time-pos/duration，property-change 永不到达，
-  // 故复用 500ms bounds tick 周期性 getProperty 兜底；若窗内收到过事件则让位事件值，避免两源互相拉扯。
+  // 进度兜底轮询保持窗：time-pos/duration 的 property-change 仅在本机向 mpv 发出 observe_property
+  // 订阅后才会推送；当前仓库 desktop/mpv-controller.js 从不发起该订阅（_eventBroadcast 只转发
+  // mpv 免订阅事件，如 end-file；见其 _handleLine），故这对事件不会送达渲染层，getProperty 轮询
+  // 是常驻兜底（有界成本：500ms tick；duration 取到即停）。若日后接入订阅，事件经本保持窗自动
+  // 接管优先级、轮询让位，两源互不打架。
   var POLL_EVENT_HOLD_MS = 3000;
   // 容器未布局（0x0，例如 CSS 尚未就位）时的兜底创建尺寸 = 桌面端 createOverlay 默认值
   var DEFAULT_RECT = { x: 0, y: 0, width: 800, height: 450 };
@@ -100,10 +103,19 @@
     function pollProgress() {
       if (destroyed || !playerId) return;                 // 销毁/换带后定时器已清，绝不补发 IPC
       var now = global.Date.now();
-      if (now - lastTimeEventAt >= POLL_EVENT_HOLD_MS) pollOne('time-pos', applyTime);
+      // 响应落地时复检保持窗：往返期间若有事件到达则丢弃轮询值（事件优先；不复检也只会在下一轮自愈）
+      if (now - lastTimeEventAt >= POLL_EVENT_HOLD_MS) {
+        pollOne('time-pos', function (v) {
+          if (global.Date.now() - lastTimeEventAt < POLL_EVENT_HOLD_MS) return;
+          applyTime(v);
+        });
+      }
       // duration 取到正上限后不再轮询（省 IPC）；拿到即停
       if (!(seekEl && Number(seekEl.max) > 0) && now - lastDurEventAt >= POLL_EVENT_HOLD_MS) {
-        pollOne('duration', applyDuration);
+        pollOne('duration', function (v) {
+          if (global.Date.now() - lastDurEventAt < POLL_EVENT_HOLD_MS) return;
+          applyDuration(v);
+        });
       }
     }
 

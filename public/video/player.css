@@ -1734,104 +1734,102 @@ body.sfv-plex-immersive .sfv-browse-body {
 .sfv-placeholder-title { font-size: 26px; font-weight: 700; letter-spacing: .5px; color: #1c1c22; }
 .sfv-placeholder-sub { font-size: 14px; line-height: 1.7; color: rgba(28,28,34,.6); max-width: 440px; }
 
-/* ===== 汇联页（边下边播 + 边播边删） ===== */
-.huilian-wrap { max-width: 920px; margin: 0 auto; padding: 48px 28px 28px; box-sizing: border-box; }
-.huilian-title { font-size: 26px; font-weight: 700; letter-spacing: .5px; color: #1c1c22; margin-bottom: 18px; }
+/* ===== 汇联页（BT 磁力播放 · Task8 新页样式） =====
+ * 适用 DOM：public/video/huilian-page.js + huilian-player-bar.js 实际产出的 class/id
+ * （tests/huilian-css-contract.test.js 锁定 渲染DOM ↔ 样式 契约）。
+ * 暗色站内风格：半透明玻璃卡浮于星空背景上，文字用 --fc-ink，强调色 --fc-accent-rgb（同站内带写法）。
+ * 交互红线：.sfv-browse--page 在 T150 设为 pointer-events:none（3D 页 click-through），
+ * 汇联页是真实交互 DOM 页，必须在 :has(.huilian-wrap) 时恢复 auto —— 否则一切按钮点不动。
+ * 注意：本区块整体替换旧 v1/v2/v3 汇联样式带；旧带全部报废类名清单见
+ * tests/huilian-css-contract.test.js 的 DEAD_OLD_SELECTORS（防止旧规则残留成孤儿）。 */
+#sfv-browse.sfv-browse--page:has(.huilian-wrap) { pointer-events: auto; }
+
+.huilian-wrap {
+  max-width: 920px; margin: 0 auto; padding: 8px 28px 48px; box-sizing: border-box;
+  color: var(--fc-ink, #e8ecef); font-size: 14px;
+}
+.huilian-desk-only {
+  margin-bottom: 16px; padding: 14px 16px; border-radius: 10px; font-size: 13px; line-height: 1.6;
+  color: #ffd97a; background: rgba(255, 205, 90, .08); border: 1px solid rgba(255, 205, 90, .32);
+}
 .huilian-input-row { display: flex; gap: 10px; align-items: stretch; }
 .huilian-input {
   flex: 1; min-width: 0;
-  padding: 11px 14px; font-size: 14px; line-height: 1.4;
-  border: 1px solid rgba(0,0,0,.12); border-radius: 10px;
-  background: rgba(255,255,255,.85); color: #1c1c22;
+  padding: 10px 14px; font-size: 13.5px; line-height: 1.4;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 10px;
+  background: rgba(255,255,255,.06); color: var(--fc-ink, #e8ecef);
   outline: none; transition: border-color .15s, box-shadow .15s;
 }
-.huilian-input:focus { border-color: rgba(var(--fc-accent-rgb), .7); box-shadow: 0 0 0 3px rgba(var(--fc-accent-rgb), .15); }
+.huilian-input::placeholder { color: rgba(232,236,239,.4); }
+.huilian-input:focus { border-color: rgba(var(--fc-accent-rgb, 60,120,220), .55); box-shadow: 0 0 0 3px rgba(var(--fc-accent-rgb, 60,120,220), .16); }
+.huilian-input:disabled { opacity: .45; cursor: not-allowed; }
 .huilian-btn {
-  padding: 0 18px; font-size: 14px; font-weight: 600; border: 0; border-radius: 10px;
-  cursor: pointer; color: #fff; background: rgba(var(--fc-accent-rgb), .92);
-  white-space: nowrap; transition: background .15s, transform .05s;
-}
-.huilian-btn:hover { background: rgba(var(--fc-accent-rgb), 1); }
-.huilian-btn:active { transform: translateY(1px); }
-.huilian-btn-clear { background: rgba(0,0,0,.45); }
-.huilian-btn-clear:hover { background: rgba(0,0,0,.6); }
-.huilian-heatmap-wrap {
-  margin-top: 18px; border-radius: 8px; overflow: hidden;
-  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06);
-}
-.huilian-heatmap { display: block; width: 100%; height: 28px; }
-.huilian-status { margin-top: 12px; font-size: 12.5px; color: rgba(28,28,34,.6); line-height: 1.6; min-height: 20px; }
-
-/* --- 汇联页 v2 完整 UI（对齐 huilian-page.js 完整 DOM） --- */
-.huilian-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
-.huilian-title { font-size: 26px; font-weight: 700; letter-spacing: .5px; color: #1c1c22; margin: 0; }
-.huilian-provider-badge { font-size: 12px; color: rgba(28,28,34,.55); padding: 4px 10px; border: 1px solid rgba(0,0,0,.08); border-radius: 999px; background: rgba(255,255,255,.6); white-space: nowrap; }
-.huilian-input-row { display: flex; gap: 10px; align-items: stretch; margin-bottom: 14px; }
-.huilian-input { flex: 1; min-width: 0; padding: 11px 14px; font-size: 14px; line-height: 1.4; border: 1px solid rgba(0,0,0,.12); border-radius: 10px; background: rgba(255,255,255,.85); color: #1c1c22; outline: none; transition: border-color .15s, box-shadow .15s; }
-.huilian-input:focus { border-color: rgba(var(--fc-accent-rgb, 60,120,220), .7); box-shadow: 0 0 0 3px rgba(var(--fc-accent-rgb, 60,120,220), .15); }
-.huilian-btn { padding: 0 18px; font-size: 14px; font-weight: 600; border: 0; border-radius: 10px; cursor: pointer; color: #fff; background: rgba(var(--fc-accent-rgb, 60,120,220), .92); white-space: nowrap; transition: background .15s, transform .05s; }
-.huilian-btn:hover { background: rgba(var(--fc-accent-rgb, 60,120,220), 1); }
-.huilian-btn:active { transform: translateY(1px); }
-.huilian-btn-clear { background: rgba(0,0,0,.45); }
-.huilian-btn-clear:hover { background: rgba(0,0,0,.6); }
-.huilian-stage { position: relative; width: 100%; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16/9; margin-bottom: 12px; }
-.huilian-video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
-.huilian-progress-row { padding: 6px 0; }
-.huilian-seekbar { position: relative; height: 8px; border-radius: 4px; background: rgba(255,255,255,.08); cursor: pointer; overflow: hidden; }
-.huilian-seekbar:hover { background: rgba(255,255,255,.14); }
-.huilian-heatmap-wrap { margin-top: 10px; border-radius: 8px; overflow: hidden; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
-.huilian-heatmap { display: block; width: 100%; height: 28px; }
-.huilian-status-row { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-size: 12.5px; color: rgba(28,28,34,.6); }
-.huilian-status { color: rgba(28,28,34,.75); }
-.huilian-metas { color: rgba(28,28,34,.5); font-variant-numeric: tabular-nums; }
-.huilian-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 18px; }
-.huilian-card { padding: 14px 16px; border-radius: 10px; background: rgba(255,255,255,.6); border: 1px solid rgba(0,0,0,.06); cursor: pointer; transition: transform .08s, box-shadow .15s; }
-.huilian-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
-.huilian-card-title { font-size: 14px; font-weight: 600; color: #1c1c22; margin-bottom: 6px; }
-.huilian-card-body { font-size: 12.5px; color: rgba(28,28,34,.6); line-height: 1.6; white-space: pre-wrap; }
-
-/* --- 汇联页 v3（mpv 方案，对齐 page-discover.js） --- */
-.huilian-tabbar { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-.huilian-tab {
-  padding: 7px 16px; font-size: 13px; font-weight: 500; border-radius: 999px;
-  background: rgba(0,0,0,.04); color: rgba(28,28,34,.65); cursor: pointer;
-  transition: background .15s, color .15s;
-}
-.huilian-tab:hover { background: rgba(0,0,0,.08); }
-.huilian-tab.active { background: rgba(var(--fc-accent-rgb, 60,120,220), .92); color: #fff; }
-.huilian-config-area { margin-bottom: 14px; }
-.huilian-config-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
-.huilian-input-wrap { flex: 1; min-width: 160px; display: flex; flex-direction: column; gap: 4px; }
-.huilian-input-label { font-size: 11.5px; color: rgba(28,28,34,.55); font-weight: 500; }
-.huilian-input {
-  padding: 9px 12px; font-size: 13px; line-height: 1.4;
-  border: 1px solid rgba(0,0,0,.12); border-radius: 8px;
-  background: rgba(255,255,255,.85); color: #1c1c22; outline: none;
-  transition: border-color .15s, box-shadow .15s;
-}
-.huilian-input:focus { border-color: rgba(var(--fc-accent-rgb, 60,120,220), .7); box-shadow: 0 0 0 3px rgba(var(--fc-accent-rgb, 60,120,220), .15); }
-.huilian-btn {
-  padding: 9px 18px; font-size: 13px; font-weight: 600; border: 0; border-radius: 8px;
-  cursor: pointer; color: #fff; background: rgba(var(--fc-accent-rgb, 60,120,220), .92);
-  white-space: nowrap; transition: background .15s, transform .05s; height: 38px;
+  padding: 0 18px; font-size: 13.5px; font-weight: 600; border: 0; border-radius: 10px;
+  cursor: pointer; color: #08090b; background: rgba(var(--fc-accent-rgb, 60,120,220), .88);
+  white-space: nowrap; transition: background .15s, transform .05s, opacity .15s;
 }
 .huilian-btn:hover { background: rgba(var(--fc-accent-rgb, 60,120,220), 1); }
 .huilian-btn:active { transform: translateY(1px); }
-.huilian-btn-play { background: rgba(var(--fc-accent-rgb, 60,120,220), .92); }
-.huilian-btn-clear { background: rgba(0,0,0,.45); }
-.huilian-btn-clear:hover { background: rgba(0,0,0,.6); }
-.huilian-list-area { margin-bottom: 12px; min-height: 80px; }
-.huilian-empty { padding: 30px; text-align: center; color: rgba(28,28,34,.45); font-size: 13px; background: rgba(0,0,0,.02); border-radius: 10px; }
-.huilian-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-.huilian-card {
-  padding: 14px; border-radius: 10px; background: rgba(255,255,255,.65);
-  border: 1px solid rgba(0,0,0,.06); cursor: pointer; transition: transform .08s, box-shadow .15s;
+.huilian-btn:disabled { opacity: .4; cursor: not-allowed; }
+/* .torrent 文件选择 input：仅作数据源，由 #huilian-browse-btn 代理触发 */
+.huilian-browse { display: none; }
+/* 统一错误/提示条（页面 showError 与播控条 report 共用；空时不占位） */
+.huilian-error { margin-top: 12px; font-size: 12.5px; line-height: 1.6; color: #ff8f8f; }
+.huilian-error:empty { display: none; }
+/* 播放区：stage 是被原生 mpv overlay 覆盖的占位容器；控件条由播控条追加在其后（同层，不可叠于 overlay 上） */
+.huilian-play-wrap { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.huilian-stage {
+  position: relative; width: 100%; aspect-ratio: 16 / 9;
+  background: rgba(0, 0, 0, .82); border: 1px solid rgba(255,255,255,.08); border-radius: 12px;
 }
-.huilian-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
-.huilian-card-title { font-size: 14px; font-weight: 600; color: #1c1c22; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.huilian-card-meta { font-size: 12px; color: rgba(28,28,34,.5); }
-.huilian-player-area { margin-bottom: 10px; min-height: 40px; }
-.huilian-status { padding: 10px 14px; font-size: 12.5px; color: rgba(28,28,34,.65); background: rgba(0,0,0,.03); border-radius: 8px; line-height: 1.6; }
+.huilian-stage[data-playing="1"] { border-color: rgba(var(--fc-accent-rgb, 60,120,220), .4); }
+.huilian-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 12px;
+  background: rgba(14, 16, 20, .78); border: 1px solid rgba(255,255,255,.08);
+}
+.huilian-bar button {
+  padding: 7px 14px; font-size: 12.5px; font-weight: 600; border: 0; border-radius: 8px;
+  cursor: pointer; color: var(--fc-ink, #e8ecef); background: rgba(255,255,255,.1);
+  transition: background .15s, transform .05s; white-space: nowrap;
+}
+.huilian-bar button:hover { background: rgba(255,255,255,.18); }
+.huilian-bar button:active { transform: translateY(1px); }
+/* 破坏性动作（删任务+删文件）红色语义，与「仅关闭」区分 */
+#huilian-close-del, #huilian-done-del { background: rgba(224, 82, 82, .26); color: #ffb0b0; }
+#huilian-close-del:hover, #huilian-done-del:hover { background: rgba(224, 82, 82, .42); }
+.huilian-bar input[type="range"] { accent-color: rgb(var(--fc-accent-rgb, 60,120,220)); height: 24px; cursor: pointer; }
+#huilian-seek { flex: 1 1 220px; min-width: 140px; }
+#huilian-vol { flex: 0 0 110px; width: 110px; }
+/* 播完 / mpv 进程退出降级面板：整行换到控件条下方 */
+.huilian-done-panel, .huilian-degraded-panel {
+  flex-basis: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-top: 8px; border-top: 1px dashed rgba(255,255,255,.12);
+  font-size: 13px; line-height: 1.6; color: rgba(232,236,239,.8);
+}
+/* 任务列表 */
+.huilian-tasks { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+.huilian-task {
+  padding: 10px 14px; border-radius: 10px; font-size: 13px; line-height: 1.6;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07);
+  color: rgba(232,236,239,.85);
+  overflow-wrap: anywhere;
+}
+.huilian-task[data-hash] { cursor: pointer; transition: background .12s, border-color .12s; }
+.huilian-task[data-hash]:hover { background: rgba(255,255,255,.085); border-color: rgba(255,255,255,.13); }
+/* 等待元数据的 pending 行（无 data-hash）：不可点，整行虚化 */
+.huilian-task:not([data-hash]) { opacity: .6; }
+.huilian-files {
+  margin-top: 8px; padding-left: 10px; display: flex; flex-direction: column; gap: 4px;
+  border-left: 2px solid rgba(var(--fc-accent-rgb, 60,120,220), .35);
+}
+.huilian-file {
+  padding: 6px 10px; border-radius: 8px; font-size: 12.5px; line-height: 1.5;
+  color: rgba(232,236,239,.6); background: rgba(255,255,255,.03);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.huilian-file[data-playable="1"] { color: var(--fc-ink, #e8ecef); cursor: pointer; }
+.huilian-file[data-playable="1"]:hover { background: rgba(var(--fc-accent-rgb, 60,120,220), .14); }
 
 /* 固定态画布：网格栏统一固定 1216×1158，5 列 × 3 排（共 15 张），超高内容在网格内滚动。
    已彻底移除响应式断点（原 2→6 列 media query）与间距可调。 */
