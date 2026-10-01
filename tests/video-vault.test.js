@@ -119,3 +119,34 @@ test('pagehide 强制 flush 未决镜像', async () => {
   await new Promise((r) => setTimeout(r, 50));
   assert.ok(br.calls.filter((c) => c.action === 'set').length >= before + 1, 'pagehide 应立即 set');
 });
+
+test('同步 throw 桥：模块仍可加载、SFV.vault 存在、ready resolve false、无未捕获抛错', async () => {
+  const calls = [];
+  const br = {
+    calls,
+    videoVault: function () { calls.push({ action: 'throw' }); throw new Error('boom'); },
+  };
+  // load() 内 vm.runInNewContext 同步执行 IIFE；若模块加载期抛出则此处直接抛错、用例失败。
+  const { g } = load({ ls: makeLocalStorage({ [K_LIB]: '[{"id":"x"}]' }), bridge: br });
+  assert.ok(g.StellaflixVideo.vault, 'SFV.vault 必须被赋值');
+  assert.strictEqual(typeof g.StellaflixVideo.vault.ready.then, 'function');
+  const restored = await g.StellaflixVideo.vault.ready;
+  assert.strictEqual(restored, false, '同步 throw 视同拒绝，ready 静默 resolve false');
+});
+
+test('get 拒绝但 set 可用：init 结束仍无条件 flush 恰好一次', async () => {
+  const calls = [];
+  const br = {
+    calls,
+    videoVault: (action, payload) => {
+      calls.push({ action, payload });
+      if (action === 'get') return Promise.reject(new Error('get boom'));
+      if (action === 'set') return Promise.resolve({ ok: true });
+      return Promise.resolve({ ok: false });
+    },
+  };
+  const { g } = load({ ls: makeLocalStorage({ [K_LIB]: '[{"id":"x"}]' }), bridge: br });
+  await g.StellaflixVideo.vault.ready;
+  assert.strictEqual(calls.filter((c) => c.action === 'get').length, 1);
+  assert.strictEqual(calls.filter((c) => c.action === 'set').length, 1, 'get 失败路径仍应恰好 flush 一次（首次建档保护）');
+});

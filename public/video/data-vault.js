@@ -44,7 +44,14 @@
   function flush() {
     var call = bridge();
     if (!call) return Promise.resolve(false);
-    return call('set', snapshot())
+    var p;
+    try {
+      p = call('set', snapshot());
+    } catch (e) {
+      if (global.console) global.console.warn('[SFV.vault] flush failed:', e && e.message);
+      return Promise.resolve(false);
+    }
+    return p
       .then(function (r) { return !!(r && r.ok); })
       .catch(function (e) {
         if (global.console) global.console.warn('[SFV.vault] flush failed:', e && e.message);
@@ -61,7 +68,13 @@
   function init() {
     var call = bridge();
     if (!call) return Promise.resolve(false);
-    var work = call('get', null).then(function (res) {
+    var getChain;
+    try {
+      getChain = call('get', null);
+    } catch (e) {
+      getChain = Promise.reject(e);
+    }
+    var work = getChain.then(function (res) {
       var vault = (res && res.ok && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) ? res.data : null;
       var restored = false;
       if (vault) {
@@ -77,9 +90,13 @@
       if (restored && global.dispatchEvent) {
         try { global.dispatchEvent(new global.Event('sfv:vault-restored')); } catch (e) { /* ignore */ }
       }
-      // 无条件镜像一次：首次建档与换桶收敛共用此步
+      return restored;
+    }).catch(function () {
+      return false;
+    }).then(function (restored) {
+      // 无条件镜像一次：首次建档与换桶收敛共用此步；两条 settle 路径都要覆盖
       return flush().then(function () { return restored; });
-    }).catch(function () { return false; });
+    });
     return new Promise(function (resolve) {
       var settled = false;
       var t = setTimeout(function () { if (!settled) { settled = true; resolve(false); } }, READY_TIMEOUT_MS);
