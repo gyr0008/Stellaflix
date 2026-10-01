@@ -20,6 +20,9 @@ function flush() {
  * 模拟轮询 list() 返回值变化（空 → 认领命中）。
  * opts.listImpl：自定义 list 返回（可控 Promise，测轮询防重入/过期响应）；
  * opts.filesReject：files 返回 rejected Promise（测错误上浮）。
+ * 注：opts.files 一律以「真实桥形状」传入 —— ipc-video 把 qbt 的 /torrents/files 裸数组
+ *   包成 {ok:true,data:<array>}，故 stub 直接透传裸数组（历史 fixture 曾误用 {files:[]} 包装，
+ *   掩盖了源码读 res.data.files 的真机 bug，见 pickFiles）。
  * setInterval 桩捕获回调（ticks）与周期（delays，Minor#4 断言 2000ms）。
  */
 function setup(options) {
@@ -41,7 +44,8 @@ function setup(options) {
         files: (hash) => {
           calls.files.push(hash);
           if (opts.filesReject) return Promise.reject(new Error('ipc 断开'));
-          return Promise.resolve({ ok: true, data: opts.files || { files: [] } });
+          // 真实桥：download.files(hash) → {ok:true,data:<qbt 裸数组>}
+          return Promise.resolve({ ok: true, data: opts.files || [] });
         },
       },
     },
@@ -114,12 +118,10 @@ test('list 轮询认领 hash → 渲染 .huilian-task[data-hash]，含 50% 与�
 
 test('files(hash) 返回 2 文件 → 渲染两行，progress 0.9 行 data-playable=1、0.01 行 =0', async () => {
   const t = setup({
-    files: {
-      files: [
-        { name: 'a.mkv', progress: 0.9, size: 1048576 },
-        { name: 'b.mkv', progress: 0.01, size: 2048 },
-      ],
-    },
+    files: [
+      { name: 'a.mkv', progress: 0.9, size: 1048576 },
+      { name: 'b.mkv', progress: 0.01, size: 2048 },
+    ],
   });
   const row = await claimRow(t, {
     hash: 'HASH1', name: '某电影', state: 'downloading',
@@ -210,12 +212,10 @@ test('files(hash) reject → 错误上浮到 .huilian-error 提示条（Importan
 
 test('展开文件行跨 2s 轮询重绘保持，复用缓存不重复请求（Important#3）', async () => {
   const t = setup({
-    files: {
-      files: [
-        { name: 'a.mkv', progress: 0.9, size: 1048576 },
-        { name: 'b.mkv', progress: 0.01, size: 2048 },
-      ],
-    },
+    files: [
+      { name: 'a.mkv', progress: 0.9, size: 1048576 },
+      { name: 'b.mkv', progress: 0.01, size: 2048 },
+    ],
   });
   const torrent = {
     hash: 'HASH1', name: '某电影', state: 'downloading',
@@ -236,4 +236,46 @@ test('展开文件行跨 2s 轮询重绘保持，复用缓存不重复请求（I
   assert.strictEqual(fileRows.length, 2, '轮询重绘后展开的文件子行应保持');
   assert.strictEqual(fileRows[0].getAttribute('data-playable'), '1', '保持后仍可播标记不丢');
   assert.strictEqual(t.calls.files.length, 1, '重绘应复用缓存文件数据，不得重新请求 files');
+});
+
+// ---- 复审修正（Fix round 1）：不可播行点击不折叠 / pickFiles 兼容双形状 ----
+
+test('点不可播文件行 → 拦截冒泡不折叠展开列表，且不发起来播放（Minor#3）', async () => {
+  const t = setup({
+    files: [
+      { name: 'a.mkv', progress: 0.9, size: 1048576 },
+      { name: 'c.mkv', progress: 0.01, size: 2048 },
+    ],
+  });
+  const row = await claimRow(t, {
+    hash: 'HASH1', name: '某电影', state: 'downloading',
+    progress: 0.5, dlspeed: 2048, upspeed: 512, url: MAGNET,
+  });
+  fire(row, 'click');
+  await flush();
+  const fileRows = row.querySelectorAll('.huilian-file');
+  assert.strictEqual(fileRows.length, 2, '前置：展开两个文件子行');
+  const deadRow = fileRows[1];
+  assert.strictEqual(deadRow.getAttribute('data-playable'), '0', '前置：低进度行不可播');
+  // 真机：不可播行若无监听，点击冒泡到任务行触发 toggleFiles → 折叠展开列表；
+  // 修复后须挂一个「仅拦截冒泡」的处理，令点击不再穿透（此处以 stopPropagation 被调用为可观测证据）。
+  let stopped = false;
+  fire(deadRow, 'click', { stopPropagation: () => { stopped = true; } });
+  await flush();
+  assert.ok(stopped, '点不可播行必须 stopPropagation，避免穿透到任务行折叠文件列表');
+});
+
+test('files(hash) 兼容旧 {files:[...]} 包装形状 → pickFiles 仍渲染（Minor#4 双形状）', async () => {
+  const t = setup({
+    files: { files: [{ name: 'a.mkv', progress: 0.9, size: 1048576 }] },
+  });
+  const row = await claimRow(t, {
+    hash: 'HASH1', name: '某电影', state: 'downloading',
+    progress: 0.5, dlspeed: 2048, upspeed: 512, url: MAGNET,
+  });
+  fire(row, 'click');
+  await flush();
+  assert.deepStrictEqual(t.calls.files, ['HASH1'], '展开应请求一次 files');
+  assert.strictEqual(row.querySelectorAll('.huilian-file').length, 1,
+    '旧 {files:[...]} 包装形状也应被 pickFiles 兼容识别（真实桥为裸数组，两形状都须支持）');
 });

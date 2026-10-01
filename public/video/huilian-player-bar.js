@@ -18,6 +18,9 @@
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
   var SYNC_INTERVAL_MS = 500;   // 周期兜底同步（brief 允许）
   var MIN_SEND_MS = 100;        // 节流下限：两次 setBounds 至少间隔 100ms
+  // 进度兜底轮询保持窗：真机 mpv-controller 从不 subscribe time-pos/duration，property-change 永不到达，
+  // 故复用 500ms bounds tick 周期性 getProperty 兜底；若窗内收到过事件则让位事件值，避免两源互相拉扯。
+  var POLL_EVENT_HOLD_MS = 3000;
   // 容器未布局（0x0，例如 CSS 尚未就位）时的兜底创建尺寸 = 桌面端 createOverlay 默认值
   var DEFAULT_RECT = { x: 0, y: 0, width: 800, height: 450 };
 
@@ -44,7 +47,8 @@
     var playerId = null;
     var barNode = null, panelNode = null, toggleBtn = null, seekEl = null, volEl = null;
     var subs = [], timer = null, gen = 0, destroyed = false, cleaned = false,
-      ended = false, paused = false, lastRect = null, lastSentAt = -1e9;
+      ended = false, paused = false, lastRect = null, lastSentAt = -1e9,
+      lastTimeEventAt = -1e9, lastDurEventAt = -1e9;
 
     function report(res, fallback) { onError((res && res.error) || (res && res.message) || fallback); }
 
@@ -81,6 +85,28 @@
       sendBounds(r);
     }
 
+    // 进度兜底轮询（Important#2）：真机 mpv-controller 从不 subscribe，time-pos/duration 的
+    // property-change 永不送达渲染层，进度条只能靠周期性 getProperty 取。挂在同一 500ms tick 上，
+    // 事件若先到并在保持窗内则让位（applyTime/applyDuration 只由事件写），两源互不打架。
+    function pollOne(name, apply) {
+      if (typeof player.getProperty !== 'function') return;
+      var myGen = gen;
+      Promise.resolve(player.getProperty(playerId, name)).then(function (res) {
+        // 后台轮询失败（属性暂不可用/已停止）静默：属可容忍抖动，不污染统一错误条
+        if (destroyed || myGen !== gen || !res || res.ok !== true) return;
+        apply(res.data);
+      }).catch(function () {});
+    }
+    function pollProgress() {
+      if (destroyed || !playerId) return;                 // 销毁/换带后定时器已清，绝不补发 IPC
+      var now = global.Date.now();
+      if (now - lastTimeEventAt >= POLL_EVENT_HOLD_MS) pollOne('time-pos', applyTime);
+      // duration 取到正上限后不再轮询（省 IPC）；拿到即停
+      if (!(seekEl && Number(seekEl.max) > 0) && now - lastDurEventAt >= POLL_EVENT_HOLD_MS) {
+        pollOne('duration', applyDuration);
+      }
+    }
+
     // ---- 事件订阅 ----
     function subscribe(event, handler) {
       if (typeof player.onEvent !== 'function') return;
@@ -102,12 +128,12 @@
     function onPropertyChange(payload) {
       var name = payload && payload.name;
       var v = eventValue(payload);
-      if (name === 'time-pos') applyTime(v);
-      else if (name === 'duration') applyDuration(v);
+      if (name === 'time-pos') { lastTimeEventAt = global.Date.now(); applyTime(v); }
+      else if (name === 'duration') { lastDurEventAt = global.Date.now(); applyDuration(v); }
     }
     function subscribeEvents() {
-      subscribe('time-pos', function (p) { applyTime(eventValue(p)); });
-      subscribe('duration', function (p) { applyDuration(eventValue(p)); });
+      subscribe('time-pos', function (p) { lastTimeEventAt = global.Date.now(); applyTime(eventValue(p)); });
+      subscribe('duration', function (p) { lastDurEventAt = global.Date.now(); applyDuration(eventValue(p)); });
       subscribe('property-change', onPropertyChange);
       subscribe('end-file', function () {
         ended = true;
@@ -172,7 +198,12 @@
     }
 
     function invoke(promise, fallback) {
-      Promise.resolve(promise).catch(function (err) { if (!destroyed) report(err, fallback); });
+      var myGen = gen;
+      Promise.resolve(promise).then(function (res) {
+        if (destroyed || myGen !== gen) return;          // 拆除/换带中的竞态：静默
+        // 真实 ipc-video 对失败控件调用以 {ok:false,error} resolve（非 reject）：错误统一喂 .huilian-error
+        if (res && res.ok === false) report(res, fallback);
+      }).catch(function (err) { if (!destroyed) report(err, fallback); });
     }
 
     // ---- 控件动作 ----
@@ -196,23 +227,29 @@
     }
     // 仅关闭：杀画面保留任务（红线：不调 download.delete）
     function keepOnly() { api.destroy(); onClose(); }
-    // 删任务+删文件：stopAndClean → download.delete(hash,true) 各一次，随后销毁 overlay
+    // 删任务+删文件：安全序 —— 先 stopAndClean，只有停止成功才允许进入破坏性 download.delete。
+    // 停止失败（拒绝或 {ok:false}）→ 上浮错误、绝不删磁盘文件、撤销幂等标记以便重试（overlay 现场保留）。
     function deleteTaskAndFiles() {
       if (cleaned) return; // 各一次：重复点击不再发起
       cleaned = true;
       Promise.resolve(playerId ? player.stopAndClean(playerId) : null)
-        .catch(function (err) { if (!destroyed) report(err, '停止播放失败'); })
-        .then(function () {
+        .then(function (res) {
+          if (res && res.ok === false) throw res;        // 停止失败：跳外层 catch，不删文件
+          var del = Promise.resolve();
           if (!hash || !bridge.download || typeof bridge.download.delete !== 'function') {
             report(null, '缺少任务标识，无法删除任务');
-            return;
+          } else {
+            del = Promise.resolve(bridge.download.delete(hash, true))
+              .then(function (dres) { if (!dres || !dres.ok) report(dres, '删除任务失败'); })
+              .catch(function (err) { if (!destroyed) report(err, '删除任务失败'); });
           }
-          return Promise.resolve(bridge.download.delete(hash, true)).then(function (res) {
-            if (!res || !res.ok) report(res, '删除任务失败');
-          });
+          // 停止成功后无论删除结果都收尾：销毁 overlay 并关闭播控条
+          return del.then(function () { api.destroy(); onClose(); });
         })
-        .catch(function (err) { if (!destroyed) report(err, '删除任务失败'); })
-        .then(function () { api.destroy(); onClose(); });
+        .catch(function (err) {
+          cleaned = false;                                // 停止失败可重试
+          if (!destroyed) report(err, '停止播放失败，已取消删除任务');
+        });
     }
 
     // ---- overlay 生命周期 ----
@@ -249,11 +286,12 @@
         }
         if (!res || !res.ok) { report(res, '无法启动播放'); return; }
         playerId = res.data.playerId;
+        lastTimeEventAt = -1e9; lastDurEventAt = -1e9; // 新 overlay：清事件窗，立即启用轮询兜底
         mountDom();
         subscribeEvents();
         if (container && container.setAttribute) container.setAttribute('data-playing', '1');
         sync(true); // 创建时视口坐标≠屏幕坐标：立即强制校正一次 overlay bounds
-        timer = global.setInterval(function () { sync(false); }, SYNC_INTERVAL_MS);
+        timer = global.setInterval(function () { sync(false); pollProgress(); }, SYNC_INTERVAL_MS);
       }).catch(function (err) { if (!destroyed && myGen === gen) report(err, '无法启动播放'); });
     }
 

@@ -93,6 +93,11 @@
             playFile(hash, index);
           });
         })(i);
+      } else {
+        // 不可播行：仍拦截冒泡，否则点击穿透到任务行触发 toggleFiles → 收起整个文件列表
+        fileNode.addEventListener('click', function (ev) {
+          if (ev && ev.stopPropagation) ev.stopPropagation();
+        });
       }
       box.appendChild(fileNode);
     }

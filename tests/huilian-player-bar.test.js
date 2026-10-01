@@ -26,11 +26,14 @@ const flush = () => new Promise((r) => setImmediate(r));
  * 记录型桥 setup：
  * opts.overlayError / overlayPending → createOverlay 失败 / 可控在途；
  * opts.setBoundsNoop → setBounds 返 {ok:true,data:false}（无 overlay）；opts.setBoundsError → {ok:false,error}；
- * opts.filesAsArray → download.files 返回裸数组（qbt 真实形状）。
+ * opts.filesAsArray → download.files 返回裸数组（qbt 真实形状）；
+ * opts.setPropertyError / seekError / stopAndCleanError → 对应控件/清理调用以 {ok:false,error} resolve
+ *   （真实 ipc-video 对失败控件调用即以此形状 resolve，而非 reject）；
+ * opts.pollTime / pollDuration → getProperty 轮询返回该数值（真机无 property-change 事件时的兜底来源）。
  */
 function setup(options) {
   const opts = options || {};
-  const calls = { createOverlay: [], setBounds: [], destroyOverlay: [], stopAndClean: [], setProperty: [], seek: [], command: [], delete: [] };
+  const calls = { createOverlay: [], setBounds: [], destroyOverlay: [], stopAndClean: [], setProperty: [], seek: [], command: [], getProperty: [], delete: [] };
   const order = [];
   const clock = { t: 10000 };
   let overlayResolve = null;
@@ -51,10 +54,29 @@ function setup(options) {
           return Promise.resolve({ ok: true, data: !opts.setBoundsNoop });
         },
         destroyOverlay: (id) => { calls.destroyOverlay.push(id); order.push(['destroyOverlay', id]); return Promise.resolve({ ok: true, data: true }); },
-        stopAndClean: (id) => { calls.stopAndClean.push(id); order.push(['stopAndClean', id]); return Promise.resolve({ ok: true, data: true }); },
-        setProperty: (id, name, value) => { calls.setProperty.push([id, name, value]); return Promise.resolve({ ok: true, data: null }); },
-        seek: (id, sec) => { calls.seek.push([id, sec]); return Promise.resolve({ ok: true, data: null }); },
+        stopAndClean: (id) => {
+          calls.stopAndClean.push(id); order.push(['stopAndClean', id]);
+          if (opts.stopAndCleanError) return Promise.resolve({ ok: false, error: opts.stopAndCleanError });
+          return Promise.resolve({ ok: true, data: true });
+        },
+        setProperty: (id, name, value) => {
+          calls.setProperty.push([id, name, value]);
+          if (opts.setPropertyError) return Promise.resolve({ ok: false, error: opts.setPropertyError });
+          return Promise.resolve({ ok: true, data: null });
+        },
+        seek: (id, sec) => {
+          calls.seek.push([id, sec]);
+          if (opts.seekError) return Promise.resolve({ ok: false, error: opts.seekError });
+          return Promise.resolve({ ok: true, data: null });
+        },
         command: (id, cmd) => { calls.command.push([id, cmd]); return Promise.resolve({ ok: true, data: null }); },
+        getProperty: (id, name) => {
+          calls.getProperty.push([id, name]);
+          if (opts.getPropertyError) return Promise.resolve({ ok: false, error: opts.getPropertyError });
+          if (name === 'duration' && opts.pollDuration != null) return Promise.resolve({ ok: true, data: opts.pollDuration });
+          if (name === 'time-pos' && opts.pollTime != null) return Promise.resolve({ ok: true, data: opts.pollTime });
+          return Promise.resolve({ ok: true, data: null });
+        },
       },
       download: {
         addTorrent: () => Promise.resolve({ ok: true, data: { hash: '' } }),
@@ -321,4 +343,72 @@ test('12) 点不可播文件行（data-playable=0）→ 不发起 createOverlay�
   await playFile(t, 2);
   assert.strictEqual(t.calls.createOverlay.length, 0);
   assert.strictEqual(t.doc.querySelector('.huilian-bar'), null);
+});
+
+// ---------------------------------------------------------------------------
+// 复审修正（Fix round 1）：控件错误上浮 / stopAndClean 失败不删文件 / getProperty 轮询兜底
+// ---------------------------------------------------------------------------
+
+test('13) 控件调用以 {ok:false,error} resolve → 错误统一上浮 .huilian-error（不再静默）', async () => {
+  const p = setup({ setPropertyError: 'mpv 拒绝设置 pause' });
+  await playFile(p);
+  fire(p.doc.querySelector('.huilian-bar').querySelector('#huilian-toggle'), 'click');
+  await flush();
+  assert.ok(errorText(p).indexOf('mpv 拒绝设置 pause') >= 0,
+    'pause 失败的真实 error 必须上浮，实际：' + errorText(p));
+
+  const s = setup({ seekError: '跳转超出可播范围' });
+  await playFile(s);
+  const seekEl = s.doc.querySelector('#huilian-seek');
+  seekEl.value = '9999';
+  fire(seekEl, 'change');
+  await flush();
+  assert.ok(errorText(s).indexOf('跳转超出可播范围') >= 0,
+    'seek 失败的真实 error 必须上浮，实际：' + errorText(s));
+
+  const v = setup({ setPropertyError: '音量设置被拒' });
+  await playFile(v);
+  const vol = v.doc.querySelector('#huilian-vol');
+  vol.value = '20';
+  fire(vol, 'change');
+  await flush();
+  assert.ok(errorText(v).indexOf('音量设置被拒') >= 0,
+    'volume 失败的真实 error 必须上浮，实际：' + errorText(v));
+});
+
+test('14) stopAndClean 以 {ok:false,error} 失败 → 上报且绝不发起破坏性 download.delete', async () => {
+  const t = setup({ stopAndCleanError: 'mpv stop 超时' });
+  await playFile(t);
+  emit(t, 'end-file');
+  fire(t.doc.querySelector('.huilian-done-panel').querySelector('#huilian-done-del'), 'click');
+  await flush();
+  assert.strictEqual(t.calls.stopAndClean.length, 1, 'stopAndClean 应尝试一次');
+  assert.strictEqual(t.calls.delete.length, 0, '红线安全序：停止失败不得删磁盘文件');
+  assert.ok(errorText(t).indexOf('mpv stop 超时') >= 0,
+    '停止失败的真实 error 必须上浮，实际：' + errorText(t));
+});
+
+test('15) 真机无 property-change 事件 → getProperty 轮询兜底推进进度条（time-pos/duration）', async () => {
+  const t = setup({ pollTime: 42.5, pollDuration: 600 });
+  await playFile(t);
+  const seekEl = t.doc.querySelector('.huilian-bar').querySelector('#huilian-seek');
+  assert.strictEqual(Number(seekEl.value), 0, '前置：轮询前进度为 0');
+  await tick(t, 500); // 500ms 兜底同步同一 tick 内驱动 progress 轮询
+  assert.ok(t.calls.getProperty.some((c) => c[1] === 'time-pos'), '应向桥轮询 time-pos');
+  assert.ok(t.calls.getProperty.some((c) => c[1] === 'duration'), '应向桥轮询 duration');
+  assert.strictEqual(Number(seekEl.max), 600, 'duration 轮询应回写进度条上限');
+  assert.strictEqual(Number(seekEl.value), 42.5, 'time-pos 轮询应回写当前进度');
+});
+
+test('16) 事件值优先：事件到达后的保持窗内轮询不得回拉扯进度条（两源不打架）', async () => {
+  const t = setup({ pollTime: 300, pollDuration: 999 });
+  await playFile(t);
+  const seekEl = t.doc.querySelector('.huilian-bar').querySelector('#huilian-seek');
+  emit(t, 'time-pos', { data: 100 });  // 事件把进度设为 100（记录事件时刻 = clock.t）
+  emit(t, 'duration', { data: 600 });
+  assert.strictEqual(Number(seekEl.value), 100);
+  assert.strictEqual(Number(seekEl.max), 600);
+  await tick(t, 500); // 同一时刻轮询会返回 300/999：应让位事件值，不回覆写
+  assert.strictEqual(Number(seekEl.value), 100, '事件保持窗内轮询不得覆盖事件进度');
+  assert.strictEqual(Number(seekEl.max), 600, '事件已给 duration：轮询不得再改写上限');
 });
