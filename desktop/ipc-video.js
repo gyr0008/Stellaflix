@@ -70,6 +70,11 @@ function initIpc() {
     try { const r = await mpvCtrl.destroyOverlay(playerId); return { ok: true, data: r }; }
     catch (err) { return { ok: false, error: err.message }; }
   });
+  // D1：overlay 窗口 bounds 跟随渲染层视频容器 rect（CSS px，主进程做 zoom/偏移换算）
+  ipcMain.handle('stellaflix-video:mpv-overlay-set-bounds', async (_e, { id, rect }) => {
+    try { return { ok: true, data: mpvCtrl.setOverlayRect(id, rect) }; }
+    catch (err) { return { ok: false, error: err.message }; }
+  });
   // 事件派发：主进程 mpv event → 推送到渲染进程
   mpvCtrl.setEventBroadcast((playerId, event, payload) => {
     let BrowserWindow;

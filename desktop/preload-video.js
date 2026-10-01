@@ -32,6 +32,7 @@ const CHANNELS = {
   mpvStopClean: 'stellaflix-video:mpv-stop-clean',
   mpvList: 'stellaflix-video:mpv-list',
   mpvEvent: 'stellaflix-video:mpv-event',
+  mpvOverlaySetBounds: 'stellaflix-video:mpv-overlay-set-bounds',
   // 协议
   protocolResolveEmby: 'stellaflix-video:protocol-resolve-emby',
   protocolResolveAlist: 'stellaflix-video:protocol-resolve-alist',
@@ -58,6 +59,8 @@ const player = {
   list: () => ipcRenderer.invoke(CHANNELS.mpvList),
   createOverlay: (opts) => ipcRenderer.invoke('stellaflix-video:mpv-overlay-create', opts || {}),
   destroyOverlay: (playerId) => ipcRenderer.invoke('stellaflix-video:mpv-overlay-destroy', playerId),
+  // D1：同步 overlay 到视频容器矩形；rect 为 getBoundingClientRect（CSS px）
+  setBounds: (playerId, rect) => ipcRenderer.invoke(CHANNELS.mpvOverlaySetBounds, { id: playerId, rect }),
   onEvent: (playerId, event, cb) => {
     if (typeof cb !== 'function') return () => {};
     const ch = CHANNELS.mpvEvent + ':' + playerId + ':' + event;
