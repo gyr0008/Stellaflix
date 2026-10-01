@@ -2,6 +2,9 @@
 /**
  * 汇联页测试 harness：node vm + 假 DOM + 假桥加载 public/video/huilian-page.js。
  * Task 2/3/7 契约测复用（轮询、认领、overlay 销毁等均经 loadPage 注入不同桥 stub）。
+ * 选择器支持：#id / .class / TAG 及 [attr]、[attr="v"] 谓词（可与前缀组合，如 .a[data-b="c"]）；
+ * 沙箱在 huilian-page.js 前先加载真实 huilian-queue.js（页面接线走真纯函数，非 mock）；
+ * 定时器测试：mount 前替换 sandbox.setInterval/clearInterval 捕获轮询回调，手动 tick 保确定性。
  *
  * 用法：
  *   const { loadPage, fire } = require('./helpers/huilian-harness');
@@ -99,9 +102,21 @@ function makeEl(tag) {
 
 function matches(node, selector) {
   const sel = String(selector).trim();
-  if (sel[0] === '#') return !!node.attributes && node.attributes.id === sel.slice(1);
-  if (sel[0] === '.') return node.classList && node.classList.contains(sel.slice(1));
-  return node.tagName === sel.toUpperCase();
+  // 属性谓词 [attr] / [attr="v"] / [attr='v'] / [attr=v]（Task3 DOM 契约：data-hash、data-index、data-playable）
+  const attrRe = /\[([\w-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]+)))?\]/g;
+  let base = sel;
+  let m;
+  while ((m = attrRe.exec(sel))) {
+    const value = node.getAttribute(m[1]);
+    if (value === null) return false;
+    const want = m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4];
+    if (want !== undefined && value !== String(want)) return false;
+    base = base.replace(m[0], '');
+  }
+  if (!base) return true;
+  if (base[0] === '#') return !!node.attributes && node.attributes.id === base.slice(1);
+  if (base[0] === '.') return node.classList && node.classList.contains(base.slice(1));
+  return node.tagName === base.toUpperCase();
 }
 
 /** 派发假事件（沿用 hex-wall.test.js 约定，自动补 stopPropagation/preventDefault/target）。 */
@@ -183,6 +198,9 @@ function loadPage(options) {
 
   if (opts.bridge) sandbox.stellaflixVideo = mergeBridge(opts.bridge === true ? null : opts.bridge);
 
+  // 浏览器中 index.html 先加载 huilian-queue.js 再加载 huilian-page.js；
+  // 测试同样先注入真队列模块（非 mock），让页面接线走真实纯函数。
+  vm.runInContext(read('public/video/huilian-queue.js'), sandbox, { filename: 'huilian-queue.js' });
   vm.runInContext(read('public/video/huilian-page.js'), sandbox, { filename: 'huilian-page.js' });
 
   const host = makeEl('div');
