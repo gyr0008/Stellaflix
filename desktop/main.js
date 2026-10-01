@@ -5348,6 +5348,35 @@ ipcMain.handle('stellaflix-poster-cache', async (event, action, payload) => {
   }
 });
 
+// 影视态用户数据 vault：localStorage 按 origin 隔离、端口跳变即换桶 → 定期整包镜像到
+// userData 文件，启动时由渲染层 data-vault.js 做空桶回填。仿 poster-cache 文件桥模式。
+const VIDEO_VAULT_FILE = path.join(app.getPath('userData'), 'video-vault.json');
+ipcMain.handle('stellaflix-video-vault', async (event, action, payload) => {
+  try {
+    if (action === 'get') {
+      try {
+        const text = await fs.promises.readFile(VIDEO_VAULT_FILE, 'utf8');
+        const all = JSON.parse(text);
+        return { ok: true, data: (all && typeof all === 'object' && !Array.isArray(all)) ? all : null };
+      } catch (e) {
+        return { ok: true, data: null }; // 不存在/损坏 → 视为无 vault，下次 flush 自愈
+      }
+    }
+    if (action === 'set') {
+      const all = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
+      const clean = {};
+      for (const k of Object.keys(all)) { if (typeof all[k] === 'string') clean[k] = all[k]; }
+      const tmp = VIDEO_VAULT_FILE + '.tmp';
+      await fs.promises.writeFile(tmp, JSON.stringify(clean), 'utf8');
+      await fs.promises.rename(tmp, VIDEO_VAULT_FILE);
+      return { ok: true };
+    }
+    return { ok: false, error: 'UNKNOWN_ACTION' };
+  } catch (e) {
+    return { ok: false, error: e.message || 'VIDEO_VAULT_FAILED' };
+  }
+});
+
 // 影视态解析页真实媒体直链嗅探（对齐 Kazumi VideoWebview：常驻 WebView + JS 钩子 + 网络拦截 + MacCMS 多跳）。
 // 7sefun 类 MacCMS：vodplay 页 player_aaaa.encrypt=2 解出下一级 play 页，再由 player.js 解出真实流。
 // 只加载第一层 HTML、只靠 URL 后缀，永远抓不到 m3u8 → TIMEOUT。

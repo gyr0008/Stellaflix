@@ -150,6 +150,7 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   // ── 影视态桥接：海报持久化 / 海报缓存 / 媒体直链嗅探 ──
   videoPoster: (action, payload) => ipcRenderer.invoke('stellaflix-video-poster', action, payload || null),
   posterCache: (action, payload) => ipcRenderer.invoke('stellaflix-poster-cache', action, payload || null),
+  videoVault: (action, payload) => ipcRenderer.invoke('stellaflix-video-vault', action, payload || null),
   resolveMediaSniff: (url, opts) => ipcRenderer.invoke('stellaflix-resolve-media-sniff', Object.assign({ url: url }, opts || {})),
   // ── T-双态独立海报：通用媒体选择器（图片 + 视频） ──
   pickMedia: (mode) => ipcRenderer.invoke('stellaflix-pick-media', (mode === 'video' || mode === 'any') ? mode : 'image'),
