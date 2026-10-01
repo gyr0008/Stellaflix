@@ -14,11 +14,15 @@
   var PLAYABLE_PROGRESS = 0.05;
 
   /*
-   * vm 契约测沙箱跨 realm：断言 deepStrictEqual 会比较对象原型，
-   * 沙箱内字面量原语与宿主原型不等。返回对象的原型统一对齐宿主
-   * （真实浏览器中 getPrototypeOf(window) 即 Object.prototype，为无害 no-op）。
+   * vm 契约测沙箱跨 realm：deepStrictEqual 会比较对象原型，沙箱内字面量原语
+   * 与宿主 realm 不等，需把返回对象原型对齐宿主 Object.prototype。
+   * 仅在"裸 vm 沙箱"（global 无 alert/document）下才取 getPrototypeOf(global)：
+   * 此时 global 是宿主 realm 的对象字面量，其原型即宿主 Object.prototype。
+   * 真实浏览器中 window 的 getPrototypeOf 是 Window.prototype，含可枚举 WebIDL
+   * 成员与依赖接收者的访问器，会污染 for...in / in 探测，故浏览器态退回 Object.prototype。
    */
-  var HOST_OBJECT_PROTO = Object.getPrototypeOf(global) || Object.prototype;
+  var IS_VM_SANDBOX = !!global && global.alert === undefined && global.document === undefined;
+  var HOST_OBJECT_PROTO = IS_VM_SANDBOX ? (Object.getPrototypeOf(global) || Object.prototype) : Object.prototype;
 
   function hostObj() {
     return Object.create(HOST_OBJECT_PROTO);
@@ -46,11 +50,14 @@
 
   // 按磁力串在 torrent 列表中认领哈希：比对 url 或 magnet_uri 字段，未命中返回 null
   function matchHash(torrents, magnetUrl) {
+    // magnetUrl 为空时直接判空：否则条目同时缺 url/magnet_uri 时会 undefined===undefined 误命中
+    if (!magnetUrl) return null;
     var list = Array.isArray(torrents) ? torrents : [];
     for (var i = 0; i < list.length; i++) {
       var t = list[i];
       if (t && (t.url === magnetUrl || t.magnet_uri === magnetUrl)) {
-        return t.hash;
+        // 遵守 hash|string|null 契约：命中条目缺 hash 时返回 null 而非 undefined
+        return t.hash || null;
       }
     }
     return null;
