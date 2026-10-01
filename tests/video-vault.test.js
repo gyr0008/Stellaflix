@@ -150,3 +150,23 @@ test('get 拒绝但 set 可用：init 结束仍无条件 flush 恰好一次', as
   assert.strictEqual(calls.filter((c) => c.action === 'get').length, 1);
   assert.strictEqual(calls.filter((c) => c.action === 'set').length, 1, 'get 失败路径仍应恰好 flush 一次（首次建档保护）');
 });
+
+test('vault 非空 + 本地全写失败（空快照）：init 末尾跳过 flush，不抹掉健康档案', async () => {
+  const ls = makeLocalStorage();
+  ls.setItem = () => { throw new Error('QuotaExceededError'); }; // 模拟配额：恢复写回全部失败
+  const br = makeBridge({ [K_LIB]: '[{"id":"a"}]' });
+  const { g } = load({ ls, bridge: br });
+  await g.StellaflixVideo.vault.ready;
+  const sets = br.calls.filter((c) => c.action === 'set');
+  assert.strictEqual(sets.length, 0, 'vault 非空且本地快照为空时，init 末尾不应发起 set（避免空快照覆盖档案）');
+  assert.strictEqual(br._store()[K_LIB], '[{"id":"a"}]', 'vault 档案原内容必须保持完好');
+});
+
+test('互补情形：vault 空 + 本地空 → 首次建档仍照常 set 一次', async () => {
+  const ls = makeLocalStorage();
+  const br = makeBridge(null); // vault 视为 {}
+  const { g } = load({ ls, bridge: br });
+  await g.StellaflixVideo.vault.ready;
+  const sets = br.calls.filter((c) => c.action === 'set');
+  assert.strictEqual(sets.length, 1, '两侧皆空属首次建档场景，应保持既有 set 行为');
+});

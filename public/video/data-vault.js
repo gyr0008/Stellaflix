@@ -74,12 +74,15 @@
     } catch (e) {
       getChain = Promise.reject(e);
     }
+    // 记录 get 返回的 vault 是否非空（至少一个键为字符串值），供末尾 flush 守卫判定
+    var vaultNonEmpty = false;
     var work = getChain.then(function (res) {
       var vault = (res && res.ok && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) ? res.data : null;
       var restored = false;
       if (vault) {
         for (var i = 0; i < KEYS.length; i++) {
           var k = KEYS[i];
+          if (typeof vault[k] === 'string') vaultNonEmpty = true;
           var local = null;
           try { local = global.localStorage.getItem(k); } catch (e) { local = null; }
           if (local == null && typeof vault[k] === 'string') {
@@ -94,7 +97,13 @@
     }).catch(function () {
       return false;
     }).then(function (restored) {
-      // 无条件镜像一次：首次建档与换桶收敛共用此步；两条 settle 路径都要覆盖
+      // 无条件镜像一次：首次建档与换桶收敛共用此步；两条 settle 路径都要覆盖。
+      // 守卫（终审修1）：vault 有数据但本地快照为空（如配额令恢复全部失败）时跳过本次 set，
+      // 否则空快照会抹掉磁盘上的健康档案。get 拒绝路径 vaultNonEmpty 为 false，行为不变。
+      var snap = snapshot();
+      var snapEmpty = true;
+      for (var kk in snap) { if (Object.prototype.hasOwnProperty.call(snap, kk)) { snapEmpty = false; break; } }
+      if (vaultNonEmpty && snapEmpty) return restored;
       return flush().then(function () { return restored; });
     });
     return new Promise(function (resolve) {

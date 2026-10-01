@@ -39,3 +39,25 @@ test('无 vault（浏览器直开）时 model 写入不报错', () => {
   const model = loadModel(makeLocalStorage(), null);
   assert.doesNotThrow(() => model.addToLibrary({ id: 'url:b', title: 'B' }));
 });
+
+test('SFV_SCRIPTS 加载顺序：data-vault 早于全部消费方（model/watch-history/hex-wall）', () => {
+  // vault 必须在消费方之前初始化，否则首屏读取拿不到回填数据（终审 T3-M3 回归守卫）
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const marker = html.indexOf('SFV_SCRIPTS');
+  assert.ok(marker >= 0, 'public/index.html 必须存在 SFV_SCRIPTS 数组');
+  const scripts = html.slice(marker);
+  const idxOf = (needle, label) => {
+    const i = scripts.indexOf(needle);
+    assert.ok(i >= 0, `SFV_SCRIPTS 缺少条目 ${label}（${needle}）`);
+    return i;
+  };
+  const vaultIdx = idxOf('"video/data-vault.js"', 'data-vault');
+  assert.ok(vaultIdx < idxOf('"video/model.js"', 'model'), 'data-vault 必须排在 model.js 之前');
+  assert.ok(vaultIdx < idxOf('"video/watch-history.js"', 'watch-history'), 'data-vault 必须排在 watch-history.js 之前');
+  // hex-wall 实际登记为 video/poster-wall/hex-wall.js，按文件名匹配兼容前缀变化
+  const hexIdx = scripts.search(/"video\/[^"]*hex-wall\.js"/);
+  assert.ok(hexIdx >= 0, 'SFV_SCRIPTS 缺少 hex-wall.js 条目');
+  assert.ok(vaultIdx < hexIdx, 'data-vault 必须排在 hex-wall.js 之前');
+  const pcIdx = scripts.indexOf('"video/poster-cache.js"');
+  if (pcIdx >= 0) assert.ok(vaultIdx > pcIdx, 'data-vault 应排在 poster-cache.js 之后');
+});
