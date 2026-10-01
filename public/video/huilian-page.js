@@ -118,10 +118,10 @@
     openFiles(findRowNode(hash), files, hash);
   }
 
-  // qbt /torrents/files 直接返回数组，兼容 {files:[...]} 包装形状
-  function pickFiles(data) {
+  // qbt files/list 接口直接返回裸数组，兼容 {files:[...]}/{torrents:[...]} 旧包装形状（真实桥为裸数组）
+  function pickArray(data, key) {
     if (Array.isArray(data)) return data;
-    return (data && Array.isArray(data.files)) ? data.files : [];
+    return (data && Array.isArray(data[key])) ? data[key] : [];
   }
 
   function toggleFiles(hash, rowNode) {
@@ -137,7 +137,7 @@
     expanded = { hash: hash, files: null };
     b.download.files(hash).then(function (res) {
       if (!res || !res.ok) { fail(res, '获取文件列表失败'); return; }
-      applyFiles(hash, pickFiles(res.data));
+      applyFiles(hash, pickArray(res.data, 'files'));
     }).catch(function (err) { fail(err, '获取文件列表失败'); }); // IPC reject 统一喂提示条（红线）
   }
 
@@ -167,15 +167,17 @@
   }
 
   // ---- 播放：可播文件行 → mpv overlay + 播控条（生命周期红线见 destroyBar） ----
-  // 播控条自行销毁后回调：仅解除页面引用
-  function closeBar() { bar = null; }
-
   // 由页面发起的销毁：unmount / 切换文件都走这里（任一时刻至多一个 overlay）
   function destroyBar() {
     if (!bar) return;
     var b = bar;
     bar = null;
     b.destroy(); // 内含 interval 清理 + 事件退订 + destroyOverlay；不调 download.delete
+  }
+
+  // I4：主窗隐藏（未走 unmount 的 hide/minimize）时 alwaysOnTop 未 parent 的 overlay 会残留；spec §4「页面隐藏→destroyOverlay」故拆画面留任务
+  function onDocVisibility() {
+    if (typeof document !== 'undefined' && document.hidden) destroyBar();
   }
 
   function playFile(hash, index) {
@@ -190,16 +192,18 @@
     if (!file) { showError('文件信息已失效，请重新展开任务'); return; }
     destroyBar(); // 换文件先销毁旧 overlay（红线）
     var gen = mountGen;
-    bar = SFV.huilianPlayerBar.create({
+    // I3：onClose 带身份守卫——仅当自己仍是页面当前条时才清 bar，防旧条 onClose 孤儿化新条致 unmount 漏销 overlay
+    var created = SFV.huilianPlayerBar.create({
       bridge: b,
       container: nodes.stage,
       file: file,
       hash: hash,
-      onClose: closeBar,
+      onClose: function () { if (bar === created) bar = null; },
       onError: showError,
       // 挂载代次失效（unmount/重挂）→ 播控条丢弃在途 overlay，不把控件条画进新页
       isStale: function () { return gen !== mountGen; },
     });
+    bar = created;
   }
 
   // ---- 2s 轮询：download.list → matchHash 认领 → reduceTasks 重绘 ----
@@ -213,7 +217,7 @@
       pollInFlight = false;         // 仅当代次相符才复位，避免过期响应误开新代的并发窗口
       if (!res || !res.ok) { fail(res, '获取任务列表失败'); return; }
       var q = queue();
-      var torrents = (res.data && res.data.torrents) || [];
+      var torrents = pickArray(res.data, 'torrents');
       if (pending && q && q.matchHash(torrents, pending.magnet)) pending = null;
       tasks = q ? q.reduceTasks(torrents) : [];
       render();
@@ -313,6 +317,10 @@
     } else {
       btn.addEventListener('click', onAdd);
       browse.addEventListener('change', onBrowseChange);
+      // I1：有桥即装 2s 轮询——重进汇联页立刻刷新任务列表（spec §4），无需先加入任务
+      // I4：注册 visibilitychange，页面隐藏时拆除 overlay（onDocVisibility 内判 document.hidden）
+      ensurePolling();
+      document.addEventListener('visibilitychange', onDocVisibility);
     }
     row.appendChild(input); row.appendChild(btn); row.appendChild(browse); row.appendChild(browseBtn);
     wrap.appendChild(row); wrap.appendChild(error); wrap.appendChild(playWrap); wrap.appendChild(list);
@@ -322,6 +330,8 @@
 
   function unmount() {
     stopPolling();
+    // I4：注销页面隐藏监听（防跨路由泄漏；与 mount 的 addEventListener 配对）
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onDocVisibility);
     // 生命周期红线：离开汇联页必先销毁 overlay（任务保留，仅杀画面；不删任务）
     destroyBar();
     nodes = null; tasks = []; pending = null;

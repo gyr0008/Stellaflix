@@ -29,6 +29,10 @@
 
   function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
 
+  // I2：mpv 进程已退出/句柄已回收时 command 抛 'player not found: '+id，ipc-video 转 {ok:false,error}；
+  // 该失败语义为「已停止」，删除流程应照常进行（区别于真实停止失败，后者仍须中止以不删磁盘文件）。
+  function isPlayerGoneError(msg) { return String(msg || '').indexOf('player not found') >= 0; }
+
   function el(tag, id, cls) {
     var n = global.document.createElement(tag);
     if (id) n.setAttribute('id', id);
@@ -246,7 +250,8 @@
       cleaned = true;
       Promise.resolve(playerId ? player.stopAndClean(playerId) : null)
         .then(function (res) {
-          if (res && res.ok === false) throw res;        // 停止失败：跳外层 catch，不删文件
+          // I2：进程已退出（player not found）视为已停止，继续删任务；真实停止失败仍抛错中止不删文件
+          if (res && res.ok === false && !isPlayerGoneError(res.error)) throw res;
           var del = Promise.resolve();
           if (!hash || !bridge.download || typeof bridge.download.delete !== 'function') {
             report(null, '缺少任务标识，无法删除任务');

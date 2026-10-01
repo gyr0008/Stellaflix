@@ -167,8 +167,9 @@ function defaultBridge(events) {
     },
     download: {
       addTorrent: (opts) => promise(Object.assign({ hash: '' }, opts || {})),
-      list: () => promise({ torrents: [] }),
-      files: () => promise({ files: [] }),
+      // 真实桥（ipc-video:115 → download.listTorrents → JSON.parse）resolve 裸数组：{ok:true,data:[...]}
+      list: () => promise([]),
+      files: () => promise([]),
       progress: () => promise(0),
       delete: () => promise(true),
     },
@@ -206,13 +207,23 @@ function loadPage(options) {
   };
 
   const body = makeEl('body');
+  // document 记录事件监听（I4：visibilitychange 页面隐藏拆除可测），并暴露可设的 hidden 标志；
+  // 与 makeEl 同一 listeners 约定，故测试可用 fire(doc,'visibilitychange') 派发。
+  const docListeners = {};
   sandbox.document = {
     createElement: (tag) => makeEl(tag),
     getElementById: (id) => (body.attributes.id === id ? body : body.querySelector('#' + id)),
     body,
+    hidden: false,
     querySelectorAll: (sel) => body.querySelectorAll(sel),
     querySelector: (sel) => (matches(body, sel) ? body : body.querySelector(sel)),
-    addEventListener: () => {},
+    listeners: docListeners,
+    addEventListener: (type, fn) => { (docListeners[type] = docListeners[type] || []).push(fn); },
+    removeEventListener: (type, fn) => {
+      const list = docListeners[type] || [];
+      const i = list.indexOf(fn);
+      if (i >= 0) list.splice(i, 1);
+    },
   };
 
   vm.createContext(sandbox);

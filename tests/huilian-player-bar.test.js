@@ -82,7 +82,8 @@ function setup(options) {
         addTorrent: () => Promise.resolve({ ok: true, data: { hash: '' } }),
         list: () => Promise.resolve({
           ok: true,
-          data: { torrents: [{ hash: 'HASH1', name: '某电影', state: 'downloading', progress: 0.5, dlspeed: 1, upspeed: 1, url: MAGNET }] },
+          // 真实桥形状：download.list → {ok:true,data:<qbt 裸数组>}
+          data: [{ hash: 'HASH1', name: '某电影', state: 'downloading', progress: 0.5, dlspeed: 1, upspeed: 1, url: MAGNET }],
         }),
         files: () => Promise.resolve({ ok: true, data: opts.filesAsArray ? FILES : { files: FILES } }),
         delete: (hash, delFiles) => { calls.delete.push([hash, delFiles]); order.push(['delete', hash, delFiles]); return Promise.resolve({ ok: true, data: true }); },
@@ -411,4 +412,79 @@ test('16) 事件值优先：事件到达后的保持窗内轮询不得回拉扯�
   await tick(t, 500); // 同一时刻轮询会返回 300/999：应让位事件值，不回覆写
   assert.strictEqual(Number(seekEl.value), 100, '事件保持窗内轮询不得覆盖事件进度');
   assert.strictEqual(Number(seekEl.max), 600, '事件已给 duration：轮询不得再改写上限');
+});
+
+// ---------------------------------------------------------------------------
+// 终审修正：I3 stale onClose 身份守卫 / I2 进程退出后仍可删任务
+// ---------------------------------------------------------------------------
+
+test('17) I3：旧条 onClose 不孤儿化当前条 —— unmount 仍销毁当前 overlay', async () => {
+  const t = setup();
+  await playFile(t, 0);                       // 条 A（mpv-1）
+  const barA = t.doc.querySelector('.huilian-bar');
+  const keepA = barA.querySelector('#huilian-keep');
+  await playFile(t, 1);                       // 换文件：先销毁 A，当前条 = B（mpv-2）
+  assert.deepStrictEqual(t.calls.destroyOverlay, ['mpv-1'], '前置：切换应先销毁 A 的 overlay');
+  // 触发旧条 A 的 onClose（点 A 的「仅关闭」→ keepOnly：A 已销毁 destroy 幂等 no-op + onClose）
+  fire(keepA, 'click');
+  await flush();
+  assert.strictEqual(t.calls.destroyOverlay.length, 1, '旧条 onClose 不得改动当前条 B 的 overlay');
+  t.page.unmount();
+  assert.deepStrictEqual(t.calls.destroyOverlay, ['mpv-1', 'mpv-2'],
+    '红线：旧条 onClose 不得让页面遗忘当前条 B；unmount 必须仍能销毁 B 的 overlay');
+});
+
+test('18) I2：stopAndClean 以 player-not-found 失败（mpv 进程已退出）→ 视为已停止，仍可删任务+删文件', async () => {
+  const t = setup({ stopAndCleanError: 'player not found: mpv-1' });
+  await playFile(t);
+  emit(t, 'end-file');
+  fire(t.doc.querySelector('.huilian-done-panel').querySelector('#huilian-done-del'), 'click');
+  await flush();
+  assert.strictEqual(t.calls.stopAndClean.length, 1, 'stopAndClean 应尝试一次');
+  assert.deepStrictEqual(t.calls.delete, [['HASH1', true]],
+    '进程已退出（player not found）应继续删除任务+文件，而非中止（spec §6 播完删任务面板）');
+  assert.ok(t.calls.destroyOverlay.indexOf('mpv-1') >= 0, '删除收尾仍应销毁 overlay');
+});
+
+test('19) I2 边界：区分「进程已消失」与「真实停止失败」——后者仍中止删除（不削弱 Task7 红线）', async () => {
+  const t = setup({ stopAndCleanError: 'mpv stop 超时' });
+  await playFile(t);
+  emit(t, 'end-file');
+  fire(t.doc.querySelector('.huilian-done-panel').querySelector('#huilian-done-del'), 'click');
+  await flush();
+  assert.strictEqual(t.calls.delete.length, 0, '真实停止失败（非 player not found）不得删磁盘文件（红线安全序保持不动）');
+});
+
+// ---------------------------------------------------------------------------
+// 终审修正：I4 页面隐藏（未走 unmount 的 hide 路径）拆除 overlay
+// ---------------------------------------------------------------------------
+
+test('20) I4：页面隐藏（document hidden + visibilitychange）→ 立即销毁 overlay、保留任务', async () => {
+  const t = setup();
+  await playFile(t);
+  assert.deepStrictEqual(t.calls.destroyOverlay, [], '前置：播放中尚未销毁');
+  t.doc.hidden = true;
+  fire(t.doc, 'visibilitychange');
+  await flush();
+  assert.deepStrictEqual(t.calls.destroyOverlay, ['mpv-1'],
+    '红线：页面隐藏必须立即销毁 overlay（spec §4「页面隐藏 → destroyOverlay」，overlay 未 parent 会浮在隐藏主窗之上）');
+  assert.strictEqual(t.calls.delete.length, 0, '隐藏只杀画面，不得删任务');
+});
+
+test('21) I4：可见态 visibilitychange 不误销毁', async () => {
+  const t = setup();
+  await playFile(t);
+  t.doc.hidden = false;
+  fire(t.doc, 'visibilitychange');
+  await flush();
+  assert.strictEqual(t.calls.destroyOverlay.length, 0, '仅 hidden=true 才拆除');
+});
+
+test('22) I4：有桥 mount 注册、unmount 注销 visibilitychange 监听（防跨路由泄漏）', async () => {
+  const t = setup();
+  await playFile(t);
+  const before = (t.doc.listeners.visibilitychange || []).length;
+  assert.ok(before >= 1, '前置：有桥 mount 应注册 visibilitychange 监听');
+  t.page.unmount();
+  assert.strictEqual((t.doc.listeners.visibilitychange || []).length, 0, 'unmount 应注销监听');
 });

@@ -388,6 +388,9 @@ function _cleanupHandle(id) {
   const h = _handles.get(id);
   if (!h) return;
   if (h.socket) { try { h.socket.destroy(); } catch (e) {} }
+  // I2：进程退出销毁 overlay 子窗（alwaysOnTop 未 parent，否则残留于屏幕之上）并清空引用；
+  // 若不销毁，句柄随之被下方 delete 丢弃，渲染层 destroyOverlay 将永远触不到该窗（泄漏 + 无法清理）。
+  if (h.overlayWin) { try { h.overlayWin.destroy(); } catch (e) {} h.overlayWin = null; }
   try { fs.unlinkSync(h.pipePath); } catch (e) {}
   _handles.delete(id);
 }

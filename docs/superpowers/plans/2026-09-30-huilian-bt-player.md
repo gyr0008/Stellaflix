@@ -479,6 +479,9 @@ test('login 失败 → reject 且不落盘', async () => {
   6. 选本地 .torrent 上传 → 任务入列；
   7. 浏览器直开 :3000 → 降级提示；
   8. 233% 缩放屏 → overlay 位置正确（DPR 换算验证）。
+  9. 最小化/隐藏主窗（不走路由 unmount 的 hide）→ mpv 画面随页面隐藏立即消失、任务保留；恢复后需重开播放（I4 renderer visibilitychange 拆除，真机验证 OS 级 alwaysOnTop 行为）；
+  10. mpv 进程崩溃/被杀 → 播控条降级面板出现，且播完/删除面板「删任务+删文件」仍可删除（I2：进程退出销毁 overlay + player-not-found 视为已停止仍可删）；
+  11. overlay 未 parent 于主窗：切到其它应用置顶窗口时 overlay 仍浮于最上（若需真子窗跟随需 desktop 窗口 parent 化，超出本波范围，仅记录）。
 - [ ] **Step 5: 记录**（message 建议：`feat: 汇联 Task8 — 新页样式落地+全量回归`）
 
 ---

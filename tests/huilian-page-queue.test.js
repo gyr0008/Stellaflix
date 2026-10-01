@@ -39,7 +39,8 @@ function setup(options) {
         list: () => {
           calls.list.push(1);
           if (opts.listImpl) return opts.listImpl(state);
-          return Promise.resolve({ ok: true, data: { torrents: state.torrents } });
+          // 真实桥形状：download.list → {ok:true,data:<qbt 裸数组>}（见 download-manager.listTorrents JSON.parse）
+          return Promise.resolve({ ok: true, data: state.torrents });
         },
         files: (hash) => {
           calls.files.push(hash);
@@ -163,7 +164,7 @@ test('轮询防重入：在途 list 未落地时再次 tick 不发起新请求�
   t.ticks[0]();
   await flush();
   assert.strictEqual(t.calls.list.length, 1, '在途请求未落地时不得重复发起 list');
-  release({ ok: true, data: { torrents: [] } });
+  release({ ok: true, data: [] });
   await flush();
   t.ticks[0](); // 落地后下一轮恢复正常（新请求同样在途，不 await）
   await flush();
@@ -183,7 +184,7 @@ test('轮询过期响应：unmount 后快速重挂，在途响应不得渲染进
   assert.strictEqual(t.host.querySelectorAll('.huilian-task').length, 0, '前置：新页应无任务行');
   release({
     ok: true,
-    data: { torrents: [{ hash: 'HASH1', name: '某电影', state: 'downloading', progress: 0.5 }] },
+    data: [{ hash: 'HASH1', name: '某电影', state: 'downloading', progress: 0.5 }],
   });
   await flush();
   assert.strictEqual(
@@ -278,4 +279,53 @@ test('files(hash) 兼容旧 {files:[...]} 包装形状 → pickFiles 仍渲染�
   assert.deepStrictEqual(t.calls.files, ['HASH1'], '展开应请求一次 files');
   assert.strictEqual(row.querySelectorAll('.huilian-file').length, 1,
     '旧 {files:[...]} 包装形状也应被 pickFiles 兼容识别（真实桥为裸数组，两形状都须支持）');
+});
+
+// ---- C1：download.list 真实裸数组形状归一 ----
+
+test('list 裸数组 payload（真实桥形状）→ 归一后渲染任务行（C1）', async () => {
+  const t = setup();
+  t.state.torrents = [{
+    hash: 'HASH1', name: '某电影', state: 'downloading',
+    progress: 0.5, dlspeed: 2048, upspeed: 512,
+  }];
+  await t.ticks[0]();
+  await flush();
+  const rows = t.host.querySelectorAll('.huilian-task');
+  assert.strictEqual(rows.length, 1, '裸数组 list payload 应渲染一行任务（读 data 本身，而非 data.torrents）');
+  assert.strictEqual(rows[0].getAttribute('data-hash'), 'HASH1', '任务行应带认领 hash');
+  assert.ok(rows[0].textContent.indexOf('50%') >= 0, '裸数组渲染的百分比应正确');
+});
+
+test('list 兼容旧 {torrents:[...]} 包装形状 → pickTorrents 仍渲染（C1 双形状，对齐 pickFiles 约定）', async () => {
+  const t = setup({
+    listImpl: () => Promise.resolve({
+      ok: true,
+      data: { torrents: [{ hash: 'H2', name: '旧包装片', state: 'downloading', progress: 0.2 }] },
+    }),
+  });
+  await t.ticks[0]();
+  await flush();
+  const rows = t.host.querySelectorAll('.huilian-task');
+  assert.strictEqual(rows.length, 1, '包装形状也应被识别（真实桥为裸数组，两形状都须支持）');
+  assert.strictEqual(rows[0].getAttribute('data-hash'), 'H2');
+});
+
+// ---- I1：页面进入即装 2s 轮询（无需先加入任务） ----
+
+test('mount 即装轮询 interval（2s），unmount 仍清除（I1）', () => {
+  const t = setup();
+  assert.strictEqual(t.ticks.length, 1, 'mount 应调用 setInterval 装 2s 轮询（重进页面即刷新任务列表）');
+  assert.strictEqual(t.delays[0], 2000, '轮询周期应为 2000ms');
+  t.page.unmount();
+  assert.deepStrictEqual(t.cleared, [7], 'unmount 应 clearInterval 轮询定时器');
+});
+
+test('非桌面（无桥）mount 不装轮询，保持降级安静（I1 降级守卫）', () => {
+  const { loadPage: lp } = require('./helpers/huilian-harness');
+  const { page, host, sandbox } = lp({ bridge: null });
+  const armed = [];
+  sandbox.setInterval = (fn, delay) => { armed.push(delay); return 99; };
+  page.mount(host);
+  assert.strictEqual(armed.length, 0, '无桥时 mount 不得装轮询，非桌面路径保持安静');
 });

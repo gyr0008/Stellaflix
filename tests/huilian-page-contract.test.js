@@ -32,8 +32,12 @@ test('非桌面：无桥 → 降级提示 + 输入区 disabled', () => {
 });
 
 test('桌面：有桥 → 输入可用且无降级提示', () => {
-  const { page, host, doc } = loadPage({ bridge: true });
+  const { page, host, doc, sandbox } = loadPage({ bridge: true });
+  // I1 后 mount 会装 2s 轮询：本测只验渲染分支，桩掉真实定时器避免遗留活动句柄，末尾 unmount 收尾
+  sandbox.setInterval = () => 1;
+  sandbox.clearInterval = () => {};
   page.mount(host);
   assert.strictEqual(doc.querySelector('#huilian-input').disabled, false);
   assert.strictEqual(doc.querySelector('.huilian-desk-only'), null);
+  page.unmount();
 });
