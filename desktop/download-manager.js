@@ -78,6 +78,7 @@ async function ensureCredential(deps) {
   const d = deps || {};
   if (d.stored) return { username: d.stored.username, password: d.stored.password };
   const def = d.defaults || {};
+  if (!def.username || !def.password) throw new Error('qbt 默认凭据缺失，无法执行首启改密');
   await d.login(def.username, def.password);
   const cred = { username: def.username, password: d.genPw() };
   await d.setPassword(cred.password);
@@ -85,10 +86,9 @@ async function ensureCredential(deps) {
   return cred;
 }
 
-/** 真实入口薄封装：就绪后确保 WebUI 口令；失败仅记 message（口令不落日志） */
+/** 真实入口薄封装：就绪后确保 WebUI 口令；改密/落盘失败一律上浮给调用方（start() 据此 reject，经 qbt-add 的 IPC 错误通道可见），口令不落日志 */
 async function _ensureCredentialReal() {
-  try { await qbtCred.ensureReal({ config: _config, http: _http, ensureCredential }); }
-  catch (e) { _log('qbt credential error:', e.message); }
+  await qbtCred.ensureReal({ config: _config, http: _http, ensureCredential });
 }
 
 // -----------------------------------------------------------------------
@@ -113,14 +113,15 @@ function start() {
     });
     _proc.on('error', reject);
     _proc.on('exit', code => { _log('qbt exit', code); _proc = null; });
-    // 等 Web API 就绪
+    // 等 Web API 就绪；就绪后确保凭据，改密/落盘失败立即 reject（经 qbt-add 的 IPC {ok:false,error} 通道上浮，不再静默变砖）
     const deadline = Date.now() + 30000;
     const poll = async () => {
-      try {
-        const r = await _http('GET', '/api/v2/app/version');
-        // D3：就绪后确保 WebUI 凭据（首启生成随机口令并落盘），再放行启动
-        if (r.status === 200) { _log('qbt ready'); await _ensureCredentialReal(); resolve(true); return; }
-      } catch (e) {}
+      let r = null;
+      try { r = await _http('GET', '/api/v2/app/version'); } catch (e) {}
+      if (r && r.status === 200) {
+        _log('qbt ready'); try { await _ensureCredentialReal(); resolve(true); } catch (e) { reject(e); }
+        return;
+      }
       if (Date.now() > deadline) { reject(new Error('qbt start timeout')); return; }
       setTimeout(poll, 500);
     };
@@ -157,10 +158,6 @@ function stop() {
     }, 1000);
   });
 }
-
-// -----------------------------------------------------------------------
-//  任务管理
-// -----------------------------------------------------------------------
 
 // -----------------------------------------------------------------------
 //  任务表单构造（纯函数，不发请求，便于单测）
@@ -344,7 +341,7 @@ function cleanOrphans() {
 function shutdown() { return stop(); }
 
 module.exports = {
-  setConfig, start, stop, isRunning,
+  setConfig, start, stop, isRunning, _http,
   addTorrent, buildAddFormBody, listTorrents, getTorrentFiles, deleteTorrent, pauseResume, getProgress,
   cleanOrphans, shutdown, ensureCredential, _ensureCredentialReal,
 };
