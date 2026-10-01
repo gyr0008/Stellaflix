@@ -65,8 +65,11 @@ function init(appPaths) {
       enabled: raw.qbt?.enabled !== false,
       exePath: resolvePlaceholders(raw.qbt?.exePath || '_up_/resources/qbittorrent/qbittorrent.exe', R),
       port: raw.qbt?.port || 8080,
+      // D3：username/password 的 admin/adminadmin 仅是「首启且 credStore 为空」那一次登录的兜底默认，
+      // 首启后由 qbt-credential 随机改密并落盘到 credStorePath，运行期以落盘值为准
       username: raw.qbt?.username || 'admin',
       password: raw.qbt?.password || 'adminadmin',
+      credStorePath: resolvePlaceholders(raw.qbt?.credStorePath || '__appData__/huilian-qbt-cred.json', R),
       defaultSavePath: resolvePlaceholders(raw.qbt?.defaultSavePath || '__appData__/Artist', R),
       maxActiveDownloads: raw.qbt?.maxActiveDownloads || 3,
       applyRateLimit: raw.qbt?.applyRateLimit === true,

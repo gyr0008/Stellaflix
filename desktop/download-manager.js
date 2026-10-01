@@ -22,10 +22,10 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const qbtCred = require('./qbt-credential'); // D3 适配层：凭据落盘 + WebUI 会话（纯编排留在本文件）
 
 let _config = null;
 let _proc = null;
-let _cookie = null;
 let _log = () => {};
 
 function setConfig(cfg) {
@@ -46,11 +46,13 @@ function _http(method, pathname, body, contentType) {
   return new Promise((resolve, reject) => {
     const port = _config?.qbt?.port || 8080;
     const auth = Buffer.from((_config?.qbt?.username || 'admin') + ':' + (_config?.qbt?.password || 'adminadmin')).toString('base64');
-    const opts = { hostname: '127.0.0.1', port, path: pathname, method, headers: { Authorization: 'Basic ' + auth, 'Content-Type': contentType || 'application/x-www-form-urlencoded' } };
+    // 会话回放：auth/login 拿到的 SID 随 Cookie 头带上；非 GET 再带 X-CSRF-Token（qbt 4.6.1+ 默认 CSRF 防护）
+    const headers = Object.assign({ Authorization: 'Basic ' + auth, 'Content-Type': contentType || 'application/x-www-form-urlencoded' }, qbtCred.sessionHeaders(method));
+    const opts = { hostname: '127.0.0.1', port, path: pathname, method, headers };
     const req = http.request(opts, res => {
       let data = '';
       res.on('data', d => data += d);
-      res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      res.on('end', () => { qbtCred.takeSession(res.headers['set-cookie']); resolve({ status: res.statusCode, body: data }); });
     });
     req.on('error', reject);
     req.setTimeout(_config?.network?.timeout || 15000, () => req.destroy(new Error('http timeout')));
@@ -61,8 +63,32 @@ function _http(method, pathname, body, contentType) {
 
 async function _login() {
   const res = await _http('POST', '/api/v2/auth/login', 'username=' + encodeURIComponent(_config.qbt.username) + '&password=' + encodeURIComponent(_config.qbt.password));
-  if (res.status === 200) _cookie = res.body;
+  // 存量缺陷修正：原 `_cookie = res.body` 存的是登录响应体（"Ok."）而非会话且从不回放，现由 _http 经 qbtCred.takeSession 捕获并回放 SID/CSRF
   return res;
+}
+
+/**
+ * D3 凭据编排（Task6；纯函数，无 fs/网络，依赖注入供单测；真实适配层见 qbt-credential.js）：
+ *   - stored 已有 → 原样返回，零调用
+ *   - 无 stored   → login(默认口令) → setPassword(genPw()) → saveCred → 返回新凭据
+ *   - login 或 setPassword reject → 整体 reject，且绝不 saveCred
+ * @param {{stored:?{username:string,password:string}, login:Function, setPassword:Function, saveCred:Function, genPw:Function, defaults:?{username:string,password:string}}} deps
+ */
+async function ensureCredential(deps) {
+  const d = deps || {};
+  if (d.stored) return { username: d.stored.username, password: d.stored.password };
+  const def = d.defaults || {};
+  await d.login(def.username, def.password);
+  const cred = { username: def.username, password: d.genPw() };
+  await d.setPassword(cred.password);
+  await d.saveCred(cred);
+  return cred;
+}
+
+/** 真实入口薄封装：就绪后确保 WebUI 口令；失败仅记 message（口令不落日志） */
+async function _ensureCredentialReal() {
+  try { await qbtCred.ensureReal({ config: _config, http: _http, ensureCredential }); }
+  catch (e) { _log('qbt credential error:', e.message); }
 }
 
 // -----------------------------------------------------------------------
@@ -75,6 +101,8 @@ function start() {
   if (!_config?.qbt?.enabled) return Promise.reject(new Error('qbt disabled'));
   const exe = _config.qbt.exePath;
   if (!fs.existsSync(exe)) return Promise.reject(new Error('qBittorrent 不存在: ' + exe));
+  // D3：先把落盘口令灌进 _config.qbt（重启后就绪轮询的 Basic 认证要用最新凭据），并复位会话
+  qbtCred.applyStored(_config);
   return new Promise((resolve, reject) => {
     const args = ['--configuration=qbt-portable', '--relative-fastresume'];
     _proc = spawn(exe, args, {
@@ -88,7 +116,11 @@ function start() {
     // 等 Web API 就绪
     const deadline = Date.now() + 30000;
     const poll = async () => {
-      try { const r = await _http('GET', '/api/v2/app/version'); if (r.status === 200) { _log('qbt ready'); resolve(true); return; } } catch (e) {}
+      try {
+        const r = await _http('GET', '/api/v2/app/version');
+        // D3：就绪后确保 WebUI 凭据（首启生成随机口令并落盘），再放行启动
+        if (r.status === 200) { _log('qbt ready'); await _ensureCredentialReal(); resolve(true); return; }
+      } catch (e) {}
       if (Date.now() > deadline) { reject(new Error('qbt start timeout')); return; }
       setTimeout(poll, 500);
     };
@@ -314,5 +346,5 @@ function shutdown() { return stop(); }
 module.exports = {
   setConfig, start, stop, isRunning,
   addTorrent, buildAddFormBody, listTorrents, getTorrentFiles, deleteTorrent, pauseResume, getProgress,
-  cleanOrphans, shutdown,
+  cleanOrphans, shutdown, ensureCredential, _ensureCredentialReal,
 };
