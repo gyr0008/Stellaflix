@@ -73,12 +73,12 @@ function makeEl(tag) {
   };
   el.querySelectorAll = function (selector) {
     const out = [];
+    // 真 DOM 作用域：只搜索调用节点 this 的子树（闭包 el 不再作根）；
+    // 仿 matches() 语义：节点自身命中选择器也计入。
     (function walk(node) {
-      node.children.forEach((child) => {
-        if (matches(child, selector)) out.push(child);
-        walk(child);
-      });
-    })(el);
+      if (matches(node, selector)) out.push(node);
+      node.children.forEach((child) => walk(child));
+    })(this);
     return out;
   };
   el.querySelector = function (selector) { return this.querySelectorAll(selector)[0] || null; };
