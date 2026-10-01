@@ -36,11 +36,17 @@ function setConfig(cfg) {
 // -----------------------------------------------------------------------
 //  HTTP 封装
 // -----------------------------------------------------------------------
-function _http(method, pathname, body) {
+/**
+ * @param {string} method
+ * @param {string} pathname
+ * @param {Buffer|string} [body]
+ * @param {string} [contentType] 缺省 application/x-www-form-urlencoded（向后兼容旧调用点）
+ */
+function _http(method, pathname, body, contentType) {
   return new Promise((resolve, reject) => {
     const port = _config?.qbt?.port || 8080;
     const auth = Buffer.from((_config?.qbt?.username || 'admin') + ':' + (_config?.qbt?.password || 'adminadmin')).toString('base64');
-    const opts = { hostname: '127.0.0.1', port, path: pathname, method, headers: { Authorization: 'Basic ' + auth, 'Content-Type': 'application/x-www-form-urlencoded' } };
+    const opts = { hostname: '127.0.0.1', port, path: pathname, method, headers: { Authorization: 'Basic ' + auth, 'Content-Type': contentType || 'application/x-www-form-urlencoded' } };
     const req = http.request(opts, res => {
       let data = '';
       res.on('data', d => data += d);
@@ -124,10 +130,115 @@ function stop() {
 //  任务管理
 // -----------------------------------------------------------------------
 
+// -----------------------------------------------------------------------
+//  任务表单构造（纯函数，不发请求，便于单测）
+// -----------------------------------------------------------------------
+
+const CRLF = '\r\n';
+const BOUNDARY_BASE = '----SFV.qbtAdd.bnd';
+
 /**
- * 添加磁力/URL 任务
+ * 净化用户上传文件名：去掉双引号与 CR/LF（防 multipart header 注入伪头部），
+ * 并去掉其它控制字符；空值兜底为固定名。
+ * @param {string} name
+ * @returns {string}
+ */
+function sanitizeFileName(name) {
+  const cleaned = String(name == null ? '' : name)
+    .replace(/["\r\n]/g, '')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .trim();
+  return cleaned || 'upload.torrent';
+}
+
+/** 表单文本字段值同样去 CR/LF，避免越界到 header 行 */
+function sanitizeFieldValue(value) {
+  return String(value == null ? '' : value).replace(/[\r\n]/g, '');
+}
+
+/**
+ * 收集与既有 url 分支一致的公共字段集（对齐 spec §3：顺序下载 + 首尾 piece + 不做种）
+ * @returns {Array<[string,string]>}
+ */
+function collectAddFields(opts, qbt) {
+  const fields = [];
+  const savePath = opts.savePath || qbt.defaultSavePath;
+  if (savePath) fields.push(['savepath', sanitizeFieldValue(savePath)]);
+  fields.push(['autoTMM', 'false']);
+  fields.push(['paused', opts.autoStart === false ? 'true' : 'false']);
+  fields.push(['seedingTimeLimit', '0']);     // 默认不做种
+  fields.push(['sequentialDownload', opts.sequential !== false ? 'true' : 'false']);
+  fields.push(['firstLastPiecePrio', opts.firstLastPiecePrio !== false ? 'true' : 'false']);
+  return fields;
+}
+
+/**
+ * 选一个不与任何分段内容冲突的 boundary（拼接安全）
+ * @param {Array<Buffer|string>} payloads
+ * @returns {string}
+ */
+function pickBoundary(payloads) {
+  for (let i = 0; i < 64; i++) {
+    const candidate = BOUNDARY_BASE + i;
+    if (!payloads.some(p => p.indexOf(candidate) !== -1)) return candidate;
+  }
+  throw new Error('无法为 multipart 表单选出安全分隔符');
+}
+
+/**
+ * 构造 qBittorrent /api/v2/torrents/add 的请求体（纯函数，不发请求）
+ *   - opts.url 非空            → application/x-www-form-urlencoded
+ *   - opts.torrentBase64 非空  → multipart/form-data（文件段字段名 torrents）
+ *   - 两者皆空                 → throw
+ * @param {object} opts  { url } | { torrentBase64, fileName } + savePath/sequential/firstLastPiecePrio/autoStart
+ * @param {object} cfg   全局配置（读 cfg.qbt.defaultSavePath）
+ * @returns {{ body: Buffer|string, headers: { 'Content-Type': string } }}
+ */
+function buildAddFormBody(opts, cfg) {
+  opts = opts || {};
+  const qbt = (cfg && cfg.qbt) || {};
+  const fields = collectAddFields(opts, qbt);
+
+  if (opts.url) {
+    const form = new URLSearchParams();
+    form.append('urls', String(opts.url));
+    for (const field of fields) form.append(field[0], field[1]);
+    return { body: form.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } };
+  }
+
+  if (opts.torrentBase64) {
+    const torrent = Buffer.from(String(opts.torrentBase64), 'base64');
+    if (!torrent.length) throw new Error('torrent 文件内容为空或 base64 非法');
+    const fileName = sanitizeFileName(opts.fileName);
+    const boundary = pickBoundary([torrent, fileName].concat(fields.map(f => f[0]).concat(fields.map(f => f[1]))));
+    const chunks = [];
+    const push = text => chunks.push(Buffer.from(text, 'utf8'));
+    // 文件段（字段名 torrents 为 qbt Web API 约定）
+    push('--' + boundary + CRLF);
+    push('Content-Disposition: form-data; name="torrents"; filename="' + fileName + '"' + CRLF);
+    push('Content-Type: application/x-bittorrent' + CRLF + CRLF);
+    chunks.push(torrent);
+    push(CRLF);
+    // 其余文本字段
+    for (const field of fields) {
+      push('--' + boundary + CRLF);
+      push('Content-Disposition: form-data; name="' + field[0] + '"' + CRLF + CRLF);
+      push(field[1]);
+      push(CRLF);
+    }
+    push('--' + boundary + '--' + CRLF);
+    return { body: Buffer.concat(chunks), headers: { 'Content-Type': 'multipart/form-data; boundary=' + boundary } };
+  }
+
+  throw new Error('addTorrent 需要 url 或 torrentBase64');
+}
+
+/**
+ * 添加磁力/URL 任务，或上传 .torrent 文件任务（D2）
  * @param {object} opts
  *   - url: 磁力或种了 URL
+ *   - torrentBase64: .torrent 文件的 base64（与 url 二选一，url 优先）
+ *   - fileName: 上传文件名（multipart 中会净化）
  *   - savePath: 保存目录（可选，默认用配置）
  *   - sequential: 是否顺序下载（默认 true，对齐 PDF 4.2）
  *   - firstLastPiecePrio: 是否优先首尾 piece（默认 true）
@@ -137,16 +248,8 @@ async function addTorrent(opts) {
   opts = opts || {};
   await start();
   await _login();
-  const form = new URLSearchParams();
-  form.append('urls', opts.url);
-  if (opts.savePath) form.append('savepath', opts.savePath);
-  else if (_config.qbt.defaultSavePath) form.append('savepath', _config.qbt.defaultSavePath);
-  form.append('autoTMM', 'false');
-  form.append('paused', opts.autoStart === false ? 'true' : 'false');
-  form.append('seedingTimeLimit', '0');     // 默认不做种
-  form.append('sequentialDownload', opts.sequential !== false ? 'true' : 'false');
-  form.append('firstLastPiecePrio', opts.firstLastPiecePrio !== false ? 'true' : 'false');
-  const res = await _http('POST', '/api/v2/torrents/add', form.toString());
+  const built = buildAddFormBody(opts, _config || {});
+  const res = await _http('POST', '/api/v2/torrents/add', built.body, built.headers['Content-Type']);
   if (res.status !== 200) throw new Error('add torrent failed: ' + res.body);
   return res.body;
 }
@@ -210,6 +313,6 @@ function shutdown() { return stop(); }
 
 module.exports = {
   setConfig, start, stop, isRunning,
-  addTorrent, listTorrents, getTorrentFiles, deleteTorrent, pauseResume, getProgress,
+  addTorrent, buildAddFormBody, listTorrents, getTorrentFiles, deleteTorrent, pauseResume, getProgress,
   cleanOrphans, shutdown,
 };
