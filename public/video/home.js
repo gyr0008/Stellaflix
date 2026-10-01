@@ -1216,9 +1216,10 @@
   }
 
   function boot() {
-    // 先异步加载持久化海报（文件存储）到内存缓存，再 install/render，
-    // 确保首次渲染时自定义海报已就绪；加载失败也不阻塞安装。
-    loadPosterStore().then(function () {
+    // 先异步加载持久化海报 + 等待数据 vault 回填（1.5s 内部超时兜底），
+    // 确保首次渲染时自定义海报与换桶回填的数据已就绪；任一失败都不阻塞安装。
+    var vaultReady = (SFV.vault && SFV.vault.ready) ? SFV.vault.ready : Promise.resolve(false);
+    Promise.all([loadPosterStore(), vaultReady]).then(function () {
       var doc = d();
       if (doc && doc.readyState === 'loading' && doc.addEventListener) {
         doc.addEventListener('DOMContentLoaded', install);

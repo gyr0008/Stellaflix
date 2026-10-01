@@ -159,7 +159,7 @@
     } catch (e) { return []; }
   }
   function writeAll(arr) {
-    try { LS.setItem(KEY, JSON.stringify(arr)); return true; } catch (e) { return false; }
+    try { LS.setItem(KEY, JSON.stringify(arr)); if (SFV.vault) SFV.vault.mirror(); return true; } catch (e) { return false; }
   }
   function normalize(rec) {
     var prog = (typeof rec.progress === 'number') ? rec.progress : (rec.finished ? 1 : 0);

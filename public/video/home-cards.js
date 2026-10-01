@@ -259,6 +259,13 @@
     }
   }
 
+  // 换桶回填若晚于首帧（ready 超时路径），回填完成后重绘一次卡片
+  if (global.addEventListener) {
+    global.addEventListener('sfv:vault-restored', function () {
+      if (SFV.home && typeof SFV.home.render === 'function') { try { SFV.home.render(); } catch (e) { /* ignore */ } }
+    });
+  }
+
   SFV.homeCards = {
     latestProgress: latestProgress,
     cardDefs: cardDefs,

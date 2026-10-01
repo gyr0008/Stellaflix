@@ -343,6 +343,7 @@
         title: item.title || '',
         ts: (typeof Date !== 'undefined' ? Date.now() : 0)
       }));
+      if (SFV.vault) SFV.vault.mirror();
     } catch (e) { /* ignore */ }
   }
 

@@ -69,6 +69,7 @@
   function writeJSON(key, val) {
     try {
       global.localStorage.setItem(key, JSON.stringify(val));
+      if (SFV.vault) SFV.vault.mirror();
       return true;
     } catch (e) {
       return false;
