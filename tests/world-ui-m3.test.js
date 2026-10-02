@@ -31,7 +31,7 @@ test('index.html：M3 换代后启动链 —— 旧渲染项摘除，world-socia
   assert.ok(!/video\/world-cesium\.js/.test(html), 'world-cesium.js 应已摘除（归档 _archive/）');
 });
 
-test('world-ui.js 提供品牌叠层 / ON AIR / 统计 / toast / 加载 / 烟花画布（卡片面已退役）', () => {
+test('world-ui.js 提供品牌叠层 / ON AIR / toast / 加载 / 烟花画布（统计条与卡片面已退役）', () => {
   const src = read('public/video/world-ui.js');
   // Task 9 口号改版（用户裁决：听→看）：新口号必须在；旧英文标题/旧副标题仍禁
   assert.match(src, /看看世界都在看什么/, '新口号必须挂出');
@@ -41,11 +41,10 @@ test('world-ui.js 提供品牌叠层 / ON AIR / 统计 / toast / 加载 / 烟花
   // ON AIR 保留（可点按钮）
   assert.match(src, /world-on-air/);
   assert.match(src, /world-on-air-dot/);
-  // 统计面板（Task 9 文案：N 个放映厅 · N 正在放映）
-  assert.match(src, /world-stats/);
-  assert.match(src, /个放映厅/);
-  assert.match(src, /正在放映/);
-  assert.match(src, /setStats/);
+  // 统计条退役（2026-10-01 用户裁决「删」：自研件非 hearthere 原样，仅保留 hearthere 设计）
+  assert.ok(!/world-stats/.test(src), 'world-stats 不得再挂出');
+  assert.ok(!/setStats/.test(src), 'setStats 应整体退役');
+  assert.ok(!/个放映厅/.test(src), '「N 个放映厅」文案应随统计条退役');
   // toast
   assert.match(src, /world-toast/);
   assert.match(src, /function toast\(/);
@@ -59,7 +58,7 @@ test('world-ui.js 提供品牌叠层 / ON AIR / 统计 / toast / 加载 / 烟花
   // 烟花画布
   assert.match(src, /world-fireworks/);
   // 导出
-  for (const fn of ['mount', 'unmount', 'toast', 'setStats', 'setOnAir', 'showLoading', 'hideLoading', 'fireworksCanvas']) {
+  for (const fn of ['mount', 'unmount', 'toast', 'setOnAir', 'showLoading', 'hideLoading', 'fireworksCanvas']) {
     assert.ok(new RegExp('\\b' + fn + '\\b').test(src), `应导出 ${fn}`);
   }
 });
@@ -105,14 +104,27 @@ test('world-actions.js（已归档 _archive/）保留旧 Cesium 面回归：快�
   }
 });
 
-test('lighthouse.css 含 M3 视觉（统计/hints/toast/加载/烟花），旧卡片样式已归档', () => {
+test('lighthouse.css 含 M3 视觉（hints/toast/加载/烟花），统计条与旧卡片样式已退役', () => {
   const css = read('public/video/lighthouse/lighthouse.css');
   for (const cls of [
-    'world-stats', 'world-hints', 'world-toast', 'world-fireworks',
+    'world-hints', 'world-toast', 'world-fireworks',
     'world-loading', 'world-on-air'
   ]) {
     assert.ok(css.includes('.' + cls), `CSS 应含 .${cls}`);
   }
+  // 统计条退役（2026-10-01 用户裁决「删」）
+  assert.ok(!/\.world-stats/.test(css), 'lighthouse.css 不得再有 .world-stats 样式');
+  // 轮⑪（2026-10-02 用户裁决）：快捷键条挂左下边缘，不得再挂右
+  const hintsRule = css.match(/\.world-hints\s*\{[^}]*\}/);
+  assert.ok(hintsRule, '.world-hints 规则必须存在');
+  assert.match(hintsRule[0], /left:\s*22px/, '快捷键条应贴左边缘（left: 22px）');
+  assert.ok(!/right:\s*22px/.test(hintsRule[0]), '快捷键条不得再挂右侧（创建放映独占右下）');
+  // 轮⑮（harness5 实测）：canvas 属替换元素，absolute+inset:0 不会拉伸，恒为固有 300×150
+  // → 必须显式 width/height:100%，否则烟花只画在左上角小盒里（审⑭连带缺陷）
+  const fwRule = css.match(/\.world-fireworks\s*\{[^}]*\}/);
+  assert.ok(fwRule, '.world-fireworks 规则必须存在');
+  assert.match(fwRule[0], /width:\s*100%/, '烟花画布必须显式铺满宽');
+  assert.match(fwRule[0], /height:\s*100%/, '烟花画布必须显式铺满高');
   // ④-4：.world-card* 已整块归档 _archive/world-card.pre-hearthere-20260927.css
   assert.ok(!/world-card/.test(css), 'lighthouse.css 不得再有旧卡片样式');
   // 毛玻璃质感（hearthere 的关键词）
@@ -134,9 +146,9 @@ test('page-world.js 把 onBeaconClick 接到 ht-panel 卡片，并在 unmount �
   assert.match(src, /worldMapActions\.mount/);
   assert.match(src, /worldUi\.unmount/);
   assert.match(src, /worldMapActions\.unmount/);
-  // 欢迎 toast + 统计（房间语义）
+  // 欢迎 toast 保留；统计条接线已退役（2026-10-01 用户裁决「删」）
   assert.match(src, /发现 .* 个放映房间/);
-  assert.match(src, /setStats/);
+  assert.ok(!/setStats/.test(src), 'page-world 不得再调 setStats（统计条已退役）');
   // CTA 主按钮走本地房间语义（tune_in → joinWatchRoom），不是电台收听
   assert.match(src, /'tune_in'/);
   assert.match(src, /joinWatchRoom/);
@@ -163,13 +175,22 @@ test('ON AIR 是可点击按钮，并接了处理函数', () => {
   assert.match(pw, /onAirCursor/);
 });
 
-test('右下快捷键条是可点击按钮（含自转），不只是键盘提示', () => {
+test('快捷键条（左下）仅剩 R/A/点火 —— Esc关卡片/F收藏/♥点赞按钮已退役（轮⑫）', () => {
   const ui = read('public/video/world-ui.js');
   assert.match(ui, /world-hint-btn/);
-  // 四项动作标识（数组里声明，setAttribute 统一绑定）
-  for (const act of ["'reset'", "'favorite'", "'rotate'", "'esc'"]) {
+  // 保留项动作标识
+  for (const act of ["'reset'", "'rotate'"]) {
     assert.ok(ui.includes(act), `应有动作 ${act}`);
   }
+  // 轮⑫（2026-10-02 用户裁决「删」）：三按钮整链退役
+  assert.ok(!ui.includes("'esc'"), 'items 不得再有 esc 关卡片按钮');
+  assert.ok(!ui.includes("'favorite'"), 'items 不得再有 favorite 收藏按钮');
+  assert.ok(!ui.includes('关卡片'), '不得再渲染「关卡片」文案');
+  assert.ok(!ui.includes('likeBtnEl'), '♥ 点赞按钮（likeBtnEl）应退役');
+  assert.ok(!ui.includes('world-like-btn'), '不得再挂载 .world-like-btn');
+  assert.ok(!ui.includes('♥ 点赞'), '不得再渲染「♥ 点赞」文案');
+  // 接收面保留：onLike 订阅（有人点赞 toast）不在本轮删除范围
+  assert.ok(ui.includes('onLike'), 'onLike 接收订阅应保留');
   assert.match(ui, /setAttribute\('data-act'/);
   assert.ok(ui.includes('setHintHandler'), '应导出 setHintHandler');
   assert.ok(ui.includes('setRotateState'), '应导出 setRotateState');
@@ -178,6 +199,8 @@ test('右下快捷键条是可点击按钮（含自转），不只是键盘提�
   assert.match(pw, /setHintHandler/);
   assert.match(pw, /setRotateState/);
   assert.match(pw, /act === 'rotate'/);
+  assert.ok(!pw.includes("act === 'esc'"), 'hintHandler esc 分支应随按钮退役（键盘 Esc 面在 world-map-actions）');
+  assert.ok(!pw.includes("act === 'favorite'"), 'hintHandler favorite 分支应随按钮退役（卡片收藏星保留）');
 
   const css = read('public/video/lighthouse/lighthouse.css');
   assert.match(css, /\.world-hint-btn/);
@@ -192,4 +215,11 @@ test('M3 模块语法合法', () => {
     });
     assert.ok(r === '' || r == null, `${f} 语法应通过`);
   }
+});
+
+test('轮⑰：fireworkAt —— 投影器 null=hearthere 门槛剔除，跳过不放（不再中央兜底）', () => {
+  const src = read('public/video/world-ui.js');
+  const fn = src.match(/function fireworkAt\([\s\S]*?\n {2}\}/);
+  assert.ok(fn, 'fireworkAt 必须存在');
+  assert.match(fn[0], /if \(!pos\) return/, '投影器返回 null 必须直接 return');
 });

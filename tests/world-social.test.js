@@ -6,13 +6,14 @@
  *
  * 客户端：vm 沙箱加载真实 public/video/world-sync.js + world-social.js，
  *   now/fetch/localStorage/setInterval 全部注入，断言：
- *   库存增减、无库存 light() 返回 false 且不 POST、complete 事件 +1 且
- *   同 index 不重复计、since 增量拉取、onFirework 订阅回调、stop 后 interval 清零。
+ *   light() 无限化恒 true 且 POST（轮⑱ 库存链退役）、since 增量拉取、
+ *   onFirework 订阅回调、stop 后 interval 清零。
  * 服务端：直接 require world-room-api.js，用假 req（EventEmitter）驱动 handle，
  *   断言 /api/room/fireworks、/api/room/likes 两个全站频道：seq 单调增、
  *   环形缓冲淘汰（上限 100）、无碰撞论证（房间码恒 6 位，字面量 9/5 位）。
  *
- * 语义源：HearThere main.pretty.js :238-240（收听奖励 → Stellaflix 看完整片奖励）；
+ * 语义源：HearThere main.pretty.js :238-240（收听奖励）——轮⑱（2026-10-02 用户裁决）
+ *   改为无限点火：库存/看完整片记账链整体退役，门槛移到 UI 的「选中灯塔」判定；
  *   粒子参数移植自 public/video/world-actions.js:77-177（对齐 hearthere fireworks.js）。
  */
 
@@ -71,8 +72,6 @@ function loadSocial(opts) {
       ? { session: { code: 'ABC123', role: 'guest', deviceId: 'dev-1' } }
       : opts.worldRoom
   };
-  if (opts.dropWorldSync) sandbox.StellaflixVideo.worldSync = null;
-
   vm.createContext(sandbox);  vm.runInContext(read('public/video/world-sync.js'), sandbox);
   vm.runInContext(read('public/video/world-social.js'), sandbox);
   const S = sandbox.StellaflixVideo.worldSocial;
@@ -84,107 +83,40 @@ function loadSocial(opts) {
     setInterval: (fn, ms) => { intervals.push({ fn, ms, cleared: false }); return intervals.length; },
     clearInterval: (id) => { const it = intervals[id - 1]; if (it) it.cleared = true; }
   });
-  if (opts.dropWorldSync) {
-    // 用假 worldSync（currentTrack 恒 null）覆盖真实实现，验证「缺 currentTrack 不动作」
-    sandbox.StellaflixVideo.worldSync = { currentTrack: () => null };
-  }
   return { S, sandbox, posts, gets, storage, intervals };
 }
 
-// ---------- 库存 / light ----------
+// ---------- light() 无限化（轮⑱）/ 库存链退役 ----------
 
-test('库存默认 0：无库存 light() 返回 false 且不发任何 POST', () => {
-  const { S, posts } = loadSocial();
-  assert.equal(S.stock(), 0);
-  assert.equal(S.light('room-1'), false);
-  assert.equal(posts.length, 0, '无库存必须零网络请求');
-  assert.equal(S.stock(), 0, '失败路径不得动库存');
-});
-
-test('light()：有库存 → 扣 1、POST /api/room/fireworks 带 deviceId+payload.stationId、返回 true', async () => {
-  const { S, posts, storage } = loadSocial({ storage: fakeStorage({ 'stellaflix-world-fireworks-stock': '2' }) });
-  assert.equal(S.stock(), 2);
+test('轮⑱：light() 无限化 —— 零库存恒 true 且每点必 POST（可连发）', async () => {
+  const { S, posts, storage } = loadSocial();
   assert.equal(S.light('room-1'), true);
-  assert.equal(S.stock(), 1);
-  assert.equal(storage.getItem('stellaflix-world-fireworks-stock'), '1', '库存必须落 localStorage');
-  assert.equal(posts.length, 1);
-  assert.match(posts[0].url, /^http:\/\/127\.0\.0\.1:3000\/api\/room\/fireworks$/);
+  assert.equal(S.light('room-2'), true);
+  assert.equal(S.light('room-3'), true);
+  assert.equal(posts.length, 3, '无限点火：每点必发');
+  assert.equal(storage.getItem('stellaflix-world-fireworks-stock'), null, '不得再读写库存键');
+  assert.equal(storage.getItem('stellaflix-world-completed-keys'), null, '不得再读写记账键');
   assert.equal(posts[0].init.method, 'POST');
+  assert.match(posts[0].url, /^http:\/\/127\.0\.0\.1:3000\/api\/room\/fireworks$/);
   const body = JSON.parse(posts[0].init.body);
   assert.equal(body.deviceId, 'dev-1');
   assert.equal(body.payload.stationId, 'room-1');
-
-  // 再点两发：库存归零后返回 false（2→1→0→拒绝）
-  assert.equal(S.light('room-1'), true);
-  assert.equal(S.stock(), 0);
-  assert.equal(S.light('room-1'), false);
-  assert.equal(posts.length, 2, '无库存不 POST');
 });
 
-test('like()：点赞走 /api/room/likes 发布面，无库存门槛、不动库存', () => {
-  const { S, posts, storage } = loadSocial();
-  assert.equal(S.stock(), 0);
-  assert.equal(S.like('room-9'), true);
-  assert.equal(posts.length, 1);
-  assert.match(posts[0].url, /\/api\/room\/likes$/);
-  const body = JSON.parse(posts[0].init.body);
-  assert.equal(body.deviceId, 'dev-1');
-  assert.equal(body.payload.stationId, 'room-9');
-  assert.equal(S.stock(), 0, '点赞不设库存门槛也不消耗库存');
-  assert.equal(storage.getItem('stellaflix-world-fireworks-stock'), null);
-});
-
-// ---------- complete 判定（消费 Task 7 currentTrack 钳制语义） ----------
-
-test('handleProgress：elapsedMs 到达片尾 → 库存 +1；未到片尾 / 重复同 index 不再加', () => {
+test('轮⑱：库存链全退役 —— stock/handleProgress/checkProgress/STOCK_KEY/SEEN_KEY 摘出导出面', () => {
   const { S } = loadSocial();
-  const room = {
-    code: 'ABC123',
-    queue: [{ title: 'A', duration_ms: 60000 }, { title: 'B', duration_ms: 90000 }],
-    current_position: 0,
-    start_time: 1000
-  };
-  assert.equal(S.handleProgress(room, 1000 + 30000), false, '半程不记');
-  assert.equal(S.stock(), 0);
-  assert.equal(S.handleProgress(room, 1000 + 60000), true, '钳制到 duration 即片尾');
-  assert.equal(S.stock(), 1);
-  assert.equal(S.handleProgress(room, 1000 + 999999), false, '同 room 同 index 只记一次');
-  assert.equal(S.stock(), 1);
-  // 换到第二轨并播完 → 再 +1
-  room.current_position = 1;
-  assert.equal(S.handleProgress(room, 1000 + 60000 + 90000), true);
-  assert.equal(S.stock(), 2);
+  assert.equal(typeof S.stock, 'undefined', 'stock() 应已退役');
+  assert.equal(typeof S.handleProgress, 'undefined', 'handleProgress() 应已退役');
+  assert.equal(typeof S.checkProgress, 'undefined', 'checkProgress() 应已退役');
+  assert.equal(S.STOCK_KEY, undefined, 'STOCK_KEY 导出面应已退役');
+  assert.equal(S.SEEN_KEY, undefined, 'SEEN_KEY 导出面应已退役');
 });
 
-test('handleProgress：playlist 嵌套面同样可判；换房间（不同 code）同 index 可再记一次', () => {
-  const { S } = loadSocial();
-  const room = {
-    code: 'XYZ789',
-    playlist: {
-      queue: [{ title: 'A', duration_ms: 60000 }],
-      current_position: 0,
-      start_time: 1000
-    }
-  };
-  assert.equal(S.handleProgress({ code: 'XYZ789', ...room.playlist }, 61000), true);
-  assert.equal(S.stock(), 1);
-  assert.equal(S.handleProgress(room, 61000), false);
-  const otherRoom = { code: 'QQQ111', queue: [{ title: 'A', duration_ms: 60000 }], current_position: 0, start_time: 1000 };
-  assert.equal(S.handleProgress(otherRoom, 61000), true, '另一房间同一部片：各记各的');
-  assert.equal(S.stock(), 2);
-});
-
-test('handleProgress：currentTrack 为 null（空房间/缺字段/模块缺失）一律不动作', () => {
-  const { S } = loadSocial();
-  assert.equal(S.handleProgress(null, 999999), false);
-  assert.equal(S.handleProgress({}, 999999), false, '缺 queue/start_time → currentTrack null');
-  assert.equal(S.stock(), 0);
-
-  const noSync = loadSocial({ dropWorldSync: true });
-  assert.equal(noSync.S.handleProgress({
-    code: 'ABC123', queue: [{ title: 'A', duration_ms: 1 }], current_position: 0, start_time: 0
-  }, 999999), false, 'worldSync.currentTrack 缺失/返回 null → 不动作');
-  assert.equal(noSync.S.stock(), 0);
+test('轮⑯：like() 发布面退役（轮⑫ 删按钮后零调用方）；onLike 接收面与 likes 轮询保留', () => {
+  const { S, posts } = loadSocial();
+  assert.equal(typeof S.like, 'undefined', 'like() 应从导出面摘除');
+  assert.equal(typeof S.onLike, 'function', 'onLike 接收面保留（轮⑫ 用户裁决）');
+  assert.equal(posts.length, 0, '装载即零发布');
 });
 
 // ---------- 轮询信箱：since 增量 + 订阅回调 + start/stop ----------
@@ -235,9 +167,10 @@ test('start/stop：默认 5000ms 轮询；stop 清 interval；重复 start 可�
   assert.equal(intervals[1].cleared, true, 'stop 后 interval 必须清零');
   S.stop();
   assert.equal(S.running(), false);
-  // Fix round 1 · I-1：轮询循环体必须同轮驱动 pollOnce 与 checkProgress（源码面锁死）
+  // 轮⑱：库存记账链退役后，轮询循环体只驱动 pollOnce（源码面锁死）
   assert.match(read('public/video/world-social.js'),
-    /function \(\) \{ pollOnce\(\); checkProgress\(\); \}/);
+    /function \(\) \{ pollOnce\(\); \}/);
+  assert.ok(!/checkProgress/.test(read('public/video/world-social.js')), 'checkProgress 应已整体退役');
 });
 
 test('轮询静默失败：fetch reject 不 throw、不打断订阅', async () => {
@@ -270,65 +203,6 @@ test('pollOnce：fetch 同步 throw → pollOnce 仍 resolve(0) 静默', async (
   assert.equal(await S.pollOnce(), 0);
 });
 
-// ---------- Fix round 1 · I-1：看完得票闭环（checkProgress 生产接线） ----------
-
-test('checkProgress：会话房间内片尾房间 → 记账 +1 并刷新 worldUi 库存徽章', async () => {
-  let calls = 0;
-  const badges = [];
-  const { S } = loadSocial({
-    now: () => 61000,
-    worldData: { fetchRooms: () => { calls++; return Promise.resolve({ rooms: [
-      { id: 'room-ABC123', roomId: 'ABC123', name: 'x',
-        playlist: { queue: [{ title: 'A', duration_ms: 60000 }], current_position: 0, start_time: 1000 } }
-    ] }); } },
-    worldUi: { setFireworkStock: (n) => badges.push(n) }
-  });
-  assert.equal(await S.checkProgress(), true);
-  assert.equal(S.stock(), 1, '片尾到达 → 库存 +1');
-  assert.equal(badges[0], 1, 'worldUi.setFireworkStock 收到新库存');
-  assert.equal(await S.checkProgress(), false, '同 index 只记一次');
-  assert.equal(S.stock(), 1);
-  assert.equal(calls, 2, '每轮拉一次房间列表');
-});
-
-test('checkProgress：无会话 / worldData 缺失 → false 且零 fetchRooms 调用（零空转）', async () => {
-  let calls = 0;
-  const wd = { fetchRooms: () => { calls++; return Promise.resolve({ rooms: [] }); } };
-  const noSession = loadSocial({ worldData: wd, worldRoom: null });
-  assert.equal(await noSession.S.checkProgress(), false);
-  assert.equal(calls, 0, '无会话不得打房间列表');
-  const noWd = loadSocial({ worldData: undefined });
-  assert.equal(await noWd.S.checkProgress(), false, 'worldData 缺失静默 false');
-  const { S } = loadSocial({ worldData: wd });
-  assert.equal(await S.checkProgress(), false, '会话中但房间不在列表 → false');
-  assert.equal(S.stock(), 0);
-});
-
-test('checkProgress：fetchRooms reject / 同步 throw → 静默 false 从不 throw', async () => {
-  const rej = loadSocial({ worldData: { fetchRooms: () => Promise.reject(new Error('net')) } });
-  assert.equal(await rej.S.checkProgress(), false);
-  const thr = loadSocial({ worldData: { fetchRooms: () => { throw new Error('boom'); } } });
-  assert.equal(await thr.S.checkProgress(), false);
-});
-
-test('start 轮询循环体同轮驱动 pollOnce 与 checkProgress；stop 全清', async () => {
-  const badges = [];
-  let calls = 0;
-  const { S, intervals } = loadSocial({
-    now: () => 61000,
-    worldData: { fetchRooms: () => { calls++; return Promise.resolve({ rooms: [
-      { roomId: 'ABC123', playlist: { queue: [{ title: 'A', duration_ms: 60000 }], current_position: 0, start_time: 1000 } }
-    ] }); } },
-    worldUi: { setFireworkStock: (n) => badges.push(n) }
-  });
-  S.start(700);
-  await intervals[0].fn(); // 修复前：fn 无返回且 checkProgress 不存在（TypeError 即 RED）
-  assert.equal(calls, 1, 'interval 体必须调 checkProgress');
-  assert.equal(S.stock(), 1, '生产闭环：start → tick → 记账 +1');
-  assert.equal(badges[0], 1, '生产闭环：徽章刷新');
-  S.stop();
-});
-
 // ---------- 渲染面：粒子引擎移植 + UI 挂点（源码断言） ----------
 
 test('world-social.js 粒子引擎移植自 world-actions.js:77-177（参数对齐 hearthere）', () => {
@@ -340,12 +214,14 @@ test('world-social.js 粒子引擎移植自 world-actions.js:77-177（参数对�
   assert.match(src, /vx \*= 0\.985/, '摩擦参数与旧引擎一致');
 });
 
-test('world-ui.js：点火按钮 + 库存计数 + 无库存 toast，挂在 SFV.worldUi 导出面尾部', () => {
+test('world-ui.js：轮⑱ 点火按钮 —— 选中灯塔即点；库存角标与「攒一发」toast 退役', () => {
   const src = read('public/video/world-ui.js');
   assert.match(src, /点火/, '「点火！」按钮');
-  assert.match(src, /先看完一部片攒一发/, '无库存 toast 文案');
+  assert.match(src, /先选中一座灯塔/, '未选中门槛 toast 文案');
+  assert.ok(!/先看完一部片攒一发/.test(src), '旧库存 toast 必须退役');
+  assert.ok(!/setFireworkStock/.test(src), '库存徽章链必须退役');
+  assert.ok(!/world-firework-count/.test(src), '×N 角标必须退役');
   assert.match(src, /SFV\.worldSocial/, 'world-ui 消费 worldSocial');
-  assert.match(src, /setFireworkStock/);
   assert.match(src, /setFireworkProjector/);
 });
 
@@ -468,7 +344,7 @@ test('闭环：客户端 light() 驱动真实 handle → pollOnce() 收编为 on
         json: () => Promise.resolve(r.payload)
       }));
   };
-  const { S } = loadSocial({ fetch: bridgedFetch, storage: fakeStorage({ 'stellaflix-world-fireworks-stock': '3' }) });
+  const { S } = loadSocial({ fetch: bridgedFetch });   // 轮⑱：无限点火，无需预置库存
   const fired = [];
   S.onFirework((p) => fired.push(p));
   assert.equal(S.light('room-42'), true);

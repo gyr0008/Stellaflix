@@ -2,19 +2,15 @@
  * Stellaflix 影视模块 — 世界页社交层（Task 8）
  *
  * 语义移植自 HearThere（main.pretty.js :238-240「收听奖励」）：
- *   · Stellaflix 适配：收听奖励 → **看完整片奖励** —— 每完整看完 1 部得 1 发烟花
- *   · 库存是客户端 localStorage 语义，服务端只是广播信箱（无鉴权扣减）
+ *   · 轮⑱（2026-10-02 用户裁决）改「无限点火」：库存/看完整片记账链整体退役，
+ *     light() 恒发布；「选中灯塔」门槛在 UI 侧（world-ui）判定
  *   · 全站频道 /api/room/fireworks、/api/room/likes：轮询信箱模式（对齐 Task 7，无 SSE/WS）
- *
- * 完成判定消费 Task 7：SFV.worldSync.currentTrack(room, nowMs) 的钳制语义 ——
- *   elapsedMs 到达当前轨 duration 即片尾；同一 room 同一 index 只记一次。
  *
  * 烟花粒子引擎移植自 public/video/world-actions.js:77-177（旧 Cesium 时代死模块，
  *   新 page-world 不再调其 celebrate；此处最小移植，参数不动：60~100 粒/发、
  *   球面分布、重力 vy+=0.045、摩擦 vx*=0.985、globalCompositeOperation='lighter'）。
  *
  * 竞态防护：轮询 start/stop 可重入（start 先清旧 interval）；since 增量拉取。
- *   轮询体每轮同时驱动 pollOnce()（信箱）与 checkProgress()（看完整片记账 + 徽章刷新）。
  * 依赖注入：configure({now, fetch, localStorage, setInterval, clearInterval,
  *   requestAnimationFrame, cancelAnimationFrame}) —— 全部可桩，测试不依赖真实时钟。
  */
@@ -35,9 +31,6 @@
     var f = deps.fetch !== undefined ? deps.fetch : global.fetch;
     return typeof f === 'function' ? f : null;
   }
-  function dstorage() {
-    return deps.localStorage !== undefined ? deps.localStorage : global.localStorage;
-  }
   function dsetInterval(fn, ms) {
     var f = deps.setInterval || global.setInterval;
     return f ? f(fn, ms) : 0;
@@ -53,105 +46,6 @@
   function dcaf(id) {
     var f = deps.cancelAnimationFrame || global.cancelAnimationFrame;
     if (f && id) f(id);
-  }
-
-  // ============================================================
-  //  库存（localStorage 键：
-  //    stellaflix-world-fireworks-stock  烟花发数（整数）
-  //    stellaflix-world-completed-keys   已记账的 complete 事件 key 列表）
-  // ============================================================
-  var STOCK_KEY = 'stellaflix-world-fireworks-stock';
-  var SEEN_KEY = 'stellaflix-world-completed-keys';
-  var SEEN_MAX = 300;   // key 列表上限，环形裁剪最旧
-
-  function lsGet(key) {
-    try {
-      var s = dstorage();
-      return s && typeof s.getItem === 'function' ? s.getItem(key) : null;
-    } catch (e) { return null; }
-  }
-  function lsSet(key, val) {
-    try {
-      var s = dstorage();
-      if (s && typeof s.setItem === 'function') s.setItem(key, val);
-    } catch (e) {}
-  }
-
-  function stock() {
-    var n = parseInt(lsGet(STOCK_KEY), 10);
-    return n > 0 ? n : 0;
-  }
-  function setStock(n) {
-    lsSet(STOCK_KEY, String(Math.max(0, Math.floor(Number(n)) || 0)));
-  }
-
-  function readSeen() {
-    try {
-      var arr = JSON.parse(lsGet(SEEN_KEY) || '[]');
-      return Array.isArray(arr) ? arr : [];
-    } catch (e) { return []; }
-  }
-
-  // ============================================================
-  //  完成判定（消费 Task 7 worldSync.currentTrack 钳制语义）
-  //  纯函数：不起计时器；同一 room.queue 同一 index 只记一次 → 库存 +1。
-  //  currentTrack 缺失（模块未加载 / 返回 null）→ 不动作。
-  // ============================================================
-  function handleProgress(room, nowMs) {
-    var ws = SFV.worldSync;
-    if (!ws || typeof ws.currentTrack !== 'function') return false;
-    var cur = ws.currentTrack(room, typeof nowMs === 'number' ? nowMs : dnow());
-    if (!cur) return false;
-    var src = (room && Array.isArray(room.queue)) ? room : (room && room.playlist);
-    if (!src || !Array.isArray(src.queue)) return false;
-    var dur = Number(src.queue[cur.index] && src.queue[cur.index].duration_ms) || 0;
-    if (!(dur > 0) || cur.elapsedMs < dur) return false;   // 未到片尾
-    var key = String(room.code || room.roomId || '?') + ':' + cur.index + ':' + cur.title;
-    var seen = readSeen();
-    if (seen.indexOf(key) >= 0) return false;              // 同 index 不重复计
-    seen.push(key);
-    if (seen.length > SEEN_MAX) seen = seen.slice(seen.length - SEEN_MAX);
-    lsSet(SEEN_KEY, JSON.stringify(seen));
-    setStock(stock() + 1);
-    return true;
-  }
-
-  // ============================================================
-  //  生产接线（Fix round 1 · I-1）：会话房间 → 片尾记账 → 库存徽章刷新
-  //  与 start() 的 5s 轮询同频；无会话/无 worldData 零空转零网络。
-  //  房间定位沿袭既有消费者：GET /api/rooms 列表项（Task 7 已透传 playlist），
-  //  按 SFV.worldRoom.session.code 匹配 roomId / 'room-'+code。
-  // ============================================================
-  var lastShownStock = null;
-  function showStock() {
-    var ui = SFV.worldUi;
-    var n = stock();
-    if (lastShownStock === n) return;
-    lastShownStock = n;
-    if (ui && typeof ui.setFireworkStock === 'function') {
-      try { ui.setFireworkStock(n); } catch (e) {}
-    }
-  }
-
-  function checkProgress() {
-    var s = SFV.worldRoom && SFV.worldRoom.session;
-    var wd = SFV.worldData;
-    if (!s || !s.code || !wd || typeof wd.fetchRooms !== 'function') return Promise.resolve(false);
-    var p;
-    try { p = Promise.resolve(wd.fetchRooms({ limit: 60 })); } catch (e) { return Promise.resolve(false); }
-    return p.then(function (info) {
-      var rooms = (info && info.rooms) || [];
-      for (var i = 0; i < rooms.length; i++) {
-        var r = rooms[i];
-        if (r && (r.roomId === s.code || r.id === 'room-' + s.code)) {
-          var credited = handleProgress(r, dnow());
-          showStock();
-          return credited;
-        }
-      }
-      showStock();
-      return false;
-    }, function () { return false; }).catch(function () { return false; });  // 全程静默，绝不 throw
   }
 
   // ============================================================
@@ -191,20 +85,13 @@
     } catch (e) {}
   }
 
-  /** 点火：扣库存 + POST 广播。无库存返回 false 且零网络请求（toast 文案由 UI 给）。 */
+  /** 轮⑱ 点火：无限化 —— 恒 POST 广播并返回 true（库存门槛退役；「选中灯塔」判定在 UI 侧）。 */
   function light(stationId) {
-    var n = stock();
-    if (n <= 0) return false;
-    setStock(n - 1);
     publish('fireworks', stationId);
     return true;
   }
-
-  /** 点赞：沿用 likes 频道发布面，无库存门槛。 */
-  function like(stationId) {
-    publish('likes', stationId);
-    return true;
-  }
+  // 轮⑯（2026-10-02 用户裁决）：like() 发布面退役——轮⑫ 删除点赞按钮后零调用方；
+  // likes 频道的接收面（onLike toast）与轮询保留。
 
   // ============================================================
   //  订阅轮询信箱：GET ?since=N 增量 → onFirework(payload) / onLike(payload)
@@ -270,7 +157,7 @@
   function start(pollMs) {
     stop();
     var ms = Number(pollMs) > 0 ? Number(pollMs) : DEFAULT_POLL_MS;
-    pollCtl = dsetInterval(function () { pollOnce(); checkProgress(); }, ms);
+    pollCtl = dsetInterval(function () { pollOnce(); }, ms);
   }
   function stop() {
     if (pollCtl) { dclearInterval(pollCtl); pollCtl = 0; }
@@ -393,11 +280,7 @@
 
   SFV.worldSocial = {
     configure: configure,
-    stock: stock,
-    handleProgress: handleProgress,
-    checkProgress: checkProgress,
     light: light,
-    like: like,
     pollOnce: pollOnce,
     start: start,
     stop: stop,
@@ -406,8 +289,6 @@
     onLike: onLike,
     celebrate: celebrate,
     stopLoop: stopLoop,
-    STOCK_KEY: STOCK_KEY,
-    SEEN_KEY: SEEN_KEY,
     DEFAULT_POLL_MS: DEFAULT_POLL_MS
   };
 })(typeof window !== 'undefined' ? window : this);

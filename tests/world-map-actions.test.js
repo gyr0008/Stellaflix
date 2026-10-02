@@ -4,7 +4,7 @@
  * 世界页 Task 6 — 交互行为层（public/video/world-map-actions.js）
  * 运行：node --test tests/world-map-actions.test.js
  *
- * 双装载：__flyOptions / __resetOptions / __rotateStep 等纯配置经
+ * 双装载：__flyOptions / __resetOptions / __spinStep 等纯配置经
  * module.exports 守卫供 Node 直连（同 world-lighthouse-deck.js 模式）；
  * 浏览器面（flyTo/easeTo 接线、自转 rAF 链、拖拽暂停、快捷键）用
  * vm 沙箱 + 假 maplibre map 驱动真实源码。
@@ -41,15 +41,24 @@ test('重置视角参数 = world-globe 初始视图同款（center [104,35] / zo
   assert.deepEqual(API.__resetOptions(), { center: [104, 35], zoom: 2.5, pitch: 0, duration: 1200 });
 });
 
-test('自转步进：每帧 +0.0667°（≈4°/s），bearing 360 回绕，恒落 [0,360)', () => {
-  assert.equal(API.ROTATE_STEP_DEG, 0.0667, '旧面 4°/秒 ÷ 60fps（T9 调参，台账 T6 minor）');
-  assert.ok(approx(API.__rotateStep(0), 0.0667), '0 → 0.0667');
-  assert.ok(approx(API.__rotateStep(179.9), 179.9667), '中段线性推进');
-  assert.ok(approx(API.__rotateStep(359.95), 0.0167), '359.95+0.0667 → 0.0167（360 处回绕）');
-  assert.ok(approx(API.__rotateStep(-0.1), 359.9667), '负输入也回绕到 [0,360)');
-  for (const b of [-720.5, -30, 0, 45.25, 359.99, 720]) {
-    const n = API.__rotateStep(b);
-    assert.ok(n >= 0 && n < 360, `步进结果 ${n}（自 ${b}）应落在 [0,360)`);
+test('自转经度步进（轮⑬ 经度漂移法）：0.25°/s 向西 drift = 24h 改 24min，zoom 联动减速', () => {
+  // 24min/圈 → 360/1440 = 0.25°/s
+  assert.equal(API.SPIN_DEG_PER_SEC, 0.25, '一圈=1440s（真实24h→24min）');
+  // 方向：相机中心经度持续减小 → 地表在视野中向东（右）移 = 真实自转方向
+  assert.ok(approx(API.__spinStep(10, 2.5, 1000), 9.75), '满速 1s → -0.25°');
+  assert.ok(approx(API.__spinStep(0, 2.5, 4000), -1), '4s → -1°');
+  assert.ok(approx(API.__spinStep(0, 2.5, 16), -0.004), '帧率无关：16ms → -0.004°');
+  // zoom 联动（Mapbox globe-spin 同款）：z≤3 满速，z≥5 停转，中间线性衰减
+  assert.ok(approx(API.__spinStep(0, 3, 1000), -0.25), 'z3 满速');
+  assert.ok(approx(API.__spinStep(0, 4, 1000), -0.125), 'z4 半速');
+  assert.ok(approx(API.__spinStep(0, 5, 1000), 0), 'z5 停转（防城市视角刷屏）');
+  assert.ok(approx(API.__spinStep(0, 13, 1000), 0), '高倍恒停');
+  // 经度回绕到 [-180,180)
+  assert.ok(approx(API.__spinStep(-179.9, 2.5, 1000), 179.85), '过 -180 回绕到东经');
+  assert.ok(approx(API.__spinStep(179.9, 2.5, -1000 * 0), 179.9), 'dt=0 不动');
+  for (const lng of [-540.5, -181, -180, 0, 45.25, 179.99, 540]) {
+    const n = API.__spinStep(lng, 2.5, 1000);
+    assert.ok(n >= -180 && n < 180, `步进结果 ${n}（自 ${lng}）应落在 [-180,180)`);
   }
 });
 
@@ -58,10 +67,10 @@ test('自转步进：每帧 +0.0667°（≈4°/s），bearing 360 回绕，恒�
 function makeFakeMap() {
   const handlers = {};
   const canvas = { style: {} };
-  const log = { flyTo: [], easeTo: [] };
+  const log = { flyTo: [], easeTo: [], jumpTo: [] };
   const map = {
     handlers, canvas, log,
-    _bearing: 0, _zoom: 13,
+    _bearing: 0, _zoom: 13, _center: { lng: 0, lat: 0 },
     on(ev, h) { (handlers[ev] = handlers[ev] || []).push(h); },
     off(ev, h) {
       const arr = handlers[ev] || [];
@@ -71,10 +80,16 @@ function makeFakeMap() {
     emit(ev, e) { (handlers[ev] || []).slice().forEach((h) => h(e || {})); },
     getZoom() { return map._zoom; },
     getBearing() { return map._bearing; },
+    getCenter() { return map._center; },
     getCanvas() { return canvas; },
     project(lngLat) { return { x: 400, y: 300 }; },
     flyTo(o) { log.flyTo.push(o); map._bearing = o.bearing != null ? o.bearing : map._bearing; return map; },
-    easeTo(o) { log.easeTo.push(o); if (o.bearing != null) map._bearing = o.bearing; return map; }
+    easeTo(o) { log.easeTo.push(o); if (o.bearing != null) map._bearing = o.bearing; return map; },
+    jumpTo(o) {
+      log.jumpTo.push(o);
+      if (o.center) map._center = { lng: o.center[0], lat: o.center[1] };
+      return map;
+    }
   };
   return map;
 }
@@ -200,50 +215,66 @@ test('reset（R 语义）→ map.easeTo 回初始全球视图并停自转', () =
   acts.unmount();
 });
 
-test('自转循环：flag 开时每帧 easeTo bearing +0.0667；flag 关不再调用', () => {
+test('自转循环（轮⑬）：flag 开时每帧 jumpTo 向西 drift 中心经度；flag 关不再调用', () => {
   const sandbox = makeSandbox();
   const map = makeFakeMap();
+  map._zoom = 2.5; // 全球档满速区
+  const acts = loadActions(sandbox);
+  acts.mount(map, { ui: makeUiStub(), deck: makeDeckStub(STATIONS) });
+  acts.setAutoRotate(true);
+  sandbox._raf.run(4); // 首帧只做时基（dt=0 不动相机），第 2 帧起 drift
+  assert.equal(map.log.jumpTo.length, 3, '4 帧应有 3 次 jumpTo（首帧时基）');
+  assert.ok(approx(map.log.jumpTo[0].center[0], -0.004), '首个 drift 帧 -0.004（16ms×0.25°/s）');
+  assert.ok(approx(map.log.jumpTo[2].center[0], -0.012), '第三帧累积 -0.012');
+  assert.equal(map.log.jumpTo[0].center[1], 0, '纬度不动（只 drift 经度）');
+  acts.setAutoRotate(false);
+  map.log.jumpTo.length = 0;
+  sandbox._raf.run(3);
+  assert.equal(map.log.jumpTo.length, 0, '关旗后不得再驱动相机');
+  acts.unmount();
+});
+
+test('高倍率（z≥5）自转停转：不产生 jumpTo（Mapbox globe-spin 同款防刷屏）', () => {
+  const sandbox = makeSandbox();
+  const map = makeFakeMap();
+  map._zoom = 13;
   const acts = loadActions(sandbox);
   acts.mount(map, { ui: makeUiStub(), deck: makeDeckStub(STATIONS) });
   acts.setAutoRotate(true);
   sandbox._raf.run(3);
-  assert.equal(map.log.easeTo.length, 3, '3 帧应有 3 次 easeTo');
-  assert.ok(approx(map.log.easeTo[0].bearing, 0.0667), '第一帧 0 → 0.0667');
-  assert.ok(approx(map.log.easeTo[2].bearing, 0.2001), '第三帧累积 0.2001');
-  acts.setAutoRotate(false);
-  map.log.easeTo.length = 0;
-  sandbox._raf.run(3);
-  assert.equal(map.log.easeTo.length, 0, '关旗后不得再驱动相机');
+  assert.equal(map.log.jumpTo.length, 0, '城市档零步进即零调用');
   acts.unmount();
 });
 
 test('拖拽暂停：dragstart 期间不 drift，dragend 恢复（flag 仍开）', () => {
   const sandbox = makeSandbox();
   const map = makeFakeMap();
+  map._zoom = 2.5;
   const acts = loadActions(sandbox);
   acts.mount(map, { ui: makeUiStub(), deck: makeDeckStub(STATIONS) });
   acts.setAutoRotate(true);
   map.emit('dragstart');
-  map.log.easeTo.length = 0;
+  map.log.jumpTo.length = 0;
   sandbox._raf.run(2);
-  assert.equal(map.log.easeTo.length, 0, '拖拽中暂停 drift');
+  assert.equal(map.log.jumpTo.length, 0, '拖拽中暂停 drift');
   map.emit('dragend');
   sandbox._raf.run(1);
-  assert.equal(map.log.easeTo.length, 1, '松手且 flag 开 → 恢复');
+  assert.equal(map.log.jumpTo.length, 1, '松手且 flag 开 → 恢复');
   acts.unmount();
 });
 
-test('unmount 停掉自转 rAF 循环：之后再泵帧不产生 easeTo', () => {
+test('unmount 停掉自转 rAF 循环：之后再泵帧不产生 jumpTo', () => {
   const sandbox = makeSandbox();
   const map = makeFakeMap();
+  map._zoom = 2.5;
   const acts = loadActions(sandbox);
   acts.mount(map, { ui: makeUiStub(), deck: makeDeckStub(STATIONS) });
   acts.setAutoRotate(true);
   sandbox._raf.run(1);
   acts.unmount();
-  map.log.easeTo.length = 0;
+  map.log.jumpTo.length = 0;
   sandbox._raf.run(5); // 队列应已被 cancel 清空
-  assert.equal(map.log.easeTo.length, 0, 'unmount 后循环必须终止');
+  assert.equal(map.log.jumpTo.length, 0, 'unmount 后循环必须终止');
   assert.equal(sandbox._raf.pending(), 0, '不应遗留 rAF 排队');
 });
 

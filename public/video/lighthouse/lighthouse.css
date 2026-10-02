@@ -349,6 +349,8 @@
   right: 18px;
   top: 64px;
   z-index: 30;
+  /* 修复轮⑨：世界页宿主 T150 pointer-events:none，面板不显式恢复则按钮点击穿透到地图 */
+  pointer-events: auto;
   width: 300px;
   max-height: calc(100% - 96px);
   display: flex;
@@ -508,6 +510,7 @@
   right: 18px;
   bottom: 22px;
   z-index: 35;
+  pointer-events: auto; /* 修复轮⑨：宿主 T150 pe:none，须显式恢复 */
   width: 280px;
   border-radius: 14px;
   background: rgba(14, 18, 30, 0.94);
@@ -553,6 +556,7 @@
   left: 18px;
   bottom: 22px;
   z-index: 35;
+  pointer-events: auto; /* 修复轮⑨：宿主 T150 pe:none，须显式恢复 */
   width: 300px;
   max-height: 360px;
   display: flex;
@@ -605,31 +609,13 @@
 
 
 /* ============================================================
- * M3 · 世界页交互层（信标卡片 / 统计面板 / 欢迎 toast / 快捷键提示）
+ * M3 · 世界页交互层（信标卡片 / 欢迎 toast / 快捷键提示）
  * 视觉对齐 hearthere：深空玻璃 + 柔光 + 脉冲，克制不花哨。
  * ============================================================ */
 
-/* ---- 统计面板（左下）---- */
-.world-stats {
-  position: absolute; left: 22px; bottom: 22px; z-index: 120;
-  display: flex; gap: 14px; align-items: center;
-  padding: 9px 15px; border-radius: 13px;
-  background: rgba(12, 16, 28, 0.72);
-  border: 1px solid rgba(150, 180, 240, 0.2);
-  backdrop-filter: blur(14px) saturate(1.15);
-  -webkit-backdrop-filter: blur(14px) saturate(1.15);
-  color: #cfe0f6; font-size: 11.5px; letter-spacing: .5px;
-  pointer-events: none;
-}
-.world-stats b { color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; margin-right: 3px; }
-.world-stats .sep { width: 1px; height: 14px; background: rgba(255,255,255,.14); }
-.world-stats .k-playing { color: #ff8a96; }
-.world-stats .k-online  { color: #7fe6ec; }
-.world-stats .k-offline { color: #9aa8c2; }
-
-/* ---- 快捷键提示（右下）---- */
+/* ---- 快捷键提示（左下，轮⑪ 2026-10-02 用户裁决移左；右下留给创建放映独占）---- */
 .world-hints {
-  position: absolute; right: 22px; bottom: 22px; z-index: 120;
+  position: absolute; left: 22px; bottom: 22px; z-index: 120;
   display: flex; gap: 10px; align-items: center;
   padding: 8px 13px; border-radius: 12px;
   background: rgba(12, 16, 28, 0.6);
@@ -662,9 +648,11 @@
 }
 .world-toast.is-in { opacity: 1; transform: translate(-50%, 0); }
 
-/* ---- 烟花画布（全屏，加色）---- */
+/* ---- 烟花画布（全屏，加色）----
+   canvas 是替换元素：absolute + inset:0 不会拉伸，必须显式 100%（轮⑮ harness 实测 300×150 固有尺寸） */
 .world-fireworks {
   position: absolute; inset: 0; z-index: 260;
+  width: 100%; height: 100%;
   pointer-events: none;
   mix-blend-mode: screen;
 }

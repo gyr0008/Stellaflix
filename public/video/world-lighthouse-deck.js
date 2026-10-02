@@ -1107,7 +1107,10 @@
       // ht :13524-13528：exiting 层（progress=Q 反扫）
       // meshTag：OBJ 解析态入 sig——基座缓存必须随 meshSource（URL→已解析对象）失效重建
       var meshTag = parsedMesh ? 'm1' : 'm0';
-      if (sel.exitingStation) {
+      // 退场窗内重选同站：exiting 与 entering 两层同 deck id（:13524-13533 后推者生效），
+      // vendored deck v9 对同 id 双新层各走 _initialize → 断言；跳过让位者即等价原语义
+      var exitingSameAsSelected = sel.exitingStation && sel.exitingStation.id === sel.selectedId;
+      if (sel.exitingStation && !exitingSameAsSelected) {
         var xBase = slotBase('rim-exiting-' + sel.exitingStation.id,
           rimSig([sel.exitingStation], sel.exitProgress) + meshTag,
           function () {

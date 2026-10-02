@@ -112,6 +112,33 @@
     return null;
   }
 
+  // 轮⑮ 烟花投影器：信标 id → 屏幕像素，与点击拾取同源（deck.projectWithElevation）。
+  // 轮⑰ 方案A（hearthere 逐字）：zoom<11.5 总闸（lo :17457，全球视图不放烟花）+
+  // 视口包围盒剔除（hasAnyInBounds :17605-17618，含跨日界线环绕）→ 背侧信标天然框外。
+  // deck 未装实例时 projectWithElevation 回落 {0,0} 哨兵 → 同样转 null。
+  var FIREWORK_MIN_ZOOM = 11.5;
+  function inFireworkBounds(b, lng, lat) {
+    var w = b.getWest(), e = b.getEast();
+    var crosses = w > e;   // 跨日界线框（如 170 → -170）
+    var lngOk = crosses ? (lng >= w || lng <= e) : (lng >= w && lng <= e);
+    return lngOk && lat >= b.getSouth() && lat <= b.getNorth();
+  }
+  function fireworkProjector(stationId) {
+    var st = findStation(stationId);
+    var deck = SFV.worldLighthouseDeck;
+    var map = SFV.worldGlobe && typeof SFV.worldGlobe.getMap === 'function' ? SFV.worldGlobe.getMap() : null;
+    if (!st || !deck || typeof deck.projectWithElevation !== 'function' || !map) return null;
+    if (typeof map.getZoom !== 'function' || map.getZoom() < FIREWORK_MIN_ZOOM) return null;
+    if (typeof map.getBounds === 'function') {
+      var b = map.getBounds();
+      if (b && !inFireworkBounds(b, st.position[0], st.position[1])) return null;
+    }
+    var p = deck.projectWithElevation(st.position);
+    if (!p || !isFinite(p.x) || !isFinite(p.y)) return null;
+    if (p.x === 0 && p.y === 0) return null;
+    return p;
+  }
+
   function panelOpen(st, extra) {
     if (!SFV.worldHtPanel || typeof SFV.worldHtPanel.open !== 'function' || !st) return;
     var opts = {
@@ -364,6 +391,10 @@
         if (SFV.worldUi && typeof SFV.worldUi.mount === 'function') {
           SFV.worldUi.mount(host);
           SFV.worldUi.showLoading('正在连接放映房间…');
+          // 轮⑮：接线烟花投影器（懒查 deck，deck 晚挂载也无妨；审⑭发现零调用点）
+          if (typeof SFV.worldUi.setFireworkProjector === 'function') {
+            SFV.worldUi.setFireworkProjector(fireworkProjector);
+          }
         }
 
         // ④-4：ht-panel 外壳（.nav-bar 挂页面宿主，:3189-3345 Rd 逐字）
@@ -408,22 +439,12 @@
               SFV.worldUi.hideLoading();
 
               var st = (SFV.worldLighthouseDeck.getState() || {}).stations || [];
-              var playing = 0, online = 0, offline = 0;
+              var playing = 0;
               for (var i = 0; i < st.length; i++) {
                 if (st[i].status === 'playing') playing++;
-                else if (st[i].status === 'offline') offline++;
-                else online++;
               }
-              SFV.worldUi.setStats({ total: st.length, playing: playing, online: online, offline: offline });
               SFV.worldUi.setOnAir(playing > 0);
               SFV.worldUi.setRotateState(SFV.worldMapActions ? SFV.worldMapActions.autoRotate : true);
-
-              // 当前站点的收藏/名称等以 deck 实时状态为准（轮询会增删站点）
-              function freshStation(id) {
-                var list = (SFV.worldLighthouseDeck.getState() || {}).stations || [];
-                for (var n = 0; n < list.length; n++) { if (list[n].id === id) return list[n]; }
-                return null;
-              }
 
               // ON AIR 可点：跳到一个正在放映的信标
               onAirCursor = -1;
@@ -443,17 +464,10 @@
                 SFV.worldUi.toast('跳到「' + target.name + '」');
               });
 
-              // 右下快捷键条：四项都可点（Esc/R/F/A，行为层在 world-map-actions）
+              // 左下快捷键条：R/A 可点（轮⑫：Esc/F/点赞按钮退役；键盘 Esc/F 面在 world-map-actions）
               SFV.worldUi.setHintHandler(function (act) {
-                if (act === 'esc') { closePanel(); return; }
                 if (act === 'reset') {
                   if (SFV.worldMapActions) SFV.worldMapActions.resetView();
-                  return;
-                }
-                if (act === 'favorite') {
-                  var cur = openStationId != null ? freshStation(openStationId) : null;
-                  if (cur) toggleFavorite(cur);
-                  else SFV.worldUi.toast('先点一座信标，再收藏');
                   return;
                 }
                 if (act === 'rotate') {
@@ -472,12 +486,20 @@
                     if (SFV.worldUi) SFV.worldUi.toast('房间模块未加载');
                     return;
                   }
-                  // 城市级坐标（不含精确位置）；面板未带坐标时取当前地图视野中心，绝不落 (0,0) 零点岛
+                  // 城市级坐标（不含精确位置）：方案A —— 命中离线城市词典落该城市坐标，
+                  // 未命中才取当前地图视野中心，绝不落 (0,0) 零点岛。
                   var lon = opts.lon, lat = opts.lat;
                   if (lon == null || lat == null) {
-                    var c = mapViewCenter();
-                    if (lon == null) lon = c.lng;
-                    if (lat == null) lat = c.lat;
+                    var city = SFV.worldData && SFV.worldData.cityLookup
+                      ? SFV.worldData.cityLookup(opts.name) : null;
+                    if (city) {
+                      lon = city.lon;
+                      lat = city.lat;
+                    } else {
+                      var c = mapViewCenter();
+                      if (lon == null) lon = c.lng;
+                      if (lat == null) lat = c.lat;
+                    }
                   }
                   if (lon == null) lon = 0;
                   if (lat == null) lat = 0;
@@ -544,6 +566,10 @@
         SFV.worldMapActions.unmount();
       }
       if (SFV.worldUi && typeof SFV.worldUi.unmount === 'function') {
+        // 轮⑮：摘除投影器，worldUi 闭包不残留跨页引用
+        if (typeof SFV.worldUi.setFireworkProjector === 'function') {
+          SFV.worldUi.setFireworkProjector(null);
+        }
         SFV.worldUi.unmount();
       }
       if (SFV.worldLighthouseDeck && typeof SFV.worldLighthouseDeck.unmount === 'function') {

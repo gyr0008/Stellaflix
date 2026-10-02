@@ -5,13 +5,17 @@
  *   flyTo        电影感固定参数：{ zoom:16, pitch:60, duration:2800 }
  *                （hearthere main.pretty.js:19062-19064、:19636）
  *   reset (R)    回 world-globe 初始全球视图 { center:[104,35], zoom:2.5, pitch:0, 1200ms }
- *   自转 (A)     maplibre 版 autoRotate：逐帧 bearing+0.0667°（≈4°/s，对齐旧面），
+ *   自转 (A)     经度漂移法（轮⑬ 2026-10-02，Mapbox globe-spin 官方范例同款）：
+ *                逐帧 center.lng -= 0.25°/s（真实 24h 压缩为 24min/圈）jumpTo；
+ *                z≤3 满速 / z≥5 停转（zoom 联动防城市视角刷屏）；
  *                dragstart 暂停 / dragend 恢复（flag 仍开才继续）；unmount 必停循环
- *   快捷键       Esc 关卡片 / R 重置 / F 收藏选中信标 / A 自转（输入框内不拦截）
+ *                （旧 bearing 法为「镜头绕地球转」且 deck 灯塔不跟，已退役）
+ *   快捷键       Esc 关卡片 / R 重置 / F 收藏选中信标 / A 自转（输入框内不拦截；
+ *                轮⑫：条内 Esc/F/点赞按钮退役，键盘面保留）
  *   收藏         localStorage 沿用旧键 stellaflix-world-favorites（旧页收藏不丢）
  *
  * 不做什么：不碰 deck 图层（world-lighthouse-deck）、不建卡片 DOM（world-ui）。
- * 双装载：__flyOptions / __resetOptions / __rotateStep 纯配置经 module.exports
+ * 双装载：__flyOptions / __resetOptions / __spinStep 纯配置经 module.exports
  * 守卫供 Node 测试直连（同 world-lighthouse-deck.js 模式）。
  */
 (function (global) {
@@ -29,11 +33,14 @@
   var FLY_PARAMS = { zoom: 16, pitch: 60, duration: 2800 };
   // 重置视角 = world-globe.js 建图初始视图同款（center/zoom/pitch），1200ms 回退
   var RESET_PARAMS = { center: [104, 35], zoom: 2.5, pitch: 0, duration: 1200 };
-  // 自转步进：每帧 bearing +0.0667°（≈4°/秒 @60fps，对齐旧 Cesium 面 rotateRateDeg=4；
-  //   T6 评审 minor 调参：原 0.3/帧≈18°/秒 过快。T9 浏览器终验可再目视微调）
-  var ROTATE_STEP_DEG = 0.0667;
-  // 单帧 easeTo 的过渡时长：小于帧间隔 → 连续 drift 不互相打断堆积
-  var ROTATE_EASE_MS = 250;
+  // 自转（轮⑬ 经度漂移法）：真实 24h → 24min/圈 = 360°/1440s = 0.25°/s
+  var SPIN_SECONDS_PER_REVOLUTION = 1440;
+  var SPIN_DEG_PER_SEC = 360 / SPIN_SECONDS_PER_REVOLUTION;
+  // zoom 联动减速（Mapbox globe-spin 范例 slowSpinZoom/maxSpinZoom 同款参数）
+  var SPIN_SLOW_ZOOM = 3;   // z ≤ 3 满速
+  var SPIN_MAX_ZOOM = 5;    // z ≥ 5 停转（城市视角防刷屏）
+  // 单帧步进上限：后台标签页恢复/掉帧时防大跳
+  var SPIN_MAX_DT_MS = 100;
 
   function stationPosition(st) {
     if (!st) return null;
@@ -64,17 +71,24 @@
     };
   }
 
-  // bearing 归一到 [0,360)（maplibre 自身回绕到 [-180,180]，这里显式统一，
-  // 步进结果可直接喂 easeTo 且测试可断言 360 处回绕）
-  function normalizeBearing(b) {
-    var n = Number(b);
+  // 经度归一到 [-180,180)（maplibre 自身回绕，这里显式统一，步进结果可直接
+  // 喂 jumpTo 且测试可断言 ±180 处回绕）
+  function normalizeLng(l) {
+    var n = Number(l);
     if (!isFinite(n)) return 0;
-    return ((n % 360) + 360) % 360;
+    return ((n % 360) + 540) % 360 - 180;
   }
 
-  function __rotateStep(bearing, stepDeg) {
-    var s = (stepDeg == null ? ROTATE_STEP_DEG : Number(stepDeg));
-    return normalizeBearing((Number(bearing) || 0) + s);
+  // 纯步进：当前中心经度 + zoom + 帧间隔 ms → 新经度。
+  // 方向=相机中心持续西移 → 地表在视野中向东（右）移 = 真实自转方向（自西向东）。
+  function __spinStep(lng, zoom, dtMs) {
+    var z = Number(zoom) || 0;
+    var rate = SPIN_DEG_PER_SEC;
+    if (z >= SPIN_MAX_ZOOM) rate = 0;
+    else if (z > SPIN_SLOW_ZOOM) {
+      rate *= (SPIN_MAX_ZOOM - z) / (SPIN_MAX_ZOOM - SPIN_SLOW_ZOOM);
+    }
+    return normalizeLng((Number(lng) || 0) - rate * (Number(dtMs) || 0) / 1000);
   }
 
   // ============================================================
@@ -124,6 +138,7 @@
   var autoRotate = true;
   var dragging = false;      // dragstart→true，dragend→false：拖拽期间不打架
   var rotateRaf = 0;
+  var rotateLastTs = 0;      // 经度漂移法帧时基（0=未就绪，首帧 dt=0）
   var keydownBound = false;
   var onDragStart = null;
   var onDragEnd = null;
@@ -156,7 +171,8 @@
   }
 
   // ============================================================
-  //  自转（maplibre 版：逐帧 easeTo bearing drift，最小实现）
+  //  自转（轮⑬ 经度漂移法：逐帧 jumpTo 向西 drift 中心经度，帧率无关；
+  //   灯塔 deck 层按 [经度,纬度] 地理锚定，地图每帧重渲染自然跟转）
   // ============================================================
 
   function setAutoRotate(on) {
@@ -169,19 +185,28 @@
     if (ui && ui.setRotateState) ui.setRotateState(autoRotate);
   }
 
-  function rotateFrame() {
+  function rotateFrame(ts) {
     rotateRaf = requestAnimationFrame(rotateFrame);
-    if (!autoRotate || dragging || !map || typeof map.easeTo !== 'function') return;
+    var now = typeof ts === 'number' ? ts : 0;
+    var prev = rotateLastTs;
+    rotateLastTs = now;
+    if (!autoRotate || dragging || !map ||
+        typeof map.jumpTo !== 'function' || typeof map.getCenter !== 'function') return;
+    // 首帧只做时基（dt=0 不动相机）；掉帧/后台恢复钳制到 SPIN_MAX_DT_MS 防大跳
+    if (!prev) return;
+    var dt = Math.min(Math.max(now - prev, 0), SPIN_MAX_DT_MS);
     try {
-      var b = typeof map.getBearing === 'function' ? map.getBearing() : 0;
-      map.easeTo({ bearing: __rotateStep(b), duration: ROTATE_EASE_MS });
+      var c = map.getCenter();
+      var lng = __spinStep(c.lng, typeof map.getZoom === 'function' ? map.getZoom() : 0, dt);
+      if (lng !== c.lng) map.jumpTo({ center: [lng, c.lat] });
     } catch (e) {
-      // 用户手势与 easeTo 偶发冲突不打紧，循环继续
+      // 用户手势与自转偶发冲突不打紧，循环继续
     }
   }
 
   function startRotateLoop() {
     if (rotateRaf || typeof requestAnimationFrame !== 'function') return;
+    rotateLastTs = 0;
     rotateRaf = requestAnimationFrame(rotateFrame);
   }
 
@@ -328,8 +353,8 @@
     // 纯配置（测试与调试用）
     __flyOptions: __flyOptions,
     __resetOptions: __resetOptions,
-    __rotateStep: __rotateStep,
-    ROTATE_STEP_DEG: ROTATE_STEP_DEG,
+    __spinStep: __spinStep,
+    SPIN_DEG_PER_SEC: SPIN_DEG_PER_SEC,
     FAV_KEY: FAV_KEY
   };
 
@@ -338,12 +363,13 @@
     module.exports = {
       __flyOptions: __flyOptions,
       __resetOptions: __resetOptions,
-      __rotateStep: __rotateStep,
-      normalizeBearing: normalizeBearing,
+      __spinStep: __spinStep,
+      normalizeLng: normalizeLng,
       stationPosition: stationPosition,
       FLY_PARAMS: FLY_PARAMS,
       RESET_PARAMS: RESET_PARAMS,
-      ROTATE_STEP_DEG: ROTATE_STEP_DEG,
+      SPIN_DEG_PER_SEC: SPIN_DEG_PER_SEC,
+      SPIN_SECONDS_PER_REVOLUTION: SPIN_SECONDS_PER_REVOLUTION,
       FAV_KEY: FAV_KEY
     };
   }

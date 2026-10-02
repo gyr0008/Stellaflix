@@ -61,9 +61,14 @@ function makeFakeMap() {
       if (i >= 0) arr.splice(i, 1);
     },
     emit(ev, e) { (handlers[ev] || []).slice().forEach((h) => h(e || {})); },
-    getZoom() { return 13; },
+    _zoom: 13, _bounds: { west: -180, east: 180, south: -90, north: 90 },
+    getZoom() { return map._zoom; },
     getBearing() { return 0; },
     getCenter() { return { lng: 10.5, lat: 20.25 }; },
+    getBounds() {
+      const b = map._bounds;
+      return { getWest: () => b.west, getEast: () => b.east, getSouth: () => b.south, getNorth: () => b.north };
+    },
     getCanvas() { return canvas; },
     project(lngLat) { return { x: 400, y: 300 }; },
     flyTo(o) { log.flyTo.push(o); return map; },
@@ -84,7 +89,7 @@ function setup() {
     deckRefresh: [], deckApplyTier: [], oldLighthouseMounted: 0, oldLighthouseRefresh: 0,
     actionsMounts: [], actionsUnmounted: 0, flyTo: [], panelOpened: [], panelClosed: 0,
     panelUnmounted: 0, toasts: [], stats: [], boundariesUnmounted: 0, order: [], roomPollHandlers: [],
-    createHostCalls: []
+    createHostCalls: [], deckProject: []
   };
 
   const ui = {
@@ -93,11 +98,12 @@ function setup() {
     unmount() { this.mounted = false; },
     showLoading() {}, hideLoading() {},
     toast(m) { calls.toasts.push(m); },
-    setStats(s) { calls.stats.push(s); },
     setOnAir() {}, setOnAirHandler(fn) { ui._onAir = fn; },
     setHintHandler(fn) { ui._hint = fn; },
     setCreateHandler(fn) { ui._create = fn; },
-    setRotateState() {}, fireworksCanvas() { return null; }
+    setRotateState() {}, fireworksCanvas() { return null; },
+    _fwProjector: null,
+    setFireworkProjector(fn) { ui._fwProjector = fn || null; }
   };
 
   // 假 ht-panel（④-4）：open 即同步记账（对应 wt It('station') 先于飞行），
@@ -131,7 +137,8 @@ function setup() {
     flyToStation(st) { calls.flyTo.push(st); calls.order.push('fly'); },
     applyTier(z) { calls.deckApplyTier.push(z); },
     getState() { return { stations: STATIONS, selectedId: null, visible: true }; },
-    pickStation(x, y) { return deck._picked; }
+    pickStation(x, y) { return deck._picked; },
+    projectWithElevation(pos) { calls.deckProject.push(pos); return { x: 777, y: 555 }; }
   };
 
   const acts = {
@@ -160,7 +167,8 @@ function setup() {
     ui: { setTitle() {} },
     worldGlobe: {
       mount() { return Promise.resolve(info); },
-      unmount() { calls.globeUnmounted++; }
+      unmount() { calls.globeUnmounted++; },
+      getMap() { return map; }   // 轮⑰：投影器 zoom 闸/包围盒需读地图
     },
     worldUi: ui,
     worldHtPanel: panel,
@@ -366,7 +374,7 @@ test('CTA 接线：tune_in→joinWatchRoom（收听态重开）/ stop→leave / 
   t.page.unmount();
 });
 
-test('Esc（ESC 快捷键）关面板 = It(null) 语义', async () => {
+test('轮⑫：hint 条 esc/favorite 分支退役 —— _hint("esc") 不再关面板（键盘 Esc 面见 world-map-actions.test）', async () => {
   const t = setup();
   t.page.mount(t.host, {});
   await t.flush();
@@ -376,9 +384,9 @@ test('Esc（ESC 快捷键）关面板 = It(null) 语义', async () => {
   await t.flush();
   assert.equal(t.panel.isOpen(), true);
   t.ui._hint('esc');
-  assert.equal(t.panel.isOpen(), false, 'ESC 快捷键应关面板');
-  t.ui._hint('esc');
-  assert.equal(t.panel.isOpen(), false, '重复 ESC 幂等不抛');
+  assert.equal(t.panel.isOpen(), true, 'esc 按钮分支已退役：hintHandler 不再关面板');
+  t.ui._hint('favorite');
+  assert.equal(t.panel.isOpen(), true, 'favorite 按钮分支已退役：不得抛错（卡片收藏星是另一入口）');
   t.page.unmount();
 });
 
@@ -424,16 +432,13 @@ test('Fix round 1 (I-2)：unmount 清空 room 模块即时刷新 handler（setMa
   assert.equal(t.calls.deckRefresh.length, before, '过期 tick 兑现不得触达 deck');
 });
 
-test('统计/快捷键语义保留：setStats 按 deck 状态计数，hint reset/rotate 走行为层', async () => {
+test('统计条退役 + 快捷键语义保留：worldUi 无 setStats 且挂载不崩，hint reset/rotate 走行为层', async () => {
   const t = setup();
   t.page.mount(t.host, {});
   await t.flush();
-  assert.equal(t.calls.stats.length, 1);
-  assert.equal(t.calls.stats[0].total, 2);
-  assert.equal(t.calls.stats[0].playing, 1);
-  assert.equal(t.calls.stats[0].online, 1);
-  assert.equal(t.calls.stats[0].offline, 0);
-  assert.equal(typeof t.ui._hint, 'function', 'Esc/R/F/A hintHandler 应保留');
+  assert.equal(t.ui.setStats, undefined, '桩上无 setStats —— 挂载链不得再调它（统计条退役）');
+  assert.equal(t.calls.stats.length, 0, '统计调用应为 0');
+  assert.equal(typeof t.ui._hint, 'function', 'R/A hintHandler 应保留');
   assert.equal(typeof t.ui._onAir, 'function', 'ON AIR handler 应保留');
   // R → resetView；A → setAutoRotate 取反并回推 setRotateState
   let resetCalls = 0;
@@ -464,5 +469,69 @@ test('A2（修复轮⑥）：创建放映缺坐标时取当前视野中心，绝
   // 显式给了坐标则原样透传
   t.ui._create({ title: 'X', name: 'Y', lon: 139.69, lat: 35.69, discovery: true });
   assert.equal(t.calls.createHostCalls[1].lon, 139.69, '显式坐标不得被覆盖');
+  t.page.unmount();
+});
+
+// ---------------- 轮⑮：烟花投影器接线（审⑭ 发现 setFireworkProjector 零调用点） ----------------
+
+test('轮⑮：mount 接线投影器 —— stationId → deck 查站 → projectWithElevation 屏幕坐标', async () => {
+  const t = setup();
+  t.page.mount(t.host, {});
+  await t.flush();
+  assert.equal(typeof t.ui._fwProjector, 'function', 'mount 必须接线 worldUi.setFireworkProjector');
+
+  const p = t.ui._fwProjector('r1');
+  assert.deepEqual(t.calls.deckProject[0], [121.47, 31.23], '按 stationId 查 deck 站点表取经纬度');
+  assert.deepEqual(p, { x: 777, y: 555 }, '投影结果原样交给 world-ui 放粒子');
+
+  assert.equal(t.ui._fwProjector('nope'), null, '未知 stationId 回落 null（引擎屏幕中心兜底）');
+  t.page.unmount();
+});
+
+test('轮⑮：deck 哨兵 {0,0}（未装实例）不放左上角 → 回落 null', async () => {
+  const t = setup();
+  t.page.mount(t.host, {});
+  await t.flush();
+  t.deck.projectWithElevation = () => ({ x: 0, y: 0 });
+  assert.equal(t.ui._fwProjector('r1'), null, '{0,0} 哨兵必须回落 null');
+  t.page.unmount();
+});
+
+test('轮⑮：unmount 卸载投影器（setFireworkProjector(null)），跨页不残留', async () => {
+  const t = setup();
+  t.page.mount(t.host, {});
+  await t.flush();
+  assert.equal(typeof t.ui._fwProjector, 'function');
+  t.page.unmount();
+  await t.flush();
+  assert.equal(t.ui._fwProjector, null, 'unmount 后投影器应摘除');
+});
+
+// ---------------- 轮⑰ 方案A：烟花 hearthere zoom 门槛 + 视口包围盒剔除 ----------------
+
+test('轮⑰：zoom 总闸 —— <11.5 投影器直接 null（hearthere lo :17457，全球视图不放烟花）', async () => {
+  const t = setup();
+  t.page.mount(t.host, {});
+  await t.flush();
+  t.map._zoom = 10;
+  assert.equal(t.ui._fwProjector('r1'), null, 'zoom 10 必须闸掉');
+  t.map._zoom = 11.5;
+  assert.deepEqual(t.ui._fwProjector('r1'), { x: 777, y: 555 }, '11.5 恰在闸上（>= 语义）');
+  t.page.unmount();
+});
+
+test('轮⑰：视口包围盒剔除 —— 框外信标 null；跨日界线 bounds 环绕判定放行', async () => {
+  const t = setup();
+  t.page.mount(t.host, {});
+  await t.flush();
+  t.map._bounds = { west: 120, east: 122, south: 30, north: 32 };
+  assert.deepEqual(t.ui._fwProjector('r1'), { x: 777, y: 555 }, 'r1(121.47,31.23) 在框内');
+  assert.equal(t.ui._fwProjector('r2'), null, 'r2(巴黎) 框外必须剔除');
+  // 跨日界线（west > east）：经度 ≥west 或 ≤east 均算框内（hasAnyInBounds :17605-17618）
+  t.map._bounds = { west: 170, east: -170, south: -10, north: 10 };
+  t.deck.getState = () => ({ stations: [{ id: 'rn', name: 'N', position: [175, 5], status: 'online' }], selectedId: null, visible: true });
+  assert.deepEqual(t.ui._fwProjector('rn'), { x: 777, y: 555 }, '175° 在跨线框 170→-170 内');
+  t.deck.getState = () => ({ stations: [{ id: 'rn', name: 'N', position: [0, 5], status: 'online' }], selectedId: null, visible: true });
+  assert.equal(t.ui._fwProjector('rn'), null, '0° 不在跨线框内');
   t.page.unmount();
 });

@@ -206,11 +206,8 @@
               });
             }
           }).then(function (lhInfo) {
-            // M3：品牌叠层 / 统计 / toast / 快捷键
+            // M3：品牌叠层 / toast / 快捷键
             window.StellaflixVideo.worldUi.mount(host);
-            window.StellaflixVideo.worldUi.setStats({
-              total: lhInfo && lhInfo.count || 0, playing: 3, online: 5, offline: 2
-            });
             window.StellaflixVideo.worldUi.setOnAir(true);
             window.StellaflixVideo.worldUi.toast('已连接 ' + (lhInfo && lhInfo.count || 0) + ' 个信标');
             window.StellaflixVideo.worldActions.mount(info.viewer, lh, window.StellaflixVideo.worldUi);

@@ -280,3 +280,31 @@ test('zoom 下穿 Bt 门再回到同值 —— rim 槽位已剪枝，回加交�
   assert.notStrictEqual(layerById(env, 'lighthouse-expanded-batch'), b1);
   env.api.unmount();
 });
+
+// ---------------------------------------------------------------------------
+// 5) 退场窗内重选同站 —— exiting/entering 两层同 deck id（视觉复验 2026-10-01 实测崩溃路径）
+//    hearthere :13524-13533 同样先推 be(exiting) 后推 ye(entering)；deck 以 id 为键
+//    后推者（entering）生效。我们必须在装配期跳过同 id 的 exiting 层，
+//    否则 vendored deck v9 对同 id 双新层各走一次 _initialize → 断言。
+// ---------------------------------------------------------------------------
+
+test('退场窗内重选同一站 —— 一拍内不得出现两个同 id rim 层（entering 胜出，exiting 让位）', async () => {
+  const env = loadSandbox();
+  const map = new env.FakeMap(13);
+  await env.api.mount(map, env.overlay, { stations: [room('a', 0, { alwaysExpanded: false }), room('d', 40)] });
+
+  env.api.setSelected('a');           // 非 expanded → enterProgress=0（翻转 timer 未 flush）
+  env.api.setSelected(null);           // triggerExit：exitProgress=1，exitingStation=a（EXIT_HOLD 窗内）
+  let err = null;
+  try { env.api.setSelected('a'); } catch (e) { err = e; }
+  assert.strictEqual(err, null, '重选拍 setProps 不得抛 deck 断言');
+
+  const ids = lastLayers(env).map((l) => l.props.id);
+  const dup = JSON.parse(JSON.stringify(ids.filter((x, i) => ids.indexOf(x) !== i))); // 跨域数组原型归一
+  assert.deepStrictEqual(dup, [], '一拍内 deck layers 不得含重复 id：' + JSON.stringify(ids));
+
+  const enter = layerById(env, 'lighthouse-rim-layer-a');
+  assert.ok(enter, 'entering a 层在场（hearthere 后推者生效语义）');
+  assert.strictEqual(enter.props.getEntranceProgress(), 0, '占 id 的必须是 entering 层（progress=0；exiting 为 1）');
+  env.api.unmount();
+});

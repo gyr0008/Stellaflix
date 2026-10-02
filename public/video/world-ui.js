@@ -5,7 +5,6 @@
  *   · 顶部叠层：标题已按需求移除，仅保留 ON AIR 指示
  *   · ON AIR   ：右上角红点脉冲
  *   · 信标卡片 ：深色毛玻璃 + 颜色条 + 状态徽章 + 收藏/定位
- *   · 统计面板 ：左下「N 个放映厅 · N 正在放映 · N 在线 · N 离线」
  *   · 欢迎 toast：顶部居中，进场后自动消失
  *   · 加载态   ：细环 + 字距文案，就绪后淡出
  *
@@ -18,7 +17,6 @@
   var root = null;        // 世界页内的 UI 容器（绝对定位铺满）
   var toastTimer = 0;
   var toastEl = null;
-  var statsEl = null;
   var onAirEl = null;
   var loadingEl = null;
   var fireworksCanvas = null;
@@ -29,7 +27,6 @@
   var createPanelEl = null;
   var createHandler = null;
   var fireworkBtnEl = null;
-  var likeBtnEl = null;
   var unsubFirework = null;
   var unsubLike = null;
   var stationProjector = null;   // stationId -> {x,y} 屏幕坐标（T9 可选接线；缺省走屏幕中心）
@@ -66,19 +63,14 @@
   }
 
   // ============================================================
-  //  统计面板 / 快捷键提示
+  //  快捷键提示（统计条已退役，2026-10-01 用户裁决「删」）
   // ============================================================
-  function buildStats() {
-    statsEl = el('div', 'world-stats');
-    root.appendChild(statsEl);
-
-    // 右下快捷键条：每一项都是可点按钮（不只是键盘提示）
+  function buildHints() {
+    // 左下快捷键条：每一项都是可点按钮（不只是键盘提示）
     hintsEl = el('div', 'world-hints');
     hintsEl.style.pointerEvents = 'auto';
     var items = [
-      ['Esc', '关卡片', 'esc'],
       ['R', '重置视角', 'reset'],
-      ['F', '收藏', 'favorite'],
       ['A', '自转', 'rotate']
     ];
     items.forEach(function (p) {
@@ -106,10 +98,11 @@
   }
 
   // ============================================================
-  //  Task 8：社交动作区 ——「点火！」按钮 + 库存计数 + 点赞
-  //  语义：HearThere 收听奖励 → Stellaflix 看完整片奖励
-  //  （每完整看完 1 部 = 1 发烟花；库存判定在 SFV.worldSocial，
-  //   本模块只画按钮、扣减/toast 走其返回面）。复用 hint 区样式语言。
+  //  Task 8：社交动作区 ——「点火！」按钮
+  //  （点赞按钮轮⑫ 2026-10-02 用户裁决「删」退役；onLike 接收 toast 保留）
+  //  语义轮⑱（2026-10-02 用户裁决）：无限点火 —— 库存链退役，
+  //  门槛改为「选中一座灯塔」（卡片打开或本人会话房）即可点。
+  //  复用 hint 区样式语言。
   // ============================================================
   function socialStationId() {
     try {
@@ -126,39 +119,19 @@
     fireworkBtnEl.style.pointerEvents = 'auto';
     fireworkBtnEl.style.cursor = 'pointer';
     fireworkBtnEl.appendChild(el('span', null, '🎆 点火！'));
-    fireworkBtnEl.appendChild(el('span', 'world-firework-count', '×0'));
     fireworkBtnEl.addEventListener('click', function () {
       var social = SFV.worldSocial;
       if (!social) { toast('社交模块未加载'); return; }
-      if (!social.light(socialStationId())) {
-        toast('先看完一部片攒一发');
-        return;
-      }
-      setFireworkStock(social.stock());
+      var id = socialStationId();
+      if (!id) { toast('先选中一座灯塔'); return; }
+      social.light(id);
     });
     hintsEl.appendChild(fireworkBtnEl);
-
-    likeBtnEl = el('button', 'world-hint-btn world-like-btn', '♥ 点赞');
-    likeBtnEl.type = 'button';
-    likeBtnEl.style.pointerEvents = 'auto';
-    likeBtnEl.style.cursor = 'pointer';
-    likeBtnEl.addEventListener('click', function () {
-      var social = SFV.worldSocial;
-      if (!social) { toast('社交模块未加载'); return; }
-      social.like(socialStationId());
-      toast('♥ 已点赞');
-    });
-    hintsEl.appendChild(likeBtnEl);
-  }
-
-  function setFireworkStock(n) {
-    if (!fireworkBtnEl) return;
-    var c = fireworkBtnEl.querySelector('.world-firework-count');
-    if (c) c.textContent = '×' + (Math.max(0, Number(n) || 0));
   }
 
   // 收到烟花事件 → 现有 world-fireworks 画布放粒子。
-  // payload.stationId 有投影器就给坐标，否则引擎回落屏幕中心（最小面，不加投影基建）。
+  // 投影器由 page-world 接线（轮⑮），轮⑰ 方案A 起其返回 null 即 hearthere
+  // zoom 总闸/视口包围盒剔除 → 直接跳过不放；无 stationId 时保留中央兜底。
   function fireworkAt(payload) {
     var social = SFV.worldSocial;
     if (!social) return;
@@ -167,6 +140,7 @@
     var pos = null;
     if (stationProjector && payload && payload.stationId) {
       try { pos = stationProjector(payload.stationId); } catch (e) { pos = null; }
+      if (!pos) return;
     }
     social.celebrate(canvas,
       pos && pos.x != null ? pos.x : undefined,
@@ -186,7 +160,6 @@
     try {
       unsubFirework = social.onFirework(function (p) { fireworkAt(p); });
       unsubLike = social.onLike(function () { toast('♥ 有人点赞了这里的放映'); });
-      setFireworkStock(social.stock());
       social.start();   // 默认 5000ms（控制方裁决，见 world-social.js 注释）
     } catch (e) {}
   }
@@ -357,25 +330,6 @@
     createHandler = typeof fn === 'function' ? fn : null;
   }
 
-  function setStats(s) {
-    if (!statsEl) return;
-    s = s || {};
-    statsEl.innerHTML = '';
-    var mk = function (k, v, cls) {
-      var w = el('span', cls);
-      w.appendChild(el('b', null, String(v)));
-      w.appendChild(document.createTextNode(k));
-      return w;
-    };
-    statsEl.appendChild(mk('个放映厅', s.total || 0));
-    statsEl.appendChild(el('span', 'sep'));
-    statsEl.appendChild(mk('正在放映', s.playing || 0, 'k-playing'));
-    statsEl.appendChild(el('span', 'sep'));
-    statsEl.appendChild(mk('在线', s.online || 0, 'k-online'));
-    statsEl.appendChild(el('span', 'sep'));
-    statsEl.appendChild(mk('离线', s.offline || 0, 'k-offline'));
-  }
-
   // ============================================================
   //  欢迎 toast
   // ============================================================
@@ -440,10 +394,9 @@
     host.appendChild(root);
 
     buildBrand();
-    buildStats();
+    buildHints();
     buildSocial();
     buildCreateBtn();
-    setStats({ total: 0, playing: 0, online: 0, offline: 0 });
     bindSocial();
 
     // 卡片需要能点，容器本身仍穿透
@@ -463,9 +416,8 @@
     }
     fireworksCanvas = null;
     fireworkBtnEl = null;
-    likeBtnEl = null;
     if (root && root.parentNode) root.parentNode.removeChild(root);
-    root = null; statsEl = null; onAirEl = null;
+    root = null; onAirEl = null;
     createBtnEl = null;
   }
 
@@ -483,7 +435,6 @@
     mount: mount,
     unmount: unmount,
     toast: toast,
-    setStats: setStats,
     setOnAir: setOnAir,
     setOnAirHandler: setOnAirHandler,
     setHintHandler: setHintHandler,
@@ -494,8 +445,7 @@
     showLoading: showLoading,
     hideLoading: hideLoading,
     fireworksCanvas: fireworksCanvasEl,
-    // Task 8 社交层导出面（挂尾部，不动既有表面）
-    setFireworkStock: setFireworkStock,
+    // Task 8 社交层导出面（挂尾部，不动既有表面；轮⑱ 库存徽章导出随链退役）
     setFireworkProjector: setFireworkProjector,
     get root() { return root; }
   };

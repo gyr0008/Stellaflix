@@ -212,7 +212,7 @@ function loadWorldPage(dom) {
     router: { register(p) { sandbox._page = p; }, go() {}, currentId: () => 'world' },
     ui: { setTitle() {} },
     worldGlobe: { mount: () => Promise.resolve(info), unmount() {} },
-    worldUi: { mount() { return dom.document.createElement('div'); }, unmount() {}, showLoading() {}, hideLoading() {}, toast() {}, setStats() {} },
+    worldUi: { mount() { return dom.document.createElement('div'); }, unmount() {}, showLoading() {}, hideLoading() {}, toast() {} },
     worldBoundaries: { mount() {}, unmount() {} },
     worldLighthouseDeck: { mount: () => Promise.resolve({ count: 0 }), unmount() {}, refreshStations: () => ({ count: 0 }), setSelected() {}, applyTier() {}, getState: () => ({ stations: [], selectedId: null, visible: true }), pickStation: () => null },
     worldMapActions: { mount() {}, unmount() {} },

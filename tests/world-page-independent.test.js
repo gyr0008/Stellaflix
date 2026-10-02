@@ -98,7 +98,7 @@ function setupWorld() {
     worldGlobe: { mount() { return Promise.resolve(info); }, unmount() {} },
     worldUi: {
       mount() { return dom.document.createElement('div'); }, unmount() {},
-      showLoading() {}, hideLoading() {}, toast() {}, setStats() {},
+      showLoading() {}, hideLoading() {}, toast() {},
       setOnAir() {}, setOnAirHandler() {}, setHintHandler() {}, setCreateHandler() {},
       setRotateState() {}, fireworksCanvas() { return null; },
       showCard() {}, hideCard() {}, cardEl: null

@@ -506,7 +506,8 @@ test('world-ui：自研卡片 DOM 退役（showCard/hideCard/cardEl 移除，HUD
   const src = read('public/video/world-ui.js');
   assert.ok(!/function showCard/.test(src), 'showCard 应移除');
   assert.ok(!/world-card/.test(src), 'world-card DOM 应移除');
-  for (const keep of ['setStats', 'setOnAir', 'showLoading', 'hideLoading', 'toast']) {
+  assert.ok(!/setStats/.test(src), '统计条已退役（2026-10-01 用户裁决「删」），setStats 不得回潮');
+  for (const keep of ['setOnAir', 'showLoading', 'hideLoading', 'toast']) {
     assert.ok(new RegExp('\\b' + keep + '\\b').test(src), 'HUD 面 ' + keep + ' 应保留');
   }
 });
