@@ -32,8 +32,36 @@
   ];
   function overlayTabs() { return OVERLAY_TABS.map(function (t) { return { id: t.id, label: t.label }; }); }
 
-  var state = { open: false, parked: false, previousFocus: null, activeTab: 'featured', defs: [], collection: null, listScroll: 0 };
+  // tabScroll：4 个 tab 共用一个滚动容器（#home-video-collections-list），
+  // 切 tab 走 innerHTML 整体替换 —— 浏览器不会重置 scrollTop，位置会被当成「容器状态」而非「tab 状态」，
+  // 于是「系列」滚到第 3 屏切「榜单」仍停在同一位置 = 滚轮相互泄露。
+  // 记录口径：切走前把当前容器 scrollTop 存进 tabScroll[旧 tab]，渲染后回填 tabScroll[新 tab]。
+  var state = { open: false, parked: false, previousFocus: null, activeTab: 'featured', defs: [], collection: null, tabScroll: Object.create(null) };
   var controlsBound = false;
+
+  function overlayTabIds() { return OVERLAY_TABS.map(function (t) { return t.id; }); }
+
+  // 切走 / 进二级页前调用：把当前容器的滚动位置记到当前 tab 名下
+  function rememberTabScroll() {
+    var list = document.getElementById('home-video-collections-list');
+    if (!list) return;
+    state.tabScroll[state.activeTab] = list.scrollTop || 0;
+  }
+
+  // 渲染后调用：把当前 tab 自己的滚动位置回填。
+  // 记录值不回写浏览器 clamp 结果 —— 切到内容更短的 tab 被钳到 0 属预期，
+  // 保留原值才能让切回长内容 tab 时位置不丢（这才是「独立记录」相对共用 scrollTop 的意义）。
+  function restoreTabScroll() {
+    var list = document.getElementById('home-video-collections-list');
+    if (!list) return;
+    list.scrollTop = state.tabScroll[state.activeTab] || 0;
+  }
+
+  // 整窗重开按原语义回顶：清空全部 tab 记录（不做跨次持久化）
+  function resetTabScroll() {
+    state.tabScroll = Object.create(null);
+    overlayTabIds().forEach(function (id) { state.tabScroll[id] = 0; });
+  }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
@@ -56,6 +84,37 @@
   // 快照里的 color 来自外部数据链路，只认 #rrggbb 才允许进样式（防篡改注入）
   function isHexColor(c) {
     return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c);
+  }
+
+  // 环境色（页面底）明度上限：底色提浓到 70% 后，亮色海报（高饱和粉/黄）会把白字压到不可读。
+  // 实测参考图底色 #684828（白字 8.3:1）/ #286060（7.2:1），对应相对亮度 0.077~0.097；
+  // 取 0.13 作上限 → 最差对比度 1.05/(0.13+0.05) ≈ 5.8:1，留足余量（AA 要求 4.5:1）。
+  var AMBIENT_MAX_LUM = 0.13;
+  function srgbLuminance(r, g, b) {
+    function f(v) {
+      var s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    }
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  }
+  // 主色压到明度上限：等比缩放保色相，只变明暗。已经够暗则原样返回（不动色相）
+  function ambientFrom(hex) {
+    if (!isHexColor(hex)) return '';
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    if (srgbLuminance(r, g, b) <= AMBIENT_MAX_LUM) return hex;
+    var lo = 0, hi = 1;
+    for (var i = 0; i < 12; i++) {
+      var m = (lo + hi) / 2;
+      if (srgbLuminance(r * m, g * m, b * m) > AMBIENT_MAX_LUM) hi = m; else lo = m;
+    }
+    return '#' + [r, g, b].map(function (v) {
+      var n = Math.round(v * lo);
+      if (n < 0) n = 0;
+      if (n > 255) n = 255;
+      return ('0' + n.toString(16)).slice(-2);
+    }).join('');
   }
 
   function readSnapshots() {
@@ -134,12 +193,16 @@
     state.defs = defs;
     if (!defs.length) {
       list.innerHTML = '<div class="home-video-collections-empty">片单模块未就绪</div>';
+      restoreTabScroll();
       return;
     }
     var snaps = readSnapshots();
     list.innerHTML = '<div class="home-video-collections-grid">' +
       defs.map(function (d) { return cardHtml(d, snaps[d.id]); }).join('') + '</div>';
     fillCovers(defs, snaps);
+    // 渲染后回填当前 tab 自己的滚动位置（唯一还原点，覆盖 打开/切 tab/二级页返回 全部渲染路径）。
+    // 卡片高度由 CSS 固定（封面 150px + 文案区），不依赖图片加载 → 同步回填不会被钳制
+    restoreTabScroll();
   }
 
   function updateCardDom(def, posters, count, color) {
@@ -270,6 +333,7 @@
       if (!state.collection || state.collection.def !== def) return; // 已返回/已切片单
       var modal = document.querySelector('.home-video-collections-modal');
       if (modal) modal.style.setProperty('--wc-warm', color);
+      if (modal) modal.style.setProperty('--wc-ambient', ambientFrom(color)); // 异步取色到位后同步页面底
       var hero = document.querySelector('.home-video-collections-hero');
       if (hero) hero.style.setProperty('--wc-warm', color);
       var posters = [];
@@ -295,20 +359,30 @@
     var posterColor = snap && isHexColor(snap.color) ? snap.color : '';
     var warm = posterColor || def.warm || '#534AB7';
     if (modal) modal.style.setProperty('--wc-warm', warm); // D2：面板环境色取片单主色
+    // 页面底 = 主色压到明度上限后的值（覆盖 CSS 里 color-mix 的兜底），保证白字可读
+    if (modal) modal.style.setProperty('--wc-ambient', ambientFrom(warm));
     var items = col.items || [];
     var heroPoster = items[0] && items[0].poster;
     if (!posterColor && heroPoster && !col.error && !col.placeholder) {
       fillDetailColor(def, items, heroPoster);
     }
-    var countText = col.error ? '加载失败'
+    // 标题居中大字（2026-10-01 对齐参考图）：正常态只显示标题，不再带「共N部」计数行。
+    // 错误 / 占位 / 加载中仍须保留状态小字 —— 否则用户看不出加载状态（错误详情在下方空态里）
+    var notice = col.error ? '加载失败'
       : col.placeholder ? '即将上线'
-      : (items.length ? countLabel(def, items.length) : '加载中…');
+      : (items.length ? '' : '加载中…');
     var html = '<div class="home-video-collections-hero" style="--wc-warm:' + esc(warm) + '">' +
       '<span class="home-video-collections-hero-bg" aria-hidden="true"' +
       (heroPoster ? ' style="background-image:url(' + esc(safeUrl(heroPoster)) + ')"' : '') + '></span>' +
-      '<button class="home-video-collections-back" type="button" data-wc-back aria-label="返回片单列表">←</button>' +
+      // 返回图标：弯钩+箭头（2026-10-01 用户指定图形，替换原文本「←」）。
+      // aria-hidden：按钮已有 aria-label，图标是装饰，避免读屏重复播报；尺寸由 CSS 类统一定义
+      '<button class="home-video-collections-back" type="button" data-wc-back aria-label="返回片单列表">' +
+      '<svg class="home-video-collections-back-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">' +
+      '<path opacity="0.4" d="M7.13 18.3096H15.13C17.89 18.3096 20.13 16.0696 20.13 13.3096C20.13 10.5496 17.89 8.30957 15.13 8.30957H4.13" stroke="#ffffff" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<path d="M6.43 10.8104L3.87 8.25043L6.43 5.69043" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '</svg></button>' +
       '<span class="home-video-collections-hero-copy"><strong>' + esc(def.title) + '</strong>' +
-      '<small>' + esc(countText) + '</small></span></div>';
+      (notice ? '<small>' + esc(notice) + '</small>' : '') + '</span></div>';
     if (col.error) {
       html += '<div class="home-video-collections-items-empty">' +
         (col.error === 'TMDB_KEY_REQUIRED' ? '打开片单内容需要先在设置配置 TMDB Key' : '片单加载失败：' + esc(col.error)) +
@@ -328,9 +402,8 @@
   }
 
   function openCollectionDetail(def) {
-    // 进二级页前记下一级列表的滚动位置，返回时恢复（方案 C：进入回顶 / 返回还原）
-    var cur = document.getElementById('home-video-collections-list');
-    state.listScroll = cur ? cur.scrollTop : 0;
+    // 进二级页前把一级列表滚动位置记到「当前 tab」名下，返回时由 renderList 按 tab 还原
+    rememberTabScroll();
     state.collection = { def: def, items: null, error: '' };
     renderItemsPage();
     if (def.type === 'placeholder') {
@@ -362,14 +435,14 @@
     if (modal) {
       modal.classList.remove('home-video-collections--detail');
       modal.style.removeProperty('--wc-warm'); // 防环境色残留到一级 tab 态
+      modal.style.removeProperty('--wc-ambient');
     }
     renderTabs();
     renderList();
-    // 返回一级列表：恢复进二级页前的滚动位置（scrollTop 保留值会因内容变矮被浏览器钳制，
-    // 表现为「退出内容层后弹窗莫名下滑」→ 渲染后显式还原，listScroll=0 即回顶）
-    var list = document.getElementById('home-video-collections-list');
-    if (list) list.scrollTop = state.listScroll || 0;
-    state.listScroll = 0;
+    // 返回一级列表：renderList 末尾已按「当前 tab 的记录」还原（scrollTop 保留值会因内容变矮
+    // 被浏览器钳制，表现为「退出内容层后弹窗莫名下滑」→ 由 restoreTabScroll 显式回填兜住）。
+    // 此处再显式调一次：切 tab 与二级页返回走同一条还原口径，不残留旧单值语义
+    restoreTabScroll();
   }
 
   function openItemDetail(idStr) {
@@ -431,6 +504,7 @@
     if (modal) {
       modal.classList.remove('home-video-collections--detail');
       modal.style.removeProperty('--wc-warm');
+      modal.style.removeProperty('--wc-ambient');
     }
     var focusTarget = state.previousFocus;
     state.previousFocus = null;
@@ -483,9 +557,10 @@
       if (!tab || !tabsBar.contains(tab)) return;
       var id = tab.getAttribute('data-wc-tab');
       if (id === state.activeTab) return;
+      rememberTabScroll(); // 先把当前位置记到旧 tab 名下，再切
       state.activeTab = id;
       renderTabs();
-      renderList();
+      renderList(); // 末尾按新 tab 的记录回填（无记录即回顶）
     });
     if (close) close.addEventListener('click', closeHomeVideoCollectionsOverlay);
     if (mask) mask.addEventListener('click', function (event) {
@@ -507,9 +582,10 @@
     bindHomeVideoCollectionsControls();
     var mask = document.getElementById('home-video-collections-mask');
     if (!mask) return;
-    // 上次若停在二级页（含 park 残留被整退的路径），重开一律回一级列表
-    // 整窗重开不恢复旧滚动位置：先清 listScroll，让 closeCollectionDetail 落回顶部
-    state.listScroll = 0;
+    // 上次若停在二级页（含 park 残留被整退的路径），重开一律回一级列表。
+    // 整窗重开按原语义回顶：清空全部 tab 的滚动记录（不跨次持久化），
+    // 再让 closeCollectionDetail → renderList 落到当前 tab 的 0
+    resetTabScroll();
     if (state.collection) closeCollectionDetail();
     state.parked = false;
     state.previousFocus = document.activeElement;

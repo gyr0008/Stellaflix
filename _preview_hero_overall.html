@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>精选片单二级页 · 改前 / 改后 对照</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 26px 24px 40px;
+    background: #0e1015; color: #e8eaf0;
+    font: 400 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 6px; font-weight: 700; }
+  .sub { color: rgba(255,255,255,.48); margin: 0 0 26px; font-size: 12px; max-width: 960px; }
+  .sub code { background: rgba(255,255,255,.08); padding: 1px 5px; border-radius: 4px; }
+  .row { display: flex; gap: 26px; flex-wrap: wrap; align-items: flex-start; }
+  .plan { width: 400px; }
+  .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .3px; }
+  .tag.old { background: rgba(255,255,255,.09); color: rgba(255,255,255,.6); }
+  .tag.new { background: rgba(96,220,160,.16); color: #6fe0a8; }
+  .name { font-size: 14px; font-weight: 700; margin: 8px 0 3px; }
+  .desc { font-size: 11.5px; color: rgba(255,255,255,.52); margin: 0 0 10px; min-height: 36px; }
+  .viewport { width: 400px; height: 330px; overflow: hidden; border-radius: 10px; }
+
+  /* ── 真实弹窗 760px，缩 0.5 ── */
+  .modal {
+    width: 760px; transform: scale(.5); transform-origin: top left;
+    display: flex; flex-direction: column; font-family: inherit;
+    padding: 22px; background: #0c0e13;
+  }
+  .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+  .head h2 { margin: 0 0 6px; font-size: 20px; font-weight: 780; color: #fff; }
+  .head p { margin: 0; color: rgba(255,255,255,.48); font-size: 11px; line-height: 1.55; max-width: 86%; }
+  .close {
+    width: 32px; height: 32px; flex: 0 0 auto; border: 1px solid rgba(255,255,255,.1);
+    border-radius: 50%; background: rgba(255,255,255,.04); color: rgba(255,255,255,.72);
+    font: 400 22px/1 inherit; cursor: pointer;
+  }
+
+  .list { min-height: 0; flex: 1 1 auto; margin-top: 12px; }
+
+  .hero {
+    position: relative; overflow: hidden; display: flex; flex-direction: column;
+    justify-content: flex-end; padding: 16px;
+    background: linear-gradient(135deg, #9b6746, rgba(8,10,14,.94));
+  }
+  .hero-bg {
+    position: absolute; inset: 0; z-index: -1;
+    background:
+      radial-gradient(circle at 78% 40%, rgba(206,44,44,.82) 0%, transparent 30%),
+      radial-gradient(circle at 24% 66%, rgba(64,124,206,.6) 0%, transparent 42%),
+      radial-gradient(circle at 52% 20%, rgba(120,150,230,.42) 0%, transparent 46%),
+      linear-gradient(160deg, #2a3454 0%, #1a2340 46%, #0e1425 100%);
+  }
+  .hero::after {
+    content: ''; position: absolute; inset: 0; z-index: -1;
+    background: linear-gradient(180deg, transparent 42%,
+      color-mix(in srgb, var(--amb, #0c0e13) 62%, transparent) 74%,
+      var(--amb, #0c0e13) 100%);
+  }
+  .back {
+    position: absolute; top: 10px; left: 10px; width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    border: 0; padding: 0; background: none; cursor: pointer; z-index: 1;
+  }
+  .hero-copy {
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+    width: 100%; padding-bottom: 10px;
+  }
+  .hero-copy strong {
+    font-size: 22px; font-weight: 800; letter-spacing: .3px; color: #fff;
+    text-shadow: 0 2px 12px rgba(0,0,0,.7);
+  }
+
+  .items-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 18px 14px; margin-top: 14px; }
+  .item { min-width: 0; }
+  .item-poster {
+    position: relative; display: block; aspect-ratio: 2/3; border-radius: 10px;
+    overflow: hidden; background-color: rgba(255,255,255,.06);
+  }
+  .item-year {
+    position: absolute; top: 6px; left: 6px; padding: 2px 7px; border-radius: 8px;
+    background: rgba(8,10,14,.62); color: rgba(255,255,255,.92); font-size: 10px; font-weight: 700;
+  }
+  .item-title {
+    display: block; margin-top: 7px; font-size: 11.5px; font-weight: 600;
+    color: rgba(255,255,255,.88); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .p1 { background: linear-gradient(150deg,#3b4a7a,#1d2743 55%,#101626); }
+  .p2 { background: linear-gradient(150deg,#5b3a52,#2a1f3c 55%,#14101f); }
+  .p3 { background: linear-gradient(150deg,#6a4430,#3a2a24 55%,#161013); }
+
+  /* ── 改前：方案 C 形态 ── */
+  .old .modal { background: #080808; --amb: #080808; }
+  .old .hero { min-height: 200px; border-radius: 16px; margin-bottom: 14px; }
+
+  /* ── 改后：通栏整块 + 主色底 ── */
+  /* ambientFrom('#9b6746') 的实测结果 = #885b3e */
+  .new .modal { padding: 0; background: #885b3e; --amb: #885b3e; }
+  .new .head { display: none; }
+  .new .list { margin-top: 0; padding: 0 22px 22px; }
+  .new .hero { min-height: 260px; border-radius: 0; margin: 0 -22px 14px; }
+
+  table { border-collapse: collapse; margin-top: 30px; font-size: 12px; }
+  td, th { text-align: left; padding: 7px 22px 7px 0; vertical-align: top; border-top: 1px solid rgba(255,255,255,.07); }
+  th { color: rgba(255,255,255,.45); font-weight: 500; }
+  td:first-child { color: rgba(255,255,255,.72); }
+  .hl { color: #6fe0a8; font-weight: 700; }
+  .warn { color: #f0b866; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>二级页 hero · 改前 / 改后 对照</h1>
+  <p class="sub">
+    已实施：① 推翻方案 C，hero 改为<strong>页面顶部背景层</strong>（通栏、无圆角、260px）；② 隐藏二级页标题栏「精选片单 / 副标题 / ✕」；③ 页面底色由 <code>主色 24%</code> 提浓到 <code>70%</code>，并加明度上限保护。
+    下方为 1:1 真实 CSS 值渲染，整体缩 50%。
+  </p>
+
+  <div class="row">
+
+    <div class="plan old">
+      <span class="tag old">改前</span>
+      <p class="name">独立圆角卡片 + 黑底 + 标题栏</p>
+      <p class="desc">hero 是被框住的容器，四周露出近乎纯黑的底色（#080808），与下方卡片有明显分界。</p>
+      <div class="viewport">
+        <div class="modal">
+          <div class="head">
+            <div><h2>精选片单</h2><p>编辑策展的主题片单，片单目录内置于本机；打开片单内容需要 TMDB Key</p></div>
+            <button class="close">✕</button>
+          </div>
+          <div class="list">
+            <div class="hero">
+              <span class="hero-bg"></span>
+              <button class="back">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                  <path opacity="0.4" d="M7.13 18.3096H15.13C17.89 18.3096 20.13 16.0696 20.13 13.3096C20.13 10.5496 17.89 8.30957 15.13 8.30957H4.13" stroke="#ffffff" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M6.43 10.8104L3.87 8.25043L6.43 5.69043" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <span class="hero-copy"><strong>漫威电影宇宙</strong></span>
+            </div>
+            <div class="items-grid">
+              <div class="item"><span class="item-poster p1"><span class="item-year">2012</span></span><span class="item-title">复仇者联盟</span></div>
+              <div class="item"><span class="item-poster p2"><span class="item-year">2015</span></span><span class="item-title">复仇者联盟 2：奥创纪元</span></div>
+              <div class="item"><span class="item-poster p3"><span class="item-year">2018</span></span><span class="item-title">复仇者联盟 3：无限战争</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="plan new">
+      <span class="tag new">改后</span>
+      <p class="name">通栏整块 + 主色底 + 无标题栏</p>
+      <p class="desc">顶部直接是海报图，向下渐变溶进同源纯色底，卡片浮在这块颜色上，一整块无边界。</p>
+      <div class="viewport">
+        <div class="modal">
+          <div class="head">
+            <div><h2>精选片单</h2><p>编辑策展的主题片单，片单目录内置于本机；打开片单内容需要 TMDB Key</p></div>
+            <button class="close">✕</button>
+          </div>
+          <div class="list">
+            <div class="hero">
+              <span class="hero-bg"></span>
+              <button class="back">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                  <path opacity="0.4" d="M7.13 18.3096H15.13C17.89 18.3096 20.13 16.0696 20.13 13.3096C20.13 10.5496 17.89 8.30957 15.13 8.30957H4.13" stroke="#ffffff" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M6.43 10.8104L3.87 8.25043L6.43 5.69043" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <span class="hero-copy"><strong>漫威电影宇宙</strong></span>
+            </div>
+            <div class="items-grid">
+              <div class="item"><span class="item-poster p1"><span class="item-year">2012</span></span><span class="item-title">复仇者联盟</span></div>
+              <div class="item"><span class="item-poster p2"><span class="item-year">2015</span></span><span class="item-title">复仇者联盟 2：奥创纪元</span></div>
+              <div class="item"><span class="item-poster p3"><span class="item-year">2018</span></span><span class="item-title">复仇者联盟 3：无限战争</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <table>
+    <tr><th>项</th><th>改前</th><th>改后</th></tr>
+    <tr><td>hero 圆角</td><td>16px</td><td class="hl">0（无圆角）</td></tr>
+    <tr><td>hero 左右</td><td>四周 22px 留白</td><td class="hl">负 margin 通栏</td></tr>
+    <tr><td>hero 高度</td><td>200px</td><td class="hl">260px</td></tr>
+    <tr><td>标题栏</td><td>显示（精选片单 + 副标题 + ✕）</td><td class="hl">二级页隐藏</td></tr>
+    <tr><td>页面底色</td><td>#080808（主色 24%）</td><td class="hl">主色 70% + 明度上限</td></tr>
+    <tr><td>白字对比度</td><td>20.0:1（过剩，色相全丢）</td><td class="hl">5.8~7.7:1（够读）</td></tr>
+    <tr><td>示例底色</td><td>#080808</td><td>#885b3e（由取色 #9b6746 压暗所得）</td></tr>
+    <tr><td>参考图底色</td><td colspan="2">#684828（金球奖）/ #286060（百亿票房）</td></tr>
+  </table>
+
+  <p class="sub" style="margin-top:22px">
+    <span class="warn">待解决</span>：改后底色 <code>#885b3e</code> 比参考图 <code>#684828</code> 偏亮偏淡，因为我们取的是
+    <strong>1×1 全图平均色</strong>（#9b6746），而参考图用的是<strong>主色</strong>（约 #6c4824）。
+    要完全对齐需改 <code>/api/image-color</code>：wsrv 从 <code>w=1&h=1</code> 改为 <code>w=16&h=16</code>，服务端量化取主色。
+    该改动会连带影响一级封面卡颜色，且需作废旧快照缓存 —— 已单独提出，等你确认再做。
+  </p>
+</body>
+</html>

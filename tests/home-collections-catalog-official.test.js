@@ -258,7 +258,8 @@ test('浮层 tab 条渲染 4 个 tab：推荐/系列/榜单/类型', async () =>
   assert.deepEqual(Array.from(tabs).map((t) => t.textContent), ['推荐', '系列', '榜单', '类型']);
 });
 
-test('社区榜卡计数=「共N部」（全量型），点卡进二级页同语义', async () => {
+// 2026-10-01：hero 计数行已移除 → 「同语义」改由二级页渲染条目数验证（全量型须拉全 8 条）
+test('社区榜卡计数=「共N部」（全量型），二级页渲染全量条目', async () => {
   const { SFV, list, click, settle, switchTab } = buildEnv();
   SFV.homeCollectionsOverlay.open();
   await switchTab('lists');
@@ -272,8 +273,12 @@ test('社区榜卡计数=「共N部」（全量型），点卡进二级页同语
   assert.equal(el.textContent, '共8部', 'tmdb-list 全量型须为「共N部」');
   click(list.querySelector('[data-wc-id="' + lists[0].id + '"]'));
   await settle();
-  const hero = list.querySelector('.home-video-collections-hero-copy small');
-  assert.equal(hero.textContent, '共8部');
+  assert.equal(
+    list.querySelector('.home-video-collections-hero-copy small'),
+    null,
+    '正常态二级页只显示标题，不带计数行',
+  );
+  assert.equal(list.querySelectorAll('[data-wc-item]').length, 8, '二级页须渲染全量 8 条');
 });
 
 test('系列合集二级页取数走 getCollection（tmdb-collection 分支不受重写影响）', async () => {

@@ -109,15 +109,21 @@ test('完整型片单（tmdb-collection）计数保持「共N部」', async () =
   assert.equal(el.textContent, '共8部');
 });
 
-test('二级页 hero 计数与封面卡同语义（分页型=精选N部）', async () => {
+// 2026-10-01：hero 计数行移除（对齐参考图），计数只在封面卡上；此处锚定新契约
+test('二级页正常态 hero 只显示片单名（不带计数行）', async () => {
   const { SFV, list, click, settle } = buildEnv();
   SFV.homeCollectionsOverlay.open();
   await settle();
   click(list.querySelector('[data-wc-id="trending-week"]'));
   await settle();
-  const hero = list.querySelector('.home-video-collections-hero-copy small');
-  assert.ok(hero, '二级页 hero 应渲染计数');
-  assert.equal(hero.textContent, '精选20部');
+  assert.equal(
+    list.querySelector('.home-video-collections-hero-copy small'),
+    null,
+    '正常态二级页只显示标题，不带计数行',
+  );
+  const title = list.querySelector('.home-video-collections-hero-copy strong');
+  assert.ok(title, '须显示片单名');
+  assert.ok(title.textContent.length > 0, '片单名不得为空');
 });
 
 // ============================================================ 3. getItems 缓存

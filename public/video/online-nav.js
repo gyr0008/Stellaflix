@@ -409,8 +409,38 @@
     // 详情 view 含 _origin==='history'（历史卡片点击时标记） → 返回历史分类页；否则返回详情页
     playerReturn = { view: view, fromHistory: (view._origin === 'history') };
   }
+  // 无返回目标（首页「接着看」/NEXT UP 续播 _origin:'continue'）时的 Home 复位。
+  // 背景（2026-10-01 复现）：此前 `if (!playerReturn) return;` 是纯空操作，完全依赖
+  // 「底层恰好还显示着 Home」。而音乐态「点空白关 Home」会置 homeSuppressed=true 并摘掉
+  // body.empty-home-active（#empty-home 默认 opacity:0），且影视态 goHome() 不重置该标记 →
+  // 退出播放器后首页永久透明，只剩 3D 粒子星空。这里主动把 Home 状态复位回来，
+  // 不再听天由命。
+  // 只复位「显隐状态 + 类」，不调 updateEmptyHomeVisibility()，避免触发音乐态
+  // renderHomeDiscover()/loadHomeDiscover() 往影视态首页塞音乐内容。
+  //
+  // 跨态隔离的单一实现（2026-10-02）：home.js 的 render()（进入影视态）也复用本函数，
+  // 避免两处各写一份而漂移。幂等，可重复调用。
+  function resetHomeVisibilityState() {
+    try {
+      if (typeof global.homeSuppressed !== 'undefined') global.homeSuppressed = false;
+      if (typeof global.homeForcedOpen !== 'undefined') global.homeForcedOpen = true;
+      if (typeof global.emptyHomeActive !== 'undefined') global.emptyHomeActive = true;
+      var b = (global.document && global.document.body) || (doc && doc.body);
+      if (b && !b.classList.contains('empty-home-active')) b.classList.add('empty-home-active');
+    } catch (e) {
+      console.warn('[SFV-Online] resetHomeVisibilityState 状态复位失败:', e && e.message);
+    }
+  }
+  function restoreHomeAfterPlayer() {
+    resetHomeVisibilityState();
+    if (SFV.home && typeof SFV.home.render === 'function') {
+      try { SFV.home.render(); } catch (e) {
+        console.warn('[SFV-Online] restoreHomeAfterPlayer home.render 失败:', e && e.message);
+      }
+    }
+  }
   function returnFromPlayer() {
-    if (!playerReturn) return; // 无记录 → 维持默认（home）
+    if (!playerReturn) { restoreHomeAfterPlayer(); return; } // 无记录 → 主动复位回 home
     var ctx = playerReturn;
     playerReturn = null;
     try {
@@ -655,6 +685,7 @@
   S.handleNavAction = handleNavAction;
   S.goToNav = goToNav;
   S.goHome = goHome;
+  S.resetHomeVisibilityState = resetHomeVisibilityState;
   S.unlockBodyScroll = unlockBodyScroll;
   S.lockBodyScroll = lockBodyScroll;
   S.capturePlayerReturn = capturePlayerReturn;
@@ -670,6 +701,7 @@
     renderLoading: renderLoading, onNavItemClick: onNavItemClick, setActiveNav: setActiveNav,
     handleNavAction: handleNavAction, goToNav: goToNav, goHome: goHome, openPage: openPage,
     unlockBodyScroll: unlockBodyScroll, lockBodyScroll: lockBodyScroll,
+    resetHomeVisibilityState: resetHomeVisibilityState,
     capturePlayerReturn: capturePlayerReturn, returnFromPlayer: returnFromPlayer,
   };
 

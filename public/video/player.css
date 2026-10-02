@@ -4330,6 +4330,19 @@ html.control-glass-svg-ok .sfv-page-bg-layer {
   color: rgba(255, 200, 120, .95);
   vertical-align: middle; letter-spacing: .3px;
 }
+/* 内置规则徽标（蓝色，区别于远端的绿=已导入 / 橙=反爬） */
+.sfv-glass-badge-internal {
+  display: inline-block; margin-left: 6px; padding: 1px 6px;
+  border-radius: 6px; font-size: 10px; font-weight: 600;
+  background: rgba(var(--fc-accent-rgb, 120, 160, 220), .28);
+  color: rgba(var(--fc-accent-rgb, 120, 160, 220), 1);
+  border: 1px solid rgba(var(--fc-accent-rgb, 120, 160, 220), .45);
+  vertical-align: middle; letter-spacing: .3px;
+}
+/* 内置条目置顶时给一条分隔线，避免和远端条目混作一团 */
+.sfv-glass-item.is-builtin {
+  border-left: 2px solid rgba(var(--fc-accent-rgb, 120, 160, 220), .55);
+}
 
 /* 安装按钮 */
 .sfv-glass-install,

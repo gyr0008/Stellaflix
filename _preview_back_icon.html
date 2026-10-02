@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>精选片单 · 返回按钮换图标对照</title>
+<style>
+  body {
+    margin: 0;
+    padding: 32px;
+    background: #0b0d12;
+    color: #e8eaf0;
+    font: 400 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0 0 6px; font-weight: 700; }
+  .sub { color: rgba(255,255,255,.5); margin: 0 0 28px; font-size: 12px; }
+  .row { display: flex; gap: 48px; flex-wrap: wrap; }
+  .cell { }
+  .cap { font-size: 12px; color: rgba(255,255,255,.62); margin-top: 14px; }
+  .cap b { color: #fff; font-weight: 700; }
+
+  /* 模拟 hero 深色底：与二级页 hero 的环境色接近 */
+  .stage {
+    width: 220px; height: 130px;
+    border-radius: 12px;
+    background: linear-gradient(120deg, #1b2436 0%, #101725 60%, #0c0e13 100%);
+    display: flex; align-items: flex-start; justify-content: flex-start;
+    padding: 10px;
+    box-sizing: border-box;
+    position: relative;
+  }
+  /* 真实 CSS 值：与 public/css/index.css 的 .home-video-collections-back 一致 */
+  .back {
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%;
+    background: rgba(8,10,14,.45);
+    color: rgba(255,255,255,.9);
+    font-size: 15px; line-height: 1;
+    cursor: pointer;
+  }
+  .back:hover { background: rgba(8,10,14,.68); }
+  .back-icon { display: block; flex: 0 0 auto; width: 24px; height: 24px; }
+
+  /* 4 倍放大：看清图形细节（等比缩放，不改变相对尺寸关系） */
+  .zoom { transform: scale(4); transform-origin: top left; }
+  .zoom-wrap { width: 120px; height: 120px; position: relative; }
+
+  table { border-collapse: collapse; margin-top: 34px; font-size: 12px; }
+  td, th { text-align: left; padding: 6px 16px 6px 0; vertical-align: top; }
+  th { color: rgba(255,255,255,.45); font-weight: 500; }
+  code { background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+</style>
+</head>
+<body>
+  <h1>精选片单 · 二级页返回按钮 —— 换图标对照</h1>
+  <p class="sub">左：改前（文本箭头「←」）　右：改后（指定 SVG）。真实尺寸 30×30，CSS 值取自 public/css/index.css</p>
+
+  <div class="row">
+    <div class="cell">
+      <div class="stage">
+        <button class="back" type="button">←</button>
+      </div>
+      <p class="cap"><b>改前</b><br>文本「←」· font-size 15px</p>
+    </div>
+
+    <div class="cell">
+      <div class="stage">
+        <button class="back" type="button">
+          <svg class="back-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+            <path opacity="0.4" d="M7.13 18.3096H15.13C17.89 18.3096 20.13 16.0696 20.13 13.3096C20.13 10.5496 17.89 8.30957 15.13 8.30957H4.13" stroke="#ffffff" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M6.43 10.8104L3.87 8.25043L6.43 5.69043" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+      <p class="cap"><b>改后</b><br>SVG · 24×24 · flex 居中</p>
+    </div>
+
+    <div class="cell">
+      <div class="zoom-wrap">
+        <div class="stage zoom" style="width:55px;height:32.5px;padding:2.5px;">
+          <button class="back" type="button">
+            <svg class="back-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+              <path opacity="0.4" d="M7.13 18.3096H15.13C17.89 18.3096 20.13 16.0696 20.13 13.3096C20.13 10.5496 17.89 8.30957 15.13 8.30957H4.13" stroke="#ffffff" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M6.43 10.8104L3.87 8.25043L6.43 5.69043" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <p class="cap"><b>改后 4× 放大</b><br>看图形细节</p>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>项</th><th>值</th></tr>
+    <tr><td>按钮</td><td><code>30×30</code> · 圆形 · 背景 <code>rgba(8,10,14,.45)</code>（hover <code>.68</code>）</td></tr>
+    <tr><td>图标</td><td><code>24×24</code>（CSS 类 <code>.home-video-collections-back-icon</code> 唯一定义）</td></tr>
+    <tr><td>描边</td><td><code>#ffffff</code> · <code>stroke-width 1.5</code> · 圆头圆角</td></tr>
+    <tr><td>主钩</td><td><code>opacity 0.4</code>（淡）</td></tr>
+    <tr><td>箭头</td><td>不透明（实白）</td></tr>
+    <tr><td>无障碍</td><td>svg <code>aria-hidden="true"</code>；名称由 button 的 <code>aria-label="返回片单列表"</code> 承载</td></tr>
+  </table>
+</body>
+</html>

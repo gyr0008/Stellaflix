@@ -184,17 +184,55 @@
       var m = html.match(/https?:\/\/[^\s"']+\.(mp4|flv|webm|mkv)(\?[^"'\s]*)?/i);
       return m ? m[0] : null;
     }},
-    // 策略 4: iframe src（常见于聚合播放器）
+    // 策略 4: 苹果 CMS（maccms）系**明文**播放数据块。
+    // 与策略 5（maccms-play-b64）同源，区别只在于这系的 url 字段是明文而非 base64，
+    // 且页面常把 JSON 里的斜杠转义成 \/ -> "url":"https:\/\/host\/a\/index.m3u8"。
+    // 于是只认字面 https:// 的策略 2（m3u8-url）会落空，播放页最终被后面的
+    // iframe-src 命中、返回播放器壳（/static/player/...）而不是真实流 —— 实测缺陷。
+    // 形态：{"url":"https://...m3u8","url_next":"...","from":"线路","server":"no",...}
+    // 必须排在 iframe-src 之前（也是这类"真实流藏在数据块里"的通用位置）。
+    { name: 'maccms-play-plain', test: function (html) {
+      var m = html.match(/"url"\s*:\s*"((?:https?:)?\\?\/\\?\/[^"]+?)"/i);
+      if (!m) return null;
+      var u = String(m[1]).replace(/\\\//g, '/');
+      // 还原 JS/JSON 的 \uXXXX 转义。实测（2026-10-01 端到端 12 部抽样）：
+      // 该系某集 url 存的是 "https://v.fengbao8.com/video/taifengshangshe/\u7b2c08\u96c6/index.m3u8"，
+      // 转义不还原时请求返回 nginx 404；还原成「第08集」后同一个地址 200 + 47KB m3u8。
+      // 只动 \uXXXX 形转义，普通 URL 里不会出现字面 \u，不会误伤。
+      u = u.replace(/\\u([0-9a-fA-F]{4})/g, function (_s, hex) {
+        try { return String.fromCharCode(parseInt(hex, 16)); } catch (e) { return _s; }
+      });
+      // 只认绝对 http(s)：页面里 maccms 配置形如 {"url":"www.example.net"} 会被上面的
+      // 正则前缀 (?:https?:)? 放过，这里统一挡掉，避免把站点配置当播放地址。
+      return /^https?:\/\//i.test(u) ? u : null;
+    }},
+    // 策略 5: iframe src（常见于聚合播放器）
     { name: 'iframe-src', test: function (html) {
       var m = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
       return m ? m[1] : null;
     }},
-    // 策略 5: JS 变量中的 URL（var url/var player/video_url 等）
+    // 策略 6: 苹果 CMS（maccms）系播放数据块（base64 编码）—— 真实流藏在 base64 里，明文正则抓不到。
+    // 形态：{"url":"<base64>","from":"<线路>","server":"","note":"","id":"","sid":1,"nid":1}
+    // 编码可能是 base64(url) 或 base64(urlencode(url))，故两种都试；
+    // 多集/多清晰度时原始串用不可打印字节分隔，需按可打印 ASCII 切分后取首个 http(s)。
+    // 必须排在 js-variable 之前：后者正则过宽，会把页面里的提示文案当 URL 命中。
+    { name: 'maccms-play-b64', test: function (html) {
+      var m = html.match(/"url"\s*:\s*"([A-Za-z0-9+\/=_\-]{20,})"/);
+      if (!m) return null;
+      return decodeMaccmsPlayUrl(m[1]);
+    }},
+    // 策略 7: JS 变量中的 URL（var url/var player/video_url 等）
     { name: 'js-variable', test: function (html) {
+      // 修正两处过宽，都必须只收「看起来像 URL」的取值：
+      //  (1) player.*?url 里的 .*? 会越过 {"flag":"play",...,"link":"..."} 跨段匹配，
+      //      实测 netflixgc.org 的播放页因此命中报错按钮的
+      //      data-url="编号【xxx】名称【xxx】不能观看请检查修复，页面地址"，
+      //      把提示文案当播放地址返回——比不解析更糟。变量别名收紧为合法标识符。
+      //  (2) 末条 /*([^"']+)/* 同样会吃掉任意“url=”属性（如 data-url="编号...报错文案"）。
       var patterns = [
-        /(?:var|let|const)\s+(?:url|videoUrl|playUrl|source|player.*?url)\s*=\s*["']([^"']+)["']/i,
+        /(?:var|let|const)\s+(?:url|videoUrl|playUrl|source|play[a-zA-Z0-9_]*|player[a-zA-Z0-9_]*)\s*=\s*["']([^"']+)["']/i,
         /["'](https?:\/\/[^"']*\.(?:m3u8|mp4|flv)[^"']*?)["']/i,
-        /\burl\s*[:=]\s*["']([^"']+)["']/i
+        /\burl\s*[:=]\s*["']((?:https?:)?\/\/[^"'\s]+|https?:\/\/[^"'\s]+)["']/i
       ];
       for (var i = 0; i < patterns.length; i++) {
         var m = html.match(patterns[i]);
@@ -203,6 +241,54 @@
       return null;
     }}
   ];
+
+  /** 纯 JS 版 base64 解码兜底（环境无 atob 时，如部分 Node 测试沙箱） */
+  function manualAtob(b64) {
+    var T = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var buf = [], out = 0, phase = 0, acc = 0;
+    for (var i = 0; i < b64.length; i++) {
+      var c = b64.charAt(i);
+      var v = T.indexOf(c);
+      if (v === -1) {
+        if (c === '-') v = 62; else if (c === '_') v = 63; else if (c === '=') break;
+        else return null;                       // 不是合法 base64
+      }
+      acc = (acc << 6) | v;
+      if (++phase === 4) { buf[out++] = (acc >> 16) & 0xff; buf[out++] = (acc >> 8) & 0xff; buf[out++] = acc & 0xff; phase = 0; acc = 0; }
+    }
+    if (phase === 2) buf[out++] = (acc >> 8) & 0xff;
+    else if (phase === 3) { buf[out++] = (acc >> 16) & 0xff; buf[out++] = (acc >> 8) & 0xff; }
+    return String.fromCharCode.apply(null, buf.slice(0, out));
+  }
+
+  function toBase64Bytes(b64) {
+    if (typeof atob === 'function') {
+      try { return atob(b64); } catch (e) { /* 落到手写实现 */ }
+    }
+    return manualAtob(b64);
+  }
+
+  /**
+   * 解出苹果 CMS 播放数据块里的真实流地址。
+   * 兼容两种编码：base64(明文 url)、base64(urlencode(url))。
+   * @param {string} b64 base64 密文
+   * @returns {string|null} 首个 http(s) 流地址
+   */
+  function decodeMaccmsPlayUrl(b64) {
+    if (!b64 || !/^[A-Za-z0-9+\/=_\-]+$/.test(b64)) return null;
+    var raw = toBase64Bytes(b64);
+    if (!raw) return null;
+    var candidates = [raw];
+    try { candidates.push(decodeURIComponent(raw)); } catch (e) { /* 非 %xx 编码，忽略 */ }
+    for (var i = 0; i < candidates.length; i++) {
+      // 原始串里多集之间用不可打印字节分隔，只保留可打印 ASCII
+      var parts = String(candidates[i]).split(/[^\x20-\x7e]+/);
+      for (var j = 0; j < parts.length; j++) {
+        if (/^https?:\/\//i.test(parts[j])) return parts[j];
+      }
+    }
+    return null;
+  }
 
   /**
    * 第三方视频解析器 URL 识别。
@@ -237,6 +323,7 @@
     cmsRenderTpl: cmsRenderTpl,
     normalizeUrlLocal: normalizeUrlLocal,
     parseDelimitedChaptersLocal: parseDelimitedChaptersLocal,
+    decodeMaccmsPlayUrl: decodeMaccmsPlayUrl,
     PLAY_URL_PATTERNS: PLAY_URL_PATTERNS,
     PARSER_URL_PATTERNS: PARSER_URL_PATTERNS,
     isParserUrl: isParserUrl

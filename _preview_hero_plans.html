@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>精选片单 hero 形态 · 三方案对比</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 26px 24px 40px;
+    background: #0e1015; color: #e8eaf0;
+    font: 400 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 6px; font-weight: 700; letter-spacing: .2px; }
+  .sub { color: rgba(255,255,255,.48); margin: 0 0 26px; font-size: 12px; }
+  .sub code { background: rgba(255,255,255,.08); padding: 1px 5px; border-radius: 4px; }
+
+  .plans { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+
+  .plan { width: 380px; }
+  .plan-head { margin-bottom: 10px; }
+  .plan-tag {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    background: rgba(120,140,255,.16); color: #a9b8ff;
+    font-size: 11px; font-weight: 700; letter-spacing: .3px;
+  }
+  .plan.rec .plan-tag { background: rgba(96,220,160,.16); color: #6fe0a8; }
+  .plan-name { font-size: 14px; font-weight: 700; margin: 7px 0 3px; }
+  .plan-desc { font-size: 11.5px; color: rgba(255,255,255,.52); margin: 0; min-height: 34px; }
+
+  .viewport { width: 380px; height: 392px; overflow: hidden; border-radius: 10px; }
+
+  /* ───────────────── 真实弹窗结构（760px，缩到 0.5 显示）───────────────── */
+  .modal {
+    width: 760px;
+    padding: 22px;
+    display: flex; flex-direction: column;
+    background: #0c0e13;
+    /* 二级页环境色 = 海报主色 24% 混入深底（与 --wc-ambient 同式） */
+    background: color-mix(in srgb, #4a3f8f 24%, #0c0e13);
+    transform: scale(.5); transform-origin: top left;
+    font-family: inherit;
+  }
+
+  .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+  .head h2 { margin: 0 0 6px; font-size: 20px; font-weight: 780; color: #fff; }
+  .head p { margin: 0; color: rgba(255,255,255,.48); font-size: 11px; line-height: 1.55; max-width: 86%; }
+  .close {
+    width: 32px; height: 32px; flex: 0 0 auto;
+    border: 1px solid rgba(255,255,255,.1); border-radius: 50%;
+    background: rgba(255,255,255,.04); color: rgba(255,255,255,.72);
+    font: 400 22px/1 inherit; cursor: pointer;
+  }
+
+  /* hero 公共部分 */
+  .hero {
+    position: relative; isolation: isolate; overflow: hidden;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    padding: 16px;
+    background: linear-gradient(135deg, #4a3f8f, rgba(8,10,14,.94));
+  }
+  .hero-bg {
+    position: absolute; inset: 0; z-index: -1;
+    background:
+      radial-gradient(circle at 78% 40%, rgba(206,44,44,.82) 0%, transparent 30%),
+      radial-gradient(circle at 24% 66%, rgba(64,124,206,.6) 0%, transparent 42%),
+      radial-gradient(circle at 52% 20%, rgba(120,150,230,.42) 0%, transparent 46%),
+      linear-gradient(160deg, #2a3454 0%, #1a2340 46%, #0e1425 100%);
+  }
+  /* 底部溶色：透明 → 环境色，与页面底同值 */
+  .hero::after {
+    content: ''; position: absolute; inset: 0; z-index: -1;
+    background: linear-gradient(180deg, transparent 42%,
+      color-mix(in srgb, color-mix(in srgb, #4a3f8f 24%, #0c0e13) 62%, transparent) 74%,
+      color-mix(in srgb, #4a3f8f 24%, #0c0e13) 100%);
+  }
+  /* 返回键：无底盘，白色图标直接浮在图上（本轮已确认） */
+  .back {
+    position: absolute; top: 10px; left: 10px;
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    border: 0; background: none; padding: 0;
+    cursor: pointer; z-index: 1;
+  }
+  .back svg { display: block; }
+  /* 标题：居中大字，去掉计数小字（本轮已确认） */
+  .hero-copy {
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center; width: 100%; padding-bottom: 10px;
+  }
+  .hero-copy strong {
+    font-size: 22px; font-weight: 800; color: #fff;
+    text-shadow: 0 2px 12px rgba(0,0,0,.7); letter-spacing: .3px;
+  }
+
+  /* 海报网格（三列，红框外，三方案完全一致） */
+  .items-grid {
+    display: grid; grid-template-columns: repeat(3, minmax(0,1fr));
+    gap: 18px 14px; margin-top: 14px;
+  }
+  .item { min-width: 0; }
+  .item-poster {
+    position: relative; display: block; aspect-ratio: 2/3;
+    border-radius: 10px; overflow: hidden;
+    background-color: rgba(255,255,255,.06);
+  }
+  .item-year {
+    position: absolute; top: 6px; left: 6px;
+    padding: 2px 7px; border-radius: 8px;
+    background: rgba(8,10,14,.62); color: rgba(255,255,255,.92);
+    font-size: 10px; font-weight: 700;
+  }
+  .item-title {
+    display: block; margin-top: 7px; font-size: 11.5px; font-weight: 600;
+    color: rgba(255,255,255,.88); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .p1 { background: linear-gradient(150deg,#3b4a7a,#1d2743 55%,#101626); }
+  .p2 { background: linear-gradient(150deg,#5b3a52,#2a1f3c 55%,#14101f); }
+  .p3 { background: linear-gradient(150deg,#6a4430,#3a2a24 55%,#161013); }
+
+  /* ── 方案 A：通栏全出血 ── */
+  .planA .hero {
+    margin: -22px -22px 14px;      /* 抵消 modal padding → 贴弹窗内边缘 */
+    border-radius: 0;
+    min-height: 260px;
+  }
+
+  /* ── 方案 B：折中收窄留白 ── */
+  .planB .hero {
+    margin-left: -12px; margin-right: -12px;  /* 22px 内边距 → 10px */
+    margin-bottom: 14px;
+    border-radius: 8px;
+    min-height: 230px;
+  }
+
+  /* ── 方案 C：保持现状卡片 ── */
+  .planC .hero {
+    border-radius: 16px;
+    min-height: 200px;
+    margin-bottom: 14px;
+  }
+
+  table { border-collapse: collapse; margin-top: 30px; font-size: 12px; }
+  td, th { text-align: left; padding: 7px 20px 7px 0; vertical-align: top; border-top: 1px solid rgba(255,255,255,.07); }
+  th { color: rgba(255,255,255,.45); font-weight: 500; }
+  td:first-child { color: rgba(255,255,255,.72); }
+  .hl { color: #6fe0a8; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>hero 形态 · 三方案对比</h1>
+  <p class="sub">
+    三个方案都已套用你已确认的两项：<code>标题居中大字（22px，去掉「共6部」）</code> + <code>返回键无底盘</code>。
+    唯一差异是 hero 的<strong>范围与圆角</strong>。按下 1:1 真实 CSS 值渲染，整体缩到 50% 显示。
+  </p>
+
+  <div class="plans">
+
+    <!-- ─────────── 方案 A ─────────── -->
+    <div class="plan planA">
+      <div class="plan-head">
+        <span class="plan-tag">方案 A</span>
+        <p class="plan-name">通栏全出血</p>
+        <p class="plan-desc">左右贴到弹窗内边缘、直角、高 260px。图片成为一整块通栏头部，最接近参考图的沉浸感。</p>
+      </div>
+      <div class="viewport">
+        <div class="modal">
+          <div class="head">
+            <div><h2>精选片单</h2><p>编辑策展的主题片单，片单目录内置于本机；打开片单内容需要 TMDB Key</p></div>
+            <button class="close">✕</button>
+          </div>
+          <div class="hero">
+            <span class="hero-bg"></span>
+            <button class="back">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                <path opacity="0.4" d="M7.13 18.3096H15.13C17.89 18.3096 20.13 16.0696 20.13 13.3096C20.13 10.5496 17.89 8.30957 15.13 8.30957H4.13" stroke="#ffffff" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M6.43 10.8104L3.87 8.25043L6.43 5.69043" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <span class="hero-copy"><strong>漫威电影宇宙</strong></span>
+          </div>
+          <div class="items-grid">
+            <div class="item"><span class="item-poster p1"><span class="item-year">2012</span></span><span class="item-title">复仇者联盟</span></div>
+            <div class="item"><span class="item-poster p2"><span class="item-year">2015</span></span><span class="item-title">复仇者联盟 2：奥创纪元</span></div>
+            <div class="item"><span class="item-poster p3"><span class="item-year">2018</span></span><span class="item-title">复仇者联盟 3：无限战争</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─────────── 方案 B ─────────── -->
+    <div class="plan planB">
+      <div class="plan-head">
+        <span class="plan-tag">方案 B</span>
+        <p class="plan-name">折中收窄留白</p>
+        <p class="plan-desc">左右留白 22px → 10px、圆角 16px → 8px、高 230px。比现在整块，但仍保留卡片边界。</p>
+      </div>
+      <div class="viewport">
+        <div class="modal">
+          <div class="head">
+            <div><h2>精选片单</h2><p>编辑策展的主题片单，片单目录内置于本机；打开片单内容需要 TMDB Key</p></div>
+            <button class="close">✕</button>
+          </div>
+          <div class="hero">
+            <span class="hero-bg"></span>
+            <button class="back">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                <path opacity="0.4" d="M7.13 18.3096H15.13C17.89 18.3096 20.13 16.0696 20.13 13.3096C20.13 10.5496 17.89 8.30957 15.13 8.30957H4.13" stroke="#ffffff" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M6.43 10.8104L3.87 8.25043L6.43 5.69043" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <span class="hero-copy"><strong>漫威电影宇宙</strong></span>
+          </div>
+          <div class="items-grid">
+            <div class="item"><span class="item-poster p1"><span class="item-year">2012</span></span><span class="item-title">复仇者联盟</span></div>
+            <div class="item"><span class="item-poster p2"><span class="item-year">2015</span></span><span class="item-title">复仇者联盟 2：奥创纪元</span></div>
+            <div class="item"><span class="item-poster p3"><span class="item-year">2018</span></span><span class="item-title">复仇者联盟 3：无限战争</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─────────── 方案 C ─────────── -->
+    <div class="plan planC rec">
+      <div class="plan-head">
+        <span class="plan-tag">方案 C · 已选定</span>
+        <p class="plan-name">保持卡片形态（仅换内部）</p>
+        <p class="plan-desc">范围完全不动（圆角 16px + 四周 22px 留白 + 200px），只套用居中标题与无底盘返回键。已落地。</p>
+      </div>
+      <div class="viewport">
+        <div class="modal">
+          <div class="head">
+            <div><h2>精选片单</h2><p>编辑策展的主题片单，片单目录内置于本机；打开片单内容需要 TMDB Key</p></div>
+            <button class="close">✕</button>
+          </div>
+          <div class="hero">
+            <span class="hero-bg"></span>
+            <button class="back">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                <path opacity="0.4" d="M7.13 18.3096H15.13C17.89 18.3096 20.13 16.0696 20.13 13.3096C20.13 10.5496 17.89 8.30957 15.13 8.30957H4.13" stroke="#ffffff" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M6.43 10.8104L3.87 8.25043L6.43 5.69043" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <span class="hero-copy"><strong>漫威电影宇宙</strong></span>
+          </div>
+          <div class="items-grid">
+            <div class="item"><span class="item-poster p1"><span class="item-year">2012</span></span><span class="item-title">复仇者联盟</span></div>
+            <div class="item"><span class="item-poster p2"><span class="item-year">2015</span></span><span class="item-title">复仇者联盟 2：奥创纪元</span></div>
+            <div class="item"><span class="item-poster p3"><span class="item-year">2018</span></span><span class="item-title">复仇者联盟 3：无限战争</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <table>
+    <tr><th>项</th><th>方案 A 通栏全出血</th><th>方案 B 折中</th><th>方案 C 现状卡片</th></tr>
+    <tr><td>左右内缩</td><td class="hl">0（贴弹窗内边缘）</td><td>10px</td><td>22px</td></tr>
+    <tr><td>圆角</td><td class="hl">0</td><td>8px</td><td>16px</td></tr>
+    <tr><td>高度</td><td class="hl">260px</td><td>230px</td><td>200px</td></tr>
+    <tr><td>顶部</td><td colspan="3">三方案都保持「精选片单」标题区不动（二级页仍显示标题 + 关闭键），hero 不覆盖它</td></tr>
+    <tr><td>标题</td><td colspan="3">居中 · 22px · 800 字重 · 白 + 阴影（已确认）</td></tr>
+    <tr><td>返回键</td><td colspan="3">无底盘 · 你指定的 SVG 直接浮在图上（已确认）</td></tr>
+    <tr><td>底部溶色</td><td colspan="3">保留现有三段渐变（透明 42% → 环境色 62% → 环境色 100%），不改</td></tr>
+    <tr><td>海报网格</td><td colspan="3">红框外，三方案完全一致，不做任何改动</td></tr>
+  </table>
+
+  <p class="sub" style="margin-top:22px">
+    注：预览里的“海报图”用渐变模拟色调（真实环境用 TMDB 海报）；环境色按 <code>color-mix(主色 24%, #0c0e13)</code> 计算，与你项目现有 <code>--wc-ambient</code> 同式。
+  </p>
+</body>
+</html>

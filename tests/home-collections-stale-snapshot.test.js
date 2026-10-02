@@ -116,17 +116,23 @@ test('同 type 且新鲜 → 仍跳过 getItems（冷启动零请求不回归）
   assert.equal(countText('trending-week'), '精选17部', '跳过路径下按快照计数显示');
 });
 
-test('陈旧修正后：卡片计数与二级页 hero 计数一致', async () => {
+// 2026-10-01 变更：二级页 hero 改为只显示居中标题（对齐参考图），计数行不再渲染。
+// 「两处计数须同源」因此失去载体 → 数据正确性改由「渲染条目数」承载，卡片计数语义继续由卡片断言覆盖。
+test('陈旧修正后：卡片计数刷新为实拉条数，二级页渲染同量条目', async () => {
   const { SFV, settle, list, click, countText } = buildEnv({ 'trending-week': FRESH });
   SFV.homeCollectionsOverlay.open();
   await settle();
   const cardCount = countText('trending-week');
   click(list.querySelector('[data-wc-id="trending-week"]'));
   await settle();
-  const hero = list.querySelector('.home-video-collections-hero-copy small');
-  assert.ok(hero, '二级页 hero 应渲染');
-  assert.equal(hero.textContent, '精选20部', '前置：二级页现拉现算=20');
-  assert.equal(cardCount, hero.textContent, '两处计数须同源');
+  assert.equal(cardCount, '精选20部', '卡片计数须为实拉条数（分页型）');
+  assert.equal(
+    list.querySelector('.home-video-collections-hero-copy small'),
+    null,
+    '正常态二级页只显示标题，不带计数行',
+  );
+  assert.ok(list.querySelector('.home-video-collections-hero-copy strong'), '二级页仍须显示片单名');
+  assert.equal(list.querySelectorAll('[data-wc-item]').length, 20, '二级页须渲染实拉的 20 条');
 });
 
 // ============================================================ 社区榜截断计数作废

@@ -114,14 +114,17 @@ test('二级页交互：点条目走 openDetailFromMeta；返回/Esc 先回一�
   assert.match(esc[0], /state\.collection/);
 });
 
-test('二级页 hero 标题含「共N部」计数与片单名', () => {
-  assert.match(overlaySrc, /共.{0,6}部/);
+// 2026-10-01：hero 改为居中大字标题，正常态不再带「共N部」计数行（对齐参考图）。
+// 「共N部/精选N部」文案仍存在于 countLabel —— 封面卡在用，语义不变；仅二级页不再显示。
+test('二级页 hero 显示片单名；正常态不带计数行，仅状态提示才渲染 small', () => {
+  assert.match(overlaySrc, /共.{0,6}部/, '计数文案仍存在于 countLabel（封面卡在用）');
+  const render = /function\s+renderItemsPage\s*\([\s\S]*?\n  \}/.exec(overlaySrc);
+  assert.ok(render, 'expected renderItemsPage()');
+  assert.match(render[0], /items\.length\s*\?\s*''/, '有条目时计数位须为空（不渲染 small）');
+  assert.match(render[0], /notice\s*\?\s*'<small>'/, '仅错误/占位/加载中才渲染状态小字');
   // hero 底 = 首条目海报 CSS 背景图（禁 canvas）
-  const hero = /function\s+renderItemsPage[\s\S]*?function\s+\w+/.exec(overlaySrc) ||
-    /function\s+renderCollectionDetail[\s\S]*?function\s+\w+/.exec(overlaySrc);
-  assert.ok(hero, 'expected items-page render function');
-  assert.match(hero[0], /background-image/);
-  assert.equal(/getContext|drawImage|canvas/i.test(hero[0]), false, 'hero 底禁用 canvas');
+  assert.match(render[0], /background-image/);
+  assert.equal(/getContext|drawImage|canvas/i.test(render[0]), false, 'hero 底禁用 canvas');
 });
 
 // ---------------------------------------------------------------- CSS
@@ -174,12 +177,13 @@ test('D2/V3 环境色：--detail 弹窗底用 color-mix(warm 18~30%) 且有纯�
   const bgLines = body.split(';').map((s) => s.trim()).filter((s) => /^background(-color)?:/.test(s));
   assert.ok(bgLines.length >= 2, '须有纯色回退 + color-mix 两条 background');
   assert.match(body, /color-mix\(in srgb,\s*var\(--wc-warm/);
-  // V3 提浓（09-25 参照图裁定）：环境色须主导页面观感，warm 占比窗口 18%~30%；
-  // 明度由基色 #0c0e13 压住，保白字可读。上限防高饱和海报把整页带脏。
+  // 2026-10-01 提浓（原 V3 窗口 18%~30%）：实测参考图底色 #684828 / #286060，
+  // 而 24% 混合后是 #080808（几乎纯黑，色相全丢）→ 窗口上调到 60%~80%，取 70%。
+  // 白字可读性不再靠「压低占比」保证，改由 JS 的 ambientFrom() 明度上限兜住。
   const pct = /color-mix\(in srgb,\s*var\(--wc-warm[^)]*?\)\s*(\d+(?:\.\d+)?)%/.exec(body);
   assert.ok(pct, 'color-mix 须显式 warm 百分比');
-  assert.ok(Number(pct[1]) >= 18, 'V3：warm 占比须 ≥18%（环境色主导而非点缀）');
-  assert.ok(Number(pct[1]) <= 30, 'V3：warm 占比须 ≤30%（防高饱和海报发脏）');
+  assert.ok(Number(pct[1]) >= 60, 'warm 占比须 ≥60%（底色须是海报色，不能是黑）');
+  assert.ok(Number(pct[1]) <= 80, 'warm 占比须 ≤80%（留压暗余量给明度保护）');
 });
 
 // ---------------------------------------------------------------- V2：hero 渐变溶色（09-25 参照图「无接缝」裁定）
@@ -205,4 +209,112 @@ test('V2 溶色：hero ::after 最后一条 background 渐变末影(100%)用 var
   assert.match(last, /linear-gradient\(/);
   assert.match(last, /var\(--wc-ambient/, '渐变须引用共享环境色');
   assert.match(last, /var\(--wc-ambient[^;]*\)\s*100%/, '100% 末影须落在环境色上（与 --detail 底色同值）');
+});
+
+// ── 返回按钮图标（2026-10-01 用户指定 SVG，替换原文本「←」）──
+
+test('返回按钮：内联指定 SVG（弯钩+箭头，24×24 viewBox），原文本「←」已移除', () => {
+  assert.equal(overlaySrc.includes('>←<'), false, '原文本箭头「←」须已移除');
+  const btn = /class="home-video-collections-back"[\s\S]{0,1200}?<\/button>/.exec(overlaySrc);
+  assert.ok(btn, 'expected back button markup');
+  assert.match(btn[0], /<svg[^>]*viewBox="0 0 24 24"/, '须内联 24×24 svg');
+  assert.match(btn[0], /opacity="0\.4"[\s\S]*?M7\.13 18\.3096/, '主钩 path 须带 opacity 0.4');
+  assert.match(btn[0], /M6\.43 10\.8104L3\.87 8\.25043L6\.43 5\.69043/, '箭头 path 须在场');
+  assert.match(btn[0], /aria-label="返回片单列表"/, '无障碍名须保留在 button 上');
+  assert.match(btn[0], /<svg[^>]*aria-hidden="true"/, '装饰性 svg 须 aria-hidden，防读屏重复播报');
+});
+
+test('返回按钮：图标居中与尺寸（flex 居中 + 尺寸由 CSS 类统一定义）', () => {
+  const btnRule = /\.home-video-collections-back\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(btnRule, 'missing .home-video-collections-back');
+  assert.match(btnRule[1], /display:\s*flex/, '内联 svg 按基线对齐会偏下 → 须 flex 居中');
+  assert.match(btnRule[1], /align-items:\s*center/);
+  assert.match(btnRule[1], /justify-content:\s*center/);
+  // 2026-10-01 追加：圆形底盘已移除（对齐参考图），白色图标直接浮在图上
+  assert.match(btnRule[1], /background:\s*none/, '圆形底盘须已移除');
+  const iconRule = /\.home-video-collections-back-icon\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(iconRule, 'missing .home-video-collections-back-icon');
+  assert.match(iconRule[1], /width:\s*24px/);
+  assert.match(iconRule[1], /height:\s*24px/);
+});
+
+// ── hero 对齐参考图（2026-10-01：用户推翻方案 C —— hero 改为页面顶部背景层，不再是独立卡片）──
+
+test('hero 通栏整块：无圆角、左右负 margin 抵消 list padding、高度 260px', () => {
+  const heroRule = /\.home-video-collections-hero\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(heroRule, 'missing .home-video-collections-hero');
+  assert.match(heroRule[1], /border-radius:\s*0/, 'hero 须无圆角（与下方纯色底连成一整块）');
+  assert.match(heroRule[1], /margin:\s*0 -22px 14px/, '须用左右 -22px 抵消 list padding → 通栏');
+  assert.match(heroRule[1], /min-height:\s*260px/, '高度 200→260px（参考图图片区高宽比约 1:2.6）');
+  assert.match(heroRule[1], /padding:\s*16px/, 'hero 内边距须保持 16px');
+});
+
+test('二级页隐藏标题栏（精选片单 / 副标题 / ✕），顶部直接是 hero', () => {
+  const headRule = /\.home-video-collections--detail\s+\.home-video-collections-head\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(headRule, 'missing --detail head hide rule');
+  assert.match(headRule[1], /display:\s*none/, '二级页须隐藏标题栏');
+  // list 承担内边距，且不能让 hero 顶出滚动容器被裁
+  const listRule = /\.home-video-collections--detail\s+\.home-video-collections-list\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(listRule, 'missing --detail list rule');
+  assert.match(listRule[1], /margin-top:\s*0/, 'hero 须能顶到弹窗顶部');
+  assert.match(listRule[1], /padding:\s*0 22px 22px/, '下方内容由 list 承担内边距');
+  assert.match(listRule[1], /scrollbar-gutter:\s*stable/, '须预留滚动条槽位，避免 hero 被滚动条压住');
+});
+
+test('hero 标题居中大字（对齐参考图）', () => {
+  const copy = /\.home-video-collections-hero-copy\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(copy, 'missing .home-video-collections-hero-copy');
+  assert.match(copy[1], /align-items:\s*center/, '标题须水平居中');
+  assert.match(copy[1], /text-align:\s*center/, '多行文本亦须居中');
+  assert.match(copy[1], /width:\s*100%/, '居中须撑满 hero 宽度');
+  const strong = /\.home-video-collections-hero-copy strong\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(strong, 'missing .home-video-collections-hero-copy strong');
+  assert.match(strong[1], /font-size:\s*22px/, '标题字号须放大到 22px（原 17px）');
+  assert.match(strong[1], /font-weight:\s*800/);
+});
+
+// 把源码里的 ambientFrom 及其依赖抽出来在测试内实跑（不是正则空谈）
+function loadAmbientFrom() {
+  const grab = (re, name) => {
+    const m = re.exec(overlaySrc);
+    assert.ok(m, `missing ${name}`);
+    return m[0];
+  };
+  const constSrc = grab(/var\s+AMBIENT_MAX_LUM\s*=\s*[\d.]+;/, 'AMBIENT_MAX_LUM');
+  const isHex = grab(/function\s+isHexColor\s*\([\s\S]*?\n  \}/, 'isHexColor()');
+  const lum = grab(/function\s+srgbLuminance\s*\([\s\S]*?\n  \}/, 'srgbLuminance()');
+  const fn = grab(/function\s+ambientFrom\s*\([\s\S]*?\n  \}/, 'ambientFrom()');
+  // eslint-disable-next-line no-new-func
+  return new Function(`${constSrc}\n${isHex}\n${lum}\n${fn}\nreturn ambientFrom;`)();
+}
+
+function whiteContrast(hex) {
+  const f = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const L = 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+  return 1.05 / (L + 0.05);
+}
+
+test('明度保护：亮色海报经 ambientFrom 压暗后，白字对比度仍 ≥5:1', () => {
+  const ambientFrom = loadAmbientFrom();
+  const cases = ['#ffffff', '#f5d547', '#e88bb0', '#7fffd4', '#9b6746', '#6d4c2d', '#080808'];
+  for (const hex of cases) {
+    const out = ambientFrom(hex);
+    assert.match(out, /^#[0-9a-f]{6}$/, `${hex} 应产出合法 #rrggbb`);
+    const ratio = whiteContrast(out);
+    assert.ok(ratio >= 5, `${hex} → ${out}，白字对比度仅 ${ratio.toFixed(2)}:1，须 ≥5:1`);
+  }
+  assert.equal(ambientFrom('#080808'), '#080808', '已够暗的色须原样返回（不动色相）');
+  assert.equal(ambientFrom('not-a-color'), '', '非法输入须返回空串');
+});
+
+test('返回键去底盘：白色图标直接浮在图上，hover 不得恢复底色', () => {
+  const back = /\.home-video-collections-back\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(back, 'missing .home-video-collections-back');
+  assert.match(back[1], /background:\s*none/, '须移除圆形底盘背景');
+  assert.equal(/border-radius:\s*50%/.test(back[1]), false, '无底盘后圆角须一并移除');
+  assert.equal(/rgba\(8,\s*10,\s*14/.test(back[1]), false, '不得残留深色底盘色');
+  const hover = /\.home-video-collections-back:hover\s*\{([^}]*)\}/.exec(indexCss);
+  assert.ok(hover, 'missing .home-video-collections-back:hover');
+  assert.equal(/background/.test(hover[1]), false, 'hover 不得重新出现底色（无底盘时突然冒圆底很突兀）');
 });

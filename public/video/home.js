@@ -136,6 +136,27 @@
   // ---- slot providers ----
   function render() {
     if (!isVideoSpace()) return;
+    // 「进入即隔离」契约（2026-10-02）：影视态首页渲染前，先复位音乐态的粘性 home 开关状态。
+    // homeSuppressed / homeForcedOpen 是 04-home-empty-wallpaper.js 的粘性全局标志：
+    // 音乐态「点空白关 Home」会写 homeSuppressed=true，切进影视态时它仍残留。
+    // 若不复位，后续任何一次 updateEmptyHomeVisibility() 都会读到它 →
+    // shouldShowEmptyHomeCore() 返回 false → 摘掉 body.empty-home-active →
+    // 影视首页透明只剩粒子星空（音乐态的历史污染跨态带进影视态）。
+    // 与 restoreMusic()（切回音乐态）的复位对称，补齐「进入」这一半。
+    try {
+      // 优先复用 online-nav 的单一实现（可被测覆盖），online 未就绪时内联兜底。
+      if (SFV.onlineNav && typeof SFV.onlineNav.resetHomeVisibilityState === 'function') {
+        SFV.onlineNav.resetHomeVisibilityState();
+      } else {
+        if (typeof global.homeSuppressed !== 'undefined') global.homeSuppressed = false;
+        if (typeof global.homeForcedOpen !== 'undefined') global.homeForcedOpen = true;
+        if (typeof global.emptyHomeActive !== 'undefined') global.emptyHomeActive = true;
+        var _isoBody = global.document && global.document.body;
+        if (_isoBody && !_isoBody.classList.contains('empty-home-active')) {
+          _isoBody.classList.add('empty-home-active');
+        }
+      }
+    } catch (_isoErr) { /* 隔离失败不阻断渲染 */ }
     // FIX: 影视态 render() 必须确保容器上有 home-quick-grid 类，
     // 否则基础 .home-grid { grid-template-columns: repeat(2, 1fr) } 会把 5 卡挤成 2 列 3 行，
     // 右上角空一格，形成"容器变形"的视觉问题。

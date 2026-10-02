@@ -736,12 +736,53 @@
     repoPanelLoading = false;
   }
 
+  /**
+   * 把本地内置规则清单转成面板条目（内置一律置顶）。
+   * 内置条目不依赖远端仓库：即使 getPluginList 抛错 / 断网，本段仍然渲染、仍可装。
+   */
+  function collectBuiltinRepoItems() {
+    var items = [];
+    try {
+      var builtin = (SFV && SFV.getBuiltinRules) ? SFV.getBuiltinRules() : [];
+      for (var i = 0; i < builtin.length; i++) {
+        var r = builtin[i] || {};
+        if (!r.name) { continue; }
+        if (SFV.isBuiltinDismissed && SFV.isBuiltinDismissed(r.name)) { continue; }
+        items.push({
+          name: r.name,
+          author: 'Stellaflix 内置',
+          version: r.version || '1.0',
+          lastUpdate: 0,
+          antiCrawlerEnabled: false,
+          __builtin: true
+        });
+      }
+    } catch (e) {
+      // 内置清单未加载（脚本顺序异常）时保持原状：面板只显示远端条目
+    }
+    return items;
+  }
+
+  // 移除一条规则（内置 / 远端通用）
+  async function uninstallRepoRule(name) {
+    var kzBridge = SFV.kazumi;
+    if (!kzBridge || !kzBridge.removeRule) throw new Error('桥接层未加载');
+    try {
+      if (SFV.dismissBuiltinRule) SFV.dismissBuiltinRule(name);
+    } catch (e) { /* 非内置规则：忽略 */ }
+    kzBridge.removeRule(name);
+    try {
+      var kz = (global.Kazumi && global.Kazumi.rulesRepo) ? global.Kazumi.rulesRepo : global.KazumiRulesRepo;
+      if (kz) { kz.setEnabled && kz.setEnabled(name, false); }
+    } catch (e) { /* 忽略 */ }
+  }
+
   function renderRepoList(filter, items) {
     var panel = repoPanelEl;
     if (!panel) return;
     var listEl = panel.querySelector('.sfv-glass-list');
     if (!listEl) return;
-    var all = items || panel._repoItems || [];
+    var all = collectBuiltinRepoItems().concat(items || panel._repoItems || []);
     var installed = getInstalledRuleNames();
 
     var rows = [];
@@ -761,15 +802,21 @@
     for (var j = 0; j < rows.length; j++) {
       var r = rows[j];
       var key = r.name ? r.name.toLowerCase() : '';
-      var isInstalled = !!installed[key];
+      var isBuiltin = !!r.__builtin;
+      // 内置规则的「已导入」以本地存储为准（它可能在面板打开前就已自动注册）
+      var isInstalled = isBuiltin
+        ? (SFV.isBuiltinInstalled ? !!SFV.isBuiltinInstalled(r.name) : !!installed[key])
+        : !!installed[key];
       var ago = r.lastUpdate ? formatTimeAgo(r.lastUpdate) : '';
       var authorStr = r.author ? esc(' by ' + r.author) : '';
       var verStr = r.version ? ('v' + esc(r.version)) : '';
-      html += '<div class="sfv-glass-item' + (isInstalled ? ' is-installed' : '') + '" data-name="' + esc(r.name || '') + '">' +
+      html += '<div class="sfv-glass-item' + (isInstalled ? ' is-installed' : '') + (isBuiltin ? ' is-builtin' : '') + '"' +
+        ' data-name="' + esc(r.name || '') + '" data-builtin="' + (isBuiltin ? '1' : '0') + '">' +
         '<div class="sfv-glass-item-main">' +
           '<div class="sfv-glass-item-name">' + esc(r.name || '—') +
+            (isBuiltin ? ' <span class="sfv-glass-badge-internal">内置</span>' : '') +
             (isInstalled ? ' <span class="sfv-glass-badge-ok">已导入</span>' : '') +
-            (r.antiCrawlerEnabled ? ' <span class="sfv-glass-badge-warn">反爬</span>' : '') +
+            ((r.antiCrawlerEnabled && !isBuiltin) ? ' <span class="sfv-glass-badge-warn">反爬</span>' : '') +
           '</div>' +
           '<div class="sfv-glass-item-meta">' +
             '<span class="sfv-glass-item-ver">' + verStr + '</span>' +
@@ -779,14 +826,16 @@
         '</div>' +
         '<div class="sfv-glass-item-ops">' +
           (isInstalled
-            ? '<button type="button" class="fx-mini-btn ghost sfv-glass-reinstall">重装</button>'
+            ? (isBuiltin
+                ? '<button type="button" class="fx-mini-btn ghost sfv-glass-uninstall">移除</button>'
+                : '<button type="button" class="fx-mini-btn ghost sfv-glass-reinstall">重装</button>')
             : '<button type="button" class="fx-mini-btn sfv-glass-install">安装</button>') +
         '</div>' +
       '</div>';
     }
     listEl.innerHTML = html;
 
-    var btns = listEl.querySelectorAll('.sfv-glass-install, .sfv-glass-reinstall');
+    var btns = listEl.querySelectorAll('.sfv-glass-install, .sfv-glass-reinstall, .sfv-glass-uninstall');
     for (var b = 0; b < btns.length; b++) {
       (function (btn) {
         btn.addEventListener('click', async function (ev) {
@@ -798,11 +847,22 @@
           if (btn.disabled) return;
           btn.disabled = true;
           var originText = btn.textContent;
-          btn.textContent = '安装中…';
+          var isUninstall = btn.classList.contains('sfv-glass-uninstall');
+          var isBuiltinItem = itemEl.getAttribute('data-builtin') === '1';
+          btn.textContent = isUninstall ? '移除中…' : '安装中…';
           try {
-            await installRepoRule(name);
-            btn.textContent = '✓ 已导入';
-            btn.classList.remove('sfv-glass-install', 'sfv-glass-reinstall');
+            if (isUninstall) {
+              await uninstallRepoRule(name);
+              btn.textContent = '✓ 已移除';
+            } else if (isBuiltinItem) {
+              if (!SFV.installBuiltinRule) throw new Error('内置规则模块未加载，请刷新页面后重试');
+              SFV.installBuiltinRule(name);
+              btn.textContent = '✓ 已导入';
+            } else {
+              await installRepoRule(name);
+              btn.textContent = '✓ 已导入';
+            }
+            btn.classList.remove('sfv-glass-install', 'sfv-glass-reinstall', 'sfv-glass-uninstall');
             btn.classList.add('sfv-glass-done');
             itemEl.classList.add('is-installed');
             var nameEl = itemEl.querySelector('.sfv-glass-item-name');
@@ -810,11 +870,12 @@
               nameEl.insertAdjacentHTML('beforeend', ' <span class="sfv-glass-badge-ok">已导入</span>');
             }
             renderRulesList();
+            renderRepoList(filter);
           } catch (e) {
             btn.textContent = originText;
             btn.disabled = false;
-            console.error('[SFV repo] 安装规则失败:', e);
-            alert('安装失败: ' + (e && e.message ? e.message : '未知错误'));
+            console.error('[SFV repo] ' + (isUninstall ? '移除' : '安装') + '规则失败:', e);
+            alert((isUninstall ? '移除失败: ' : '安装失败: ') + (e && e.message ? e.message : '未知错误'));
           }
         });
       })(btns[b]);

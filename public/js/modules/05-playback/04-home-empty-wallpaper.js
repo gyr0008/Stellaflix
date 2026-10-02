@@ -308,7 +308,39 @@ function openHomeLibrary() {
   openPlaylistPanelTab('playlists', true);
   refreshUserPlaylists(true);
 }
+// ---------------------------------------------------------------- 影视态判定（2026-10-02 契约级根治）
+// 影视态标识：00-core-stores.js L16-17 同时写在 documentElement 与 body 上，
+// preload-mode.js L10 也会加在 documentElement 上，故两处都判，任一命中即为影视态。
+function isVideoSpaceActive() {
+  try {
+    if (document.documentElement && document.documentElement.classList
+      && document.documentElement.classList.contains('video-space-active')) return true;
+    if (document.body && document.body.classList
+      && document.body.classList.contains('video-space-active')) return true;
+  } catch (e) { /* DOM 异常按非影视态处理，退回既有逻辑 */ }
+  return false;
+}
+
+// 契约（2026-10-02）：「Home 开关」是音乐态专属交互。
+//   - 音乐态：#empty-home 是「空壳首页 + 壁纸预览」，点空白/再点 Home 键收起 UI 露出壁纸，是设计本意。
+//   - 影视态：#empty-home 就是影视首页本体（video/home.js 的 render() 填充海报/精选片单/继续观看
+//     等真实内容），关掉它不会露出任何东西，只会把用户丢进无 UI 的 3D 粒子场景。
+// 因此影视态一律不走音乐态这套开关逻辑。这不是给某个浮层加豁免（打地鼠），而是从「当前是哪个态」
+// 这一个事实层面切断整条泄漏链，一次性覆盖当前与未来所有影视态全屏层：
+// 播放器 #sfv-overlay / 搜索页 #sfv-search-page / 浏览厅 .sfv-hall / 片库 / 历史 / 追番 /
+// 精选片单二级页 / 背景 DIY 遮罩 / 片源仓库面板 / TMDB 设置 overlay …
 function goHome() {
+  // 影视态：委托影视态自己的回首页实现（online-nav.js goHome：关浏览层 + 重渲染影视首页）。
+  // 绝不能落进下面的音乐态分支——else 分支会 updateEmptyHomeVisibility() → renderHomeDiscover()
+  // 往影视态首页塞音乐内容；if 分支会 dismissHomePage() → homeSuppressed=true（粘性）→
+  // 影视态无任何路径复位 → 首页永久透明只剩粒子星空。
+  if (isVideoSpaceActive()) {
+    var _SFV = (typeof window !== 'undefined') ? window.StellaflixVideo : null;
+    if (_SFV && _SFV.online && typeof _SFV.online.goHome === 'function') {
+      try { _SFV.online.goHome(); } catch (e) { /* 委托失败不回落音乐态逻辑 */ }
+    }
+    return;
+  }
   if (homeForcedOpen || emptyHomeActive) {
     dismissHomePage({ toast: true });
     showToast('已关闭 Home');
@@ -330,6 +362,10 @@ function goHome() {
 }
 function dismissHomePage(opts) {
   opts = opts || {};
+  // 影视态不接受「关 Home」（契约见 isVideoSpaceActive 上方注释）。
+  // 挡住直接调用路径（goHome() 的 toggle 分支、任何跨模块直调），
+  // 否则 homeSuppressed 仍会被写成 true（粘性标志，影视态无复位路径）→ 首页永久透明。
+  if (isVideoSpaceActive()) return;
   homeForcedOpen = false;
   homeSuppressed = true;
   setHomeControlsLocked(false);
@@ -358,6 +394,11 @@ function isPointNearHomeContent(x, y) {
 }
 function isHomeBlankDismissClick(e) {
   if (!emptyHomeActive || !e || e.defaultPrevented) return false;
+  // 影视态一律不判定为「Home 空白点击」（契约见 isVideoSpaceActive 上方注释）。
+  // 这是从源头切断：影视态任何页面内的点击都不再具备「关掉影视首页」的能力，
+  // 因此不可能泄漏到上一页影响上一页显示。下方逐层的 class 豁免清单退化为兜底，
+  // 不再是唯一的防线。
+  if (isVideoSpaceActive()) return false;
   if (e.button != null && e.button !== 0) return false;
   if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
   // 任一「点外即关」面板打开时，空白点击一律不关 Home（API 守卫，比 class 选择器更稳）
@@ -367,8 +408,15 @@ function isHomeBlankDismissClick(e) {
     // empty-home-active → 返回后首页透明只剩粒子星空（2026-09-25 片库返回 bug）
     var browseEl = document.getElementById('sfv-browse');
     if (browseEl && browseEl.classList.contains('sfv-show')) return false;
+    // 影视播放器（#sfv-overlay）打开时一律不关 Home：播放器是 body 直接子元素、铺满视口
+    // 叠在 Home 之上，点画面/拖进度条（.sfv-progress 非 button）的坐标必然落在
+    // #empty-home 矩形内，若放行会摘掉 empty-home-active → 退出播放器后首页透明
+    // 只剩粒子星空（2026-10-01 复现；与 2026-09-25 片库页同源，同款守卫）。
+    var overlayEl = document.getElementById('sfv-overlay');
+    if (overlayEl && overlayEl.classList.contains('sfv-show')) return false;
     var SFV = window.StellaflixVideo;
     if (SFV) {
+      if (SFV.player && typeof SFV.player.isOpen === 'function' && SFV.player.isOpen()) return false;
       if (SFV.sourcePicker && SFV.sourcePicker.isOpen && SFV.sourcePicker.isOpen()) return false;
       if (SFV.SearchFilter && SFV.SearchFilter.isOpen && SFV.SearchFilter.isOpen()) return false;
     }
@@ -428,6 +476,14 @@ function isHomeBlankDismissClick(e) {
   var y = e.clientY;
   var home = document.getElementById('empty-home');
   if (!home) return false;
+  // 归属判定（2026-10-02）：只有真正点在 #empty-home 自己的空白上，才算「Home 空白点击」。
+  // 任何盖在 Home 之上的全屏层（搜索页 #sfv-search-page、浏览厅 .sfv-hall、播放器 #sfv-overlay、
+  // 背景 DIY 遮罩 .sfv-bg-diy-mask、片源仓库面板、TMDB 设置 overlay…）里的点击，事件 target 都
+  // 不属于 Home 子树，一律不关 Home。
+  // 这是「一次性覆盖」的根治：逐个 class 加豁免是打地鼠（2026-09-25 片库页、2026-10-01 播放器
+  // 各踩一次，搜索页/浏览厅仍漏网），而归属判定不依赖任何具体 class 清单。
+  // 防御式调用：测试假 DOM（fakeEl）没有 contains → 跳过该判定，由其余守卫兜底。
+  if (typeof home.contains === 'function' && !home.contains(target)) return false;
   var homeRect = home.getBoundingClientRect();
   if (!isPointInsideRectWithPad(x, y, homeRect, 0)) return false;
   if (isPointNearHomeContent(x, y)) return false;

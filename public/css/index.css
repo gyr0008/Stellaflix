@@ -18759,24 +18759,60 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
 /* D2 环境色页面底：二级页弹窗面板被片单主色染色（首行纯色回退，老浏览器忽略 color-mix）
    V2：环境色提为共享变量 --wc-ambient，hero 渐变末影与页面底取同一值消除接缝
    V3：warm 占比 7%→24% 提浓（参照图环境色主导观感），基色 #0c0e13 压明度保白字可读 */
+/* 2026-10-01 对齐参考图：底色由「主色 24% 混入深黑」提高到 70%。
+   实测参考图底色 #684828 / #286060（白字 8.3:1 / 7.2:1，色相清晰可辨）；
+   24% 得到的是 #080808（20:1，色相全丢，等于纯黑）。
+   JS 侧 renderItemsPage 会用 ambientFrom() 覆写此值（带明度上限保护），这里是取色失败时的兜底。
+   另：二级页顶部就是 hero → modal 自身不留内边距，改由 list 给下方内容留。 */
+/* ⚠ !important 是必需的，不是保守写法（2026-10-01 实机缺陷修复）：
+   index.css 顶部的玻璃面板系统有【两条】把 `.modal` 钉死的 !important 背景规则 ——
+   行 ~14929 取 var(--saved-panel-glass-bg)（rgba(0,0,0,.10)）、行 ~15422 取 var(--panel-glass-bg)
+   （三层径向/线性渐变，位置更靠后故它胜出），两者都作用于所有 .modal。
+   !important 压过一切普通声明，与本规则的选择器权重无关 —— 不加 !important，
+   环境色在实机上一帧都不会出现。2026-10-01 实测证据：二级页卡片区众数色 #000000，
+   红蓝通道差 0（零色相），亮度 0.0000，白字对比度 21:1 = 完全没染色。
+   本规则位置晚于这两条、且权重 0,2,0 > 0,1,0，故同为 !important 时由本条胜出。
+   回归守卫：tests/home-collections-ambient-cascade.test.js（自带按规范的层叠求解器：
+   !important → 特异度 → 源码顺序，并配负向对照）；真实内核交叉验证见
+   scripts/check-ambient-cascade.js（Electron 跑 Chromium，读 computed style + 采样真实渲染像素）。
+   注意：jsdom 的 getComputedStyle 不认 !important，用它写这类测试会得到假结论。
+   注：本条注释必须留在规则块外 —— 注释内的花括号会截断测试用的规则体正则。 */
 .home-video-collections-modal.home-video-collections--detail {
   --wc-ambient: #0c0e13;
-  --wc-ambient: color-mix(in srgb, var(--wc-warm, #534AB7) 24%, #0c0e13);
-  background: #0c0e13;
-  background: var(--wc-ambient)
+  --wc-ambient: color-mix(in srgb, var(--wc-warm, #534AB7) 70%, #0c0e13);
+  background: #0c0e13 !important;
+  background: var(--wc-ambient) !important;
+  padding: 0
 }
 
+/* 二级页隐藏「精选片单 / 副标题 / ✕」标题栏（参考图顶部直接是图，无标题栏）。
+   关闭入口保留 Esc 与点遮罩；返回键仍在 hero 左上角，可先回一级（一级有 ✕） */
+.home-video-collections--detail .home-video-collections-head {
+  display: none
+}
+
+/* list 承担内边距：hero 在 list 内用负 margin 抵消左右 padding 即通栏。
+   注意不能用负 margin 顶出 list 的 border box —— 滚动容器会裁掉溢出部分 */
+.home-video-collections--detail .home-video-collections-list {
+  margin-top: 0;
+  padding: 0 22px 22px;
+  scrollbar-gutter: stable
+}
+
+/* 2026-10-01 推翻方案 C：hero 不再是「被框住的独立卡片」，而是页面的顶部背景层。
+   左右负 margin 抵消 list 的 22px padding → 通栏；无圆角 → 与下方纯色底连成一整块。
+   高度 200→260px：参考图图片区高宽比约 1:2.6，760px 宽对应约 290px，取 260 兼顾弹窗总高 */
 .home-video-collections-hero {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  min-height: 200px;
-  margin-bottom: 14px;
+  min-height: 260px;
+  margin: 0 -22px 14px;
   padding: 16px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  border-radius: 16px;
+  border-radius: 0;
   background: linear-gradient(135deg, var(--wc-warm, #534AB7), rgba(8, 10, 14, .94))
 }
 
@@ -18806,24 +18842,49 @@ body.video-space-active #empty-home .home-grid.home-quick-grid .home-card:nth-ch
   left: 10px;
   width: 30px;
   height: 30px;
+  /* 内联 svg 默认按基线对齐（垂直偏下），须显式居中 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 2026-10-01 对齐参考图：去掉圆形底盘，白色图标直接浮在图上。
+     随底盘一并移除：border-radius/font-size/line-height（三者只为「文本居圆底中」服务）；
+     color 保留 —— 将来若把 svg 描边改 currentColor 可直接生效 */
   border: 0;
-  border-radius: 50%;
-  background: rgba(8, 10, 14, .45);
+  padding: 0;
+  background: none;
   color: rgba(255, 255, 255, .9);
-  font-size: 15px;
-  line-height: 1;
   cursor: pointer;
   z-index: 1
 }
 
+/* 返回图标尺寸唯一定义点（改大小只动这里，JS 里的 svg 属性无须同步） */
+.home-video-collections-back-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px
+}
+
+/* 底盘已移除：hover 若恢复深色圆底会突兀，改用轻微变淡做反馈 */
 .home-video-collections-back:hover {
-  background: rgba(8, 10, 14, .68)
+  opacity: .72
+}
+
+/* 2026-10-01 对齐参考图：标题水平居中、压在图片下半部（hero 本身为 column + justify-end） */
+.home-video-collections-hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding-bottom: 10px;
+  text-align: center
 }
 
 .home-video-collections-hero-copy strong {
-  font-size: 17px;
+  font-size: 22px;
   font-weight: 800;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, .6)
+  letter-spacing: .3px;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, .7)
 }
 
 .home-video-collections-hero-copy small {
