@@ -187,6 +187,49 @@
     return !!(global.deck && global.deck.MapboxOverlay);
   }
 
+  // 轮㉑b 真机根因修复：VENDOR 次序 deck 先 → core/obj UMD 后（T9 getter-only 约束不可重排），
+  // 两个独立 UMD 以 root['loaders']=factory() 整体替换 globalThis.loaders，把 deck 初始化时
+  // 写进旧对象的 image loader（qn）孤儿化；deck 惰重建的 loaderRegistry 恒空 → IconManager
+  // 所有图片加载 "No valid loader found (image/png)" 静默失败 → 地球国旗/头像全灭。
+  // 链尾补注册一个最小 image loader（真机探针验证：deck select+parse 接受，parse 收
+  // ArrayBuffer、须返 ImageBitmap）。非 hearthere 设计，是对 UMD 全局互踩的对症补丁。
+  function registerImageLoader() {
+    var g = globalThis.loaders;
+    if (!g) return false;
+    // 真机事实：core UMD 命名空间不导出 _state，_state/loaderRegistry 由 deck 首用
+    // `e._state||(e._state={})` 惰建（晚于链尾）—— 故此处自建并沿用 deck 的 || 语义。
+    var st = g._state || (g._state = {});
+    var reg = Array.isArray(st.loaderRegistry) ? st.loaderRegistry : (st.loaderRegistry = []);
+    for (var i = 0; i < reg.length; i++) {
+      if (reg[i] && reg[i].id === 'image') return true; // 已有则让位，幂等
+    }
+    reg.unshift({
+      id: 'image',
+      version: '4.2-shim',
+      name: 'StellaflixImageLoader',
+      mimeTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml'],
+      extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'],
+      parse: function (data) {
+        var bytes = data;
+        if (typeof data === 'string') {
+          var comma = data.indexOf(',');
+          var body = comma < 0 ? data : data.slice(comma + 1);
+          var meta = comma < 0 ? '' : data.slice(0, comma);
+          if (typeof atob !== 'function') return Promise.reject(new Error('image loader: no atob'));
+          var bin = meta.indexOf('base64') >= 0 ? atob(body) : decodeURIComponent(body);
+          bytes = new Uint8Array(bin.length);
+          for (var j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+        }
+        if (typeof Blob !== 'function') return Promise.reject(new Error('image loader: no Blob'));
+        if (typeof createImageBitmap !== 'function') {
+          return Promise.reject(new Error('image loader: no createImageBitmap'));
+        }
+        return createImageBitmap(data instanceof Blob ? data : new Blob([bytes]));
+      }
+    });
+    return true;
+  }
+
   function ensureVendor() {
     if (vendorReady()) return Promise.resolve();
     if (vendorPromise) return vendorPromise;
@@ -198,6 +241,7 @@
           vendorPromise = null;
           throw new Error('[world-globe] vendor 注入完成但 deck 全局缺失');
         }
+        registerImageLoader(); // 轮㉑b：链尾补被 UMD 互踩孤儿化的 image loader
       })
       .catch(function (err) {
         vendorPromise = null;
@@ -346,6 +390,11 @@
         }
         // :989-1008 wheel 只在存活实例上常驻登记
         m.getCanvas().addEventListener('wheel', wheelHandler, { passive: false });
+        // 轮㉑c：deck overlay 实例化前对共享 webgl2 上下文安装 UBO 垫片（vendor 不动）。
+        // 轮㉑d h127 判别：回退垫片后真机塔身+国旗全灭 → 垫片为产品必需（与 cullMode:'none' 并列双因子）。
+        try {
+          SFV.worldUboShim.install(m.getCanvas().getContext('webgl2'));
+        } catch (e) { console.warn('[world-globe] UBO 垫片安装异常', e); }
         var ov = null;
         try {
           // deck overlay 实例化逐字对齐 :13539-13543（不开对象级可拾取、无 glOptions）
@@ -452,11 +501,44 @@
     return map;
   }
 
+  // 轮㉑c UBO 垫片：本机 ANGLE/NVIDIA 上 bindBufferBase(UNIFORM_BUFFER,…)/base 语义
+  // 静默不生效（最小 WebGL2 复现 dt-run1：draw 报 1282、UBO 数据不达 shader 全黑），等价
+  // bindBufferRange(i, buf, 0, BUFFER_SIZE) 正常。vendor luma _applyBindings 走 base
+  // 路径 → projectUniforms 不达 → deck 图层（灯塔塔身/国旗）退化。轮㉑d h127 判别：
+  // 回退垫片后真机塔身+国旗全灭 → 垫片为产品必需（与 cullMode:'none' 并列双因子）。
+  function installUboShim(gl) {
+    if (!gl || typeof gl.bindBufferBase !== 'function' || typeof gl.bindBufferRange !== 'function') return false;
+    var UBO = gl.UNIFORM_BUFFER;
+    if (UBO == null) return false;
+    if (gl.__uboShimPatched) return false;
+    var obbb = gl.bindBufferBase.bind(gl);
+    var obRange = gl.bindBufferRange.bind(gl);
+    gl.bindBufferBase = function (target, index, buffer) {
+      if (target === UBO && buffer) {
+        var size = 0;
+        try {
+          var prev = gl.getParameter(gl.UNIFORM_BUFFER_BINDING);
+          gl.bindBuffer(UBO, buffer);
+          size = gl.getBufferParameter(gl.UNIFORM_BUFFER, gl.BUFFER_SIZE) || 0;
+          gl.bindBuffer(UBO, prev);
+        } catch (e) { return obbb(target, index, buffer); }
+        if (size > 0) return obRange(target, index, buffer, 0, size);
+        return obbb(target, index, buffer);
+      }
+      return obbb(target, index, buffer);
+    };
+    gl.__uboShimPatched = 1;
+    return true;
+  }
+
   SFV.worldGlobe = {
     mount: mount,
     unmount: unmount,
     getMap: getMap,
     VENDOR: VENDOR,
+    __registerImageLoader: registerImageLoader, // 轮㉑b：供测试与真机复验直调
     get map() { return map; }
   };
+
+  SFV.worldUboShim = { install: installUboShim };
 })(typeof window !== 'undefined' ? window : this);

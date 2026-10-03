@@ -21,16 +21,16 @@
 
   // 演示房间（房间服务不可用时的兜底）
   var DEMO_ROOMS = [
-    { id: 'r-sh', roomId: 'room-sh', name: '上海',   lon: 121.47, lat: 31.23,  status: 'playing', title: '《星际穿越》',   people: 3, alwaysExpanded: true },
-    { id: 'r-tk', roomId: 'room-tk', name: '东京',   lon: 139.69, lat: 35.69,  status: 'playing', title: '《千与千寻》',   people: 2, alwaysExpanded: true },
-    { id: 'r-ny', roomId: 'room-ny', name: '纽约',   lon: -74.01, lat: 40.71,  status: 'playing', title: '《奥本海默》',   people: 5, alwaysExpanded: true },
-    { id: 'r-ld', roomId: 'room-ld', name: '伦敦',   lon: -0.13,  lat: 51.51,  status: 'online',  title: '《盗梦空间》',   people: 2, alwaysExpanded: true },
-    { id: 'r-pr', roomId: 'room-pr', name: '巴黎',   lon: 2.35,   lat: 48.86,  status: 'online',  title: '《天使爱美丽》', people: 1, alwaysExpanded: true },
-    { id: 'r-sy', roomId: 'room-sy', name: '悉尼',   lon: 151.21, lat: -33.87, status: 'online',  title: '《疯狂的麦克斯》', people: 2, alwaysExpanded: true },
-    { id: 'r-ri', roomId: 'room-ri', name: '里约',   lon: -43.17, lat: -22.91, status: 'online',  title: '《上帝之城》',   people: 4, alwaysExpanded: true },
-    { id: 'r-ct', roomId: 'room-ct', name: '开普敦', lon: 18.42,  lat: -33.92, status: 'online',  title: '《第九区》',     people: 1, alwaysExpanded: true },
-    { id: 'r-mb', roomId: 'room-mb', name: '孟买',   lon: 72.88,  lat: 19.08,  status: 'playing', title: '《三傻》',       people: 6, alwaysExpanded: true },
-    { id: 'r-ms', roomId: 'room-ms', name: '莫斯科', lon: 37.62,  lat: 55.76,  status: 'online',  title: '《潜行者》',     people: 2, alwaysExpanded: true }
+    { id: 'r-sh', roomId: 'room-sh', name: '上海', lon: 121.47, lat: 31.23, status: 'playing', title: '《星际穿越》', people: 3, alwaysExpanded: true, ownerType: 'system', countryCode: 'CN', city: '上海', country: '中国', coverUrl: 'https://image.tmdb.org/t/p/w780/8sNiAPPYU14PUepFNeSNGUTiHW.jpg', descriptionZh: '近未来，地球环境持续恶化，枯萎病和沙尘暴让越来越多农作物消失，人类的生存前景也变得岌岌可危。曾为NASA飞行员的库珀如今与家人在农场生活，一次偶然发现的异常重力现象，却将他和女儿墨菲引向一个仍在秘密运作的NASA基地。布兰德教授告诉他，多年前土星附近出现了一处神秘虫洞，人类已经通过它寻找太阳系之外可能适合居住的新世界。为了给地球上的人类寻找延续文明的希望，库珀决定告别家人，与艾米莉亚·布兰德等人踏上一场穿越虫洞、前往遥远星系的探索之旅。然而在浩瀚宇宙中，距离与时间都将成为他们从未真正面对过的考验……' },
+    { id: 'r-tk', roomId: 'room-tk', name: '东京', lon: 139.69, lat: 35.69, status: 'playing', title: '《千与千寻》', people: 2, alwaysExpanded: true, ownerType: 'system', countryCode: 'JP', city: '东京', country: '日本', coverUrl: 'https://image.tmdb.org/t/p/w780/6oaL4DP75yABrd5EbC4H2zq5ghc.jpg', descriptionZh: '10岁的千寻跟随父母搬家途中，意外穿过一条神秘隧道，闯入了一个属于神灵的奇异世界。父母因为擅自吃下供奉给神灵的食物而被变成猪，惊慌失措的千寻则在神秘少年白龙的帮助下得以留下。为了在这个世界生存并寻找救回父母的方法，她不得不到汤婆婆掌管的“油屋”浴场工作。在形形色色的神灵与不可思议的遭遇中，原本胆小任性的千寻开始学会独自面对困难，而她也必须找到离开这里、带父母重返人类世界的方法……' },
+    { id: 'r-ny', roomId: 'room-ny', name: '纽约', lon: -74.01, lat: 40.71, status: 'playing', title: '《奥本海默》', people: 5, alwaysExpanded: true, ownerType: 'system', countryCode: 'US', city: '纽约', country: '美国', coverUrl: 'https://image.tmdb.org/t/p/w780/neeNHeXjMF5fXoCJRsOmkNGC7q.jpg', descriptionZh: '随着战争阴云笼罩世界，各国之间的军事竞赛愈演愈烈。为了抢占先机，美国军方找到量子力学与核物理学家罗伯特·奥本海默，任命他领导洛斯阿拉莫斯实验室，并参与推进绝密的曼哈顿计划。在科学家们争分夺秒的研发下，人类历史上第一颗原子弹最终在荒漠中成功引爆。然而，当这种足以改变世界的力量真正诞生后，奥本海默也开始重新审视自己的选择以及核武器可能带来的后果。随着战争结束，他的政治立场和过往经历又让他逐渐卷入一场更加复杂的政治风暴……' },
+    { id: 'r-ld', roomId: 'room-ld', name: '伦敦', lon: -0.13, lat: 51.51, status: 'online', title: '《盗梦空间》', people: 2, alwaysExpanded: true, ownerType: 'system', countryCode: 'GB', city: '伦敦', country: '英国', coverUrl: 'https://image.tmdb.org/t/p/w780/8ZTVqvKDQ8emSGUEMjsS4yHAwrp.jpg', descriptionZh: '道姆·柯布与同事阿瑟和纳什在一次针对日本能源大亨齐藤（渡边谦 饰）的盗梦行动中失败，反被齐藤利用。齐藤威逼利诱因遭通缉而流亡海外的柯布帮他拆分他竞争对手的公司，采取极端措施在其唯一继承人罗伯特·费希尔的深层潜意识中种下放弃家族公司、自立门户的想法。为了重返美国，柯布偷偷求助于岳父迈尔斯，吸收了年轻的梦境设计师艾里阿德妮、梦境演员艾姆斯和药剂师约瑟夫加入行动。在一层层递进的梦境中，柯布不仅要对付费希尔潜意识的本能反抗，还必须直面已逝妻子梅尔的处处破坏，实际情况远比预想危险得多……' },
+    { id: 'r-pr', roomId: 'room-pr', name: '巴黎', lon: 2.35, lat: 48.86, status: 'online', title: '《天使爱美丽》', people: 1, alwaysExpanded: true, ownerType: 'system', countryCode: 'FR', city: '巴黎', country: '法国', coverUrl: 'https://image.tmdb.org/t/p/w780/6n53UI4mX9QMfe2S0Pgt8mGebY1.jpg', descriptionZh: '艾米莉（奥黛丽·塔图 Audrey Tautou 饰）有着别人看来不幸的童年——父亲给她做健康检查时，发现她心跳过快，便断定她患上心脏病，从此艾米莉与学校绝缘。随后因为一桩意外，母亲在她眼前突然死去。这一切都毫不影响艾米莉对生活的豁达乐观。1997年，戴安娜王妃的去世让她倍感人生的孤独脆弱，艾米莉从此开始了一系列助人计划，包括自闭忧郁的邻居老人，被老板刻薄的菜摊伙计、遗失了童年器物的旧房东、爱情失意的咖啡店同事。但她万万想不到，成人录象带商店店员尼诺（马修·卡索维 Mathieu Kassovitz 饰），竟成为她的棘手对象，艾米莉开始了令人哭笑不得的另类计划……' },
+    { id: 'r-sy', roomId: 'room-sy', name: '悉尼', lon: 151.21, lat: -33.87, status: 'online', title: '《疯狂的麦克斯》', people: 2, alwaysExpanded: true, ownerType: 'system', countryCode: 'AU', city: '悉尼', country: '澳大利亚', coverUrl: 'https://image.tmdb.org/t/p/w780/mWQg2INejtX1PCWRAN4vseadA6H.jpg', descriptionZh: '在不远的未来，公路骑士们在道路上肆虐，所过之处留下疯狂破坏的痕迹。为了追逐盗取了警用车的“黑暗骑士”，警方付出了重大代价，幸有比骑士更加疯狂的麦克斯（梅尔·吉布森 Mel Gibson 饰）出场，迫使黑暗骑士车祸身亡。黑暗骑士的同伙们发誓报仇，他们降临小镇，要接回黑暗骑士的尸身，并且肆意凌虐弱者，麦克斯和搭档古斯（Steve Bisley 饰）抓获凶手后，却因为无人敢指认，只得容忍他们继续逍遥法外。古斯被公路骑士们抓到，身负重伤，而麦克斯的妻子杰西（琼妮·萨缪尔 Joanne Samuel 饰）也被他们恐吓骚扰，有“疯狂”之称的麦克斯不再隐忍，向骑士们展开回击。 乔治·米勒 詹姆斯·麦考斯兰' },
+    { id: 'r-ri', roomId: 'room-ri', name: '里约', lon: -43.17, lat: -22.91, status: 'online', title: '《上帝之城》', people: 4, alwaysExpanded: true, ownerType: 'system', countryCode: 'BR', city: '里约', country: '巴西', coverUrl: 'https://image.tmdb.org/t/p/w780/uvitbjFU4JqvMwIkMWHp69bmUzG.jpg', descriptionZh: '巴西里约热内卢的贫民窟，这里是“上帝之城”，更是魔鬼也会叹息着转身的地方。 阿炮带着我们到了这里，他见证了这里二十多年来被残暴、贪婪、复仇、野心、背叛、掠夺所裹挟的混乱生活以及最终导致的一场灾难性的黑帮争斗。虽然从小就要 辗转于匪徒间求生存，但胆小怕事的性格与自我保护的本能却使他一直能平安度日。 60年代初，阿毛、阿夹和阿呆是这里的“少年三侠”，在抢劫完旅馆之后，他们三人分道扬镳，阿夹重回上帝的怀抱，而阿呆和阿毛纷纷付出了生命的代价。' },
+    { id: 'r-ct', roomId: 'room-ct', name: '开普敦', lon: 18.42, lat: -33.92, status: 'online', title: '《第九区》', people: 1, alwaysExpanded: true, ownerType: 'system', countryCode: 'ZA', city: '开普敦', country: '南非', coverUrl: 'https://image.tmdb.org/t/p/w780/jhM3wgWUrrOkz9r4xwV5cV5RhI4.jpg', descriptionZh: '1990 年，一艘巨大的飞船出现在地球上空，人们惶恐不安，却又分外好奇。经过一段时间紧张的等待，外星飞船始终没有动静。人类终于小心翼翼靠近它，强行走进舱内，结果发现了不计其数的外星人。他们形容丑陋，宛如虾子，而且健康状况极差，虚弱无力。原来这是一群来自外星的难民，他们最终被地球人接纳，并隔离在南非约翰内斯堡的一片区域内生活，此地名为“第九区”。经过长达 20 年的繁衍，外星难民的数量扩张至 180 万之多，且和周边人类的矛盾冲突不断，越来越多的人类呼吁将“大虾”赶出地球。MNU（列国同盟组织）经过磋商，决定将外星难民迁移到更为偏远的区域。MNU 外星事务部门的特工威库斯（Sharlto Copley 饰）专门负责搬迁工作。威库斯在动员过程中傲慢随意，与当地居民冲突频频。最终，他为自己的行为付出代价，外星人的神秘流体将其感染，威库斯慢慢变成了外星人的模样。此时威库斯才真正体会到了外星移民在地球上受到的不公待遇，他决定做些什么改变局面……' },
+    { id: 'r-mb', roomId: 'room-mb', name: '孟买', lon: 72.88, lat: 19.08, status: 'playing', title: '《三傻》', people: 6, alwaysExpanded: true, ownerType: 'system', countryCode: 'IN', city: '孟买', country: '印度', coverUrl: 'https://image.tmdb.org/t/p/w780/u7kuUaySqXBVAtqEl9vkTkAzHV9.jpg', descriptionZh: '十年前，法兰、拉杜与兰乔在印度顶尖的皇家工程学院相识并成为好友。面对竞争激烈、崇尚成绩与服从的教育环境，特立独行的兰乔始终坚持真正的学习来自兴趣与理解，并一次次挑战校长“病毒”的教育理念。他的想法也逐渐影响着背负家庭期待的法兰和拉杜，鼓励两人重新思考自己真正想要的人生。与此同时，兰乔与信奉死记硬背的模范生“消音器”针锋相对，两人甚至立下十年后再论成败的约定。十年过去，当法兰和拉杜再次踏上寻找这位昔日好友的旅程，那段关于友情、梦想与选择的大学往事也随之重新浮现……' },
+    { id: 'r-ms', roomId: 'room-ms', name: '莫斯科', lon: 37.62, lat: 55.76, status: 'online', title: '《潜行者》', people: 2, alwaysExpanded: true, ownerType: 'system', countryCode: 'RU', city: '莫斯科', country: '俄罗斯', coverUrl: 'https://image.tmdb.org/t/p/w780/6yrbWzzrPp7pwz6zHdifspJk8t3.jpg', descriptionZh: '安德烈·塔可夫斯基在苏联时期的最后一部作品，是一次穿越神秘后末日景观的形而上学旅程，亦是一场独一无二的精妙观影体验。受雇的向导——“潜行者”——带领一位作家和一位教授深入“区”的核心地带，这个长期封闭的灾难禁区中，三人最终逼近了传说中的“房间”：一个据称能实现人内心深处最隐秘愿望的地方。改编自阿尔卡季与鲍里斯·斯特鲁加茨基兄弟的科幻小说，塔可夫斯基以丰富的物质细节和有机的氛围感，构建出一个沉浸式的世界。作为一则宗教寓言、对当时政治焦虑的反思，亦或是对电影本身的冥想——本片通过展开多重可能的意涵，将观众全然包围。[标准收藏]' }
   ];
 
   // 由 roomId 稳定散列出色相（对齐 hearthere「每座灯塔有自己的颜色」）
@@ -41,7 +41,13 @@
       h ^= s.charCodeAt(i);
       h = Math.imul(h, 16777619);
     }
-    return Math.abs(h) / 2147483647;
+    // lowbias32 雪崩终结器（Chris Wellons）：FNV 终值高位对同前缀等长 id 相关，
+    // 十演示房色相曾全挤红黄绿段（0.057–0.379）→ 混匀后铺满全色环
+    var z = h >>> 0;
+    z ^= z >>> 16; z = Math.imul(z, 0x7feb352d);
+    z ^= z >>> 15; z = Math.imul(z, 0x846ca68b);
+    z ^= z >>> 16;
+    return (z >>> 0) / 4294967296;
   }
   function hueToRgb(h) {
     var i = Math.floor(h * 6);
@@ -66,10 +72,27 @@
     };
   }
 
+  // 轮㉓-C：演示房与真实房同权装配散列色——此前 mergeWithDemo/降级支路裸推
+  // DEMO_ROOMS（无 colorTop）→ roomToStation 落默认薰衣草 → 十塔同色
+  DEMO_ROOMS.forEach(function (d) {
+    var c = colorsFor(d.roomId || d.id);
+    d.colorTop = c.colorTop;
+    d.colorBottom = c.colorBottom;
+  });
+
+  function currentCoverUrl(r) {
+    try {
+      var ws = SFV.worldSync;
+      var cur = ws && ws.currentTrack ? ws.currentTrack(r, Date.now()) : null;
+      return cur && cur.cover ? cur.cover : '';
+    } catch (e) { return ''; }
+  }
+
   function normalize(r) {
     if (!r) return null;
     var roomId = r.roomId || r.id;
     var c = colorsFor(roomId);
+    var coverUrl = currentCoverUrl(r);
     return {
       id: 'room-' + roomId,
       roomId: roomId,
@@ -82,6 +105,8 @@
       // Task 7：queue_update 进度面透传（world-sync.currentTrack 消费）；
       // status 枚举映射保持原样，渲染层语义不回退
       playlist: r.playlist || null,
+      // 轮㉔：当前轨海报 = 灯塔提色色源（缺位不造值，deck applyPosterColor 空串短路）
+      coverUrl: coverUrl || undefined,
       lastHeartbeat: Number(r.lastHeartbeat) || 0,
       colorTop: c.colorTop,
       colorBottom: c.colorBottom,

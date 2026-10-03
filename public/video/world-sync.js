@@ -201,7 +201,10 @@
   }
 
   // C2：自动检测换片 —— 比较 player 当前 URL，变了就广播 switch
+  // 轮㉔：首拍基线 + 换片时向服务端发布 now-playing（cover=灯塔提色色源，
+  // 对齐 hearthere :2061-2094 色源=当前曲目 artwork + :1924 换轨回写）
   var _lastBroadcastUrl = '';
+  var _lastPublishedUrl = '';
   function detectVideoChange() {
     try {
       var v = (SFV.player && SFV.player.getVideoEl && SFV.player.getVideoEl()) ||
@@ -212,6 +215,10 @@
         notifyVideoChange({ url: url, title: (currentVideo && currentVideo.title) || '' });
       }
       _lastBroadcastUrl = url;
+      if (url !== _lastPublishedUrl) {
+        _lastPublishedUrl = url;
+        publishNowPlaying(v);
+      }
     } catch (e) {}
   }
 
@@ -223,6 +230,7 @@
     chatSeen = {};
     currentVideo = null;
     _lastBroadcastUrl = '';
+    _lastPublishedUrl = '';
   }
 
   // B2：查询当前播放状态（playing / paused / idle）
@@ -276,7 +284,7 @@
     var dur = Number(queue[pos] && queue[pos].duration_ms) || 0;
     if (!(elapsed > 0)) elapsed = 0;
     if (dur > 0 && elapsed > dur) elapsed = dur;
-    return { index: pos, title: String((queue[pos] && queue[pos].title) || ''), elapsedMs: elapsed };
+    return { index: pos, title: String((queue[pos] && queue[pos].title) || ''), cover: String((queue[pos] && queue[pos].cover) || ''), elapsedMs: elapsed };
   }
 
   // ---- Host → server.js 广播（沿用 edge-local 的 /api/room/:code/* POST 面） ----
@@ -339,6 +347,26 @@
   /** Host 心跳：只刷新服务端 lastHeartbeat，不动其它字段。 */
   function publishHeartbeat() {
     return postRoom('heartbeat', {});
+  }
+
+  // 轮㉔：把正在放映的影片作为单元素 queue 发布（cover 取 player meta，
+  // 世界页灯塔据此提色）。静默失败语义沿用 publishQueueUpdate。
+  function publishNowPlaying(v) {
+    var meta = {};
+    try {
+      if (SFV.player && SFV.player.getMeta) meta = SFV.player.getMeta() || {};
+    } catch (e) {}
+    var durationMs = Math.round((Number(v && v.duration) || 0) * 1000);
+    return publishQueueUpdate({
+      type: 'queue_update',
+      queue: [{
+        title: String(meta.title || (currentVideo && currentVideo.title) || ''),
+        duration_ms: durationMs,
+        cover: String(meta.cover || meta.pic || '')
+      }],
+      current_position: 0,
+      start_time: Date.now()
+    });
   }
 
   SFV.worldSync = {

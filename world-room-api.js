@@ -137,16 +137,22 @@ function pushSignal(r, from, to, payload) {
 // ============================================================
 const QUEUE_MAX_LEN = 200;   // 片单长度上限
 const TITLE_MAX_LEN = 48;    // 与房间 title 同一克制
+const COVER_MAX_LEN = 300;   // 轮㉔：海报 URL（公开字段，世界页灯塔提色色源）
 
 // 归一化 host 载荷：只留公开字段（url 等内部字段不落库）
 function normalizeQueueUpdate(body) {
   const rawQueue = Array.isArray(body.queue) ? body.queue.slice(0, QUEUE_MAX_LEN) : [];
   return {
     type: String(body.type || 'queue_update'),
-    queue: rawQueue.map((t) => ({
-      title: String((t && t.title) || '').slice(0, TITLE_MAX_LEN),
-      duration_ms: Math.max(0, Number(t && t.duration_ms) || 0)
-    })),
+    queue: rawQueue.map((t) => {
+      const track = {
+        title: String((t && t.title) || '').slice(0, TITLE_MAX_LEN),
+        duration_ms: Math.max(0, Number(t && t.duration_ms) || 0)
+      };
+      const cover = String((t && t.cover) || '').slice(0, COVER_MAX_LEN);
+      if (cover) track.cover = cover;
+      return track;
+    }),
     current_position: body.current_position == null || body.current_position === ''
       ? null
       : Number(body.current_position),
@@ -169,7 +175,9 @@ function publicPlaylist(p) {
   if (!p) return null;
   return {
     type: p.type,
-    queue: p.queue.map((t) => ({ title: t.title, duration_ms: t.duration_ms })),
+    queue: p.queue.map((t) => (t.cover
+      ? { title: t.title, duration_ms: t.duration_ms, cover: t.cover }
+      : { title: t.title, duration_ms: t.duration_ms })),
     current_position: p.current_position,
     start_time: p.start_time,
     host_sent_at: p.host_sent_at,

@@ -145,6 +145,9 @@
       listeningStationId: listeningStationId,
       isFavorite: SFV.worldMapActions ? SFV.worldMapActions.isFavorite(st.id) : false,
       canGoNext: SFV.worldHtPanel.canGoNextStation(deckStations(), st.id),  // :19973
+      flagUrlFor: function (cc) {
+        return SFV.worldFlags ? SFV.worldFlags.flagFramedUrl(cc) : null;   // 轮⑲ Qf 等价位注入
+      },
       onFavorite: function () { toggleFavorite(st); },
       onAction: function (action) { handleCta(action, st); }
     };

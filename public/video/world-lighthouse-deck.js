@@ -92,6 +92,22 @@
   //  纯数据（Node 可测面）
   // ============================================================
 
+  // 轮㉔-B：海报提色（SFV.worldPosterColor，0..255）覆盖散列色——色源=本地像素量化为已批偏差，
+  // 规则逐字 hearthere getLighthouseColors :2061-2094。未就绪→维持散列色并触发后台提取，
+  // 就绪后刷一次 refreshMap 即时重取（hearthere :1924 换轨回写色值=同构，我们借轮询入口落地）。
+  var posterRefreshArmed = {};
+  function applyPosterColor(st) {
+    var pc = SFV.worldPosterColor;
+    if (!pc || !st.coverUrl) return;
+    var hit = pc.peekColors(st.coverUrl);
+    if (hit) { st.colorTop = hit.colorTop; st.colorBottom = hit.colorBottom; return; }
+    if (posterRefreshArmed[st.coverUrl]) return;
+    posterRefreshArmed[st.coverUrl] = true;
+    pc.posterColors(st.coverUrl).then(function (c) {
+      if (c && SFV.worldRoom && SFV.worldRoom.refreshMap) SFV.worldRoom.refreshMap();
+    });
+  }
+
   // 房间（world-data 归一化形状 / API 原始形状）→ 灯塔站点
   function roomToStation(room) {
     if (!room) return null;
@@ -117,6 +133,13 @@
       if (room.avatarInitial !== undefined) passthrough.avatarInitial = room.avatarInitial;
       if (room.avatarSeed !== undefined) passthrough.avatarSeed = room.avatarSeed;
       if (room.countryCode !== undefined) passthrough.countryCode = room.countryCode;
+      // 轮⑲ 卡片槽位（$f/hero/desc 数据面，缺省不凭空造值）
+      if (room.city !== undefined) passthrough.city = room.city;
+      if (room.region !== undefined) passthrough.region = room.region;
+      if (room.country !== undefined) passthrough.country = room.country;
+      if (room.coverUrl !== undefined) passthrough.coverUrl = room.coverUrl;
+      if (room.descriptionZh !== undefined) passthrough.descriptionZh = room.descriptionZh;
+      applyPosterColor(passthrough);
       return passthrough;
     }
     var lon = room.longitude != null ? room.longitude : room.lon;
@@ -141,6 +164,13 @@
     if (room.avatarInitial !== undefined) st.avatarInitial = room.avatarInitial;
     if (room.avatarSeed !== undefined) st.avatarSeed = room.avatarSeed;
     if (room.countryCode !== undefined) st.countryCode = room.countryCode;
+    // 轮⑲ 卡片槽位（$f/hero/desc 数据面，缺省不凭空造值）
+    if (room.city !== undefined) st.city = room.city;
+    if (room.region !== undefined) st.region = room.region;
+    if (room.country !== undefined) st.country = room.country;
+    if (room.coverUrl !== undefined) st.coverUrl = room.coverUrl;
+    if (room.descriptionZh !== undefined) st.descriptionZh = room.descriptionZh;
+    applyPosterColor(st);
     return st;
   }
 
@@ -158,8 +188,8 @@
   // ============================================================
   //  步骤④-3 头像数据面（Ur :7264-7267 / cs 首字母头像 :4146-4165 / Lm :12978-12987）
   //  · 本地房间数据无 avatarUrl → 首字母渐变 SVG（与 hearthere 无头像用户同路径）
-  //  · system+countryCode 的旗标 SVG（Qf/Yl :7240-7262）是听留在线专用资产：
-  //    本地放映房间无 system 数据面，旗标分支按首字母兜底，不凭空造旗标。
+  //  · system+countryCode 旗标支路（Qf/Yl :7240-7262）—— 轮⑳ 已接：数据面为
+  //    world-flags.js（Yl 等价位）+ 演示站 countryCode（轮⑲），未知码回 cs 首字母。
   // ============================================================
 
   // Va :4124（色相调色板）/ zd :4127-4131（种子散列）/ Hd :4133-4135（XML 转义）
@@ -209,7 +239,9 @@
   }
   // Ur :7264-7267 本地数据面：user 直喂 avatarUrl（ks/Nr CDN 白名单归一链属 Supabase
   //   头像体系，本地无此数据面【用户裁决：不使用 Supabase】）；
-  //   无头像 → cs 首字母 SVG；system+countryCode 旗标（Qf）为在线站专属，本地无数据面 → 同落首字母。
+  //   system+countryCode → Qf 装框国旗（轮⑳，world-flags.flagFramedUrl 等价位；
+  //   未知码 null → 同落 cs 首字母，与 hearthere Qf miss→cs 语义等价）；
+  //   无头像 → cs 首字母 SVG。
   function stationAvatarUrl(st) {
     if (!st) return null;
     var e = st.displayKind != null ? st.displayKind : st.ownerType;
@@ -218,10 +250,77 @@
     if (st.avatarUrl) {
       return e === 'user' ? initialsAvatarUrl(initials, seed) : st.avatarUrl;
     }
+    if (e === 'system' && st.countryCode && SFV.worldFlags) {
+      var flag = SFV.worldFlags.flagFramedUrl(st.countryCode);
+      if (flag) return flag;
+    }
     return initialsAvatarUrl(initials, seed);
   }
   // $（S :10702）：getAvatarOpacity 恒 1
   function getAvatarOpacity() { return 1; }
+  // 轮㉑：地球头像 SVG→PNG 光栅预热。真机取证——vendored deck 的 IconManager 走
+  //   createImageBitmap(blob) 解码图标，Chrome 拒绝 SVG data-uri（"The source image
+  //   could not be decoded."）→ Qf 国旗/cs 首字母图集槽恒空 → 地球头顶什么都不画。
+  //   地球侧先光栅化为 PNG 再喂 deck；未就绪返回 null（hasPhoto=false 跳过，光晕仍画）
+  //   ≡ hearthere oe.current「头像预热就绪」门（ss :16713）真语义。卡片走 <img> 不受影响。
+  var _avatarPngCache = new Map();     // svgDataUri -> pngDataUri（就绪）
+  var _avatarPngPending = new Set();   // 在途 svgDataUri（去重）
+  var _avatarWarmGen = 0;              // 每有新头像就绪 +1 → avatar slot 键感知重建
+  var _avatarWarmScheduled = false;
+  var _rasterizeAvatar = defaultRasterizeAvatar;
+  function defaultRasterizeAvatar(svgUrl) {
+    return new Promise(function (resolve, reject) {
+      if (typeof Image !== 'function' || typeof document === 'undefined' || !document.createElement) {
+        reject(new Error('no-dom')); return;   // Node/vm 无 DOM：安全降级
+      }
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var c = document.createElement('canvas');
+          c.width = 128; c.height = 128;
+          var ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, 128, 128);
+          resolve(c.toDataURL('image/png'));
+        } catch (err) { reject(err); }
+      };
+      img.onerror = function () { reject(new Error('img-error')); };
+      img.src = svgUrl;
+    });
+  }
+  function scheduleAvatarWarmRefresh() {
+    if (_avatarWarmScheduled) return;
+    if (typeof setTimeout !== 'function') return;   // vm 无定时器：refresh 本就 no-op
+    _avatarWarmScheduled = true;
+    later(function () { _avatarWarmScheduled = false; refresh(); }, 0);
+  }
+  function globeAvatarUrl(st) {
+    var url = stationAvatarUrl(st);
+    if (!url) return null;
+    if (url.indexOf('http') === 0) return url;              // http 头像：deck 自解 PNG/JPG
+    if (url.indexOf('data:image/svg') !== 0) return url;    // 非 SVG data（如已是 PNG）直喂
+    var png = _avatarPngCache.get(url);
+    if (png) return png;
+    if (!_avatarPngPending.has(url)) {
+      _avatarPngPending.add(url);
+      _rasterizeAvatar(url).then(function (p) {
+        _avatarPngCache.set(url, p);
+        _avatarPngPending.delete(url);
+        _avatarWarmGen++;
+        scheduleAvatarWarmRefresh();
+      }).catch(function () { _avatarPngPending.delete(url); });
+    }
+    return null;   // 未预热 → hasPhoto=false → IconLayer 跳过（光晕仍画）
+  }
+  // 头像就绪集（轮㉑ 修正）：SVG 头像须 PNG 光栅完成才算就绪（deck createImageBitmap 拒 SVG）；
+  //   http 头像即时就绪。hasPhoto 由此驱动 ≡ hearthere oe.current 预热门真语义。
+  function stationAvatarIdSet() {
+    var s = new Set();
+    for (var i = 0; i < state.stations.length; i++) {
+      var st = state.stations[i];
+      if (globeAvatarUrl(st) != null) s.add(st.id);
+    }
+    return s;
+  }
   // Lm :12978-12987（Rm :13000-13008 对本地全量 haloIds 恒通过）
   function stationAvatarData(st) {
     if (!st) return null;
@@ -415,7 +514,34 @@
     "    }"
   ].join('\n');
 
-  // Ph（:10923-10927，kh() :10908-10910 以 ac=13.5 / Ch=2.0 生成）：zoom 语义淡出
+  // xh（:10836-10857）柔光风格光晕（非 compact 档，hearthere Kh 国旗光晕子层 :11251 走此支）
+  var GLOW_FS_SOFT = [
+    "    if (picking.isActive < 0.5) {",
+    "        float dist = length(unitPosition);",
+    "        ",
+    "        // 核心层：明亮的中心点",
+    "        float coreSize = 0.4;",
+    "        float core = 1.0 - smoothstep(0.0, coreSize, dist);",
+    "        core = pow(core, 1.2);",
+    "        ",
+    "        // 内光晕：柔和的第一层扩散",
+    "        float innerGlow = 1.0 - smoothstep(0.0, 0.6, dist);",
+    "        innerGlow = pow(innerGlow, 2.5);",
+    "        ",
+    "        // 外光晕：更大范围的柔和光芒",
+    "        float outerGlow = 1.0 - smoothstep(0.0, 0.85, dist);",
+    "        outerGlow = pow(outerGlow, 5.0);",
+    "        ",
+    "        // 组合光晕（柔和风格：核心 + 明显光晕）",
+    "        float combinedGlow = core * 0.8 + innerGlow * 0.15 + outerGlow * 0.08;",
+    "        ",
+    "        float glowIntensity = 1.2;",
+    "        fragColor.rgb *= glowIntensity;",
+    "        fragColor.a *= combinedGlow;",
+    "    }"
+  ].join('\n');
+
+  // Ph（:10923-10927，kh() :10908-10910 以 ac=13.5 / Ch=2.0 生成）：zoom 语义淡出（仅 Ah 子类注入）
   var GLOW_FS_ZOOM_FADE = [
     "    if (picking.isActive < 0.5) {",
     "        fragColor.a *= clamp((13.5 - presenceGlow.zoom) / 2.0, 0.0, 1.0);",
@@ -484,7 +610,8 @@
   // ============================================================
 
   var RimLayer = null;   // Qh LighthouseRimLayer
-  var GlowLayer = null;  // Ah PresenceGlowScatterplotLayer（rc 星点 + presenceGlow 淡出）
+  var GlowScatterplotLayer = null; // rc GlowScatterplotLayer :10858-10898（compact?Sh:xh，无淡出）
+  var GlowLayer = null;  // Ah PresenceGlowScatterplotLayer（rc 子类 + presenceGlow 淡出）
   var CircleAvatarLayer = null; // Hh CircleAvatarLayer :11094-11179
   var AvatarComposite = null;   // Kh GlowAvatarLayer :11189-11320
 
@@ -530,15 +657,25 @@
       };
     }
     if (!GlowLayer) {
-      GlowLayer = class PresenceGlowScatterplotLayer extends deckGlobal.ScatterplotLayer {
+      // rc（:10858-10898）：基类仅按 compact 选 Sh/xh，无 presenceGlow 淡出
+      GlowScatterplotLayer = class GlowScatterplotLayer extends deckGlobal.ScatterplotLayer {
         getShaders() {
           var e = super.getShaders();
-          e.modules = (e.modules || []).concat([PRESENCE_GLOW_MODULE, GLOBE_OCCLUSION_MODULE]); // Ah :10934 + patch 版遮挡函数
+          e.modules = (e.modules || []).concat([GLOBE_OCCLUSION_MODULE]); // patch 版遮挡函数（bh 依赖）
           var inj = e.inject || {};
           inj['vs:#main-end'] = GLOW_VS_MAIN_END; // rc :10895（bh）
-          // rc :10896 compact 档选 Sh（Dh 调用点恒 compact:true :10991）；
-          // Ah 在尾部再拼 Ph（:10937 拼接语义）
-          inj['fs:#main-end'] = GLOW_FS_MAIN_END;
+          inj['fs:#main-end'] = this.props.compact === true ? GLOW_FS_COMPACT : GLOW_FS_SOFT; // rc :10896
+          e.inject = inj;
+          return e;
+        }
+      };
+      // Ah（:10925-10949）：rc 子类 + Mh UBO + Ph 尾部拼接 + draw 推 zoom
+      GlowLayer = class PresenceGlowScatterplotLayer extends GlowScatterplotLayer {
+        getShaders() {
+          var e = super.getShaders();
+          e.modules = (e.modules || []).concat([PRESENCE_GLOW_MODULE]); // Ah :10934
+          var inj = e.inject || {};
+          inj['fs:#main-end'] = (inj['fs:#main-end'] || '') + GLOW_FS_ZOOM_FADE; // Ah :10937 拼接语义
           e.inject = inj;
           return e;
         }
@@ -649,13 +786,12 @@
           if (!o || o.length === 0) return []; // :11244-11248
           var p = this._getUpdateTriggers(o);
           var h = this._getPhotoData(o);
-          var m = new GlowLayer({ // rc（:11251-11278；PresenceGlowScatterplotLayer，compact 真→Sh 星点 fs :10890-10898）
+          var m = new GlowScatterplotLayer({ // rc（:11251-11278）→ xh 柔光常亮，无淡出
             id: e.id + '-glow',
             data: o,
             pickable: false,
             visible: i,
             opacity: l,
-            compact: true,
             billboard: true,
             getPosition: function (v) { return [v.position[0], v.position[1], v.itemElevation != null ? v.itemElevation : f]; },
             getRadius: function () { return u; },
@@ -691,7 +827,10 @@
             sizeUnits: 'meters',
             getColor: function (v) { return [255, 255, 255, (v.itemOpacity != null ? v.itemOpacity : 1) * 255]; },
             loadOptions: { fetch: { mode: 'cors' } }, // :11299-11303
-            parameters: { depthWriteEnabled: true },
+            // 轮㉑d：maplibre 3D 建筑 pass 在共享上下文泄漏 CULL_FACE(GL_BACK+CW)，deck 状态
+            // 缓存不知情 → billboard quad 整枚被剔、零片元无报错（h126 像素闭环）。显式关剔除，
+            // 对齐 hearthere 同类防御（:11678/:12893 cullMode:'none'）。
+            parameters: { depthWriteEnabled: true, cullMode: 'none' },
             updateTriggers: {
               getColor: p.opacity,
               getPosition: p.elevation
@@ -1061,12 +1200,13 @@
         detailOpacity: detail,
         forcePrepare: false,                      // ie 网络预热面未移植 → 恒 false（裁决 2026-09-30）
         haloIds: state.stations.map(function (st) { return st.id; }), // 本地全量 ≡「已预热」
-        photoIds: EMPTY_ID_SET,                   // 无照片面
+        photoIds: stationAvatarIdSet(),           // ④-5b 误读已纠正：hasPhoto=头像图就绪门（ss :16713），
+                                                  //   data-uri 恒即时就绪、http 图由浏览器缓存，本地恒全量
         stationById: byId,
         getAvatarOpacity: getAvatarOpacity,
         getElevation: function (id) { return stationElevation(id, byId.get(id)); }
       });
-      var avatarBase = slotBase('avatar', avatarSig() + '|' + ze.length, function () {
+      var avatarBase = slotBase('avatar', _avatarWarmGen + '|' + avatarSig() + '|' + ze.length, function () {
         return new AvatarComposite({
           id: AVATAR_LAYER_ID,
           data: ze,
@@ -1708,7 +1848,7 @@
   }
   function lmAvatarData(st, opFn, elevFn) {                             // Lm :12978-12987
     return {
-      id: st.id, position: st.position, avatarUrl: stationAvatarUrl(st),
+      id: st.id, position: st.position, avatarUrl: globeAvatarUrl(st),
       color: st.colorTop, itemOpacity: opFn(st.id), itemElevation: elevFn(st.id)
     };
   }
@@ -1921,6 +2061,7 @@
     SHADER_INJECT: RIM_SHADER_INJECT,
     SHADER_INJECT_GLOW_VS: GLOW_VS_MAIN_END,
     SHADER_INJECT_GLOW_FS: GLOW_FS_MAIN_END,
+    SHADER_INJECT_GLOW_FS_SOFT: GLOW_FS_SOFT,
     SHADER_MODULE_GLOBE_OCCLUSION: GLOBE_OCCLUSION_MODULE,
     // 步骤④-3 头像层（数据面纯函数 Node 可测；类与 GLSL 供 vm 沙箱校验）
     AVATAR_LAYER_ID: AVATAR_LAYER_ID,
@@ -1932,6 +2073,8 @@
     GLOW_AVATAR_DEFAULTS: GLOW_AVATAR_DEFAULTS,
     initialsAvatarUrl: initialsAvatarUrl,
     stationAvatarUrl: stationAvatarUrl,
+    globeAvatarUrl: globeAvatarUrl,
+    __setAvatarRasterizer: function (fn) { _rasterizeAvatar = fn || defaultRasterizeAvatar; },
     stationAvatarData: stationAvatarData,
     getAvatarOpacity: getAvatarOpacity,
     SHADER_INJECT_CIRCLE: CIRCLE_CROP_FS,

@@ -14,7 +14,10 @@
  *     :13506-13514（头像层 data=Rm）；zn :19601-19636（startBounds+Om targetBounds 捕获）
  *
  * 裁决（用户 2026-09-30「可」）：网络头像预热队列（we/oe/Mi/Ci/Hm，Supabase 面）不移植——
- *   本地 haloIds=全量站（头像即时可用等价「已预热」）、photoIds=空集（无照片面）；
+ *   本地 haloIds=全量站（头像即时可用等价「已预热」）；
+ *   轮⑳ 纠错：photoIds 不是「照片面」，而是 hasPhoto=头像图就绪门（ss :16713 data-uri 恒短路
+ *   就绪、Kh._getPhotoData :11207 只滤 hasPhoto===false），本地恒应为全量站 → 装配期传
+ *   stationAvatarIdSet()；Rm 本体仍逐字（本文件下方用例把 photoIds 当入参自由传递，语义不变）。
  *   仅 Sr 门 + Rm 装配逐字保留。
  *
  * 风格：仓内惯例——纯函数直连 require；装配/事件用 vm 沙箱装载真实模块断言行为。
@@ -154,7 +157,7 @@ test('Rm 门闭 → Tm 同一引用；门开 → haloIds 查表映射 + hasPhoto
   assert.strictEqual(open[0].hasPhoto, false);
   assert.strictEqual(open[0].itemOpacity, 1);
   assert.strictEqual(open[0].itemElevation, 50);
-  assert.ok(open[0].avatarUrl, 'Lm avatarUrl 面');
+  assert.strictEqual(open[0].avatarUrl, null, '轮㉑：未预热 SVG → null（deck createImageBitmap 拒 SVG，hasPhoto=false 同向）');
   const forced = API.avatarPrepareSet({ zoom: 10, detailOpacity: 0, forcePrepare: true, haloIds: ['a'], photoIds: new Set(), stationById: byId, getAvatarOpacity: op, getElevation: el });
   assert.strictEqual(forced.length, 1, 'forcePrepare 越门（ie 分支，网络预热面未移植恒 false——接口保真）');
 });

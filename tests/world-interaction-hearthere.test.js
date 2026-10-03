@@ -577,6 +577,26 @@ test('GlowAvatarLayer.renderLayers 逐字（Kh :11231-11315）：glow 子层半�
   env.api.unmount();
 });
 
+test('轮㉑d：avatar 子层 parameters.cullMode=none —— maplibre 3D 建筑 pass 泄漏 CULL_FACE(GL_BACK+CW) 会整枚剔除 IconLayer billboard quad（h126 像素级闭环：draw 前实测 cull:true，工装 disable 后国旗即现）。hearthere 自身即以 cullMode=none 防御同类泄漏（BeaconBlinkLayer :11678、PulseRing :12893），本修复对齐其手法', async () => {
+  const env = loadSandbox();
+  const map = new env.FakeMap(14);
+  withDeckOverlay(env, map, {});
+  await env.api.mount(map, env.overlay, { stations: [station('a', 121)] });
+  const Composite = env.sandbox.StellaflixVideo.worldLighthouseDeck.__GlowAvatarLayerCtor;
+  const recs = env.api.getState().stations.map(API.stationAvatarData);
+  const inst = new Composite({
+    id: 'x', data: recs,
+    glowRadius: 200, avatarSize: .18, pickable: true
+  });
+  const subs = inst.renderLayers();
+  const av = subs[1];
+  assert.strictEqual(av.props.id, 'x-avatar');
+  assert.strictEqual(av.props.parameters.cullMode, 'none',
+    'avatar 子层必须显式 cullMode:none，否则泄漏态 CULL_FACE 下 quad 背面被剔、零片元且无报错');
+  assert.strictEqual(av.props.parameters.depthWriteEnabled, true, '原 depthWriteEnabled:true 不得丢');
+  env.api.unmount();
+});
+
 test('组装顺序逐字（ht :13506-13514）：glow → station-avatar-layer → warmup；b.length>0 才挂头像层', async () => {
   const env = loadSandbox();
   const map = new env.FakeMap(12); // ④-5b：Sr 门 sc=11，zoom10 头像 data 归 Tm 空——升到开门档

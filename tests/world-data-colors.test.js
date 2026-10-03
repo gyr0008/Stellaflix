@@ -52,3 +52,41 @@ test('色相散列语义保持：同 roomId 稳定、colorBottom=colorTop×0.32�
       'colorBottom 应为主色 ×0.32：' + JSON.stringify(a));
   }
 });
+
+// ---------------- 轮㉓-C：FNV 高位聚集致十演示角色相全挤红黄绿段（0.057–0.379），蓝/紫/青整段缺失 ----------------
+
+function rgbHue([r, g, b]) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  if (!d) return 0;
+  let h;
+  if (mx === r) h = ((g - b) / d + 6) % 6;
+  else if (mx === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return h / 6;
+}
+
+test('轮㉓-C 十演示角色相须铺满全色环（雪崩终结器修 FNV 聚集，对齐 hearthere 每塔一色）', () => {
+  const wd = loadWorldData();
+  const ids = ['room-sh', 'room-tk', 'room-ny', 'room-ld', 'room-pr',
+    'room-sy', 'room-ri', 'room-ct', 'room-mb', 'room-ms'];
+  const hues = ids.map((id) => rgbHue(wd.normalize({ roomId: id, lon: 0, lat: 0 }).colorTop));
+  const buckets = new Set(hues.map((h) => Math.floor(h * 6)));
+  assert.ok(buckets.size >= 4,
+    '色相六区覆盖须 ≥4（现全挤红黄绿段），实测 buckets=' + [...buckets] + ' hues=' + hues.map((h) => h.toFixed(3)));
+  assert.ok(Math.max(...hues) > 0.45,
+    '须存在蓝/紫段站（hue>0.45），实测 max=' + Math.max(...hues).toFixed(3));
+});
+
+test('轮㉓-C fetchRooms 降级/合并面的演示房须自带 colorTop（裸推致十塔同走默认薰衣草色=塔不变色根因）', async () => {
+  const wd = loadWorldData();
+  const info = await wd.fetchRooms({}); // vm 沙箱 fetch undefined → 降级演示房间支路
+  assert.ok(Array.isArray(info.rooms) && info.rooms.length >= 10, '降级应回十演示房');
+  for (const d of info.rooms) {
+    assert.ok(Array.isArray(d.colorTop) && d.colorTop.length === 3,
+      d.roomId + ' 须带 colorTop（现裸推 DEMO_ROOMS 无此字段 → roomToStation 落默认色）');
+    for (const v of d.colorTop) assert.ok(v >= 0 && v <= 255, '分量 0..255：' + JSON.stringify(d.colorTop));
+  }
+  const hues = info.rooms.map((d) => rgbHue(d.colorTop));
+  const buckets = new Set(hues.map((h) => Math.floor(h * 6)));
+  assert.ok(buckets.size >= 4, '演示房实际下发色相亦须铺满全色环，实测 buckets=' + [...buckets]);
+});
