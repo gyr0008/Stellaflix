@@ -30,6 +30,9 @@
   // 若 token 不匹配则整段丢弃，避免把上一部影片的候选/状态点/回退写入「重开后的面板」
   // （对齐 Kazumi AsyncSessionOwner/AsyncSession 的 isStale/isActive 失效机制）。
   var searchToken = 0;
+  // P1-1：单源重试代次。retrySource/别名重查只失效「该源」的在途回调，
+  // 不再全局 searchToken++ 误伤同轮其他源的在途结果（对齐修复 2026-10-03 审查）。
+  var genByKey = {};
   // 模块级运行态：searchAndPick 当轮搜索的源单元/视图/候选池，供 B2 的
   // retrySource / searchSourceWithKeyword 复用（按 sourceKey 重查单源）。
   var runState = null;
@@ -324,6 +327,7 @@
 
     // F2：开启新一轮搜索，使任何仍在途的上一轮回调失效（陈旧回调会整段丢弃）。
     searchToken++;
+    genByKey = {}; // 新一轮：各源重试代次清零
     var myToken = searchToken;
 
     // 1) 枚举源单元（CMS 启用源 + Kazumi 启用规则），每个单元对应一个 Tab/隔离键。
@@ -378,6 +382,9 @@
   function queryOneUnit(u, kw, token, isRetry) {
     if (!runState) return;
     var rs = runState;
+    // P1-1：发起时捕获该源代次；重试只 bump 本源 gen，旧回调按 gen 失效，兄弟源不受影响。
+    var gen = genByKey[u.key] || 0;
+    function stale() { return token !== searchToken || gen !== (genByKey[u.key] || 0); }
     var p;
     if (u.kind === 'cms') {
       p = (SFV.sources && SFV.sources.search)
@@ -400,7 +407,7 @@
         : Promise.resolve({ items: [], errors: [] });
     }
     p.then(function (res) {
-      if (token !== searchToken) return; // F2：陈旧回调整段丢弃，不写入当前面板
+      if (stale()) return; // F2/P1-1：换轮或该源已被重试过 → 陈旧回调整段丢弃，不写入当前面板
       // B1：桥接层已把 CaptchaRequiredException 透传为 res.errors[].captcha，
       // 命中即点亮 captcha 蓝点（对齐 Kazumi captcha 态），不走 ok/none。
       var capErr = (res && res.errors || []).filter(function (e) { return e && e.captcha; })[0];
@@ -435,7 +442,13 @@
       var items = (res && res.items) || [];
       // 归一化为带 sourceKey 的扁平候选（对齐 buildCandidates 单源形态）
       var srcCands = normalizeUnitItems(u, items, rs.view);
+      // P1-2：重查（别名/手动检索）命中可能与已入池条目重叠，按候选 id 去重，
+      // 防止同 (sourceId, vodId) 重复渲染 + 重复进播放会话池。
+      var seenIds = {};
+      rs.idxByKey[u.key].forEach(function (e) { seenIds[e.c.id] = true; });
       srcCands.forEach(function (c) {
+        if (seenIds[c.id]) return;
+        seenIds[c.id] = true;
         var i = rs.candidates.length;
         rs.candidates.push(c);
         rs.idxByKey[u.key].push({ i: i, c: c });
@@ -449,7 +462,7 @@
         SFV.sourcePicker.setSourceWaiting(u.key, false);
       }
     }).catch(function (e) {
-      if (token !== searchToken) return; // F2：陈旧回调整段丢弃
+      if (stale()) return; // F2/P1-1：陈旧回调整段丢弃
       // 单源失败 → 状态点红（error），不阻断其他源
       if (SFV.sourcePicker && SFV.sourcePicker.setStatus) {
         SFV.sourcePicker.setStatus(u.key, 'error');
@@ -459,7 +472,7 @@
       }
       console.warn('[detail-source] 源搜索失败 ' + u.key + ':', e && e.message);
     }).then(function () {
-      if (token !== searchToken) return; // F2：陈旧回调整段丢弃，不触发回退
+      if (stale()) return; // F2/P1-1：陈旧回调整段丢弃，不触发回退
       if (isRetry) return;               // 重查不计入全局 fallback 判定
       rs.settledCount++;
       // 全部源结束后仍未命中任何 → 回退自带源（对齐旧逻辑）
@@ -490,7 +503,8 @@
         console.warn('[detail-source] 读 captcha cookie 失败，按无 cookie 重查:', e && e.message);
       }
     }
-    searchToken++;
+    // P1-1：只失效「本源」的在途回调（bump 本源代次），不再 searchToken++ 误伤兄弟源。
+    genByKey[sourceKey] = (genByKey[sourceKey] || 0) + 1;
     queryOneUnit(u, runState.title, searchToken, true);
   }
 
@@ -512,7 +526,8 @@
     if (!u) return;
     var kw = String(keyword == null ? '' : keyword).trim();
     if (!kw) return;
-    searchToken++;
+    // P1-1：同 retrySource，只失效本源在途回调。
+    genByKey[sourceKey] = (genByKey[sourceKey] || 0) + 1;
     queryOneUnit(u, kw, searchToken, true);
   }
 

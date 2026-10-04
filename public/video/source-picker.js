@@ -192,6 +192,14 @@
     });
     root.appendChild(tabbar);
 
+    // 片源多时 Tab 栏被截断且滚动条已隐藏——滚轮映射为横向滚动是唯一的滚动发现路径。
+    // passive:false 保证 Chromium 下 preventDefault 生效（阻止穿透滚背后页面）。
+    tabbar.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var dx = Math.abs(e.deltaX || 0) > Math.abs(e.deltaY || 0) ? e.deltaX : e.deltaY;
+      tabbar.scrollLeft += dx;
+    }, { passive: false });
+
     // ---- 源内条目容器（每源一个 section，仅激活源显示）----
     var list = doc.createElement('div');
     list.className = 'sfv-picker-list';
@@ -450,15 +458,15 @@
     // 先清旧 placeholder（如有）
     var ph = sec.querySelector('.sfv-picker-source-ph');
     if (ph) ph.parentNode.removeChild(ph);
-    var cnt = 0;
     (items || []).forEach(function (ent) {
       // 避免重复：同下标已渲染则跳过
       if (sec.querySelector('[data-idx="' + ent.i + '"]')) return;
       sec.appendChild(makeRow(ent.c, ent.i));
-      cnt++;
     });
-    // 更新该源状态点：有命中=ok，无命中=none
-    setStatus(sourceKey, cnt ? 'ok' : 'none');
+    // 更新该源状态点：P1-2 修复——按源内累积行数判定（重查落空/全重叠时
+    // 本轮无新增，但旧行仍在，不得翻成 none 冒出「无结果」部件）。
+    var total = sec.querySelectorAll('.sfv-picker-row').length;
+    setStatus(sourceKey, total ? 'ok' : 'none');
     // 更新标题计数
     updateCount();
   }
