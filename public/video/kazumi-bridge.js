@@ -387,6 +387,43 @@
     return resolvePlayUrlHtml(episodePageUrl, ruleName);
   }
 
+  // ---- N1（2026-10-04 奈飞工厂解析失败事故）：隐藏窗口嗅探排队 ----
+  // 主进程 stellaflix-resolve-media-sniff 是单飞设计（desktop/main.js:5686：并发第二请求
+  // 立即返回 {error:'BUSY'}）。旧实现把 BUSY 当成「嗅探未命中」降级到 HTML 正则 —— 而对
+  // 「超级播放器」系站点（player_aaaa encrypt:2 解出签名令牌，页面无字面 m3u8）正则必然落空，
+  // 最终 mpv 被喂 HTML 页面地址报 DEMUXER_ERROR。
+  // 修法：①渲染层串行队列 —— 后到请求等待前一次结束再发起；
+  //      ②队列外的 BUSY（跨窗口竞争）有限重试（500ms×5，超限维持"未命中→降级链"既有语义）。
+  var _sniffChain = Promise.resolve();
+  var SNIFF_BUSY_RETRY_MS = 500;
+  var SNIFF_BUSY_MAX_RETRY = 5;
+
+  function sniffDelay(ms) {
+    return new Promise(function (r) { setTimeout(r, ms); });
+  }
+
+  function sniffWithRetry(url, opts) {
+    return window.desktopWindow.resolveMediaSniff(url, opts).then(function first(res) {
+      var retries = 0;
+      function step(r) {
+        if (!(r && !r.ok && r.error === 'BUSY') || retries >= SNIFF_BUSY_MAX_RETRY) return r;
+        retries++;
+        console.log('[KazumiBridge] 嗅探 BUSY（队列外竞争），' + SNIFF_BUSY_RETRY_MS + 'ms 后第 ' + retries + ' 次重试');
+        return sniffDelay(SNIFF_BUSY_RETRY_MS)
+          .then(function () { return window.desktopWindow.resolveMediaSniff(url, opts); })
+          .then(step);
+      }
+      return step(res);
+    });
+  }
+
+  function queuedSniff(url, opts) {
+    var run = _sniffChain.then(function () { return sniffWithRetry(url, opts); });
+    // 链尾吞掉异常：单次嗅探失败不得卡死后续排队请求
+    _sniffChain = run.then(function () {}, function () {});
+    return run;
+  }
+
   /**
    * Stage B — 基于主进程隔离隐藏 BrowserWindow 的真实浏览器上下文解析。
    * 加载剧集/解析器页面（站点 JS 真实执行），从主进程 session.webRequest 拦截 network
@@ -401,7 +438,7 @@
     // <webview>.getWebContents() 返回 null，无法注册 webRequest，故改为可靠的主进程路径）。
     if (typeof window !== 'undefined' && window.desktopWindow && typeof window.desktopWindow.resolveMediaSniff === 'function') {
       try {
-        var sniffRes = await window.desktopWindow.resolveMediaSniff(episodePageUrl, { timeoutMs: timeoutMs || 15000 });
+        var sniffRes = await queuedSniff(episodePageUrl, { timeoutMs: timeoutMs || 15000 });
         // 兼容两种契约：
         //   新：{ ok, best:{url,score}, candidates:[...] }
         //   旧：{ ok, url, mime }（历史 IPC）

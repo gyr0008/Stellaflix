@@ -29,6 +29,13 @@
     return (typeof fn === 'function') ? fn : function () {};
   }
 
+  // N2（2026-10-04）：媒体地址门闸 —— 超时/失败/异常三条降级路径共用同一尺子。
+  // 教训：超时分支曾无条件 doPlay(ep.url)，把 netflixgc 的 HTML 播放页直喂 mpv，
+  // 产生 DEMUXER_ERROR_COULD_NOT_OPEN 噪音；HTML 页不是流，任何分支都不许起播。
+  function looksLikeMediaUrl(u) {
+    return /\.(m3u8|m3u|mp4|flv|webm|mkv|aac|m4s|ts)(\?|$)/i.test(u || '');
+  }
+
   /**
    * 关闭浏览层，但仅在播放器已可见之后。
    * 防御：任何让播放器「晚现形」的异步起播分支（如分享页探测）都会先暴露影视首页
@@ -238,7 +245,16 @@
         registerNextEpisode(view, ep, road);
         closeBrowseBehindPlayer(); // 播放器（含 iframe）已可见后关闭浏览层
       } else {
-        doPlay(embedUrl); // 无嵌入能力时降级为原始地址直连
+        // N2（2026-10-04）：embedUrl 是解析器 HTML 页，无嵌入能力时不得直喂播放器
+        // （同源事故路径：mpv 拿到 HTML 报 DEMUXER_ERROR）。仅当它本身是媒体直链才降级。
+        if (looksLikeMediaUrl(embedUrl)) {
+          doPlay(embedUrl);
+        } else {
+          dep('toast')('该源需嵌入式解析器播放，当前播放器不支持嵌入');
+          if (SFV.detailSource && typeof SFV.detailSource.failPlaybackSwitch === 'function') {
+            try { SFV.detailSource.failPlaybackSwitch('解析器页面无法嵌入播放'); } catch (e) {}
+          }
+        }
       }
     };
 
@@ -250,16 +266,26 @@
 
     if (isKazumi && SFV.kazumi && typeof SFV.kazumi.resolvePlayUrl === 'function') {
       dep('toast')('正在解析播放地址…');
-      // 超时兜底：30s 内 resolvePlayUrl 未返回则降级
+      // 超时兜底：N1 排队后单集解析最长可达「排队等待+自身嗅探」两轮（~30s+），
+      // 原 30s 会在新架构下更易误触发，放宽到 45s。
+      // N2（2026-10-04 事故）：超时降级与失败降级共用媒体门闸 —— 曾有此分支无条件
+      // doPlay(ep.url)，把 netflixgc HTML 播放页直喂 mpv（DEMUXER_ERROR_COULD_NOT_OPEN）。
       var resolveDone = false;
       var resolveTimer = setTimeout(function () {
         if (!resolveDone && mySeq === playSeq) {
           resolveDone = true;
           console.warn('[Kazumi] resolvePlayUrl 超时降级, url=' + String(ep.url).slice(0, 120));
-          dep('toast')('播放地址解析超时，尝试原始地址');
-          doPlay(ep.url);
+          if (looksLikeMediaUrl(ep.url)) {
+            dep('toast')('播放地址解析超时，尝试原始地址');
+            doPlay(ep.url);
+          } else {
+            dep('toast')('播放地址解析超时（该源为加密解析型播放器，页面无可提取直链）');
+            if (SFV.detailSource && typeof SFV.detailSource.failPlaybackSwitch === 'function') {
+              try { SFV.detailSource.failPlaybackSwitch('播放地址解析超时'); } catch (e) {}
+            }
+          }
         }
-      }, 30000);
+      }, 45000);
       SFV.kazumi.resolvePlayUrl(ep.url, view.ruleName || '').then(function (resolved) {
         if (resolveDone || mySeq !== playSeq) return; // 已被超时处理，或已被更新一次起播取代（C2）
         resolveDone = true;
@@ -273,8 +299,7 @@
           }
         } else {
           // 解析失败：仅在 URL 看起来像媒体地址时才降级直连，否则提示错误
-          var looksLikeMedia = /\.(m3u8|m3u|mp4|flv|webm|mkv|aac|m4s|ts)(\?|$)/i.test(ep.url || '');
-          if (looksLikeMedia) {
+          if (looksLikeMediaUrl(ep.url)) {
             console.warn('[Kazumi] 播放页解析未命中，但原始 URL 似媒体地址，降级直连:', ep.url);
             doPlay(ep.url);
           } else {
@@ -290,8 +315,7 @@
         resolveDone = true;
         clearTimeout(resolveTimer);
         console.warn('[Kazumi] 播放页解析异常:', e.message);
-        var looksLikeMedia = /\.(m3u8|m3u|mp4|flv|webm|mkv|aac|m4s|ts)(\?|$)/i.test(ep.url || '');
-        if (looksLikeMedia) {
+        if (looksLikeMediaUrl(ep.url)) {
           dep('toast')('解析异常，尝试原始地址');
           doPlay(ep.url);
         } else {
