@@ -230,3 +230,57 @@ test('E Tab 栏滚轮映射为横向滚动并阻止穿透，触控板横手势�
   fire(bar, 'wheel', { deltaY: 10, deltaX: -60, preventDefault: () => {} });
   assert.strictEqual(bar.scrollLeft, 60, '横向手势 |deltaX|>|deltaY| 时以 deltaX 为准');
 });
+
+// ---------------------------------------------------------------- F/G. 流式路径相关性过滤（2026-10-04 站点搜索退化事故）
+
+const junkItem = (sourceId, vodId, name) => ({
+  title: name, year: '', variants: [{ sourceId, vodId, sourceName: '源' }],
+});
+
+test('F 站点搜索退化返回整站目录时，无关标题不得入面板，该源落橙点无结果', async () => {
+  const h = makeSearchHarness();
+  const { ds, doc } = loadStack({
+    getEnabledSources: () => [{ id: 's1', name: '源A' }, { id: 's2', name: '源B' }],
+    search: h.search,
+  });
+  ds.onPlayClick({ key: 'v1', title: '测试片' }, makeEl('div'));
+
+  // s1 站点搜索口失效 → 返回首页目录（标题与查询零重叠）
+  h.callFor('s1').d.res(okRes([
+    junkItem('s1', '1', '弗兰肯斯坦'),
+    junkItem('s1', '2', '操控游戏'),
+    junkItem('s1', '3', '凡人修仙传'),
+  ]));
+  // s2 有真实命中（保证不触发整轮回退，聚焦本源行为）
+  h.callFor('s2').d.res(okRes([cmsItem('s2', '9', '源B')]));
+  await flush();
+
+  assert.strictEqual(rowsOf(doc, 'cms:s1').length, 0,
+    '整站目录垃圾不得渲染成行（缺过滤 = 2026-10-04 事故根因）');
+  assert.match(dotClass(doc, 'cms:s1'), /sfv-picker-dot--none/,
+    '过滤后无行的源应落 none（橙点），而非展示垃圾');
+  assert.strictEqual(rowsOf(doc, 'cms:s2').length, 1, '兄弟源不受影响');
+});
+
+test('G 精确命中与子串噪音/垃圾混合时，只保留精确组', async () => {
+  const h = makeSearchHarness();
+  const { ds, doc } = loadStack({
+    getEnabledSources: () => [{ id: 's1', name: '源A' }],
+    search: h.search,
+  });
+  ds.onPlayClick({ key: 'v1', title: '测试片' }, makeEl('div'));
+
+  h.callFor('s1').d.res(okRes([
+    cmsItem('s1', '1', '源A', '测试片'),
+    cmsItem('s1', '2', '源A', '测试片纪录片后台'),
+    junkItem('s1', '3', '弗兰肯斯坦'),
+  ]));
+  await flush();
+
+  const rows = rowsOf(doc, 'cms:s1');
+  assert.strictEqual(rows.length, 1, '有精确命中时子串噪音与无关垃圾都不得入面板');
+  // 行标题渲染在 .sfv-picker-row-sub（c.sub）
+  const subs = rows.map((r) => r.querySelector('.sfv-picker-row-sub').textContent).join('|');
+  assert.match(subs, /测试片/);
+  assert.doesNotMatch(subs, /弗兰肯斯坦|纪录片后台/);
+});

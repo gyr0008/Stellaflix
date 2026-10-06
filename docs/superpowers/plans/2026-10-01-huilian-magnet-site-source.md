@@ -3756,7 +3756,16 @@ Expected: FAIL —`Cannot read properties of undefined (reading 'create')`（`pu
           if (res && res.ok) merged = merged.concat(res.value || []);
           else if (!firstError) firstError = (res && res.message) || '';
         }
-        works = merged;
+        // ⚠️ 必须逐个浅复制容器对象（Task8 评审 I-1）：source 层的 fetch* 把**同一个 array 引用**
+        // 连同其中的 work 对象一起外泄（命中缓存也回同一对象）。`works = merged` 直接把缓存里的
+        // 原对象接过来，随后 loadVersions 就地写 `work.versions` / `work.error` 就污染了 source 缓存 ——
+        // 后果可证：抓版本失败留下的 error 会让「重新搜同一个词条」永久停在错误态
+        // （下文 plan:4005 的「由下一轮搜索整批换新对象时才清」前提在缓存下不成立）。
+        works = merged.map(function (w) {
+          var copy = {};
+          for (var k in w) if (hasOwnProperty.call(w, k)) copy[k] = w[k];
+          return copy;
+        });
         // 三种空态互斥（§7）：错误优先于「没找到」；有结果时错误也不能吞——交提示条
         if (merged.length) { emptyCopy = ''; say(firstError); }
         else emptyCopy = firstError || ('没找到与「' + query + '」匹配的分享。');
@@ -3787,7 +3796,7 @@ Expected: FAIL —`Cannot read properties of undefined (reading 'create')`（`pu
         delete inflight[work.key];
         if (isStale()) return;
         if (res && res.ok) { work.versions = res.value || []; work.error = ''; }
-        else { work.error = (res && res.message) || ''; } // 失败退回未抓态：error 存在时 loadVersions 会重试
+        else { work.error = (res && res.message) || ''; } // 留 error 态：本组件不做隐式重试，重试入口是重新搜索（见下文「抓取失败不自动重试」）
       }).catch(function (err) {
         delete loading[work.key];
         delete inflight[work.key];
@@ -4003,6 +4012,7 @@ Expected: FAIL —`Cannot read properties of undefined (reading 'create')`（`pu
 
 - **`render()` 在 `loadVersions` 之前调用**（`toggleWork`）：§7 要求「展开后正在抓 → 行内骨架，不整页 loading」，所以骨架必须与网络解耦。若等 `p.then` 再渲染，展开点击会看起来没反应。
 - **抓取失败不自动重试**（`loadVersions` 的守卫 `hasVersions(work) || work.error`）：留 error 态、由下一轮搜索整批换新对象时才清，展开钮不做隐式重试——§6.4 的限流前提就是「不做无界自动重试」，而 §7 的重试钮只规定在「本地代理不可用」「站点 4xx/5xx」的**分区状态点**上，本组件的重试入口就是搜索钮本身。
+  ⚠️ 这条不变量的成立**依赖**上文 `works = merged.map(浅复制)`：不复制时「下一轮搜索」拿到的是 source 缓存里的同一对象，error 永不清。配套回归测（Task 8 修复轮新增，必须先红后绿）：同一 query 搜两次，第一次 `fetchVersions` 回 `{ok:false,message:'…'}`，第二次断言该作品**回到未抓态**（`versionsCalls` 增量 +1、error 不粘滞），并断言就地写回不污染 source 缓存（组件拿到的 works 与 source 返回的 works **不是同一对象引用**）。
 - **`shownAll[work.key] = !shownAll[work.key]`** 而不是 `= true`：折叠钮与「全部 N」共用同一个 `render()`，用翻转才能「全部 → 只看前 3 → 全部」来回切。
 - **有结果时也要把失败上浮**（`if (merged.length) say(firstError)`）：多规则合并后「一条成功一条 404」是真实可能，把 404 悄悄吞掉等于告诉用户「这站好好的」。页面那条 `.huilian-error` 就是提示条，成功搜索时会被下一次 `say('')` 清掉。
 
@@ -4371,7 +4381,8 @@ test('f) 同 id 覆盖：先出差异确认，确认后才落盘', () => {
   t.q('.huilian-rules-json').value = JSON.stringify({ rules: [ruleOf('pomo', { trackers: ['udp://new.test'] })] });
   fire(t.q('.huilian-rules-json-import'), 'click');
   assert.strictEqual(t.R.get('pomo').trackers[0], 'udp://old.test', '确认之前不得覆盖');
-  assert.ok(t.q('.huilian-rules-confirm'), '应出现差异确认块');
+  assert.ok(t.q('.huilian-rules-confirm').classList.contains('huilian-rules-confirm--on'),
+    '差异确认块要处于「已亮」态（Task9 评审 F1：裸 exists 断言恒真——节点开面板就挂载，只靠 CSS 类隐藏，jsdom 无 layout）');
   assert.ok(t.q('.huilian-rules-confirm').textContent.indexOf('pomo') >= 0, '差异要指名冲突 id');
   fire(t.q('.huilian-rules-confirm-yes'), 'click');
   assert.strictEqual(t.R.get('pomo').trackers[0], 'udp://new.test');
@@ -4395,7 +4406,8 @@ test('g) URL 导入无默认地址；填址后走 getText + 同一确认路径�
   fire(t.q('.huilian-rules-url-import'), 'click');
   return new Promise((r) => t.win.setTimeout(r, 0)).then(() => {
     assert.strictEqual(t.texts[0], 'https://remote.test/rules.json');
-    assert.ok(t.q('.huilian-rules-confirm'), 'URL 路径也要在覆盖前确认（不是直接落盘）');
+    assert.ok(t.q('.huilian-rules-confirm').classList.contains('huilian-rules-confirm--on'),
+      'URL 路径也要在覆盖前确认（不是直接落盘）；必须钉 --on 类——节点常驻 DOM，裸 exists 恒真（Task9 评审 F1）');
     fire(t.q('.huilian-rules-confirm-yes'), 'click');
     assert.strictEqual(t.R.get('pomo').trackers[0], 'udp://new.test');
   });
@@ -4608,7 +4620,9 @@ Expected: FAIL —`Cannot read properties of undefined (reading 'open')`（`huil
       var R = rules();
       if (!R) return;
       var parsed = R.parseImport(text);
-      if (!parsed.ok) { setMsg(R.formatValidateError(parsed)); return; }   // 裁决 2：到此为止，一个字节都不落
+      // 裁决 2：到此为止，一个字节都不落。陈旧 awaiting 要一起清（Task9 评审 F6），
+      // 否则上一次「覆盖前确认」的差异块会滞留在校验失败的屏幕上，看起来像还能继续确认。
+      if (!parsed.ok) { awaiting = null; renderConfirm(); setMsg(R.formatValidateError(parsed)); return; }
       var ids = conflictIds(parsed.rules);
       if (ids.length) {
         awaiting = { ids: ids, run: function () { finish(R.importFromJson(text, now())); } };
@@ -4626,29 +4640,35 @@ Expected: FAIL —`Cannot read properties of undefined (reading 'open')`（`huil
       if (!R || !url) return;
       urlBtn.disabled = true;
       // 裁决 1：不走 importFromUrl（它没有确认停留点），取回文本后与粘贴路径共用确认
+      // 会话门禁（Task9 评审 F2）：点过之后关面板/重开 = currentClose 变了，在途 getText 落地
+      // 不得再往脱离文档的节点渲染、更不得静默落盘或触发旧 onChanged
+      var session = currentClose;
       Promise.resolve(R.getText(url)).then(function (text) {
+        if (currentClose !== session) return;
         syncButtons();
         importJsonWithConfirm(text);
       }, function (err) {
+        if (currentClose !== session) return;
         syncButtons();
         setMsg(mapError(err));
       });
     });
 
-    var card = null;
     closeSelf = P.openModal(function (node) {
-      card = node;
       // 保留 openModal 写的 sfv-picker-modal，只追加面板自己的类（易错点 3）
       node.setAttribute('class', 'sfv-picker-modal huilian-rules-panel');
       node.appendChild(el('div', 'huilian-rules-title', '磁力站点规则'));
-      node.appendChild(listBox);
-      node.appendChild(confirmBox);
+      // 正文一律挂进 body（Task9 评审 F3：原先 `body` 建而不挂 = 死节点，而 Task10 要为它补
+      // `.huilian-rules-body { display:flex; … }` —— 不挂上那条样式就是给幽灵节点写的）
+      body.appendChild(listBox);
+      body.appendChild(confirmBox);
       var importBox = el('div', 'huilian-rules-import');
       importBox.appendChild(urlInput); importBox.appendChild(urlBtn);
       importBox.appendChild(jsonInput); importBox.appendChild(jsonBtn);
-      node.appendChild(importBox);
-      node.appendChild(msg);
-      node.appendChild(el('button', 'huilian-rules-close', '关闭'));
+      body.appendChild(importBox);
+      body.appendChild(msg);
+      body.appendChild(el('button', 'huilian-rules-close', '关闭'));
+      node.appendChild(body);
       node.querySelector('.huilian-rules-close').addEventListener('click', close);
       renderList();
       renderConfirm();
@@ -4790,6 +4810,9 @@ test('site-search 与 rules-ui 均已注册，且都排在数据层之后、页�
   });
   assert.ok(at('huilian-site-search.js') < at('huilian-magnet-rules-ui.js'),
     '站点搜索 create 时判 SFV.huilianMagnetRulesUi 在不在场——两个都注册后顺序无所谓，但面板不得先于组件加载');
+  // Task9 评审 F7：Task 8 翻面时这条被替换掉了，必须留 pin —— site-search 运行期取 source 抓取层
+  assert.ok(at('huilian-magnet-source.js') < at('huilian-site-search.js'),
+    'site-search 必须排在 huilian-magnet-source.js 之后');
 });
 ```
 

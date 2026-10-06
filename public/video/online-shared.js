@@ -328,10 +328,12 @@
       initialFilterState: fs ? fs.copyWith() : null,
       initialNotShowWatched: S._hideWatched,
       initialNotShowAbandoned: S._hideAbandoned,
+      initialNoSearchHistory: SFV.searchPrivacy.isNoSearchHistory(),
       onApply: function (res) {
         if (res.filterState) S._filterState = res.filterState.copyWith();
         S._hideWatched = !!res.notShowWatched;
         S._hideAbandoned = !!res.notShowAbandoned;
+        SFV.searchPrivacy.setNoSearchHistory(!!res.noSearchHistory);
         var kw = (S.searchInput && S.searchInput.value) ? S.searchInput.value.trim() : '';
         if (kw) S.doInlineSearch(kw);
         else renderFilterChips();
@@ -382,6 +384,7 @@
   }
   function saveSearchHistory(kw) {
     if (!kw) return;
+    if (SFV.searchPrivacy && SFV.searchPrivacy.isNoSearchHistory()) return;
     try {
       var list = getSearchHistory();
       list = list.filter(function (i) { return i !== kw; });

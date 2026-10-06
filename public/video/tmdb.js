@@ -307,10 +307,11 @@
     });
   }
 
-  function popular(mediaType, page) {
+  // 轮㉖：第三参 opts 透传（如 { region: 'KR' }）；request 的合并序保证 query 覆盖默认 CN
+  function popular(mediaType, page, opts) {
     if (!cfg.apiKey) return Promise.reject(new Error('TMDB_KEY_REQUIRED'));
     var p = page || 1;
-    return request('/movie/popular', { page: p }).then(normalizeList);
+    return request('/movie/popular', Object.assign({ page: p }, opts || {})).then(normalizeList);
   }
 
   // 通用 discover 查询（片单引擎 collections.js 使用）：支持任意筛选参数组合

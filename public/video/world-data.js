@@ -80,6 +80,29 @@
     d.colorBottom = c.colorBottom;
   });
 
+  // 轮㉖（用户裁决 2026-10-03）：灯塔基座 = 各国实时热映（SFV.worldMovies），
+  // 有 live 即在球、顶掉演示十塔；无 live（模块缺席/全败）回落 DEMO_ROOMS。
+  // live 站不经 normalize（字段已是站形状，normalize 会剥掉 countryCode/city 等），
+  // 装配期补 colorsFor 上色（㉓ 教训：缺 colorTop 全落默认薰衣草）。
+  function baseStations() {
+    var live = [];
+    try {
+      var lm = SFV.worldMovies;
+      var arr = lm && lm.stations ? lm.stations() : [];
+      if (Array.isArray(arr)) live = arr;
+    } catch (e) { /* live 源异常不炸数据面，回落演示 */ }
+    if (!live.length) return DEMO_ROOMS.slice();
+    return live.map(function (s) {
+      var o = Object.assign({}, s);
+      if (!o.colorTop) {
+        var c = colorsFor(o.roomId || o.id);
+        o.colorTop = c.colorTop;
+        o.colorBottom = c.colorBottom;
+      }
+      return o;
+    });
+  }
+
   function currentCoverUrl(r) {
     try {
       var ws = SFV.worldSync;
@@ -299,7 +322,7 @@
       if (r.id) seen['id:' + r.id] = true;
       out.push(r);
     });
-    DEMO_ROOMS.forEach(function (d) {
+    baseStations().forEach(function (d) {
       if (seen['rid:' + d.roomId] || seen['id:' + d.id]) return;
       out.push(d);
     });
@@ -325,7 +348,7 @@
       throw new Error('EMPTY');
     }).catch(function (e) {
       console.warn('[world-data] 拉取放映房间失败，降级演示房间', e && e.message);
-      var demo = DEMO_ROOMS.slice();
+      var demo = baseStations();
       if (opts.limit) demo = demo.slice(0, opts.limit);
       lastResult = {
         ok: true,

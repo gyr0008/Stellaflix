@@ -139,6 +139,8 @@
       if (room.country !== undefined) passthrough.country = room.country;
       if (room.coverUrl !== undefined) passthrough.coverUrl = room.coverUrl;
       if (room.descriptionZh !== undefined) passthrough.descriptionZh = room.descriptionZh;
+      // 轮㉗ live 国家热映塔专属标记（与 lon/lat 支路同语义）
+      if (room.cc !== undefined) passthrough.cc = room.cc;
       applyPosterColor(passthrough);
       return passthrough;
     }
@@ -170,6 +172,8 @@
     if (room.country !== undefined) st.country = room.country;
     if (room.coverUrl !== undefined) st.coverUrl = room.coverUrl;
     if (room.descriptionZh !== undefined) st.descriptionZh = room.descriptionZh;
+    // 轮㉗ live 国家热映塔专属标记（world-movies 才带 cc；面板据此出「看这部」按钮）
+    if (room.cc !== undefined) st.cc = room.cc;
     applyPosterColor(st);
     return st;
   }

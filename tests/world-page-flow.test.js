@@ -535,3 +535,30 @@ test('轮⑰：视口包围盒剔除 —— 框外信标 null；跨日界线 bou
   assert.equal(t.ui._fwProjector('rn'), null, '0° 不在跨线框内');
   t.page.unmount();
 });
+
+test('轮㉗ watch_movie：live 塔「看这部」→ smartResumePlay(去《》,img=coverUrl)，纯本地不碰房间；模块缺席→toast', async () => {
+  const t = setup();
+  const resume = [];
+  let joined = 0;
+  t.SFV.detailSource = { smartResumePlay(rec) { resume.push(rec); } };
+  t.SFV.worldRoom.joinWatchRoom = function () { joined++; return Promise.resolve(); };
+  t.page.mount(t.host, {});
+  await t.flush();
+
+  t.deck._picked = { id: 'r-KR', roomId: 'room-kr', name: '首尔', position: [126.98, 37.57],
+    status: 'playing', ownerType: 'system', cc: 'KR', title: '《蜘蛛侠》', coverUrl: 'https://img/x.jpg' };
+  t.map.emit('click', { point: { x: 10, y: 10 } });
+  await t.flush();
+  const before = t.calls.panelOpened.length;
+  t.calls.panelOpened[before - 1].opts.onAction('watch_movie');
+
+  assert.deepEqual(resume, [{ title: '蜘蛛侠', img: 'https://img/x.jpg' }], '须去书名号并以 coverUrl 作 img');
+  assert.equal(joined, 0, 'watch_movie 不加入/创建任何房间（裁决=纯本地播放）');
+  assert.equal(t.calls.panelOpened.length, before, '起播不重开面板');
+
+  // 模块缺席回落：仅 toast，不抛错
+  t.SFV.detailSource = undefined;
+  t.calls.panelOpened[before - 1].opts.onAction('watch_movie');
+  assert.ok(t.calls.toasts.some((m) => m.indexOf('播放链未加载') >= 0), '缺席须 toast 提示');
+  t.page.unmount();
+});

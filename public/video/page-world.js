@@ -66,9 +66,17 @@
         if (pollSeq !== seq) return; // 已切页：不碰已卸载 deck
         if (!info || !info.rooms || !info.rooms.length) return;
         SFV.worldLighthouseDeck.refreshStations(info.rooms);
+        syncSelectedSky(); // 轮㉕：选中站在换片/换色后天空跟随（hearthre playbackState 推更新等价）
       }).catch(function () {});
     };
     roomPollTimer = setInterval(tick, 20000);
+    // 轮㉖：各国实时热映（world-movies）拉到新站即立刻上球一次；
+    // 缓存命中/6h TTL 内 changed=false 不打扰，后续由 20s 轮询自然带出
+    if (SFV.worldMovies && SFV.worldMovies.refresh) {
+      SFV.worldMovies.refresh().then(function (changed) {
+        if (changed) tick();
+      }).catch(function () {});
+    }
     // B1：建房/离房后 world-room 会调 refreshMap，这里注册即时刷新
     if (SFV.worldRoom && SFV.worldRoom.setMapRefreshHandler) {
       SFV.worldRoom.setMapRefreshHandler(tick);
@@ -139,6 +147,14 @@
     return p;
   }
 
+  // 轮㉕ 天空三段链驱动（裁决：选中灯塔=hearthere playbackState 等价面）
+  function applySkyStation(st) {
+    if (SFV.worldSky && typeof SFV.worldSky.applyStation === 'function') SFV.worldSky.applyStation(st);
+  }
+  function syncSelectedSky() {
+    applySkyStation(openStationId ? findStation(openStationId) : null);
+  }
+
   function panelOpen(st, extra) {
     if (!SFV.worldHtPanel || typeof SFV.worldHtPanel.open !== 'function' || !st) return;
     var opts = {
@@ -149,7 +165,8 @@
         return SFV.worldFlags ? SFV.worldFlags.flagFramedUrl(cc) : null;   // 轮⑲ Qf 等价位注入
       },
       onFavorite: function () { toggleFavorite(st); },
-      onAction: function (action) { handleCta(action, st); }
+      onAction: function (action) { handleCta(action, st); },
+      onClose: closePanel // × 按钮 → It(null) 等价：清选中 + 天空回白（轮㉕）
     };
     if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) opts[k] = extra[k];
     openStationId = st.id;
@@ -159,6 +176,7 @@
   function closePanel() { // It(null) 等价（:19971）
     openStationId = null;
     if (SFV.worldHtPanel && typeof SFV.worldHtPanel.close === 'function') SFV.worldHtPanel.close();
+    applySkyStation(null); // 轮㉕：无选中=回落白星野/白晕（:19380-19383 else 支路）
   }
 
   function panelStation() {
@@ -195,6 +213,17 @@
       return;
     }
     if (action === 'next_station') { nextPlayingStation(); return; }
+    if (action === 'watch_movie') { // 轮㉗：live 热映塔本国片跨源直播（裁决=纯本地播放，未命中仅 toast）
+      var mTitle = String((st && st.title) || '').replace(/[《》]/g, '').trim();
+      if (!mTitle) return;
+      var ds = SFV.detailSource;
+      if (!ds || typeof ds.smartResumePlay !== 'function') {
+        if (SFV.worldUi) SFV.worldUi.toast('播放链未加载');
+        return;
+      }
+      ds.smartResumePlay({ title: mTitle, img: st.coverUrl || '' });
+      return;
+    }
     // offline / idle：Wf 已把按钮置禁用，点击不达此处
   }
 
@@ -221,6 +250,7 @@
     }
     panelOpen(st);
     flyTo(st);
+    applySkyStation(st);   // 轮㉕：选中即驱动星野/地平/光晕
   }
 
   function onMapClick(e) {
@@ -530,6 +560,11 @@
                 });
               }
 
+              // 轮㉕：天空三段链（DynamicSky 60s/move500ms 调度 + 初始一拍）
+              if (SFV.worldSky && typeof SFV.worldSky.mount === 'function') {
+                SFV.worldSky.mount(info.map);
+              }
+
               // 点击拾取（deck.pickStation）+ 悬停 cursor 绑定到 maplibre 事件
               bindMapInteractions(info.map);
 
@@ -556,6 +591,10 @@
       liftTitlebar(false);
       stopRoomPolling();
       unbindMapInteractions();
+      // 轮㉕：天空链先于 deck/地图摘除（依赖 map 的 on/off 与 rAF）
+      if (SFV.worldSky && typeof SFV.worldSky.unmount === 'function') {
+        SFV.worldSky.unmount();
+      }
       openStationId = null;
       listeningStationId = null;
       if (SFV.worldHtPanel && typeof SFV.worldHtPanel.unmount === 'function') {

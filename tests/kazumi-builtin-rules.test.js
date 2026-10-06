@@ -173,20 +173,28 @@ test('内置清单必须包含 555dy 系三镜像，且每条的 host 自洽、s
       rule.searchURL.indexOf(new URL(exp.host).host) !== -1,
       `规则[${exp.name}] 的 searchURL「${rule.searchURL}」不含自身 host ${new URL(exp.host).host}，多半是 copy 其它站没改`
     );
-    assert.equal(
-      rule.searchURL.indexOf('m=vod-search') !== -1 && rule.searchURL.indexOf('@keyword') !== -1,
-      true,
-      `规则[${exp.name}] 的 searchURL 必须是真搜索口 index.php?m=vod-search&wd=@keyword`
-    );
-    // 555dy 搜索条目自身就是 <a class="module-poster-item">：
-    // 用后代选择器（如 //a[@href]）取不到它自己 → 静默 0 结果；必须 self::a
-    assert.equal(rule.searchResult, 'self::a', `规则[${exp.name}] searchResult 必须是 'self::a'`);
-    // 收敛进真实结果区：行容器（module-items）包住条目（module-poster-item），
-    // 只写行容器时引擎每条只取首个 name/link → 119 条被压成 15 条
+    // 2026-10-04 改版复验：旧口 index.php?m=vod-search&wd= 已退化为「返回首页」
+    // （200 + 与首页字节完全一致），首页卡片又被条目 xpath 命中 → 面板刷整站目录。
+    // 真搜索口 = 首页搜索表单 action：/vodsearch/-------------.html?wd=@keyword。
     assert.ok(
-      rule.searchList.indexOf('module-poster-items-base') !== -1 &&
-      rule.searchList.indexOf('module-poster-item') !== -1,
-      `规则[${exp.name}] searchList 未收敛到「结果行容器内的 module-poster-item 条目」（实测会 119→15）`
+      rule.searchURL.indexOf('/vodsearch/-------------.html') !== -1 &&
+      rule.searchURL.indexOf('wd=@keyword') !== -1,
+      `规则[${exp.name}] 的 searchURL 必须是 2026-10-04 复验的新搜索口 /vodsearch/-------------.html?wd=@keyword（旧 m=vod-search 返回首页整站目录）`
+    );
+    // 新结果页条目是 div.module-card-item.module-item（旧模板 a.module-poster-item 已被替换；
+    // 实测搜索页 18 条全中、首页 0 命中，条目级收敛同时自带防退化）。
+    assert.ok(
+      rule.searchList.indexOf('module-card-item') !== -1 && rule.searchList.indexOf('module-item') !== -1,
+      `规则[${exp.name}] searchList 须收敛到条目级 div.module-card-item.module-item（2026-10-04 实采）`
+    );
+    assert.ok(
+      rule.searchName.indexOf('module-card-item-title') !== -1,
+      `规则[${exp.name}] searchName 须取 div.module-card-item-title（2026-10-04 实采标题容器）`
+    );
+    // 条目是 div 不再是 <a>：self::a 已失效；标题锚 a@href=/voddetail/xxx.html
+    assert.ok(
+      rule.searchResult.indexOf('voddetail') !== -1,
+      `规则[${exp.name}] searchResult 须取 //a[contains(@href,'voddetail')]（条目为 div，self::a 静默 0 结果）`
     );
     assert.ok(
       rule.chapterRoads.indexOf('module-play-list-content') !== -1 &&
@@ -194,6 +202,34 @@ test('内置清单必须包含 555dy 系三镜像，且每条的 host 自洽、s
       `规则[${exp.name}] 章节 xpath 不是 555dy 真实 DOM（module-play-list-content/link）`
     );
   }
+});
+
+test('奈飞工厂 2026-10-04 改版：搜索口与结果页 xpath 对齐线上真实 DOM', () => {
+  // 事故实锤（2026-10-04 curl）：旧口 index.php?m=vod-search&wd= 返回 200 + 与首页
+  // 字节完全相同（193,617B），首页 public-list-box 卡片被当搜索结果 → 面板显示整站目录。
+  // 首页搜索表单 action 已改 /vodsearch/-------------.html；新结果页条目结构同步更换
+  // （vod-detail search-list 行 + slide-info-title 标题，public-list-box/time-title 在结果页 0 命中）。
+  const { SFV } = loadBuiltin();
+  const rule = SFV.builtinRules.filter((r) => r.name === '奈飞工厂 NetflixGC')[0];
+  assert.ok(rule, '内置清单应含 奈飞工厂 NetflixGC');
+  assert.ok(
+    rule.searchURL.indexOf('https://netflixgc.org/vodsearch/-------------.html?wd=@keyword') === 0,
+    `searchURL 须为新搜索口，实测当前=${rule.searchURL}`
+  );
+  assert.ok(
+    rule.searchList.indexOf('vod-detail') !== -1 && rule.searchList.indexOf('search-list') !== -1,
+    'searchList 须收敛到条目 div.vod-detail.search-list（2026-10-04 实采）'
+  );
+  assert.ok(
+    rule.searchName.indexOf('slide-info-title') !== -1,
+    'searchName 须取 h3.slide-info-title（2026-10-04 实采）'
+  );
+  assert.ok(
+    rule.searchResult.indexOf('voddetail') !== -1,
+    "searchResult 须取 //a[contains(@href,'voddetail')]（详情链接；播放按钮 vodplay 与分类 vodsearch 都被排除）"
+  );
+  // 详情页章节结构复验未变（anthology-list-play 在新详情页仍 8 命中）
+  assert.ok(rule.chapterRoads.indexOf('anthology-list-play') !== -1, 'chapterRoads 应保持 anthology-list-play');
 });
 
 test('启动自动注册：开箱即用，且幂等（重复调用不重复注册）', () => {
@@ -209,6 +245,56 @@ test('启动自动注册：开箱即用，且幂等（重复调用不重复注�
   SFV.installBuiltinRules();
   SFV.installBuiltinRules();
   assert.equal(sandbox.kazumi.listRules().length, names.length, '重复注册不应产生重复条目');
+});
+
+// ---- 版本升级通道（2026-10-04 橙点事故）------------------------------------
+// 事故：installAll 曾「同名即跳过」，用户 localStorage 永远停在 v1.0 旧搜索口，
+// 内置 v1.1 修复无法回灌 → 站点改版后老用户全员橙点。
+// 对齐 Kazumi plugins_controller：needUpdate 逐段数字比较（utils/version.dart），
+// 内置更新 → addOrUpdate 按名覆盖；本地同版/更新版不得覆盖（保住用户手改与前向兼容）。
+
+const staleNetflixRule = () => ({
+  api: '4', type: 'video', name: '奈飞工厂 NetflixGC', version: '1.0',
+  baseURL: 'https://netflixgc.org/',
+  searchURL: 'https://netflixgc.org/index.php?m=vod-search&wd=@keyword',
+  searchList: "//div[contains(@class,'public-list-box')]",
+  searchName: "//a[contains(@class,'time-title')]",
+  searchResult: "//a[contains(@class,'public-list-exp')]",
+  chapterRoads: "//ul[contains(@class,'anthology-list-play')]",
+  chapterResult: '//li/a',
+  searchMode: 'xpath', chapterMode: 'xpath'
+});
+
+test('本地同名旧版内置规则须被自动升级为新版（版本回灌通道）', () => {
+  const { sandbox } = loadBuiltin([staleNetflixRule()]);
+  const stored = sandbox.kazumi.listRules().filter((r) => r.name === '奈飞工厂 NetflixGC')[0];
+  assert.ok(stored, '前置：本地应有该规则');
+  assert.equal(stored.version, '1.1', '旧版 1.0 应被内置 1.1 覆盖');
+  assert.ok(stored.searchURL.indexOf('/vodsearch/-------------.html') > -1,
+    '升级后须带上 2026-10-04 新搜索口，实际: ' + stored.searchURL);
+});
+
+test('本地版本不低于内置时不得覆盖（同版保住用户手改，更高版前向兼容）', () => {
+  const sameVer = staleNetflixRule();
+  sameVer.version = '1.1';
+  sameVer.searchList = "//div[contains(@class,'my-custom-edit')]";
+  const first = loadBuiltin([sameVer]);
+  const kept = first.sandbox.kazumi.listRules().filter((r) => r.name === '奈飞工厂 NetflixGC')[0];
+  assert.equal(kept.searchList, sameVer.searchList, '同版本号的用户手改不得被覆盖');
+
+  const newer = staleNetflixRule();
+  newer.version = '9.9';
+  const second = loadBuiltin([newer]);
+  const kept2 = second.sandbox.kazumi.listRules().filter((r) => r.name === '奈飞工厂 NetflixGC')[0];
+  assert.equal(kept2.version, '9.9', '本地更新版（如手动导入的新 JSON）不得被降级覆盖');
+});
+
+test('版本比较须按点分数字逐段比（1.9 > 1.1），非字符串前缀比较', () => {
+  const v19 = staleNetflixRule();
+  v19.version = '1.9';
+  const { sandbox } = loadBuiltin([v19]);
+  const kept = sandbox.kazumi.listRules().filter((r) => r.name === '奈飞工厂 NetflixGC')[0];
+  assert.equal(kept.version, '1.9', '本地 1.9 数字逐段比较高于内置 1.1，不得被覆盖');
 });
 
 test('dismissed：用户移除后不再自动塞回，且面板可查询', () => {

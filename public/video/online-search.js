@@ -158,6 +158,42 @@
         ? SFV.SearchFilterCore.aggregateByLocalKey(merged)
         : merged;
       console.log('[SFV-DEBUG] aggregated count=' + aggregated.length);
+
+      // P0-2 跨页拼结果（对齐 Kazumi search_controller.dart ≤3页连拉）：
+      // 聚合卡不足 24 时，仅对本轮有命中的强势 CMS 源续拉第 2/3 页，见新即停。
+      var moreP = Promise.resolve({ added: [] });
+      if (canCms && aggregated.length < 24 && SFV.SearchFilterCore && SFV.SearchFilterCore.collectMorePages) {
+        var rawCms = arr[0].raw || [];
+        var strongIds = {};
+        for (var ri = 0; ri < rawCms.length; ri++) {
+          if (rawCms[ri] && rawCms[ri].sourceId) strongIds[rawCms[ri].sourceId] = 1;
+        }
+        var strongSources = (SFV.sources.getEnabledSources() || []).filter(function (s) { return strongIds[s.id]; });
+        if (strongSources.length) {
+          moreP = SFV.SearchFilterCore.collectMorePages({
+            knownItems: rawCms,
+            fetchPage: function (pg) {
+              return SFV.sources.search(kw, { timeout: 8000, pg: pg, sources: strongSources })
+                .then(function (r) { return r.raw || []; });
+            }
+          });
+        }
+      }
+
+      moreP.then(function (more) {
+        if (S._currentSearchView !== viewToken) return;
+        var fresh = (more && more.added) || [];
+        if (fresh.length) {
+          console.log('[SFV-DEBUG] 跨页续拉 added=' + fresh.length + ', reason=' + more.reason);
+          merged = merged.concat(fresh);
+          aggregated = (SFV.SearchFilterCore && SFV.SearchFilterCore.aggregateByLocalKey)
+            ? SFV.SearchFilterCore.aggregateByLocalKey(merged)
+            : merged;
+        }
+        proceed();
+      });
+
+      function proceed() {
       var tmdbEnabled = !!(SFV.tmdb && typeof SFV.tmdb.hasKey === 'function' && SFV.tmdb.hasKey() &&
                            typeof SFV.tmdb.bestMatch === 'function');
       // 分层：身份卡在 aggregate 已定；TMDB 只补海报/评分，不合并分季卡
@@ -210,6 +246,7 @@
         if (S._currentSearchView !== viewToken) return;
         S.showSearchStatus('搜索出错：' + (err && err.message ? err.message : '未知错误'), 'error');
       });
+      }
     }).catch(function (err) {
       if (S._currentSearchView !== viewToken) return;
       S.showSearchStatus('搜索出错：' + (err && err.message ? err.message : '未知错误'), 'error');

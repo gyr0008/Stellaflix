@@ -33,6 +33,7 @@
     'station.showcase.unnamed': '声音信标 {id}',
     'station.action.authorize': '绑定 Apple Music 开始收听',
     'station.action.tuneIn': '进入房间',
+    'station.action.watchMovie': '看这部',
     'station.action.stop': '退出观看',
     'station.action.nextStation': '下一个电台',
     'station.action.offline': '离线',
@@ -372,6 +373,18 @@
       cur.appendChild(mk('span', null, showcaseText(J.labelKey)));
       cur.addEventListener('click', function () { onAction(A); });
       row.appendChild(cur);
+
+      // 轮㉗ 方案C双按钮（用户裁决，hearthere 单 CTA 的功能分叉）：
+      // 仅 live 国家热映塔（st.cc）追加「看这部」直播按钮，其余站点原样单 CTA
+      if (st && st.cc != null) {
+        var watch = mk('button', 'ht-btn station-panel__cta station-panel__cta--watch');
+        var wIcon = mk('span', 'station-panel__cta-icon');
+        wIcon.appendChild(ctaIcon('broadcast'));
+        watch.appendChild(wIcon);
+        watch.appendChild(mk('span', null, showcaseText('station.action.watchMovie')));
+        watch.addEventListener('click', function () { onAction('watch_movie'); });
+        row.appendChild(watch);
+      }
 
       var next = mk('button', 'ht-btn primary station-panel__cta station-panel__cta--next station-panel__cta--tune-in-cyan');
       next.disabled = !opts.canGoNext;

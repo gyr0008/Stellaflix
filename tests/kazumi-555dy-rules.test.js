@@ -10,6 +10,11 @@
  *     不还原时请求 nginx 404，还原后同一个地址 200 + 47KB m3u8。
  *  4. searchList 必须命中「条目」而不是「网格行」：行容器下每条只取首个链接，
  *     119 条结果会被压成 15 条（实测缺陷）。
+ *  5. 2026-10-04 改版（实锤：旧口 m=vod-search 返回 200+首页字节，整站目录被当结果）：
+ *     搜索口切到首页表单 action /vodsearch/-------------.html?wd=@keyword；
+ *     条目由 a.module-poster-item 换成 div.module-card-item.module-item（实测 18 条/页），
+ *     searchResult 由 self::a 换成 //a[contains(@href,'voddetail')]；
+ *     章节 module-play-list-content/link 与播放页嗅探复验未变。search.html 夹具已换当日实采。
  */
 const fs = require('fs');
 const path = require('path');
@@ -79,13 +84,15 @@ test('xpath 字段齐全且不得用全等 @class= 写法（contains(@class,\'x\
   });
 });
 
-test('searchList 命中的是「条目」而不是「网格行」：解析出 119 条影片', t => {
+test('searchList 命中的是「条目」而不是「网格行」：新模板解析出 18 条影片', t => {
+  // 2026-10-04 改版重采：结果条目由 a.module-poster-item（119 条）换成
+  // div.module-card-item.module-item（18 条/页）。search.html 为当日线上实采。
   const { XE, Schema } = loadEngine();
   const r = Schema.fromJson(rules[0]);
   const html = fs.readFileSync(path.join(FIX, 'search.html'), 'utf8');
   const out = XE.parseSearch(html, r, nz);
   assert.equal(out.diagnostics.length, 0, '解析不该有诊断: ' + out.diagnostics.slice(0, 2).join(';'));
-  assert.equal(out.items.length, 119, '应解析出 119 条，实际 ' + out.items.length + '（若变 15 条说明又退回「行容器」写法）');
+  assert.equal(out.items.length, 18, '应解析出 18 条，实际 ' + out.items.length + '（若为 0 说明条目 xpath 又对不上新模板）');
   out.items.forEach(it => {
     assert.ok(/^\/voddetail\/\d+\.html$/.test(it.src), '非影片链接: ' + it.src);
     assert.ok(it.name && it.name.length > 0, '空标题');
@@ -93,12 +100,17 @@ test('searchList 命中的是「条目」而不是「网格行」：解析出 11
   assert.equal(new Set(out.items.map(i => i.src)).size, out.items.length, '链接必须唯一');
 });
 
-test('searchResult 必须能取到条目自身的 href（用 self::a 而非后代选择器）', t => {
-  const { Schema } = loadEngine();
+test('searchResult 取条目内的 voddetail 链接（2026-10-04 改版后条目是 div，self::a 失效）', t => {
+  const { Schema, XE } = loadEngine();
   rules.forEach(r => {
-    assert.equal(Schema.fromJson(r).searchResult, 'self::a',
-      r.name + ' 的 searchResult 必须是 self::a：条目本身就是 <a>，后代选择器取不到 href');
+    assert.ok(String(Schema.fromJson(r).searchResult).indexOf('voddetail') > -1,
+      r.name + ' searchResult 必须是 //a[contains(@href,\'voddetail\')]：新模板条目为 div，self::a 静默 0 结果');
   });
+  // 端到端钉一次：真实解析出的 src 与 fixture 首条一致（防 searchResult 漂到vodplay/vodsearch 链接）
+  const r = Schema.fromJson(rules[0]);
+  const out = XE.parseSearch(fs.readFileSync(path.join(FIX, 'search.html'), 'utf8'), r, nz);
+  assert.ok(out.items.length > 0 && /^\/voddetail\/\d+\.html$/.test(out.items[0].src),
+    '实际解析 src 须为 voddetail 详情链接，首条=' + (out.items[0] && out.items[0].src));
 });
 
 test('详情页解析出 13 条线路（12 条真实 + 1 条转义样本），集链接绝对化', t => {

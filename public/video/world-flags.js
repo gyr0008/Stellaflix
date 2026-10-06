@@ -40,6 +40,12 @@
       '<polygon points="30,3 57,20 30,37 3,20" fill="#FFDF00"/>' +
       '<circle cx="30" cy="20" r="8.5" fill="#002776"/>' +
       '<path d="M22.5 19q7.5 4.5 15 0" stroke="#FFFFFF" stroke-width="1.6" fill="none"/>'),
+    CA: svg(
+      '<rect width="15" height="40" fill="#FF0000"/>' +
+      '<rect x="15" width="30" height="40" fill="#FFFFFF"/>' +
+      '<rect x="45" width="15" height="40" fill="#FF0000"/>' +
+      '<polygon points="30,8 31.8,13.3 34.3,12.1 33.5,16.5 37.7,16.1 35.9,19.9 39.9,22.2 34.6,23.7 37,28 32.7,26.9 33.3,31.5 30,29 26.7,31.5 27.3,26.9 23,28 25.4,23.7 20.1,22.2 24.1,19.9 22.3,16.1 26.5,16.5 25.7,12.1 28.2,13.3" fill="#FF0000"/>' +
+      '<rect x="29.2" y="27.5" width="1.6" height="4.5" fill="#FF0000"/>'),
     CN: svg(
       '<rect width="60" height="40" fill="#DE2910"/>' +
       '<polygon points="10,3 12.5,9 19,9.5 14,13.6 15.5,20 10,16.5 4.5,20 6,13.6 1,9.5 7.5,9" fill="#FFDE00"/>' +
@@ -47,6 +53,16 @@
       '<circle cx="27" cy="12" r="2" fill="#FFDE00"/>' +
       '<circle cx="27" cy="18" r="2" fill="#FFDE00"/>' +
       '<circle cx="23" cy="22" r="2" fill="#FFDE00"/>'),
+    DE: svg(
+      '<rect width="60" height="13.4" fill="#000000"/>' +
+      '<rect y="13.3" width="60" height="13.4" fill="#DD0000"/>' +
+      '<rect y="26.7" width="60" height="13.4" fill="#FFCE00"/>'),
+    ES: svg(
+      '<rect width="60" height="10" fill="#AA151B"/>' +
+      '<rect y="10" width="60" height="20" fill="#F1BF00"/>' +
+      '<rect y="30" width="60" height="10" fill="#AA151B"/>' +
+      '<rect x="8" y="14" width="7" height="11" rx="1.5" fill="#AA151B" stroke="#6D1A17" stroke-width="0.6"/>' +
+      '<circle cx="11.5" cy="12.5" r="1.8" fill="#FFED09"/>'),
     FR: svg(
       '<rect width="20" height="40" fill="#0055A4"/>' +
       '<rect x="20" width="20" height="40" fill="#FFFFFF"/>' +
@@ -61,6 +77,10 @@
       '<rect y="11" width="60" height="18" fill="#FFFFFF"/>' +
       '<rect x="25" width="10" height="40" fill="#C8102E"/>' +
       '<rect y="15" width="60" height="10" fill="#C8102E"/>'),
+    IT: svg(
+      '<rect width="20" height="40" fill="#009246"/>' +
+      '<rect x="20" width="20" height="40" fill="#FFFFFF"/>' +
+      '<rect x="40" width="20" height="40" fill="#CE2B37"/>'),
     IN: svg(
       '<rect width="60" height="13.4" fill="#FF9933"/>' +
       '<rect y="13.3" width="60" height="13.4" fill="#FFFFFF"/>' +
@@ -69,10 +89,35 @@
     JP: svg(
       '<rect width="60" height="40" fill="#FFFFFF"/>' +
       '<circle cx="30" cy="20" r="10" fill="#BC002D"/>'),
+    KR: svg(
+      '<rect width="60" height="40" fill="#FFFFFF"/>' +
+      '<circle cx="30" cy="20" r="8" fill="#CD2E3A"/>' +
+      '<path d="M30 12a8 8 0 0 1 0 16 4 4 0 0 1 0-8 4 4 0 0 0 0-8z" fill="#0047A0"/>' +
+      '<g stroke="#000000" stroke-width="2">' +
+      '<g transform="rotate(-30 11 9)"><line x1="5" y1="6" x2="17" y2="6"/><line x1="5" y1="9" x2="17" y2="9"/><line x1="5" y1="12" x2="17" y2="12"/></g>' +
+      '<g transform="rotate(30 49 31)"><line x1="43" y1="28" x2="46.5" y2="28"/><line x1="51.5" y1="28" x2="55" y2="28"/><line x1="43" y1="31" x2="46.5" y2="31"/><line x1="51.5" y1="31" x2="55" y2="31"/><line x1="43" y1="34" x2="46.5" y2="34"/><line x1="51.5" y1="34" x2="55" y2="34"/></g>' +
+      '<g transform="rotate(30 49 9)"><line x1="43" y1="6" x2="55" y2="6"/><line x1="43" y1="9" x2="46.5" y2="9"/><line x1="51.5" y1="9" x2="55" y2="9"/><line x1="43" y1="12" x2="55" y2="12"/></g>' +
+      '<g transform="rotate(-30 11 31)"><line x1="5" y1="28" x2="17" y2="28"/><line x1="5" y1="31" x2="8.5" y2="31"/><line x1="13.5" y1="31" x2="17" y2="31"/><line x1="5" y1="34" x2="17" y2="34"/></g>' +
+      '</g>'),
+    MX: svg(
+      '<rect width="20" height="40" fill="#006847"/>' +
+      '<rect x="20" width="20" height="40" fill="#FFFFFF"/>' +
+      '<rect x="40" width="20" height="40" fill="#CE1126"/>' +
+      '<circle cx="30" cy="20" r="5" fill="#8B5A2B"/>' +
+      '<path d="M27 20q3-4 6 0" stroke="#006847" stroke-width="1.4" fill="none"/>'),
+    NL: svg(
+      '<rect width="60" height="13.4" fill="#AE1C28"/>' +
+      '<rect y="13.3" width="60" height="13.4" fill="#FFFFFF"/>' +
+      '<rect y="26.7" width="60" height="13.4" fill="#21468B"/>'),
     RU: svg(
       '<rect width="60" height="13.4" fill="#FFFFFF"/>' +
       '<rect y="13.3" width="60" height="13.4" fill="#0039A6"/>' +
       '<rect y="26.7" width="60" height="13.4" fill="#D52B1E"/>'),
+    TR: svg(
+      '<rect width="60" height="40" fill="#E30A17"/>' +
+      '<circle cx="23" cy="20" r="8.5" fill="#FFFFFF"/>' +
+      '<circle cx="26" cy="20" r="7" fill="#E30A17"/>' +
+      '<polygon points="36,15.6 37.3,19 40.8,19 38,21.2 39.1,24.6 36,22.4 32.9,24.6 34,21.2 31.2,19 34.7,19" fill="#FFFFFF"/>'),
     US: svg(
       '<rect width="60" height="40" fill="#B22234"/>' +
       '<rect y="3.1" width="60" height="3.1" fill="#FFFFFF"/>' +

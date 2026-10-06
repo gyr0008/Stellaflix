@@ -6,6 +6,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const systemMemory = require('./system-memory');
+const { parseListeningPid, parseTasklistName } = require('./port-lock');
 const videoConfig = require('./video-config');
 const mpvController = require('./mpv-controller');
 const downloadManager = require('./download-manager');
@@ -536,28 +537,75 @@ const KUGOU_LOGIN_COOKIE_PRIORITY = [
   'Kugou',
   'NickName',
 ];
-function findOpenPort(startPort) {
-  return new Promise((resolve, reject) => {
-    function tryPort(port) {
-      const tester = net.createServer();
+// 端口硬锁（方案A，2026-10-03）：只允许 LOCKED_PORT，被占时绝不静默 +1 退避。
+// 退避换 origin = localStorage 换桶 = 影视数据"消失"（10-01 事故根因，spec §1）。
+// 纯解析层在 desktop/port-lock.js（tests/port-lock.test.js 覆盖）。
+const LOCKED_PORT = 3000;
 
-      tester.once('error', (err) => {
-        if (err.code === 'EADDRINUSE' || err.code === 'EACCES') {
-          tryPort(port + 1);
-          return;
-        }
-        reject(err);
-      });
-
-      tester.once('listening', () => {
-        tester.close(() => resolve(port));
-      });
-
-      tester.listen(port, '127.0.0.1');
-    }
-
-    tryPort(startPort);
+function probePortFree(port) {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+    tester.once('error', () => resolve(false));
+    tester.once('listening', () => tester.close(() => resolve(true)));
+    tester.listen(port, '127.0.0.1');
   });
+}
+
+function execText(command, args) {
+  return new Promise((resolve) => {
+    execFile(command, args, { windowsHide: true, encoding: 'utf8' }, (err, stdout) => {
+      resolve(err ? '' : String(stdout || ''));
+    });
+  });
+}
+
+async function describePortOccupier(port) {
+  const netstat = await execText('netstat', ['-ano']);
+  const pid = parseListeningPid(netstat, port);
+  if (!pid) return { pid: null, name: null };
+  const tasklist = await execText('tasklist', ['/FI', 'PID eq ' + pid, '/NH']);
+  return { pid, name: parseTasklistName(tasklist, pid) };
+}
+
+function taskkillPid(pid) {
+  return new Promise((resolve) => {
+    execFile('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true }, (err) => resolve(!err));
+  });
+}
+
+async function acquireLockedPort(port) {
+  for (;;) {
+    if (await probePortFree(port)) return port;
+    const occupier = await describePortOccupier(port);
+    const who = occupier.pid
+      ? `占用进程：${occupier.name || '未知'}（PID ${occupier.pid}）`
+      : '占用者无法识别（可能非本机监听）。';
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'Stellaflix 无法启动',
+      message: `端口 ${port} 已被占用。${who}`,
+      detail: 'Stellaflix 固定使用端口 ' + port + '，换端口会导致影视数据换桶"消失"。\n'
+        + '可以结束占用进程后继续，或退出应用保留现场。',
+      buttons: occupier.pid ? ['结束占用并重试', '退出应用'] : ['重试', '退出应用'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response === 1) {
+      // 与渲染恢复失败同套路：标记退出+稍后 quit，绝不留 0 窗口僵尸进程
+      appQuitting = true;
+      setTimeout(() => app.quit(), 300);
+      return new Promise(() => {});
+    }
+    if (occupier.pid) {
+      const killed = await taskkillPid(occupier.pid);
+      if (!killed) {
+        dialog.showErrorBox('无法结束占用进程',
+          `PID ${occupier.pid} 结束失败（可能权限不足或已退出）。\n请手动结束后重试，或退出应用。`);
+      }
+    }
+    await startupDelay(600);
+  }
 }
 
 function startupDelay(delayMs) {
@@ -5981,7 +6029,7 @@ async function ensureLocalServerStarted() {
   localServerStartPromise = (async () => {
     const injectedDelay = Math.max(0, Math.min(15000, Number(process.env.STELLAFLIX_STARTUP_TEST_SERVER_DELAY_MS) || 0));
     if (injectedDelay) await startupDelay(injectedDelay);
-    const port = await withStartupTimeout(findOpenPort(3000), 5000, 'findOpenPort');
+    const port = await acquireLockedPort(LOCKED_PORT);
     mainServerPort = port;
     configureLocalAppPermissions();
     configureLocalServerEnvironment(port);

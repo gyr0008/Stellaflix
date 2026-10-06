@@ -195,9 +195,11 @@
       section('filter', '结构识别（竖屏短剧）', '开启后隐藏集数超过阈值的剧集，多为竖屏短剧 / AI 漫剧。注意：CMS 不提供单集时长，仅以集数识别，百集动画等正常长番也可能被误伤，请按需调整阈值。',
         switchRow('隐藏集数过多的剧集', 'episode', epiOn) +
         '<div data-epi-holder' + (epiOn ? '' : ' style="display:none"') + '></div>') +
-      section('filter', '过滤', '控制是否隐藏已经看过或放弃的内容。',
+      section('filter', '过滤', '控制是否隐藏已经看过或放弃的内容，以及搜索历史隐私。',
         switchRow('隐藏已看', 'watch', flags.notShowWatched) +
-        switchRow('隐藏已弃', 'abandon', flags.notShowAbandoned)) +
+        switchRow('隐藏已弃', 'abandon', flags.notShowAbandoned) +
+        switchRow('不记录搜索历史', 'privacy', flags.noSearchHistory) +
+        '<div class="sf-filter-section__desc">开启后搜索词不再写入本地历史；「重置」不影响本开关。</div>') +
       // T143：搜索页背景 DIY 入口并入筛选面板
       section('image', '搜索页背景', '切换搜索页背景色或上传自定义图片。',
         '<div class="sfv-bg-diy-inline-host"></div>');
@@ -364,6 +366,8 @@
           flags.notShowWatched = on;
         } else if (key === 'abandon') {
           flags.notShowAbandoned = on;
+        } else if (key === 'privacy') {
+          flags.noSearchHistory = on;
         }
         buildSheet(ctx);
       });
@@ -380,7 +384,8 @@
     var draft = (opts.initialFilterState || new Core.SearchFilterState()).copyWith();
     var flags = {
       notShowWatched: !!opts.initialNotShowWatched,
-      notShowAbandoned: !!opts.initialNotShowAbandoned
+      notShowAbandoned: !!opts.initialNotShowAbandoned,
+      noSearchHistory: !!opts.initialNoSearchHistory
     };
 
     var layer = document.createElement('div');
@@ -449,6 +454,7 @@
           filterState: draft,
           notShowWatched: flags.notShowWatched,
           notShowAbandoned: flags.notShowAbandoned,
+          noSearchHistory: flags.noSearchHistory,
           shouldSearch: true
         });
       }
