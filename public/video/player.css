@@ -2347,6 +2347,24 @@ html.control-glass-svg-ok .sfv-episode-panel {
   color: #6ff7e6;
   border: 1px solid rgba(0, 245, 212, .45);
 }
+/* 画质徽章（播放器片源区）：六档配色与多源面板 .sfv-picker-row-q 同口径 */
+.sfv-ep-item-q {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+  letter-spacing: .03em;
+}
+.sfv-ep-item-q[data-q="4K"]   { background: rgba(255,196,0,.18);  color: #ffc400; }
+.sfv-ep-item-q[data-q="蓝光"]  { background: rgba(255,255,255,.16); color: #ffffff; }
+.sfv-ep-item-q[data-q="HDR"]  { background: rgba(176,120,255,.18); color: #b078ff; }
+.sfv-ep-item-q[data-q="1080P"] { background: rgba(80,170,255,.16); color: #50aaff; }
+.sfv-ep-item-q[data-q="720P"]  { background: rgba(255,255,255,.10); color: rgba(255,255,255,.62); }
+.sfv-ep-item-q[data-q="枪版"]  { background: rgba(255,90,90,.16);  color: #ff5a5a; }
+.sfv-ep-item.is-current .sfv-ep-item-q { background: rgba(255,255,255,.22); color: #fff; }
 
 /* ---------- 弹幕层 ---------- */
 /* 覆盖整个播放区，穿透点击，置于视频之上、字幕/控制条之下 */

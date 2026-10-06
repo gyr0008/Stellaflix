@@ -525,6 +525,16 @@
   // 与详情页多源面板功能对齐：展示全部片源（跨源候选 + 当前源线路）供热切换，
   // 并标出正在播放的那一项；下方仍保留剧集列表。
   // 再次点击按钮或点击面板外空白区域则收回。
+  /**
+   * 线路名画质事实（2026-10-06 主人批准）：只吃 roads[].from（片源自证线路名），
+   * 尺子在 SearchFilterCore.qualityTagFromText——真画质词（蓝光/高清…）出徽章，
+   * 源标识（bfzym3u8/NBY 等）已被边界规则免疫为 null；无事实不渲染。
+   */
+  function roadQualityTag(from) {
+    var C = SFV.SearchFilterCore;
+    return (C && typeof C.qualityTagFromText === 'function') ? C.qualityTagFromText(from) : null;
+  }
+
   function openEpisodePanel(e) {
     if (epPanel && epPanel.parentNode) { closeEpisodePanel(); return; }
     var d = global.document;
@@ -589,6 +599,13 @@
           btn.appendChild(sub);
         }
         if (item.disabled) btn.disabled = true;
+        if (item.quality) {
+          var qchip = d.createElement('span');
+          qchip.className = 'sfv-ep-item-q';
+          qchip.setAttribute('data-q', item.quality);
+          qchip.textContent = item.quality;
+          btn.appendChild(qchip);
+        }
         if (item.current && item.badge) {
           var badge = d.createElement('span');
           badge.className = 'sfv-ep-item-badge';
@@ -619,6 +636,7 @@
           return {
             label: label,
             sub: c.sub || '',
+            quality: c.quality || '',
             current: isCur,
             badge: '播放中',
             onClick: function () {
@@ -645,6 +663,7 @@
           return {
             label: (p && p.from) || ('线路 ' + (i + 1)),
             sub: (eps.length ? (eps.length + ' 集') : '') + (isPlaying ? ' · 播放中' : ''),
+            quality: roadQualityTag(p && p.from),
             current: isCur,
             keepOpen: true,
             onClick: function () {

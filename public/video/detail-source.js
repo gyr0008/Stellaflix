@@ -55,6 +55,14 @@
     return playbackSession;
   }
   function getPlaybackSession() { return playbackSession; }
+
+  /**
+   * 当前搜索轮的扁平候选池（仅供测试/诊断读取；面板行与池共用同一引用，
+   * 数据链契约 quality 等字段以此为准）。
+   */
+  function getRunStateCandidates() {
+    return (runState && runState.candidates) || [];
+  }
   function markPlaybackSource(currentKey) {
     if (playbackSession) playbackSession.currentKey = currentKey || null;
   }
@@ -442,6 +450,12 @@
       var items = (res && res.items) || [];
       // 归一化为带 sourceKey 的扁平候选（对齐 buildCandidates 单源形态）
       var srcCands = normalizeUnitItems(u, items, rs.view);
+      // B（2026-10-04 站点搜索退化事故）：流式路径与 hall.js 同尺子过相关性过滤。
+      // 站点搜索口失效返回整站目录时，score 0 的无关标题被剔除、该源落橙点，而非刷屏垃圾。
+      // 尺子取本轮实际检索词 kw：别名重查命中的译名得以保留，退化目录仍被剔除。
+      if (SFV.SearchFilterCore && typeof SFV.SearchFilterCore.filterCandidatesForQuery === 'function' && kw) {
+        srcCands = SFV.SearchFilterCore.filterCandidatesForQuery(srcCands, kw, { topN: 8 });
+      }
       // P1-2：重查（别名/手动检索）命中可能与已入池条目重叠，按候选 id 去重，
       // 防止同 (sourceId, vodId) 重复渲染 + 重复进播放会话池。
       var seenIds = {};
@@ -549,6 +563,15 @@
   }
 
   /**
+   * 画质事实标签（宁缺毋滥）：只喂候选自身字段（CMS title/remarks/playFrom 线路名、
+   * Kazumi 搜索标题），无事实返回 null → 面板不渲染徽章。尺子在 SearchFilterCore。
+   */
+  function qualityTagOf(text) {
+    var C = SFV.SearchFilterCore;
+    return (C && typeof C.qualityTagFromText === 'function') ? C.qualityTagFromText(text) : null;
+  }
+
+  /**
    * 把单源搜索到的 items 归一化为带 sourceKey 的扁平候选（形态对齐 buildCandidates 单源结果）。
    * 复用 SFV.detail.classifyCandidateEmbed 判定 isEmbed。
    */
@@ -563,6 +586,7 @@
           label: (v.sourceName || v.sourceId || 'CMS') + (v.remarks ? ' · ' + v.remarks : ''),
           sub: (it.title || '') + (it.year ? ' (' + it.year + ')' : ''),
           title: it.title || '',
+          quality: qualityTagOf([it.title, v.remarks, v.playFrom].filter(Boolean).join(' ')),
           kind: 'cms', group: (v.sourceName || v.sourceId || 'CMS'),
           isEmbed: D.classifyCandidateEmbed({ kind: 'cms', _ref: v }), _ref: v,
           sourceKey: u.key
@@ -574,6 +598,8 @@
           label: (it.ruleName || 'Kazumi'),
           sub: it.title || (view && view.title) || '',
           title: it.title || (view && view.title) || '',
+          // Kazumi 搜索结果只带标题（xpath 抽取），标题即唯一事实面
+          quality: qualityTagOf(it.title),
           kind: 'kazumi', ruleName: it.ruleName || '', group: (it.ruleName || 'Kazumi'),
           isEmbed: D.classifyCandidateEmbed({ kind: 'kazumi', ruleName: it.ruleName, _ref: it }), _ref: it,
           sourceKey: u.key
@@ -685,23 +711,13 @@
   // ---------------------------------------------------------------- 画质评级
   // 按片源"线路名(from)"/"集名"中的常见画质关键词从高到低打分，用于片源热切换排序。
   // 返回整数分 (0~100)，分值越高画质越优；无关键词时返回中性分 50。
-  var QUALITY_KEYWORD_TIERS = [
-    { re: /(4k|uhd|2160p|2160)/i, score: 100 },
-    { re: /(1080p?|full.?hd|fhd|高清)/i, score: 85 },
-    { re: /(720p?|hd|标清)/i, score: 70 },
-    { re: /(bd|bluray|蓝光|remux)/i, score: 95 },
-    { re: /(杜比|dolby|hdr|hlg)/i, score: 90 },
-    { re: /(粤语|双语|中英|中字|特效)/i, score: 55 },
-    { re: /(tc|ts|枪版|cam|scr|webrip|web.?dl)/i, score: 30 },
-    { re: /(dvds|vcd|标清|lq|低清)/i, score: 20 },
-  ];
+  // 2026-10-06：词表收编进 SearchFilterCore.qualityScoreFromText（与面板画质标签
+  // qualityTagFromText 同文件共口径）；本函数纯委托，首条命中/中性 50 行为不变。
   function scoreFromLabel(label) {
-    if (!label) return 50;
-    var s = String(label).trim();
-    for (var i = 0; i < QUALITY_KEYWORD_TIERS.length; i++) {
-      if (QUALITY_KEYWORD_TIERS[i].re.test(s)) return QUALITY_KEYWORD_TIERS[i].score;
+    if (SFV.SearchFilterCore && typeof SFV.SearchFilterCore.qualityScoreFromText === 'function') {
+      return SFV.SearchFilterCore.qualityScoreFromText(label);
     }
-    return 50;
+    return label ? 50 : 50; // Core 缺席时保持中性分语义（排序不受影响）
   }
   // 对 plays 列表（多线路）按画质评分降序排列，返回排序后的副本。
   function sortPlaysByQuality(plays) {
@@ -754,6 +770,7 @@
           label: ruleName || 'Kazumi',
           sub: (it.title || '') + (it.year ? ' (' + it.year + ')' : ''),
           title: it.title || '',
+          quality: qualityTagOf(it.title),
           kind: 'kazumi', ruleName: ruleName, group: ruleName || 'Kazumi',
           isEmbed: D.classifyCandidateEmbed({ kind: 'kazumi', ruleName: ruleName, _ref: it }),
           _ref: it,
@@ -767,6 +784,7 @@
           label: (v.sourceName || v.sourceId || 'CMS'),
           sub: (it.title || '') + (it.year ? ' (' + it.year + ')' : ''),
           title: it.title || '',
+          quality: qualityTagOf([it.title, v.remarks, v.playFrom].filter(Boolean).join(' ')),
           kind: 'cms', group: (v.sourceName || v.sourceId || 'CMS'),
           isEmbed: D.classifyCandidateEmbed({ kind: 'cms', _ref: v }),
           _ref: { sourceId: v.sourceId, vodId: v.vodId, sourceName: v.sourceName || '' },
@@ -1035,6 +1053,7 @@
     sortPlaysByQuality: sortPlaysByQuality,
     beginPlaybackSession: beginPlaybackSession,
     getPlaybackSession: getPlaybackSession,
+    getRunStateCandidates: getRunStateCandidates,
     markPlaybackSource: markPlaybackSource,
     clearPlaybackSession: clearPlaybackSession,
     candidatesForPanel: candidatesForPanel,

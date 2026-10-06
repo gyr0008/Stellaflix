@@ -261,6 +261,14 @@
     var badge = doc.createElement('span');
     badge.className = 'sfv-picker-row-badge ' + (c.isEmbed ? 'sfv-picker-badge-embed' : 'sfv-picker-badge-direct');
     badge.textContent = c.isEmbed ? '内嵌' : '直链';
+    // 画质徽章：仅当片源自证事实（c.quality）时渲染；无事实不渲染，绝不出现「未知」
+    var qchip = null;
+    if (c.quality) {
+      qchip = doc.createElement('span');
+      qchip.className = 'sfv-picker-row-q';
+      qchip.setAttribute('data-q', c.quality);
+      qchip.textContent = c.quality;
+    }
     var txt = doc.createElement('span');
     txt.className = 'sfv-picker-row-txt';
     var rl = doc.createElement('span');
@@ -273,7 +281,7 @@
     var go = doc.createElement('span');
     go.className = 'sfv-picker-row-go';
     go.textContent = '播放 ▸';
-    row.appendChild(ic); row.appendChild(badge); row.appendChild(txt); row.appendChild(go);
+    row.appendChild(ic); row.appendChild(badge); if (qchip) row.appendChild(qchip); row.appendChild(txt); row.appendChild(go);
     row.addEventListener('click', function () { pick(i); });
     return row;
   }

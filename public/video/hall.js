@@ -426,6 +426,15 @@
   }
 
   // ---- 点海报：并行搜 CMS10 + Kazumi → 单源直播 / 多源弹窗 / 无果 toast ----
+  /**
+   * 画质事实标签（宁缺毋滥，与 detail-source.qualityTagOf 同口径）：
+   * 只喂候选自身字段，尺子在 SearchFilterCore.qualityTagFromText；无事实返回 null。
+   */
+  function qualityTagOf(text) {
+    var C = SFV.SearchFilterCore;
+    return (C && typeof C.qualityTagFromText === 'function') ? C.qualityTagFromText(text) : null;
+  }
+
   function openPoster(item) {
     if (!item) return;
     var title = (item.title || '').trim();
@@ -446,6 +455,7 @@
             label: (v.sourceName || v.sourceId || 'CMS') + (v.remarks ? ' · ' + v.remarks : ''),
             sub: it.title + (it.year ? ' (' + it.year + ')' : ''),
             title: it.title || '',
+            quality: qualityTagOf([it.title, v.remarks, v.playFrom].filter(Boolean).join(' ')),
             kind: 'cms', group: (v.sourceName || v.sourceId || 'CMS'), _ref: v
           });
         });
@@ -457,6 +467,7 @@
           label: (it.ruleName || 'Kazumi'),
           sub: it.title || title,
           title: it.title || title,
+          quality: qualityTagOf(it.title),
           kind: 'kazumi', group: (it.ruleName || 'Kazumi'), _ref: it
         });
       });

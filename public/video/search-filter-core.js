@@ -360,6 +360,60 @@
   }
 
   /* ------------------------------------------------------------------
+   * 画质尺子（2026-10-06 多源面板画质标签，主人拍板「宁缺毋滥」）
+   *   两套口径共用一张词表，分工明确：
+   *   - qualityScoreFromText：与 detail-source 旧 QUALITY_KEYWORD_TIERS 完全一致
+   *     （首条命中即返回、无命中中性 50），片源线路排序行为不变（回归护栏钉死）。
+   *   - qualityTagFromText：归一「事实标签」——扫全部规则取最高档；英文词要求
+   *     单词边界（'hidden hdri' 不得命中 HD），保守子集：超清/标清/webrip/web-dl
+     等歧义词不产出标签。只可喂「候选自身字段」（title/remarks/playFrom 线路名），
+     页面导航词等外部文案严禁灌入（夹具「午夜蓝光」即污染源实例）。
+   * ------------------------------------------------------------------ */
+
+  // 排序打分口径：与旧表逐条同序同正则（首条命中即分）。
+  var QUALITY_SCORE_TIERS = [
+    { re: /(4k|uhd|2160p|2160)/i, score: 100 },
+    { re: /(1080p?|full.?hd|fhd|高清)/i, score: 85 },
+    { re: /(720p?|hd|标清)/i, score: 70 },
+    { re: /(bd|bluray|蓝光|remux)/i, score: 95 },
+    { re: /(杜比|dolby|hdr|hlg)/i, score: 90 },
+    { re: /(粤语|双语|中英|中字|特效)/i, score: 55 },
+    { re: /(tc|ts|枪版|cam|scr|webrip|web.?dl)/i, score: 30 },
+    { re: /(dvds|vcd|标清|lq|低清)/i, score: 20 },
+  ];
+
+  // 标签口径：六档保守子集（无事实 → null，面板绝不渲染「未知」）。
+  var QUALITY_TAG_TIERS = [
+    { tag: '4K',   score: 100, re: /(?:^|[^a-z0-9])(?:4k|uhd|2160p)(?:[^a-z0-9]|$)|2160p/i },
+    { tag: '蓝光', score: 95,  re: /(?:^|[^a-z0-9])bd(?:[^a-z0-9]|$)|蓝光|remux|bluray/i },
+    { tag: 'HDR',  score: 90,  re: /(?:^|[^a-z0-9])(?:hdr|dolby|hlg)(?:[^a-z0-9]|$)|杜比视界|杜比音效/i },
+    { tag: '1080P', score: 85, re: /(?:^|[^a-z0-9])(?:1080p?|fhd|full\s?hd)(?:[^a-z0-9]|$)|高清/i },
+    { tag: '720P', score: 70,  re: /(?:^|[^a-z0-9])(?:720p?|hd)(?:[^a-z0-9]|$)/i },
+    { tag: '枪版', score: 30,  re: /(?:^|[^a-z0-9])(?:tc|ts|scr|cam)(?:[^a-z0-9]|$)|枪版/i },
+  ];
+
+  function qualityScoreFromText(text) {
+    if (!text) return 50;
+    var s = String(text).trim();
+    for (var i = 0; i < QUALITY_SCORE_TIERS.length; i++) {
+      if (QUALITY_SCORE_TIERS[i].re.test(s)) return QUALITY_SCORE_TIERS[i].score;
+    }
+    return 50;
+  }
+
+  function qualityTagFromText(text) {
+    if (!text) return null;
+    var s = String(text);
+    var best = null;
+    for (var i = 0; i < QUALITY_TAG_TIERS.length; i++) {
+      if (QUALITY_TAG_TIERS[i].re.test(s) && (!best || QUALITY_TAG_TIERS[i].score > best.score)) {
+        best = QUALITY_TAG_TIERS[i];
+      }
+    }
+    return best ? best.tag : null;
+  }
+
+  /* ------------------------------------------------------------------
    * SearchFilterState（纯排除模型）
    *   所有 exclude* 字段表示「要隐藏的内容」；排序为中性重排。
    * ------------------------------------------------------------------ */
@@ -555,6 +609,60 @@
   }
 
   /* ------------------------------------------------------------------
+   * P0-2 跨页拼结果（对齐 Kazumi search_controller.dart 单次搜索自动连拉≤3页）：
+   * 从第 2 页起逐页拉取，某页无新条目即停（见新即停），唯一计数达 threshold 即停。
+   * fetchPage(page) 由调用方注入（含超时/强源过滤），纯逻辑便于测试。
+   * @returns Promise<{added:Object[], unique:number, reason:'enough'|'no-fresh'|'max-pages'|'error'}>
+   * ------------------------------------------------------------------ */
+  function collectMorePages(opts) {
+    opts = opts || {};
+    var fetchPage = opts.fetchPage;
+    var maxPages = opts.maxPages != null ? opts.maxPages : 3;
+    var threshold = opts.threshold != null ? opts.threshold : 24;
+    var keyOf = opts.keyOf || function (it) {
+      return String(it.title || '').toLowerCase() + '|' + (it.year || '');
+    };
+    var knownItems = opts.knownItems || [];
+    var keys = {};
+    var unique = 0;
+    var added = [];
+    function countFresh(items) {
+      var fresh = 0;
+      for (var i = 0; i < (items || []).length; i++) {
+        var it = items[i];
+        if (!it) continue;
+        var k = keyOf(it);
+        if (keys[k]) continue;
+        keys[k] = 1; unique++; fresh++; added.push(it);
+      }
+      return fresh;
+    }
+    for (var s = 0; s < knownItems.length; s++) {
+      var ki = knownItems[s];
+      if (!ki) continue;
+      var kk = keyOf(ki);
+      if (!keys[kk]) { keys[kk] = 1; unique++; }
+    }
+    function stop(reason) { return { added: added, unique: unique, reason: reason }; }
+    if (unique >= threshold) return Promise.resolve(stop('enough'));
+    var page = 2;
+    function step() {
+      if (page > maxPages) return Promise.resolve(stop('max-pages'));
+      return Promise.resolve()
+        .then(function () { return fetchPage(page); })
+        .then(function (items) {
+          var fresh = countFresh(items);
+          page++;
+          if (unique >= threshold) return stop('enough');
+          if (!fresh) return stop('no-fresh');
+          return step();
+        })
+        .catch(function () { return stop('error'); });
+    }
+    return step();
+  }
+
+  /* ------------------------------------------------------------------
    * 导出
    * ------------------------------------------------------------------ */
 
@@ -581,7 +689,10 @@
     collectSeasonFamilyHits: collectSeasonFamilyHits,
     filterSeasonSiblings: filterSeasonSiblings,
     filterCandidatesForQuery: filterCandidatesForQuery,
-    rankSearchResults: rankSearchResults
+    rankSearchResults: rankSearchResults,
+    collectMorePages: collectMorePages,
+    qualityScoreFromText: qualityScoreFromText,
+    qualityTagFromText: qualityTagFromText
   };
 
   if (typeof module !== 'undefined' && module.exports) {
