@@ -22,7 +22,6 @@ const required = [
   'qishui-qr-login.js',
   'qq-vip-api.js',
   'spotify-api.js',
-  'subsonic-api.js',
   'cuefield/feedback-log.js',
   'cuefield/stellaflix-bridge.js',
   'desktop/global-proxy.js',

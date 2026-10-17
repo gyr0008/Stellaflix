@@ -1169,7 +1169,7 @@ function stopWallpaperEngineRuntimeForRenderer(reason = '') {
   wallpaperEngineCaptureOperation += 1;
   cancelWallpaperEngineHostBoundsRestart();
   clearWallpaperEngineCaptureGrant();
-  return wallpaperEngineRuntime.stop().catch((error) => {
+  return wallpaperEngineRuntime.stop({ forceHelperCleanup: true }).catch((error) => {
     console.warn('[Wallpaper Engine] renderer cleanup failed:', reason || 'renderer-reset', error && error.message || error);
     return { ok: false, stopped: false, error: String(error && (error.message || error.name) || error || 'WALLPAPER_ENGINE_STOP_FAILED') };
   });
@@ -1479,7 +1479,15 @@ function scheduleWallpaperEngineHostBoundsRestart(win, reason = 'bounds-changed'
   // The DWM surface helper follows the authoritative host HWND and resizes the
   // source in place. Restarting the Scene here would discard native parallax
   // state and reintroduce the old capture-only lifecycle on every drag.
-  if (status && status.active === true && status.captureMode === 'dwm-thumbnail') return;
+  if (status && status.active === true && status.captureMode === 'dwm-thumbnail') {
+    // Instead of a rebuild, push one immediate follow so the mirrored surface
+    // tracks the window on the same frame as the drag. The helper's internal
+    // timer is only the idle fallback; this is what removes the lag.
+    if (typeof wallpaperEngineRuntime.nudgeDwmSurfaceFollow === 'function') {
+      try { wallpaperEngineRuntime.nudgeDwmSurfaceFollow(String(status.sessionId || '')); } catch (_) { }
+    }
+    return;
+  }
   if (!wallpaperEngineHostBoundsRestartPending && (!status || status.active !== true)) return;
   let job = wallpaperEngineHostBoundsStopPromise;
   if (job && job.started === true) {
@@ -4216,11 +4224,17 @@ ipcMain.handle('stellaflix-wallpaper-engine-choose-project-file', async (event) 
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, canceled: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
     const options = {
-      title: '选择 Wallpaper Engine 的 project.json 或场景包（.pkg/.pak）',
-      buttonLabel: '导入此项目',
+      title: '选择 Wallpaper Engine 的 project.json、场景包（.pkg/.pak）或视频/图片',
+      buttonLabel: '导入到壁纸索引',
       properties: ['openFile'],
       filters: [
-        { name: 'Wallpaper Engine 项目', extensions: ['pkg', 'pak', 'json'] },
+        {
+          name: 'Wallpaper Engine 项目 / 视频 / 图片',
+          extensions: ['pkg', 'pak', 'json', 'mp4', 'webm', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'webp', 'gif'],
+        },
+        { name: '视频', extensions: ['mp4', 'webm', 'mov', 'm4v'] },
+        { name: '图片', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'] },
+        { name: '所有文件', extensions: ['*'] },
       ],
     };
     const result = mainWindow && !mainWindow.isDestroyed()
@@ -5815,12 +5829,6 @@ function configureLocalServerEnvironment(port) {
   if (!process.env.SPOTIFY_CONFIG_FILE && !process.env.STELLAFLIX_SPOTIFY_CONFIG_FILE) {
     process.env.SPOTIFY_CONFIG_FILE = path.join(STABLE_USER_DATA_PATH, '.spotify-credentials.json');
   }
-  // Subsonic 配置同样落 userData（历史遗漏：其余数据文件均已迁移，唯此项仍写
-  // 安装目录 data/，重装/升级即丢配置）。注意变量名是单 L 的 STELLAFIX_（历史
-  // 拼写遗留，subsonic-api.js 按此名读取，测试亦然，不可"顺手修正"）。
-  if (!process.env.STELLAFIX_SUBSONIC_CONFIG_FILE) {
-    process.env.STELLAFIX_SUBSONIC_CONFIG_FILE = path.join(STABLE_USER_DATA_PATH, 'subsonic-servers.json');
-  }
 }
 
 const APP_OWNED_MIGRATION_FILES = [
@@ -5977,18 +5985,15 @@ function migrateLegacyAuthStorage() {
     console.warn('Qishui token migration skipped:', e.message);
   }
   try {
-    // Subsonic 配置迁移：data/subsonic-servers.json（安装目录，重装/升级即丢）
-    // → userData。模式与上方 cookie 迁移一致：目标不存在才复制，复制成功后删旧件。
-    const legacySubsonicConfig = path.join(__dirname, '..', 'data', 'subsonic-servers.json');
-    if (fs.existsSync(legacySubsonicConfig)) {
-      if (!fs.existsSync(process.env.STELLAFIX_SUBSONIC_CONFIG_FILE)) {
-        fs.mkdirSync(path.dirname(process.env.STELLAFIX_SUBSONIC_CONFIG_FILE), { recursive: true });
-        fs.copyFileSync(legacySubsonicConfig, process.env.STELLAFIX_SUBSONIC_CONFIG_FILE);
-      }
-      fs.unlinkSync(legacySubsonicConfig);
+    // 远程库（Subsonic/Navidrome）功能已删除：清理两处残留的明文凭据文件
+    for (const leftover of [
+      path.join(STABLE_USER_DATA_PATH, 'subsonic-servers.json'),
+      path.join(__dirname, '..', 'data', 'subsonic-servers.json'),
+    ]) {
+      if (fs.existsSync(leftover)) fs.unlinkSync(leftover);
     }
   } catch (e) {
-    console.warn('Subsonic config migration skipped:', e.message);
+    console.warn('Subsonic credential cleanup failed:', e.message);
   }
   try {
     const qishuiOAuthTarget = process.env.QISHUI_OAUTH_CONFIG_FILE;

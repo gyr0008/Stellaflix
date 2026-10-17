@@ -405,7 +405,6 @@ const {
   handleQishuiSongUrl,
 } = require('./qishui-api');
 const qishuiQrLogin = require('./qishui-qr-login');
-const subsonicApi = require('./subsonic-api.js');
 const {
   getSpotifyConfig,
   clearSpotifyToken,
@@ -8165,49 +8164,6 @@ const server = http.createServer(async (req, res) => {
       });
       res.end(text);
     } catch (err) { console.error('[BangumiSearch]', err); res.writeHead(502); res.end(); }
-    return;
-  }
-
-  // ---------- Subsonic / Navidrome 远程音乐库 ----------
-  if (pn === '/api/subsonic/config') {
-    if (req.method === 'GET') { sendJSON(res, { servers: subsonicApi.listServersPublic() }); return; }
-    if (req.method === 'POST') {
-      try {
-        const body = await readRequestBody(req);
-        if (body && body.action === 'delete') {
-          const okDel = subsonicApi.deleteServer(body.id);
-          sendJSON(res, { ok: !!okDel, servers: subsonicApi.listServersPublic() }, okDel ? 200 : 404);
-          return;
-        }
-        if (body && body.id && !subsonicApi.getServer(body.id)) {
-          sendJSON(res, { error: 'SUBSONIC_SERVER_NOT_FOUND' }, 404);
-          return;
-        }
-        const saved = subsonicApi.saveServer(body || {});
-        sendJSON(res, { ok: true, server: saved, servers: subsonicApi.listServersPublic() });
-      } catch (err) {
-        console.error('[SubsonicConfig]', err.message);
-        sendJSON(res, { error: err.message || 'SUBSONIC_CONFIG_FAILED' }, 400);
-      }
-      return;
-    }
-    sendJSON(res, { error: 'METHOD_NOT_ALLOWED' }, 405);
-    return;
-  }
-  if (pn.startsWith('/api/subsonic/')) {
-    const sid = url.searchParams.get('server') || '';
-    try {
-      if (!subsonicApi.getServer(sid)) { sendJSON(res, { error: 'SUBSONIC_SERVER_NOT_FOUND' }, 404); return; }
-      if (pn === '/api/subsonic/artists') { sendJSON(res, await subsonicApi.browseArtists(sid)); return; }
-      if (pn === '/api/subsonic/artist') { sendJSON(res, await subsonicApi.browseArtist(sid, url.searchParams.get('id') || '')); return; }
-      if (pn === '/api/subsonic/album') { sendJSON(res, await subsonicApi.browseAlbum(sid, url.searchParams.get('id') || '')); return; }
-      if (pn === '/api/subsonic/playlists') { sendJSON(res, await subsonicApi.browsePlaylists(sid)); return; }
-      if (pn === '/api/subsonic/playlist') { sendJSON(res, await subsonicApi.browsePlaylist(sid, url.searchParams.get('id') || '')); return; }
-      sendJSON(res, { error: 'SUBSONIC_UNKNOWN_ENDPOINT' }, 404);
-    } catch (err) {
-      console.error('[Subsonic]', err.message);
-      sendJSON(res, { error: err.message || 'SUBSONIC_REQUEST_FAILED' }, err.notFound ? 404 : 502);
-    }
     return;
   }
 

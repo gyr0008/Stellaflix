@@ -44,7 +44,6 @@ Stellaflix 是一款「音乐 × 影视」双形态的 Windows 桌面沉浸式�
 - 网易云音乐账号、搜索、歌单、播客接入
 - QQ 音乐、汽水音乐、酷狗、Spotify 接入
 - 音源质量探测与多源回退：单源不可用时自动切换备选平台
-- Subsonic / Navidrome 远程音乐库
 - 本地曲库管理、下载管理器、试听检测与全音质探测
 - 自定义音源运行时：脚本化扩展更多音源
 
@@ -78,7 +77,7 @@ Stellaflix 是一款「音乐 × 影视」双形态的 Windows 桌面沉浸式�
 
 - `desktop/` — Electron 主进程：窗口/托盘/IPC、Wallpaper Engine 运行时、完整桌面模式、本地曲库、下载管理与自定义音源运行时
 - `server.js` — 本地 API 服务：网易云搜索/播放/扫码登录/音频代理，受保护接口自动携带登录态，冷启动懒加载
-- `*-api.js` — 平台适配层：酷狗 / 汽水 / QQ 会员 / Spotify / Subsonic / Agent 工具
+- `*-api.js` — 平台适配层：酷狗 / 汽水 / QQ 会员 / Spotify / Agent 工具
 - `public/js/modules/` — 渲染层 11 个模块域（state / scene / visual / beat / shelf / playback / lyrics / fx / account / shell / main-loop），原生 JavaScript，无前端框架
 - `public/video/` — 影视态：播放器、源适配、番剧时间线、弹幕引擎、超分着色器
 - `cuefield/` — CueField 智能混音：转场评估、歌单衔接、LRC 锚点
