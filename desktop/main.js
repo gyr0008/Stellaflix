@@ -6,7 +6,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const systemMemory = require('./system-memory');
-const { parseListeningPid, parseTasklistName } = require('./port-lock');
+const { parseListeningPid, parseTasklistName, buildPortLockDialog } = require('./port-lock');
+const secondInstanceNotice = require('./second-instance-notice');
 const videoConfig = require('./video-config');
 const mpvController = require('./mpv-controller');
 const downloadManager = require('./download-manager');
@@ -577,32 +578,20 @@ async function acquireLockedPort(port) {
   for (;;) {
     if (await probePortFree(port)) return port;
     const occupier = await describePortOccupier(port);
-    const who = occupier.pid
-      ? `占用进程：${occupier.name || '未知'}（PID ${occupier.pid}）`
-      : '占用者无法识别（可能非本机监听）。';
-    const { response } = await dialog.showMessageBox({
-      type: 'warning',
-      title: 'Stellaflix 无法启动',
-      message: `端口 ${port} 已被占用。${who}`,
-      detail: 'Stellaflix 固定使用端口 ' + port + '，换端口会导致影视数据换桶"消失"。\n'
-        + '可以结束占用进程后继续，或退出应用保留现场。',
-      buttons: occupier.pid ? ['结束占用并重试', '退出应用'] : ['重试', '退出应用'],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (response === 1) {
+    // 按钮组/默认项由纯决策层给出：回车与 Esc 一律落在下标 1「退出应用」，不杀进程。
+    const spec = buildPortLockDialog(port, occupier);
+    const { response } = await dialog.showMessageBox(spec);
+    if (response !== 0) {
       // 与渲染恢复失败同套路：标记退出+稍后 quit，绝不留 0 窗口僵尸进程
       appQuitting = true;
       setTimeout(() => app.quit(), 300);
       return new Promise(() => {});
     }
-    if (occupier.pid) {
-      const killed = await taskkillPid(occupier.pid);
-      if (!killed) {
-        dialog.showErrorBox('无法结束占用进程',
-          `PID ${occupier.pid} 结束失败（可能权限不足或已退出）。\n请手动结束后重试，或退出应用。`);
-      }
+    if (!spec.killable) continue;   // 下标 0 = 「重试」，重新探测端口，不碰任何进程
+    const killed = await taskkillPid(occupier.pid);
+    if (!killed) {
+      dialog.showErrorBox('无法结束占用进程',
+        `PID ${occupier.pid} 结束失败（可能权限不足或已退出）。\n请手动结束后重试，或退出应用。`);
     }
     await startupDelay(600);
   }
@@ -2072,6 +2061,27 @@ function focusMainWindow() {
   resetMainWindowZoom();
   mainWindow.focus();
   sendWindowState(mainWindow);
+  return true;
+}
+
+// 二次实例来了、但窗口还不存在（首实例仍在端口探测/服务端启动）时，
+// 用户看到的只有「第二个进程闪一下没了」。这里补一句可见反馈，去重到只弹一个。
+const firstInstanceLaunchAtMs = Date.now();
+let secondInstanceNoticeVisible = false;
+
+function notifySecondInstanceWhileStarting(stage) {
+  if (secondInstanceNoticeVisible) return false;
+  secondInstanceNoticeVisible = true;
+  try {
+    Promise.resolve(dialog.showMessageBox(secondInstanceNotice.buildNotice({
+      port: LOCKED_PORT,
+      stage: stage,
+      elapsedMs: Date.now() - firstInstanceLaunchAtMs,
+    }))).catch(() => { secondInstanceNoticeVisible = false; });
+  } catch (e) {
+    secondInstanceNoticeVisible = false;
+    console.warn('[SingleInstance] 启动期提示弹窗失败:', e && e.message || e);
+  }
   return true;
 }
 
@@ -6734,7 +6744,10 @@ if (!_lock) {
       additionalData,
     });
     // 始终尝试把已有窗口拉到前台（即使 startup 尚未完成）。
-    focusMainWindow();
+    const focused = focusMainWindow();
+    // 窗口还没建出来（端口探测/服务端启动阶段）→ 至少要让用户看见「在启动」，
+    // 否则第二进程静默退出就是用户口中的「闪退」。
+    if (!focused && !startupCompleted) notifySecondInstanceWhileStarting('startup');
     if (startupCompleted) return;
     app.whenReady()
       .then(() => createWindow())

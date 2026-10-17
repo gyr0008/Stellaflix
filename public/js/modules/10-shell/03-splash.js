@@ -16,6 +16,7 @@ var splashSoundFallbackArmed = false;
 var splashTimer = null;
 var reduceSplashMotion = false;
 var splashReadyToEnter = false;
+var splashEnterRequested = false;
 
 function splashClamp01(v) { return Math.max(0, Math.min(1, v)); }
 function splashSmoothstep(edge0, edge1, x) {
@@ -602,6 +603,7 @@ function dismissSplash(opts) {
   markAppPerf(instant ? 'splash-skip' : 'splash-dismiss');
   if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
   splashReadyToEnter = false;
+  splashEnterRequested = false;
   s.classList.remove('ready');
   setTimeout(stopSplashIntroSound, instant ? 0 : 240);
   if (instant) {
@@ -640,6 +642,19 @@ function dismissSplash(opts) {
   }, 620);
 }
 
+function setSplashEnterHint(showHint) {
+  var s = document.getElementById('splash');
+  var el = s && s.querySelector ? s.querySelector('.splash-enter') : null;
+  if (!el) return;
+  if (showHint) {
+    if (el.__splashEnterLabel === undefined) el.__splashEnterLabel = el.textContent;
+    el.textContent = '正在初始化…';
+  } else if (el.__splashEnterLabel !== undefined) {
+    el.textContent = el.__splashEnterLabel;
+    el.__splashEnterLabel = undefined;
+  }
+}
+
 function markSplashReadyToEnter() {
   var s = document.getElementById('splash');
   if (!s || s.classList.contains('hide') || s.classList.contains('exiting')) return;
@@ -650,7 +665,63 @@ function markSplashReadyToEnter() {
   s.setAttribute('role', 'button');
   s.setAttribute('tabindex', '0');
   s.setAttribute('aria-label', '点击进入 Stellaflix');
+  setSplashEnterHint(false);
+  // 就绪前的点击不再丢弃（h151 实测：0→3.8s 死区内连点 12 次全部静默失效）：
+  // 记下意图，到这里立即放行，用户不必再点一次。
+  if (splashEnterRequested) {
+    splashEnterRequested = false;
+    dismissSplash();
+  }
 }
+
+function requestSplashEnter() {
+  playStellaflixIntroSound();
+  if (splashReadyToEnter) { dismissSplash(); return; }
+  // 动画未满 1.5s：排队而非丢弃，并给出可见反馈
+  splashEnterRequested = true;
+  setSplashEnterHint(true);
+}
+
+// ==== C: 开屏输入护栏 ====
+// 实测（h153/h156）：#splash 虽然 z-index:300 挡住命中测试，但 window 级监听照样收到同一次
+// 点击 —— 开屏期点一下就在未初始化的粒子水波池上写 r.x，抛 Uncaught TypeError。
+// 弹窗期间输入必须只归开屏自己：指针/点击事件在 window 捕获层收口，
+// 落在 #splash 上的 click 由护栏直接走进入逻辑；'exiting' 淡出期不再吞，
+// 否则背后 UI 又多出 620ms「点了没反应」。
+function splashInputBlocked() {
+  if (!document.body.classList.contains('splash-active')) return false;
+  var s = document.getElementById('splash');
+  if (!s) return false;
+  if (s.classList.contains('hide') || s.classList.contains('exiting')) return false;
+  return true;
+}
+
+function isSplashTarget(target) {
+  var s = document.getElementById('splash');
+  if (!s || !target) return false;
+  var el = target;
+  while (el) {
+    if (el === s) return true;
+    el = el.parentNode;
+  }
+  return false;
+}
+
+function splashInputGuard(e) {
+  if (!e) return;
+  var type = e.type;
+  if (type !== 'pointerdown' && type !== 'mousedown' && type !== 'mouseup' && type !== 'click') return;
+  if (!splashInputBlocked()) return;
+  var inside = isSplashTarget(e.target);
+  if (e.stopPropagation) e.stopPropagation();
+  if (e.preventDefault) e.preventDefault();
+  // 冒泡被截断后 #splash 自己的 click 不会触发，这里补上同一次意图
+  if (inside && type === 'click') requestSplashEnter();
+}
+
+['pointerdown', 'mousedown', 'mouseup', 'click'].forEach(function (type) {
+  window.addEventListener(type, splashInputGuard, true);
+});
 
 document.addEventListener('DOMContentLoaded', function () {
   var s = document.getElementById('splash');
@@ -677,10 +748,6 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   armSplashSoundFallback();
   prewarmHomeWallpaperPreview();
-  function requestSplashEnter() {
-    playStellaflixIntroSound();
-    if (splashReadyToEnter) dismissSplash();
-  }
   s.addEventListener('click', requestSplashEnter);
   document.addEventListener('keydown', function (e) {
     if (!document.body.classList.contains('splash-active')) return;

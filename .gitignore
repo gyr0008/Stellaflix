@@ -95,6 +95,8 @@ screenshots/
 
 # B1 bundle 产物（用户裁决暂不入库；改模块后 npm run bundle 现场生成）
 public/js/bundles/
+# A 方案影视链 bundle 产物（同口径：改影视模块后 npm run bundle 现场生成，缺失则运行时回退逐文件）
+public/video/bundles/
 
 # 会话临时取证/调查产物（不入库、不删除）
 /_scratch/

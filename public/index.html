@@ -2156,6 +2156,36 @@
   ];
   var CAP = [];
   var docAdd = null, winAdd = null, wrapped = false;
+  // ==== A: 影视链「连续段」bundle —— 134 次 requestIdleCallback 让路压成 10 次 ====
+  // 产物由 scripts/bundle-video-scripts.js 生成（顺序守恒红线同音乐侧）。
+  // manifest 缺失/损坏/与 SFV_SCRIPTS 不逐位一致 → 回退逐文件模式，功能永远跟最新源码走。
+  // ?dev=1 强制逐文件：改了影视模块忘了 npm run bundle 时的逃生门。
+  var SFV_QUEUE = SFV_SCRIPTS.map(function (p) { return p + '?v=' + String(Date.now()); });
+  try {
+    if (!/[?&]dev=1\b/.test(window.location.search)) {
+      var mfReq = new XMLHttpRequest();
+      mfReq.open('GET', 'video/bundles/video-bundle-manifest.json', false);
+      mfReq.send(null);
+      if (mfReq.status >= 200 && mfReq.status < 300) {
+        var mf = JSON.parse(mfReq.responseText);
+        var groups = mf && Array.isArray(mf.groups) ? mf.groups : [];
+        var flat = [];
+        groups.forEach(function (g) { if (Array.isArray(g.modules)) flat = flat.concat(g.modules); });
+        var bundleMatchesSource = groups.length > 0 &&
+          flat.length === SFV_SCRIPTS.length &&
+          flat.every(function (m, idx) { return m === SFV_SCRIPTS[idx]; });
+        if (!bundleMatchesSource) {
+          console.warn('[SFV-lazy] bundle 产物与 SFV_SCRIPTS 不一致（跑 npm run bundle 重建），回退逐文件');
+        } else {
+          var mfVer = encodeURIComponent(String(mf.builtAt || Date.now()));
+          SFV_QUEUE = groups.map(function (g) { return g.file + '?v=' + mfVer; });
+        }
+      }
+    }
+  } catch (bundleErr) {
+    SFV_QUEUE = SFV_SCRIPTS.map(function (p) { return p + '?v=' + String(Date.now()); });
+    console.warn('[SFV-lazy] bundle 产物不可用，回退逐文件:', bundleErr && bundleErr.message || bundleErr);
+  }
   function wrap(){
     if(wrapped) return; wrapped = true;
     docAdd = document.addEventListener.bind(document);
@@ -2172,7 +2202,7 @@
   function schedule(fn){ if(window.requestIdleCallback) requestIdleCallback(fn,{timeout:60}); else setTimeout(fn,0); }
   function loadOne(){
     if(i===0) wrap();
-    if(i>=SFV_SCRIPTS.length){
+    if(i>=SFV_QUEUE.length){
       unwrap();
       CAP.forEach(function(c){
         try{ c.l.call(c.w==='d'?document:window, {type:'DOMContentLoaded', target:(c.w==='d'?document:window)}); }catch(e){ console.error('[SFV-lazy] init err', e); }
@@ -2187,7 +2217,7 @@
       return;
     }
     var sc=document.createElement('script');
-    sc.src=SFV_SCRIPTS[i++]+'?v='+String(Date.now());
+    sc.src=SFV_QUEUE[i++];
     sc.onload=function(){ schedule(loadOne); };
     sc.onerror=function(){ schedule(loadOne); };
     document.head.appendChild(sc);
