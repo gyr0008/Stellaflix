@@ -425,6 +425,8 @@
       if (typeof global.homeSuppressed !== 'undefined') global.homeSuppressed = false;
       if (typeof global.homeForcedOpen !== 'undefined') global.homeForcedOpen = true;
       if (typeof global.emptyHomeActive !== 'undefined') global.emptyHomeActive = true;
+      // B 方案（2026-10-11）：进入影视首页的任何渲染路径同时复位影视专属收起态（非粘性）。
+      if (typeof global.resetVideoHomeCollapsed === 'function') global.resetVideoHomeCollapsed();
       var b = (global.document && global.document.body) || (doc && doc.body);
       if (b && !b.classList.contains('empty-home-active')) b.classList.add('empty-home-active');
     } catch (e) {

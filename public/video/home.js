@@ -1152,6 +1152,9 @@
     try {
       if (typeof global.homeSuppressed !== 'undefined') global.homeSuppressed = false;
       if (typeof global.homeForcedOpen !== 'undefined') global.homeForcedOpen = true;
+      // B 方案（2026-10-11）：video-home-collapsed 挂在 body 上，切回音乐态必须复位，
+      // 否则收起态被带进音乐首页（与 resetHomeVisibilityState 的复位对称）。
+      if (typeof global.resetVideoHomeCollapsed === 'function') global.resetVideoHomeCollapsed();
       if (typeof global.setHomeControlsLocked === 'function') global.setHomeControlsLocked(true);
       if (typeof global.setPeek === 'function' && global.document) {
         var searchArea = global.document.getElementById('search-area');

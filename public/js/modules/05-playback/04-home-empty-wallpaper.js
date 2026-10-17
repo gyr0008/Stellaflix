@@ -325,6 +325,37 @@ function isVideoSpaceActive() {
 // 这一个事实层面切断整条泄漏链，一次性覆盖当前与未来所有影视态全屏层：
 // 播放器 #sfv-overlay / 搜索页 #sfv-search-page / 浏览厅 .sfv-hall / 片库 / 历史 / 追番 /
 // 精选片单二级页 / 背景 DIY 遮罩 / 片源仓库面板 / TMDB 设置 overlay …
+// ---------------------------------------------------------------- 影视态专属 Home 收起开关（B 方案 2026-10-11）
+// 与音乐态 homeSuppressed/homeForcedOpen 完全无关，也不摘 empty-home-active：
+// 收起 = body 挂 video-home-collapsed 类（index.css 据此 !important 隐藏 #empty-home，
+// 露出 3D 星空），音乐可见性链保持完整。非粘性：进入影视首页的渲染路径
+// （online-nav.resetHomeVisibilityState）与切回音乐态（home.js restoreMusic）都会复位，
+// 杜绝 10-02 事故形态（粘性标志跨态残留 → 首页永久透明）复发。
+var videoHomeCollapsed = false;
+function isVideoHomeShowing() {
+  try {
+    if (!document.body.classList.contains('empty-home-active')) return false;
+    var browseEl = document.getElementById('sfv-browse');
+    if (browseEl && browseEl.classList.contains('sfv-show')) return false;
+    var overlayEl = document.getElementById('sfv-overlay');
+    if (overlayEl && overlayEl.classList.contains('sfv-show')) return false;
+    var searchEl = document.getElementById('sfv-search-page');
+    if (searchEl && searchEl.classList.contains('sfv-search-open')) return false;
+    var _SFV = (typeof window !== 'undefined') ? window.StellaflixVideo : null;
+    if (_SFV && _SFV.player && typeof _SFV.player.isOpen === 'function' && _SFV.player.isOpen()) return false;
+  } catch (e) { /* 判定失败按"不在首页"处理，退化为纯委托回首页 */ return false; }
+  return true;
+}
+function resetVideoHomeCollapsed() {
+  videoHomeCollapsed = false;
+  try { document.body.classList.remove('video-home-collapsed'); } catch (e) {}
+}
+
+// 契约（2026-10-02 立，2026-10-11 B 方案补充）：影视态点 Home——
+//   - 已在影视首页且未收起 → 收起首页 UI 露出 3D 星空（专属开关）；
+//   - 收起中 → 复位并委托回首页重渲染；
+//   - 其它页面（浏览层/搜索页/播放器）→ 纯委托回首页，不收起。
+// 任何分支都绝不落进下面的音乐态开关逻辑。
 function goHome() {
   // 影视态：委托影视态自己的回首页实现（online-nav.js goHome：关浏览层 + 重渲染影视首页）。
   // 绝不能落进下面的音乐态分支——else 分支会 updateEmptyHomeVisibility() → renderHomeDiscover()
@@ -332,9 +363,24 @@ function goHome() {
   // 影视态无任何路径复位 → 首页永久透明只剩粒子星空。
   if (isVideoSpaceActive()) {
     var _SFV = (typeof window !== 'undefined') ? window.StellaflixVideo : null;
-    if (_SFV && _SFV.online && typeof _SFV.online.goHome === 'function') {
-      try { _SFV.online.goHome(); } catch (e) { /* 委托失败不回落音乐态逻辑 */ }
+    var _delegate = function () {
+      if (_SFV && _SFV.online && typeof _SFV.online.goHome === 'function') {
+        try { _SFV.online.goHome(); } catch (e) { /* 委托失败不回落音乐态逻辑 */ }
+      }
+    };
+    if (videoHomeCollapsed) {
+      resetVideoHomeCollapsed();
+      _delegate();
+      showToast('已回到 Home');
+      return;
     }
+    if (isVideoHomeShowing()) {
+      videoHomeCollapsed = true;
+      document.body.classList.add('video-home-collapsed');
+      showToast('已收起 Home');
+      return;
+    }
+    _delegate();
     return;
   }
   if (homeForcedOpen || emptyHomeActive) {

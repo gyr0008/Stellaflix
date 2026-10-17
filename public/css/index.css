@@ -2417,6 +2417,14 @@ body.empty-home-active #empty-home {
   transform: translateX(-50%) translateY(0) scale(1)
 }
 
+/* 影视态专属 Home 收起（B 方案 2026-10-11）：只隐藏内容层露出 3D 星空，
+   不摘 empty-home-active，音乐可见性链零介入；覆写手法与 splash/immersive 同层。 */
+body.video-home-collapsed #empty-home {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateX(-50%) translateY(18px) scale(.992) !important
+}
+
 body.splash-active #empty-home,
 body.immersive-mode #empty-home {
   opacity: 0 !important;
