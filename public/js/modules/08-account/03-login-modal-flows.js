@@ -1141,6 +1141,20 @@ async function submitSpotifyConfigLogin() {
   }
   if (shouldOpenOAuth) await openSpotifyWebLogin();
 }
+function scheduleNeteaseProfileRetry() {
+  // 服务端复验超时会给「网易云用户」兜底档案；网易云没有 45s 轮询，
+  // 补一条延迟重查尾巴（对齐 checkQr 的 pendingProfile 自愈），失败则维持兜底档案。
+  if (!loginStatus || !loginStatus.loggedIn) return;
+  if (!loginStatus.pendingProfile && loginStatus.userId) return;
+  var fallbackProfile = loginStatus;
+  setTimeout(function () {
+    refreshLoginStatus(true).then(function (fresh) {
+      loginStatus = (fresh && fresh.loggedIn && fresh.userId) ? fresh
+        : Object.assign({}, fallbackProfile, { loggedIn: true, pendingProfile: true });
+      renderUserBtn();
+    }).catch(function (e) { console.warn('Netease profile retry failed:', e); });
+  }, 1500);
+}
 async function openNeteaseWebLogin() {
   if (neteaseWebLoginBusy) return;
   var statusEl = document.getElementById('qr-status');
@@ -1172,6 +1186,7 @@ async function openNeteaseWebLogin() {
     loadHomeDiscover(true);
     if (statusEl) { statusEl.textContent = '网易云会话已保存'; statusEl.className = 'scan'; }
     offerLoginCookieExport('netease', info);
+    scheduleNeteaseProfileRetry();
     setTimeout(function () {
       closeLoginModal();
       showToast('网易云已登录: ' + (info.nickname || info.userId || ''));
@@ -1377,6 +1392,7 @@ async function submitNeteaseCookieLogin() {
     loadHomeDiscover(true);
     if (statusEl) { statusEl.textContent = '网易云会话已保存'; statusEl.className = 'scan'; }
     offerLoginCookieExport('netease', info);
+    scheduleNeteaseProfileRetry();
     setTimeout(function () {
       closeLoginModal();
       showToast('网易云已登录: ' + (info.nickname || info.userId || ''));

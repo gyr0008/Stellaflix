@@ -5361,7 +5361,8 @@ async function getLoginInfo() {
   }
   if (neteaseLoginInfoCache.cookie === cookieKey && neteaseLoginInfoCache.promise) return neteaseLoginInfoCache.promise;
   const request = fetchNeteaseLoginInfo().then(info => {
-    if (userCookie === cookieKey) {
+    // 只端正结果：负缓存会把刚恢复的登录态挡在 30s 外，堵死 pendingProfile 自愈窗口
+    if (info.loggedIn && userCookie === cookieKey) {
       neteaseLoginInfoCache.cookie = cookieKey;
       neteaseLoginInfoCache.at = Date.now();
       neteaseLoginInfoCache.value = info;

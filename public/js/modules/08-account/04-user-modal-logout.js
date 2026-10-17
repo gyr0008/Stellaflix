@@ -192,6 +192,15 @@ async function logoutAllAccountsAndResetEasterEgg() {
       apiJson('/api/qishui/logout'),
       apiJson('/api/spotify/logout')
     ]);
+    // 不清分区原件的话，下次点「登录」会命中 reused 短路秒抓旧 cookie 重新落盘，账号"复活"
+    var desktopApi = window.desktopWindow || {};
+    await Promise.allSettled([
+      typeof desktopApi.clearNeteaseMusicLogin === 'function' ? desktopApi.clearNeteaseMusicLogin() : Promise.resolve(),
+      typeof desktopApi.clearQQMusicLogin === 'function' ? desktopApi.clearQQMusicLogin() : Promise.resolve(),
+      typeof desktopApi.clearKugouMusicLogin === 'function' ? desktopApi.clearKugouMusicLogin() : Promise.resolve(),
+      typeof desktopApi.clearQishuiMusicLogin === 'function' ? desktopApi.clearQishuiMusicLogin() : Promise.resolve(),
+      typeof desktopApi.clearSpotifyMusicLogin === 'function' ? desktopApi.clearSpotifyMusicLogin() : Promise.resolve()
+    ]);
     resetAllProviderRendererLoginState();
     closeCollectModal();
     closeUserModal();
