@@ -76,7 +76,7 @@ function clearWallpaperEngineLayerMedia(delay) {
 }
 
 function restoreOriginalBackgroundAfterWallpaperEngine() {
-  document.body.classList.remove('wallpaper-engine-active', 'wallpaper-engine-dwm-active');
+  document.body.classList.remove('wallpaper-engine-active', 'wallpaper-engine-dwm-active', 'wallpaper-engine-loading');
   stopWallpaperEngineGlassCaptureStream(false);
   if (typeof syncWallpaperEngineControlGlassSurface === 'function') {
     syncWallpaperEngineControlGlassSurface(true);
@@ -96,6 +96,7 @@ function suspendOriginalBackgroundForWallpaperEngine() {
 function wallpaperEngineLayerReady(kind, token) {
   if (token !== wallpaperEngineLayerToken || !wallpaperEngineSelection.active) return;
   cancelWallpaperEngineHostRecovery(true);
+  document.body.classList.remove('wallpaper-engine-loading');
   var layer = document.getElementById('wallpaper-engine-layer');
   if (!layer) return;
   layer.classList.remove('ready', 'image-ready', 'video-ready', 'engine-ready', 'freeze-ready');
@@ -142,6 +143,7 @@ function describeWallpaperEngineMediaFailure(item, error) {
 
 function wallpaperEngineLayerFailed(item, attemptedKind, token, error) {
   if (token !== wallpaperEngineLayerToken) return;
+  document.body.classList.remove('wallpaper-engine-loading');
   var nativeStopPromise = Promise.resolve({ ok: true });
   if (attemptedKind === 'engine') {
     cancelWallpaperEngineFirstFrameWait();
@@ -213,6 +215,10 @@ function applyWallpaperEngineBackground(item, quiet) {
   var token = ++wallpaperEngineLayerToken;
   if (kind !== 'engine') stopWallpaperEngineNativeSession();
   restoreOriginalBackgroundAfterWallpaperEngine();
+  // Keep the base background opaque until the wallpaper layer can take over,
+  // so a translucent (window-opacity) background cannot expose the desktop or
+  // the WE window while it loads. Cleared by layer ready/failed/restore.
+  document.body.classList.add('wallpaper-engine-loading');
   if (!layer || !image || !video) return false;
   updateWallpaperEngineEntryUi('正在加载 ' + (item.title || '壁纸') + '…');
 
@@ -221,6 +227,26 @@ function applyWallpaperEngineBackground(item, quiet) {
     if (kind === 'engine' && wallpaperEngineNativeHostUnavailable()) return;
     clearWallpaperEngineLayerMedia(0);
     if (kind === 'engine') {
+      // The native Scene takes several seconds to come up. Without something in
+      // the layer the module's own black backdrop shows for that whole window,
+      // which is the reported load-time flashing (the user's base background is
+      // #000000). Paint the project's preview poster first so loading reads as
+      // poster -> live wallpaper instead of bright -> black -> bright. It is
+      // replaced by the native DWM surface as soon as that is ready, and the
+      // layer is hidden entirely once dwm-active is set.
+      if (item.hasPreview) {
+        image.onload = function () {
+          if (token !== wallpaperEngineLayerToken || !wallpaperEngineSelection.active) return;
+          if (wallpaperEngineSelection.id !== item.id) return;
+          // The native surface may already own the window by the time this
+          // poster decodes. Revealing the image layer then would push the live
+          // wallpaper off and put the still poster back, so skip it.
+          if (document.body.classList.contains('wallpaper-engine-dwm-active')) return;
+          wallpaperEngineLayerReady('image', token);
+        };
+        image.onerror = function () { };
+        image.src = wallpaperEngineMediaUrl(item, 'preview');
+      }
       startWallpaperEngineNativeBackground(item, token).catch(function (error) {
         if (token !== wallpaperEngineLayerToken) return;
         if (wallpaperEngineNativeHostUnavailable() || /WALLPAPER_ENGINE_START_SUPERSEDED/.test(String(error && (error.code || error.message) || error || ''))) return;

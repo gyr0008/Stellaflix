@@ -228,6 +228,7 @@ function bindWallpaperEngineLibraryEvents() {
       }
     });
     window.addEventListener('pagehide', function () {
+      var pagehideSessionId = String(wallpaperEngineNativeSessionId || '');
       if (typeof wallpaperEngineHostBoundsUnsubscribe === 'function') {
         try { wallpaperEngineHostBoundsUnsubscribe(); } catch (e) { }
         wallpaperEngineHostBoundsUnsubscribe = null;
@@ -236,6 +237,11 @@ function bindWallpaperEngineLibraryEvents() {
       cancelWallpaperEngineVideoRetry();
       cancelWallpaperEngineFirstFrameWait();
       cancelWallpaperEnginePointerActivity();
+      if (/^[a-f0-9]{24}$/i.test(pagehideSessionId)) {
+        try {
+          Promise.resolve(stopWallpaperEngineNativeSession(pagehideSessionId, { rendererLifecycle: true })).catch(function () { });
+        } catch (e2) { }
+      }
       ++wallpaperEngineLayerToken;
       stopWallpaperEngineCaptureStream();
       clearWallpaperEngineFreezeFrame(true);

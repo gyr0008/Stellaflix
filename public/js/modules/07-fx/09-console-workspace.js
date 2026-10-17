@@ -287,7 +287,10 @@ var FX_CONSOLE_LAYOUT = [
       ] },
       { key: 'experimental', title: '实验功能', hint: '尚未开放或需要谨慎使用的能力', items: [
         fxConsoleItem('t-startSpace', '启动默认空间', '音乐空间 影视空间 启动默认'),
-        fxConsoleItem('t-wallpaperMode', '完整桌面模式', '完整 Stellaflix 进入桌面层 Ctrl Shift M 切换操作层 本次启动有效', false)
+        fxConsoleItem('t-wallpaperMode', '完整桌面模式', '完整 Stellaflix 进入桌面层 Ctrl Shift M 切换操作层 本次启动有效', false),
+        fxConsoleItem('t-coverWallpaper', '封面壁纸', '封面光晕粒子壁纸 桌面壁纸层 播放器背景板 试验'),
+        fxConsoleItem('cover-wallpaper-surface-seg', '封面壁纸位置', '桌面壁纸层 播放器背景板 互斥'),
+        fxConsoleItem('fx-coverwallpaperopacity', '封面壁纸透明', '0.35 到 1')
       ] }
     ]
   }

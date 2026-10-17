@@ -5,6 +5,7 @@ var wallpaperEngineProjects = [];
 var wallpaperEngineLibrarySnapshot = null;
 var wallpaperEngineMediaToken = '';
 var wallpaperEngineLibraryBusy = false;
+var wallpaperEngineLibraryLoadPromise = null;
 var wallpaperEngineLayerToken = 0;
 var wallpaperEnginePreviewObserver = null;
 var wallpaperEngineSearchRenderTimer = 0;
@@ -587,11 +588,15 @@ window.__stellaflixSyncWallpaperEngineCaptureFrameRate = syncWallpaperEngineCapt
 
 function stopWallpaperEngineNativeSession(sessionId) {
   var api = wallpaperEngineDesktopApi();
+  var options = arguments.length > 1 && arguments[1] && typeof arguments[1] === 'object' ? arguments[1] : {};
   var stopAll = arguments.length === 0;
-  var expected = String(sessionId || wallpaperEngineNativeSessionId || '');
+  var expected = String(sessionId || (stopAll ? wallpaperEngineNativeSessionId : '') || '');
+  if (!stopAll && !/^[a-f0-9]{24}$/i.test(expected)) return Promise.resolve({ ok: true, skipped: true });
   if (stopAll || !sessionId || expected === wallpaperEngineNativeSessionId) wallpaperEngineNativeSessionId = '';
   if (!api || typeof api.stopWallpaperEngineScene !== 'function') return Promise.resolve({ ok: true });
-  return Promise.resolve(api.stopWallpaperEngineScene({ sessionId: expected, all: stopAll })).catch(function () {
+  var payload = { sessionId: expected, all: stopAll };
+  if (options.rendererLifecycle === true) payload.rendererLifecycle = true;
+  return Promise.resolve(api.stopWallpaperEngineScene(payload)).catch(function () {
     return { ok: false };
   });
 }
@@ -1280,8 +1285,27 @@ async function startWallpaperEngineNativeBackground(item, token) {
       wallpaperEngineLayerFailed(item, 'engine', token);
       return;
     }
-    wallpaperEngineLayerReady('dwm', token);
-    clearWallpaperEngineFreezeFrame(false);
+    // Keep the loading poster up for two paints plus a short settle so the
+    // native thumbnail has a real frame before the DOM goes transparent, then
+    // reveal in one step. A crossfade here is counterproductive: the poster is
+    // semi-transparent over the (black) base background, so fading it drags the
+    // whole player through a dark patch.
+    (function revealAfterNativeSettles() {
+      var settleToken = token;
+      var settleSessionId = sessionId;
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          setTimeout(function () {
+            if (settleToken !== wallpaperEngineLayerToken
+              || !wallpaperEngineSelection.active
+              || !wallpaperEngineNativeStartIsCurrent(item, settleToken)
+              || String(wallpaperEngineNativeSessionId || '') !== settleSessionId) return;
+            wallpaperEngineLayerReady('dwm', settleToken);
+            clearWallpaperEngineFreezeFrame(false);
+          }, 320);
+        });
+      });
+    })();
     return;
   }
   stopWallpaperEngineGlassCaptureStream(false);
@@ -1437,7 +1461,7 @@ function clearWallpaperEngineLayerMedia(delay) {
 }
 
 function restoreOriginalBackgroundAfterWallpaperEngine() {
-  document.body.classList.remove('wallpaper-engine-active', 'wallpaper-engine-dwm-active');
+  document.body.classList.remove('wallpaper-engine-active', 'wallpaper-engine-dwm-active', 'wallpaper-engine-loading');
   stopWallpaperEngineGlassCaptureStream(false);
   if (typeof syncWallpaperEngineControlGlassSurface === 'function') {
     syncWallpaperEngineControlGlassSurface(true);
@@ -1457,6 +1481,7 @@ function suspendOriginalBackgroundForWallpaperEngine() {
 function wallpaperEngineLayerReady(kind, token) {
   if (token !== wallpaperEngineLayerToken || !wallpaperEngineSelection.active) return;
   cancelWallpaperEngineHostRecovery(true);
+  document.body.classList.remove('wallpaper-engine-loading');
   var layer = document.getElementById('wallpaper-engine-layer');
   if (!layer) return;
   layer.classList.remove('ready', 'image-ready', 'video-ready', 'engine-ready', 'freeze-ready');
@@ -1482,6 +1507,7 @@ function wallpaperEngineLayerReady(kind, token) {
 
 function wallpaperEngineLayerFailed(item, attemptedKind, token) {
   if (token !== wallpaperEngineLayerToken) return;
+  document.body.classList.remove('wallpaper-engine-loading');
   var nativeStopPromise = Promise.resolve({ ok: true });
   if (attemptedKind === 'engine') {
     cancelWallpaperEngineFirstFrameWait();
@@ -1551,6 +1577,10 @@ function applyWallpaperEngineBackground(item, quiet) {
   var token = ++wallpaperEngineLayerToken;
   if (kind !== 'engine') stopWallpaperEngineNativeSession();
   restoreOriginalBackgroundAfterWallpaperEngine();
+  // Keep the base background opaque until the wallpaper layer can take over,
+  // so a translucent (window-opacity) background cannot expose the desktop or
+  // the WE window while it loads. Cleared by layer ready/failed/restore.
+  document.body.classList.add('wallpaper-engine-loading');
   if (!layer || !image || !video) return false;
   updateWallpaperEngineEntryUi('正在加载 ' + (item.title || '壁纸') + '…');
 
@@ -1559,6 +1589,26 @@ function applyWallpaperEngineBackground(item, quiet) {
     if (kind === 'engine' && wallpaperEngineNativeHostUnavailable()) return;
     clearWallpaperEngineLayerMedia(0);
     if (kind === 'engine') {
+      // The native Scene takes several seconds to come up. Without something in
+      // the layer the module's own black backdrop shows for that whole window,
+      // which is the reported load-time flashing (the user's base background is
+      // #000000). Paint the project's preview poster first so loading reads as
+      // poster -> live wallpaper instead of bright -> black -> bright. It is
+      // replaced by the native DWM surface as soon as that is ready, and the
+      // layer is hidden entirely once dwm-active is set.
+      if (item.hasPreview) {
+        image.onload = function () {
+          if (token !== wallpaperEngineLayerToken || !wallpaperEngineSelection.active) return;
+          if (wallpaperEngineSelection.id !== item.id) return;
+          // The native surface may already own the window by the time this
+          // poster decodes. Revealing the image layer then would push the live
+          // wallpaper off and put the still poster back, so skip it.
+          if (document.body.classList.contains('wallpaper-engine-dwm-active')) return;
+          wallpaperEngineLayerReady('image', token);
+        };
+        image.onerror = function () { };
+        image.src = wallpaperEngineMediaUrl(item, 'preview');
+      }
       startWallpaperEngineNativeBackground(item, token).catch(function (error) {
         if (token !== wallpaperEngineLayerToken) return;
         if (wallpaperEngineNativeHostUnavailable() || /WALLPAPER_ENGINE_START_SUPERSEDED/.test(String(error && (error.code || error.message) || error || ''))) return;
@@ -2033,36 +2083,45 @@ function consumeWallpaperEngineSnapshot(snapshot) {
   }
 }
 
-async function loadWallpaperEngineLibrary(force, showNotice) {
+function loadWallpaperEngineLibrary(force, showNotice) {
   var api = wallpaperEngineDesktopApi();
   if (!api || typeof api.listWallpaperEngineProjects !== 'function') {
     updateWallpaperEngineLibraryStatus(null, '仅桌面版支持本地壁纸识别');
     if (showNotice) showToast('当前环境不支持 Wallpaper Engine 本地识别');
-    return [];
+    return Promise.resolve([]);
   }
-  if (wallpaperEngineLibraryBusy) return wallpaperEngineProjects;
+  if (wallpaperEngineLibraryBusy) return wallpaperEngineLibraryLoadPromise || Promise.resolve(wallpaperEngineProjects);
   wallpaperEngineLibraryBusy = true;
-  var failure = '';
-  updateWallpaperEngineLibraryStatus(null, '');
-  renderWallpaperEngineLibrary();
-  try {
-    var snapshot = await api.listWallpaperEngineProjects({ force: force === true });
-    if (!snapshot || snapshot.ok === false) throw new Error(snapshot && snapshot.error || '扫描失败');
-    consumeWallpaperEngineSnapshot(snapshot);
-    if (showNotice) showToast(snapshot.count ? ('已识别 ' + snapshot.count + ' 个 Wallpaper Engine 项目') : '没有识别到 Wallpaper Engine 项目');
-    return wallpaperEngineProjects;
-  } catch (e) {
-    failure = e.message || '扫描失败';
-    wallpaperEngineProjects = [];
-    wallpaperEngineLibrarySnapshot = null;
-    wallpaperEngineMediaToken = '';
-    if (showNotice) showToast('Wallpaper Engine 识别失败');
-    return [];
-  } finally {
-    wallpaperEngineLibraryBusy = false;
-    updateWallpaperEngineLibraryStatus(wallpaperEngineLibrarySnapshot, failure);
+  var loadPromise = (async function () {
+    var failure = '';
+    updateWallpaperEngineLibraryStatus(null, '');
     renderWallpaperEngineLibrary();
-  }
+    try {
+      var snapshot = await api.listWallpaperEngineProjects({ force: force === true });
+      if (!snapshot || snapshot.ok === false) throw new Error(snapshot && snapshot.error || '扫描失败');
+      consumeWallpaperEngineSnapshot(snapshot);
+      if (showNotice) showToast(snapshot.count ? ('已识别 ' + snapshot.count + ' 个 Wallpaper Engine 项目') : '没有识别到 Wallpaper Engine 项目');
+      return wallpaperEngineProjects;
+    } catch (e) {
+      failure = e.message || '扫描失败';
+      wallpaperEngineProjects = [];
+      wallpaperEngineLibrarySnapshot = null;
+      wallpaperEngineMediaToken = '';
+      if (showNotice) showToast('Wallpaper Engine 识别失败');
+      return [];
+    } finally {
+      wallpaperEngineLibraryBusy = false;
+      updateWallpaperEngineLibraryStatus(wallpaperEngineLibrarySnapshot, failure);
+      renderWallpaperEngineLibrary();
+    }
+  })();
+  wallpaperEngineLibraryLoadPromise = loadPromise;
+  loadPromise.then(function () {
+    if (wallpaperEngineLibraryLoadPromise === loadPromise) wallpaperEngineLibraryLoadPromise = null;
+  }, function () {
+    if (wallpaperEngineLibraryLoadPromise === loadPromise) wallpaperEngineLibraryLoadPromise = null;
+  });
+  return loadPromise;
 }
 
 async function openWallpaperEngineLibrary() {
@@ -2296,6 +2355,7 @@ function bindWallpaperEngineLibraryEvents() {
       }
     });
     window.addEventListener('pagehide', function () {
+      var pagehideSessionId = String(wallpaperEngineNativeSessionId || '');
       if (typeof wallpaperEngineHostBoundsUnsubscribe === 'function') {
         try { wallpaperEngineHostBoundsUnsubscribe(); } catch (e) { }
         wallpaperEngineHostBoundsUnsubscribe = null;
@@ -2304,6 +2364,11 @@ function bindWallpaperEngineLibraryEvents() {
       cancelWallpaperEngineVideoRetry();
       cancelWallpaperEngineFirstFrameWait();
       cancelWallpaperEnginePointerActivity();
+      if (/^[a-f0-9]{24}$/i.test(pagehideSessionId)) {
+        try {
+          Promise.resolve(stopWallpaperEngineNativeSession(pagehideSessionId, { rendererLifecycle: true })).catch(function () { });
+        } catch (e2) { }
+      }
       ++wallpaperEngineLayerToken;
       stopWallpaperEngineCaptureStream();
       clearWallpaperEngineFreezeFrame(true);

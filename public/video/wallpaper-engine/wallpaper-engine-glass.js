@@ -268,8 +268,27 @@ async function startWallpaperEngineNativeBackground(item, token) {
       wallpaperEngineLayerFailed(item, 'engine', token);
       return;
     }
-    wallpaperEngineLayerReady('dwm', token);
-    clearWallpaperEngineFreezeFrame(false);
+    // Keep the loading poster up for two paints plus a short settle so the
+    // native thumbnail has a real frame before the DOM goes transparent, then
+    // reveal in one step. A crossfade here is counterproductive: the poster is
+    // semi-transparent over the (black) base background, so fading it drags the
+    // whole player through a dark patch.
+    (function revealAfterNativeSettles() {
+      var settleToken = token;
+      var settleSessionId = sessionId;
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          setTimeout(function () {
+            if (settleToken !== wallpaperEngineLayerToken
+              || !wallpaperEngineSelection.active
+              || !wallpaperEngineNativeStartIsCurrent(item, settleToken)
+              || String(wallpaperEngineNativeSessionId || '') !== settleSessionId) return;
+            wallpaperEngineLayerReady('dwm', settleToken);
+            clearWallpaperEngineFreezeFrame(false);
+          }, 320);
+        });
+      });
+    })();
     return;
   }
   stopWallpaperEngineGlassCaptureStream(false);

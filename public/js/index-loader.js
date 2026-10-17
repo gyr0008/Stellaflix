@@ -69,6 +69,8 @@
     'js/modules/02-visual/15-ripples-cover-depth.js',
     'js/modules/02-visual/16-hex-grid-viewport.js',
     'js/modules/02-visual/17-hex-card-transform.js',
+    'js/cover-wallpaper-effect.js',
+    'js/modules/02-visual/18-cover-wallpaper.js',
     'sonic-topography-preset.js',
     'sonic-workshop-preset.js',
     'js/modules/03-beat/00-tempo-worker-cache-prefetch.js',

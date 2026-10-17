@@ -954,6 +954,13 @@ body.desktop-shell.desktop-fullscreen #top-right {
   pointer-events: none
 }
 
+/* WE 场景加载期间上层仍是透明的：窗口透明度设置会让 #custom-bg 半透明，
+   露出背后的实时桌面与正在被接管的 WE 弹窗（加载闪屏）。加载全程强制底色
+   不透明，层就绪/失败/还原时由 JS 摘掉 loading 类交还常规背景。 */
+body.wallpaper-engine-loading #custom-bg {
+  background: rgb(var(--custom-bg-color-rgb, 0, 0, 0)) !important;
+}
+
 #wallpaper-engine-layer {
   position: fixed;
   inset: 0;
@@ -1112,6 +1119,12 @@ html:fullscreen body.desktop-shell #wallpaper-engine-freeze {
   border-radius: 0 !important;
   clip-path: none !important
 }
+
+#cover-wallpaper-board{position:fixed;inset:0;z-index:0;display:none;pointer-events:none;opacity:0;transition:opacity .45s ease}
+#cover-wallpaper-board.mounted{display:block}
+#cover-wallpaper-board.active{opacity:1}
+/* 背景板是封面派生的整幅画面，与封面模糊底图/自定义背景叠层会互相糊掉，启用时让位。 */
+body.cover-wallpaper-board-active #album-bg,body.cover-wallpaper-board-active #custom-bg,body.cover-wallpaper-board-active #theme-bg-tint{opacity:0!important}
 
 body.wallpaper-engine-active #custom-bg,
 body.wallpaper-engine-active #album-bg,

@@ -335,36 +335,45 @@ function consumeWallpaperEngineSnapshot(snapshot) {
   }
 }
 
-async function loadWallpaperEngineLibrary(force, showNotice) {
+function loadWallpaperEngineLibrary(force, showNotice) {
   var api = wallpaperEngineDesktopApi();
   if (!api || typeof api.listWallpaperEngineProjects !== 'function') {
     updateWallpaperEngineLibraryStatus(null, '仅桌面版支持本地壁纸识别');
     if (showNotice) showToast('当前环境不支持 Wallpaper Engine 本地识别');
-    return [];
+    return Promise.resolve([]);
   }
-  if (wallpaperEngineLibraryBusy) return wallpaperEngineProjects;
+  if (wallpaperEngineLibraryBusy) return wallpaperEngineLibraryLoadPromise || Promise.resolve(wallpaperEngineProjects);
   wallpaperEngineLibraryBusy = true;
-  var failure = '';
-  updateWallpaperEngineLibraryStatus(null, '');
-  renderWallpaperEngineLibrary();
-  try {
-    var snapshot = await api.listWallpaperEngineProjects({ force: force === true });
-    if (!snapshot || snapshot.ok === false) throw new Error(snapshot && snapshot.error || '扫描失败');
-    consumeWallpaperEngineSnapshot(snapshot);
-    if (showNotice) showToast(snapshot.count ? ('已识别 ' + snapshot.count + ' 个 Wallpaper Engine 项目') : '没有识别到 Wallpaper Engine 项目');
-    return wallpaperEngineProjects;
-  } catch (e) {
-    failure = e.message || '扫描失败';
-    wallpaperEngineProjects = [];
-    wallpaperEngineLibrarySnapshot = null;
-    wallpaperEngineMediaToken = '';
-    if (showNotice) showToast('Wallpaper Engine 识别失败');
-    return [];
-  } finally {
-    wallpaperEngineLibraryBusy = false;
-    updateWallpaperEngineLibraryStatus(wallpaperEngineLibrarySnapshot, failure);
+  var loadPromise = (async function () {
+    var failure = '';
+    updateWallpaperEngineLibraryStatus(null, '');
     renderWallpaperEngineLibrary();
-  }
+    try {
+      var snapshot = await api.listWallpaperEngineProjects({ force: force === true });
+      if (!snapshot || snapshot.ok === false) throw new Error(snapshot && snapshot.error || '扫描失败');
+      consumeWallpaperEngineSnapshot(snapshot);
+      if (showNotice) showToast(snapshot.count ? ('已识别 ' + snapshot.count + ' 个 Wallpaper Engine 项目') : '没有识别到 Wallpaper Engine 项目');
+      return wallpaperEngineProjects;
+    } catch (e) {
+      failure = e.message || '扫描失败';
+      wallpaperEngineProjects = [];
+      wallpaperEngineLibrarySnapshot = null;
+      wallpaperEngineMediaToken = '';
+      if (showNotice) showToast('Wallpaper Engine 识别失败');
+      return [];
+    } finally {
+      wallpaperEngineLibraryBusy = false;
+      updateWallpaperEngineLibraryStatus(wallpaperEngineLibrarySnapshot, failure);
+      renderWallpaperEngineLibrary();
+    }
+  })();
+  wallpaperEngineLibraryLoadPromise = loadPromise;
+  loadPromise.then(function () {
+    if (wallpaperEngineLibraryLoadPromise === loadPromise) wallpaperEngineLibraryLoadPromise = null;
+  }, function () {
+    if (wallpaperEngineLibraryLoadPromise === loadPromise) wallpaperEngineLibraryLoadPromise = null;
+  });
+  return loadPromise;
 }
 
 async function openWallpaperEngineLibrary() {

@@ -5,6 +5,7 @@ var wallpaperEngineProjects = [];
 var wallpaperEngineLibrarySnapshot = null;
 var wallpaperEngineMediaToken = '';
 var wallpaperEngineLibraryBusy = false;
+var wallpaperEngineLibraryLoadPromise = null;
 var wallpaperEngineLayerToken = 0;
 var wallpaperEnginePreviewObserver = null;
 var wallpaperEngineSearchRenderTimer = 0;

@@ -90,6 +90,7 @@
       <button id="fullscreen-diy-btn" class="desktop-mode-btn" type="button" onclick="toggleDiyMode()" title="DIY"
         aria-label="DIY" aria-pressed="false">DIY</button>
     </div>
+    <canvas id="cover-wallpaper-board" aria-hidden="true"></canvas>
     <div id="custom-bg"><video id="custom-bg-video" muted loop playsinline preload="metadata"></video></div>
     <div id="wallpaper-engine-layer" aria-hidden="true">
       <img id="wallpaper-engine-image" alt="">
@@ -951,6 +952,8 @@
             <div class="fx-toggle" id="t-wallpaperMode" onclick="toggleFx('wallpaperMode')"
               title="把当前完整 Stellaflix 放到 Windows 桌面；右上控制器可显示、隐藏桌面图标，Esc 退出">
               <span>完整桌面模式<em class="fx-dev-badge">试验</em></span><span class="dot"></span></div>
+            <div class="fx-toggle" id="t-coverWallpaper" onclick="toggleFx('coverWallpaper')"
+              title="封面光晕粒子壁纸，可画到桌面壁纸层或播放器背景板"><span>封面壁纸<em class="fx-dev-badge">试验</em></span><span class="dot"></span></div>
             <div class="fx-toggle" id="t-startSpace" onclick="toggleStartSpace()" title="点击切换：决定软件启动时默认进入的空间">
               <span class="start-space-label"><em class="ss-text ss-current" data-mode="music">音乐空间</em><em class="ss-text ss-other" data-mode="video">影视空间</em></span><span class="dot"></span></div>
           </div>
@@ -977,6 +980,12 @@
             <button data-wallpaper-fps="60">60</button>
           </div>
           <div class="fx-slider" hidden><label>壁纸透明度</label><input id="fx-wallpaperopacity" type="range" min="0.35"
+              max="1" step="0.01"><output></output></div>
+          <div class="fx-seg" id="cover-wallpaper-surface-seg">
+            <button data-cover-wallpaper-surface="desktop" title="全屏挂到桌面壁纸层，在桌面图标和其它窗口后面显示">桌面壁纸层</button>
+            <button data-cover-wallpaper-surface="board" title="画在播放器窗口内，作为界面最底层背景板">播放器背景板</button>
+          </div>
+          <div class="fx-slider"><label>封面壁纸透明</label><input id="fx-coverwallpaperopacity" type="range" min="0.35"
               max="1" step="0.01"><output></output></div>
         </div>
       </div>

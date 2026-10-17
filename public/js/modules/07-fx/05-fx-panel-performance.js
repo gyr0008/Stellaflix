@@ -274,6 +274,7 @@ function updateFxInputs() {
   setRange('fx-desktoplyricsopacity', fx.desktopLyricsOpacity);
   setRange('fx-desktoplyricsy', fx.desktopLyricsY);
   setRange('fx-wallpaperopacity', fx.wallpaperOpacity);
+  setRange('fx-coverwallpaperopacity', fx.coverWallpaperOpacity);
   setRange('fx-shelfsize', fx.shelfSize);
   setRange('fx-shelfx', fx.shelfOffsetX);
   setRange('fx-shelfy', fx.shelfOffsetY);
@@ -369,6 +370,8 @@ function updateFxInputs() {
   updateWallpaperFpsControls();
   var wallpaperModeToggle = document.getElementById('t-wallpaperMode');
   if (wallpaperModeToggle) wallpaperModeToggle.classList.toggle('on', fx.wallpaperMode);
+  var coverWallpaperToggle = document.getElementById('t-coverWallpaper');
+  if (coverWallpaperToggle) coverWallpaperToggle.classList.toggle('on', fx.coverWallpaper);
   var shelfPodcastsToggle = document.getElementById('t-shelfShowPodcasts');
   if (shelfPodcastsToggle) shelfPodcastsToggle.classList.toggle('on', fx.shelfShowPodcasts !== false);
   var shelfMergeToggle = document.getElementById('t-shelfMergeCollections');
@@ -411,6 +414,7 @@ function updateFxInputs() {
   updateSonicSeriesControlVisibility();
   applyControlGlassChromaticOffset();
   syncFxUniforms();
+  if (typeof updateCoverWallpaperSurfaceControls === 'function') updateCoverWallpaperSurfaceControls();
 }
 function animateFxResetButton(btn) {
   if (!btn || !window.gsap) return;
@@ -811,6 +815,7 @@ function relabelFxPanelControls() {
   setFxSliderLabel('fx-desktoplyricsopacity', '桌面歌词透明度');
   setFxSliderLabel('fx-desktoplyricsy', '桌面歌词高度');
   setFxSliderLabel('fx-wallpaperopacity', '壁纸透明度');
+  setFxSliderLabel('fx-coverwallpaperopacity', '封面壁纸透明');
   setFxSliderLabel('fx-shelfsize', '歌单架大小');
   setFxSliderLabel('fx-shelfx', '左右位置');
   setFxSliderLabel('fx-shelfy', '上下位置');
