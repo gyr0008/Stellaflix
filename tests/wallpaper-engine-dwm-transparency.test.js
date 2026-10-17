@@ -68,6 +68,7 @@ test('startWallpaperEngineNativeBackground 在 dwm-thumbnail 模式不挂兜底�
     wallpaperEngineLayerToken: token,
     wallpaperEngineNativeSessionId: '',
     wallpaperEngineCaptureMode: '',
+    wallpaperEngineSelection: { id: 'project-id', kind: 'engine', active: true },
     wallpaperEngineDesktopApi: () => ({
       startWallpaperEngineScene: async () => ({ ok: true, sessionId, captureMode: 'dwm-thumbnail' })
     }),
@@ -85,7 +86,10 @@ test('startWallpaperEngineNativeBackground 在 dwm-thumbnail 模式不挂兜底�
     clearWallpaperEngineFreezeFrame: () => { calls.push('clearFreeze'); },
     calibrateWallpaperEngineCaptureViewport: () => { calls.push('calibrate'); },
     requestWallpaperEngineVideoPlayback: () => { calls.push('playback'); },
-    waitForWallpaperEngineVideoFirstFrame: () => { calls.push('firstFrame'); }
+    waitForWallpaperEngineVideoFirstFrame: () => { calls.push('firstFrame'); },
+    // A2（revealAfterNativeSettles）：2×RAF + 320ms settle 后一步揭示；桩同步放行
+    requestAnimationFrame: (cb) => { cb(); },
+    setTimeout: (fn) => { fn(); return 0; }
   };
 
   vm.createContext(sandbox);

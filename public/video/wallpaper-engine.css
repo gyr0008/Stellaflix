@@ -137,6 +137,9 @@ body.wallpaper-engine-active #album-bg-next,
 body.wallpaper-engine-active #canvas-container { opacity: 0 !important;
   visibility: hidden !important }
 
+/* 加载期上层未就绪时窗口可能半透明：强制底色不透明，挡住露出的桌面与 WE 弹窗 */
+body.wallpaper-engine-loading #custom-bg { background: rgb(var(--custom-bg-color-rgb, 0, 0, 0)) !important }
+
 .wallpaper-engine-row { border-color: rgba(97, 185, 255, .13);
   background: linear-gradient(135deg, rgba(65, 142, 255, .075), rgba(255, 255, 255, .022)) }
 
