@@ -934,7 +934,7 @@
       volume_panel: '音量面板', playlist_import: '歌单导入', lx_playlist_import: '落雪歌单文件导入',
       playlist_selection: '主页歌单选择', source_import: '音源文件导入', local_file_import: '本地音乐文件导入',
       local_folder_import: '本地音乐文件夹导入', custom_lyrics: '自定义歌词', daily_review: '每日热评管理',
-      listening_insight: '听歌偏好', visual_guide: '使用引导', author_support: '作者支持', beat_analysis: '本曲鼓点分析'
+      listening_insight: '听歌偏好', author_support: '作者支持', beat_analysis: '本曲鼓点分析'
     };
     if (!labels[section]) return toolError('INTERFACE_INVALID', '不支持打开这个界面');
     try {
@@ -1001,7 +1001,6 @@
           custom_lyrics: typeof openCustomLyricModal === 'function' ? openCustomLyricModal : null,
           daily_review: typeof openDailyReviewManager === 'function' ? openDailyReviewManager : null,
           listening_insight: typeof openHomeInsight === 'function' ? openHomeInsight : null,
-          visual_guide: typeof startVisualGuide === 'function' ? function () { return startVisualGuide({ manual: true }); } : null,
           author_support: typeof openAuthorSupportPanel === 'function' ? openAuthorSupportPanel : null,
           beat_analysis: typeof openLocalBeatModal === 'function' && typeof currentCoverSong === 'function' && typeof audio !== 'undefined'
             ? function () { return openLocalBeatModal(currentCoverSong(), audio && audio.src || ''); } : null

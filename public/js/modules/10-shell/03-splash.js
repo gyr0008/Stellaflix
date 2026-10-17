@@ -587,9 +587,8 @@ function finishSplashReveal(forceLoad, opts) {
     }
     requestAnimationFrame(function () {
       markStartupHomeReadyForAutoplay(opts.reason || 'splash', opts.fastSkip ? 240 : 100);
-      var guideStarted = maybeRunStartupVisualGuide('splash');
-      if (!guideStarted && !hasAnyPlatformLogin()) maybeRunStartupLoginGuide('splash');
-      else if (!guideStarted && !homeShown) maybeRunStartupLoginGuide('splash');
+      if (!hasAnyPlatformLogin()) maybeRunStartupLoginGuide('splash');
+      else if (!homeShown) maybeRunStartupLoginGuide('splash');
       setTimeout(maybeShowUploadTipOnce, 5200);
     });
   });

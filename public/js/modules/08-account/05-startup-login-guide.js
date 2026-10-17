@@ -107,7 +107,6 @@ function runLoginGuideParticles(done) {
 }
 function maybeRunStartupLoginGuide(source) {
   if (startupLoginGuideShown || loginGuideAnimating) return;
-  if (visualGuideActive) return;
   if (document.body.classList.contains('splash-active')) return;
   if (immersiveMode) return;
   if (!loginStatusChecked || loginStatusCheckFailed || loginStatus.loggedIn || playing) return;

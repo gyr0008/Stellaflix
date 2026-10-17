@@ -96,7 +96,6 @@ function loadSplash() {
     updateEmptyHomeVisibility: () => { calls.revealHome++; return true; },
     shouldForceEmptyHomeAfterSplash: () => false,
     markStartupHomeReadyForAutoplay: () => {},
-    maybeRunStartupVisualGuide: () => true,
     maybeRunStartupLoginGuide: () => {},
     maybeShowUploadTipOnce: () => {},
     hasAnyPlatformLogin: () => true,

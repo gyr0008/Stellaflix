@@ -475,7 +475,7 @@
   // - safeRenderQueuePanel, safeShelfRebuild, safeSwitchPlaylistTab
   // - setFxPanelTab, setImmersiveMode, setLyricMotionStyle
   // - setPlaybackQuality, setVolume, showToast, shuffleQueue
-  // - startVisualGuide, toggleControlsAutoHide, toggleFullscreen
+  // - toggleControlsAutoHide, toggleFullscreen
   // - toggleFxFabAutoHide, toggleFxPanel, toggleLyricsPanel, togglePlay
 
 })();

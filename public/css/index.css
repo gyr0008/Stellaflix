@@ -602,7 +602,6 @@ body.desktop-shell #desktop-titlebar::after {
   box-shadow: 0 0 16px rgba(255, 83, 103, .56)
 }
 
-body.desktop-shell #desktop-titlebar #visual-guide-btn,
 body.desktop-shell #desktop-titlebar #update-entry,
 body.desktop-shell #desktop-titlebar #custom-source-btn {
   width: 30px;
@@ -616,10 +615,6 @@ body.desktop-shell #desktop-titlebar #custom-source-btn {
   color: rgba(224, 250, 255, .70);
   backdrop-filter: none;
   -webkit-backdrop-filter: none
-}
-
-body.desktop-shell #desktop-titlebar #visual-guide-btn {
-  font-size: 14px
 }
 
 body.desktop-shell #desktop-titlebar #custom-source-btn svg,
@@ -654,7 +649,6 @@ body.desktop-shell #desktop-titlebar #update-entry::after {
   display: none
 }
 
-body.desktop-shell #desktop-titlebar #visual-guide-btn:hover,
 body.desktop-shell #desktop-titlebar #update-entry:hover,
 body.desktop-shell #desktop-titlebar #custom-source-btn:hover {
   background: rgba(255, 83, 103, .10);
@@ -665,12 +659,10 @@ body.desktop-shell #desktop-titlebar #custom-source-btn:hover {
 
 /* ── 影视空间：标题栏玻璃覆盖（透明、无边框） ── */
 body.video-space-active.desktop-shell #desktop-titlebar .desktop-window-btn,
-body.video-space-active.desktop-shell #desktop-titlebar #visual-guide-btn,
 body.video-space-active.desktop-shell #desktop-titlebar #update-entry,
 body.video-space-active.desktop-shell #desktop-titlebar #custom-source-btn,
 body.video-space-active.desktop-shell #desktop-titlebar #diy-mode-btn{background:transparent!important;box-shadow:none!important;border-color:transparent!important;color:rgba(224,250,255,.72)}
 body.video-space-active.desktop-shell #desktop-titlebar .desktop-window-btn:hover,
-body.video-space-active.desktop-shell #desktop-titlebar #visual-guide-btn:hover,
 body.video-space-active.desktop-shell #desktop-titlebar #update-entry:hover,
 body.video-space-active.desktop-shell #desktop-titlebar #custom-source-btn:hover{background:rgba(4,8,10,.42)!important;color:#fff}
 body.video-space-active.desktop-shell #desktop-titlebar #diy-mode-btn:hover{background:rgba(255,83,103,.10)!important;border-color:rgba(255,83,103,.34)!important;color:#fff}
@@ -706,7 +698,6 @@ body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-drag-region {
   display: none !important;
 }
 
-body.desktop-shell.sfv-world-page #desktop-titlebar #visual-guide-btn,
 body.desktop-shell.sfv-world-page #desktop-titlebar #update-entry,
 body.desktop-shell.sfv-world-page #desktop-titlebar #custom-source-btn,
 body.desktop-shell.sfv-world-page #desktop-titlebar #diy-mode-btn {
@@ -858,18 +849,6 @@ body.desktop-shell #toast {
   pointer-events: none;
   transform: translateY(-18px) scale(.96);
   transition: opacity .2s cubic-bezier(.16, 1, .3, 1), transform .2s cubic-bezier(.16, 1, .3, 1), background .18s, color .18s, border-color .18s, box-shadow .18s
-}
-
-body.visual-guide-active #fullscreen-diy-zone {
-  opacity: 0;
-  pointer-events: none !important;
-  transition: opacity .18s cubic-bezier(.16, 1, .3, 1)
-}
-
-body.visual-guide-active #fullscreen-diy-btn {
-  opacity: 0 !important;
-  pointer-events: none !important;
-  transform: translateY(-18px) scale(.96) !important
 }
 
 body.desktop-shell.desktop-fullscreen #desktop-titlebar,
@@ -3674,22 +3653,6 @@ body.empty-home-active.controls-visible #empty-home {
   background: rgba(0, 245, 212, .075);
   color: #fff;
   box-shadow: 0 16px 46px rgba(0, 245, 212, .08), inset 0 1px 0 rgba(255, 255, 255, .10)
-}
-
-#visual-guide-btn {
-  font-size: 18px;
-  font-weight: 780;
-  line-height: 1;
-  color: rgba(255, 255, 255, .68);
-  border-color: rgba(255, 255, 255, .10);
-  background: rgba(255, 255, 255, .04)
-}
-
-#visual-guide-btn:hover {
-  color: #fff;
-  border-color: rgba(255, 83, 103, .40);
-  background: rgba(255, 83, 103, .10);
-  box-shadow: 0 14px 38px rgba(255, 83, 103, .08)
 }
 
 #upload-actions {
@@ -11036,210 +10999,6 @@ body.login-guide-active #login-guide-canvas {
   color: rgba(255, 255, 255, .58)
 }
 
-#visual-guide {
-  position: fixed;
-  inset: 0;
-  z-index: 620;
-  display: none;
-  pointer-events: auto;
-  cursor: pointer
-}
-
-#visual-guide.show {
-  display: block
-}
-
-.visual-guide-scrim {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, rgba(244, 210, 138, .05), rgba(255, 83, 103, .035) 34%, rgba(9, 10, 14, .38) 58%, rgba(0, 0, 0, .66)), radial-gradient(circle at var(--gx, 50%) var(--gy, 50%), rgba(255, 255, 255, .045), rgba(0, 0, 0, .36) 34%, rgba(0, 0, 0, .68));
-  opacity: 0;
-  transition: opacity .28s cubic-bezier(.16, 1, .3, 1)
-}
-
-#visual-guide.show .visual-guide-scrim {
-  opacity: 1
-}
-
-.visual-guide-ring {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 80px;
-  height: 48px;
-  border-radius: 16px;
-  border: 1.5px solid rgba(255, 255, 255, .74);
-  box-shadow: 0 0 0 7px rgba(255, 83, 103, .13), 0 0 42px rgba(255, 83, 103, .24), inset 0 0 20px rgba(255, 255, 255, .08);
-  opacity: 0;
-  transform: translate3d(0, 0, 0) scale(.98);
-  transition: left .38s cubic-bezier(.16, 1, .3, 1), top .38s cubic-bezier(.16, 1, .3, 1), width .38s cubic-bezier(.16, 1, .3, 1), height .38s cubic-bezier(.16, 1, .3, 1), border-radius .38s cubic-bezier(.16, 1, .3, 1), opacity .24s, transform .38s cubic-bezier(.16, 1, .3, 1);
-  pointer-events: none;
-  overflow: hidden
-}
-
-.visual-guide-ring::before {
-  content: '';
-  position: absolute;
-  inset: 6px;
-  border: 1px solid rgba(244, 210, 138, .34);
-  border-radius: inherit;
-  opacity: .62
-}
-
-.visual-guide-ring::after {
-  content: '';
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  top: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .86), transparent);
-  animation: visual-guide-scan 1.8s cubic-bezier(.16, 1, .3, 1) infinite
-}
-
-#visual-guide.show .visual-guide-ring {
-  opacity: 1;
-  transform: translate3d(0, 0, 0) scale(1)
-}
-
-.visual-guide-ring.shelf-target {
-  border-color: rgba(255, 255, 255, .16);
-  box-shadow: inset -34px 0 56px rgba(255, 255, 255, .045), 0 0 54px rgba(255, 255, 255, .06);
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .035));
-}
-
-.visual-guide-card {
-  position: absolute;
-  width: min(326px, calc(100vw - 32px));
-  padding: 17px 18px 15px;
-  border-radius: 14px;
-  border: 1px solid rgba(244, 210, 138, .18);
-  background: linear-gradient(145deg, rgba(28, 27, 32, .94), rgba(9, 10, 14, .95));
-  box-shadow: 0 28px 86px rgba(0, 0, 0, .62), 0 0 0 1px rgba(255, 83, 103, .10), inset 0 1px 0 rgba(255, 255, 255, .10);
-  backdrop-filter: blur(28px) saturate(1.16);
-  -webkit-backdrop-filter: blur(28px) saturate(1.16);
-  pointer-events: auto;
-  cursor: default;
-  opacity: 0;
-  transform: translateY(10px) scale(.982);
-  transition: left .38s cubic-bezier(.16, 1, .3, 1), top .38s cubic-bezier(.16, 1, .3, 1), opacity .26s, transform .38s cubic-bezier(.16, 1, .3, 1), filter .38s;
-  overflow: hidden
-}
-
-.visual-guide-card::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 1px;
-  background: linear-gradient(90deg, rgba(255, 83, 103, .70), rgba(244, 210, 138, .56), transparent)
-}
-
-#visual-guide.show .visual-guide-card {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  filter: blur(0)
-}
-
-.visual-guide-kicker {
-  font-size: 10px;
-  font-weight: 760;
-  letter-spacing: .16em;
-  color: rgba(255, 83, 103, .78);
-  text-transform: uppercase;
-  margin-bottom: 8px
-}
-
-.visual-guide-title {
-  font-size: 16px;
-  font-weight: 760;
-  color: rgba(255, 255, 255, .96);
-  letter-spacing: .2px;
-  margin-bottom: 7px
-}
-
-.visual-guide-body {
-  font-size: 12.5px;
-  line-height: 1.62;
-  color: rgba(255, 255, 255, .64);
-  letter-spacing: .1px
-}
-
-.visual-guide-hint {
-  margin-top: 11px;
-  padding: 8px 10px;
-  border-radius: 9px;
-  border: 1px solid rgba(255, 255, 255, .075);
-  background: rgba(255, 255, 255, .038);
-  font-size: 11px;
-  color: rgba(244, 210, 138, .72)
-}
-
-.visual-guide-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 14px
-}
-
-.visual-guide-progress {
-  font-size: 10.5px;
-  color: rgba(255, 255, 255, .38);
-  font-variant-numeric: tabular-nums
-}
-
-.visual-guide-actions button {
-  height: 32px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, .10);
-  background: rgba(255, 255, 255, .045);
-  color: rgba(255, 255, 255, .70);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 0 12px;
-  transition: background .18s, border-color .18s, color .18s, transform .18s
-}
-
-.visual-guide-actions button:hover {
-  background: rgba(255, 255, 255, .085);
-  border-color: rgba(255, 255, 255, .20);
-  color: #fff;
-  transform: translateY(-1px)
-}
-
-.visual-guide-actions .primary {
-  border-color: rgba(255, 83, 103, .42);
-  background: rgba(255, 83, 103, .14);
-  color: #fff
-}
-
-.visual-guide-actions .primary:hover {
-  border-color: rgba(255, 83, 103, .62);
-  background: rgba(255, 83, 103, .20)
-}
-
-@keyframes visual-guide-scan {
-
-  0%,
-  100% {
-    transform: translateY(0);
-    opacity: .26
-  }
-
-  42% {
-    opacity: .72
-  }
-
-  70% {
-    transform: translateY(82px);
-    opacity: .18
-  }
-}
-
 /* ============================================================ */
 /*  控制台 — 简化版                                              */
 /* ============================================================ */
@@ -14939,7 +14698,6 @@ body.empty-home-active #home-btn {
 .track-detail-modal,
 .cover-color-pop,
 .color-lab-pop,
-.visual-guide-card,
 .volume-popover,
 .quality-popover,
 .control-source-switcher,
@@ -14976,7 +14734,6 @@ html.control-glass-svg-ok .modal.update-modal,
 html.control-glass-svg-ok .track-detail-modal,
 html.control-glass-svg-ok .cover-color-pop,
 html.control-glass-svg-ok .color-lab-pop,
-html.control-glass-svg-ok .visual-guide-card,
 html.control-glass-svg-ok .volume-popover,
 html.control-glass-svg-ok .quality-popover,
 html.control-glass-svg-ok .lyric-timing-popover,
@@ -15012,7 +14769,6 @@ html.control-glass-svg-ok .control-source-switcher {
 .fx-fold,
 .quality-option,
 .modal-btn,
-.visual-guide-actions button,
 .home-chip,
 .pl-card,
 .queue-item,
@@ -15045,7 +14801,6 @@ html.control-glass-svg-ok .fx-slider,
 html.control-glass-svg-ok .fx-fold,
 html.control-glass-svg-ok .quality-option,
 html.control-glass-svg-ok .modal-btn,
-html.control-glass-svg-ok .visual-guide-actions button,
 html.control-glass-svg-ok .home-chip,
 html.control-glass-svg-ok .pl-card,
 html.control-glass-svg-ok .queue-item,
@@ -15073,7 +14828,6 @@ html.control-glass-svg-ok .mini-queue-remove {
 .preset-card.active,
 .quality-option.active,
 .modal-btn:hover,
-.visual-guide-actions button:hover,
 .home-chip:hover,
 .home-card:hover,
 .home-tile:hover,
@@ -15108,7 +14862,6 @@ html.control-glass-svg-ok .mini-queue-remove {
 .home-mosaic-cell::before,
 .home-mosaic-cell::after,
 .modal.update-modal::before,
-.visual-guide-card::before,
 #upload-tip::before {
   content: none !important;
   background: none !important;
@@ -15118,8 +14871,7 @@ html.control-glass-svg-ok .mini-queue-remove {
 .fx-section-label,
 .pl-section-label,
 .preset-card.active .pc-icon,
-.fx-fold-head .arrow,
-.visual-guide-kicker {
+.fx-fold-head .arrow {
   color: rgba(255, 255, 255, .68) !important;
   text-shadow: none !important
 }
@@ -15437,7 +15189,6 @@ html.control-glass-svg-ok .home-mosaic-cell {
 .track-detail-modal,
 .cover-color-pop,
 .color-lab-pop,
-.visual-guide-card,
 .home-hero,
 .home-card,
 .home-tile,
@@ -15468,7 +15219,6 @@ html.control-glass-svg-ok .modal.update-modal,
 html.control-glass-svg-ok .track-detail-modal,
 html.control-glass-svg-ok .cover-color-pop,
 html.control-glass-svg-ok .color-lab-pop,
-html.control-glass-svg-ok .visual-guide-card,
 html.control-glass-svg-ok .home-hero,
 html.control-glass-svg-ok .home-card,
 html.control-glass-svg-ok .home-tile,
@@ -15495,7 +15245,6 @@ html.control-glass-svg-ok #drop-overlay .drop-text {
 .fx-fold,
 .quality-option,
 .modal-btn,
-.visual-guide-actions button,
 .home-chip,
 .local-beat-tab,
 .search-history-chip,
@@ -15520,7 +15269,6 @@ html.control-glass-svg-ok .fx-slider,
 html.control-glass-svg-ok .fx-fold,
 html.control-glass-svg-ok .quality-option,
 html.control-glass-svg-ok .modal-btn,
-html.control-glass-svg-ok .visual-guide-actions button,
 html.control-glass-svg-ok .home-chip,
 html.control-glass-svg-ok .local-beat-tab,
 html.control-glass-svg-ok .search-history-chip,
@@ -15582,7 +15330,6 @@ html.control-glass-svg-ok #playlist-panel {
 
 #home-btn,
 #upload-btn,
-#visual-guide-btn,
 #fx-fab,
 #top-right .icon-btn {
   background: var(--saved-button-glass-bg) !important;
@@ -15594,7 +15341,6 @@ html.control-glass-svg-ok #playlist-panel {
 
 html.control-glass-svg-ok #home-btn,
 html.control-glass-svg-ok #upload-btn,
-html.control-glass-svg-ok #visual-guide-btn,
 html.control-glass-svg-ok #fx-fab,
 html.control-glass-svg-ok #top-right .icon-btn {
   backdrop-filter: var(--saved-button-glass-svg-filter) !important;
@@ -15656,7 +15402,6 @@ html.control-glass-svg-ok #search-results {
 .quality-option,
 .modal-btn,
 .search-mode-tabs button,
-.visual-guide-actions button,
 .home-chip,
 .pl-card,
 .queue-item,
@@ -15685,7 +15430,6 @@ html.control-glass-svg-ok .preset-card,
 html.control-glass-svg-ok .lyric-color-row,
 html.control-glass-svg-ok .quality-option,
 html.control-glass-svg-ok .modal-btn,
-html.control-glass-svg-ok .visual-guide-actions button,
 html.control-glass-svg-ok .home-chip,
 html.control-glass-svg-ok .pl-card,
 html.control-glass-svg-ok .queue-item,
@@ -15751,7 +15495,6 @@ html.control-glass-svg-ok .preset-card,
 html.control-glass-svg-ok .lyric-color-row,
 html.control-glass-svg-ok .quality-option,
 html.control-glass-svg-ok .modal-btn,
-html.control-glass-svg-ok .visual-guide-actions button,
 html.control-glass-svg-ok .home-chip,
 html.control-glass-svg-ok .pl-card,
 html.control-glass-svg-ok .queue-item,
@@ -15774,7 +15517,6 @@ html.control-glass-svg-ok .home-tile,
 html.control-glass-svg-ok .home-mosaic-cell,
 html.control-glass-svg-ok .modal,
 html.control-glass-svg-ok .track-detail-modal,
-html.control-glass-svg-ok .visual-guide-card,
 html.control-glass-svg-ok .volume-popover,
 html.control-glass-svg-ok .quality-popover,
 html.control-glass-svg-ok .lyric-timing-popover,
@@ -15786,7 +15528,6 @@ html.control-glass-svg-ok .pl-inline-detail {
 
 html.control-glass-svg-ok #home-btn,
 html.control-glass-svg-ok #upload-btn,
-html.control-glass-svg-ok #visual-guide-btn,
 html.control-glass-svg-ok #fx-fab,
 html.control-glass-svg-ok #top-right .icon-btn {
   backdrop-filter: var(--saved-button-glass-svg-filter) !important;
@@ -15978,7 +15719,6 @@ html.control-glass-svg-ok #search-results.search-history-surface {
 
 #home-btn,
 #upload-btn,
-#visual-guide-btn,
 #fx-fab,
 #top-right .icon-btn {
   color: rgba(var(--fc-accent-rgb), .82) !important;
@@ -15994,7 +15734,6 @@ html.control-glass-svg-ok #search-results.search-history-surface {
 
 #home-btn:hover,
 #upload-btn:hover,
-#visual-guide-btn:hover,
 #fx-fab:hover,
 #fx-fab.active,
 #top-right .icon-btn:hover {
@@ -16017,14 +15756,12 @@ body.empty-home-active #home-btn {
   box-shadow: var(--saved-button-glass-hover-shadow), 0 0 24px rgba(var(--home-icon-rgb), .16) !important;
 }
 
-#visual-guide-btn,
 #fx-fab {
   color: var(--visual-icon-color) !important;
   border-color: rgba(var(--visual-icon-rgb), .42) !important;
   box-shadow: var(--saved-button-glass-shadow), 0 0 18px rgba(var(--visual-icon-rgb), .10) !important;
 }
 
-#visual-guide-btn:hover,
 #fx-fab:hover,
 #fx-fab.active {
   color: var(--visual-icon-color) !important;
@@ -16033,31 +15770,10 @@ body.empty-home-active #home-btn {
   box-shadow: var(--saved-button-glass-hover-shadow), 0 0 24px rgba(var(--visual-icon-rgb), .16) !important;
 }
 
-#visual-guide-btn svg,
 #home-btn svg,
 #upload-btn svg,
 #fx-fab svg {
   stroke: currentColor !important;
-}
-
-#visual-guide-btn,
-body.desktop-shell #desktop-titlebar #visual-guide-btn,
-html.control-glass-svg-ok #visual-guide-btn {
-  color: rgba(184, 188, 196, .58) !important;
-  border-color: rgba(255, 255, 255, .08) !important;
-  background: rgba(36, 38, 44, .46) !important;
-  box-shadow: 0 10px 26px rgba(0, 0, 0, .18), inset 0 1px 0 rgba(255, 255, 255, .06) !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-#visual-guide-btn:hover,
-body.desktop-shell #desktop-titlebar #visual-guide-btn:hover,
-html.control-glass-svg-ok #visual-guide-btn:hover {
-  color: #fff !important;
-  border-color: rgba(255, 255, 255, .24) !important;
-  background: rgba(72, 76, 86, .72) !important;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, .24), inset 0 1px 0 rgba(255, 255, 255, .10) !important;
 }
 
 /* Visual console organization and adaptive popovers. */

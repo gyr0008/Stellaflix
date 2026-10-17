@@ -105,7 +105,6 @@ function handleHomeTileClick(index) {
   else if (item.kind === 'song') playHomeSong(item.index);
   else if (item.kind === 'login') showLoginModal({ source: 'home-tile' });
   else if (item.kind === 'local') openHomeLocalImport();
-  else if (item.kind === 'guide') openHomeProductGuide();
   else if (item.kind === 'playlist') openHomePlaylist(item.index);
   else if (item.kind === 'podcast') openHomePodcast(item.index);
   else if (item.kind === 'podcastSearch') { setSearchMode('podcast'); loadPodcastHot(); }

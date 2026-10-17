@@ -538,7 +538,6 @@
     if (/(?:自定义歌词|歌词编辑|编辑歌词)/.test(text) && matches('(?:自定义歌词|歌词编辑|编辑歌词)')) return 'custom_lyrics';
     if (/(?:每日热评|热评管理)/.test(text) && matches('(?:每日热评|热评管理)')) return 'daily_review';
     if (/(?:听歌偏好|偏好画像|听歌画像)/.test(text) && matches('(?:听歌偏好|偏好画像|听歌画像)')) return 'listening_insight';
-    if (/(?:使用引导|新手引导|功能引导)/.test(text) && matches('(?:使用引导|新手引导|功能引导)')) return 'visual_guide';
     if (/(?:作者支持|支持作者)/.test(text) && matches('(?:作者支持|支持作者)')) return 'author_support';
     if (/(?:本曲鼓点分析|鼓点分析)/.test(text) && matches('(?:本曲鼓点分析|鼓点分析)')) return 'beat_analysis';
     if (/(?:首页|主页)/.test(text) && matches('(?:首页|主页)')) return 'home';

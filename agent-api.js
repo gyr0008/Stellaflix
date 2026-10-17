@@ -217,8 +217,8 @@ const OPEN_INTERFACE_TOOL_SCHEMA = {
     properties: {
       section: {
         type: 'string',
-        enum: ['home', 'library', 'radio', 'ranking', 'visual_console', 'advanced_settings', 'lyric_animation', 'hotkeys', 'audio_output', 'wallpaper', 'update', 'remote_control', 'music_planet', 'song_details', 'artist_details', 'collect', 'current_queue', 'playlist_panel', 'global_search', 'playback_tuning', 'volume_panel', 'playlist_import', 'lx_playlist_import', 'playlist_selection', 'source_import', 'local_file_import', 'local_folder_import', 'custom_lyrics', 'daily_review', 'listening_insight', 'visual_guide', 'author_support', 'beat_analysis'],
-        description: '要打开的界面。除常用首页、音乐库、电台、排行榜和设置外，还支持当前队列、歌单面板、搜索、倍速/音调、音量、各种导入、自定义歌词、热评、偏好、使用引导、作者支持和鼓点分析。'
+        enum: ['home', 'library', 'radio', 'ranking', 'visual_console', 'advanced_settings', 'lyric_animation', 'hotkeys', 'audio_output', 'wallpaper', 'update', 'remote_control', 'music_planet', 'song_details', 'artist_details', 'collect', 'current_queue', 'playlist_panel', 'global_search', 'playback_tuning', 'volume_panel', 'playlist_import', 'lx_playlist_import', 'playlist_selection', 'source_import', 'local_file_import', 'local_folder_import', 'custom_lyrics', 'daily_review', 'listening_insight', 'author_support', 'beat_analysis'],
+        description: '要打开的界面。除常用首页、音乐库、电台、排行榜和设置外，还支持当前队列、歌单面板、搜索、倍速/音调、音量、各种导入、自定义歌词、热评、偏好、作者支持和鼓点分析。'
       },
     },
     required: ['section'],
@@ -746,7 +746,7 @@ function parseToolArguments(value, toolName) {
   }
   if (toolName === SOURCE_MANAGER_TOOL_NAME) return {};
   if (toolName === OPEN_INTERFACE_TOOL_NAME) {
-    const allowedSections = new Set(['home', 'library', 'radio', 'ranking', 'visual_console', 'advanced_settings', 'lyric_animation', 'hotkeys', 'audio_output', 'wallpaper', 'update', 'remote_control', 'music_planet', 'song_details', 'artist_details', 'collect', 'current_queue', 'playlist_panel', 'global_search', 'playback_tuning', 'volume_panel', 'playlist_import', 'lx_playlist_import', 'playlist_selection', 'source_import', 'local_file_import', 'local_folder_import', 'custom_lyrics', 'daily_review', 'listening_insight', 'visual_guide', 'author_support', 'beat_analysis']);
+    const allowedSections = new Set(['home', 'library', 'radio', 'ranking', 'visual_console', 'advanced_settings', 'lyric_animation', 'hotkeys', 'audio_output', 'wallpaper', 'update', 'remote_control', 'music_planet', 'song_details', 'artist_details', 'collect', 'current_queue', 'playlist_panel', 'global_search', 'playback_tuning', 'volume_panel', 'playlist_import', 'lx_playlist_import', 'playlist_selection', 'source_import', 'local_file_import', 'local_folder_import', 'custom_lyrics', 'daily_review', 'listening_insight', 'author_support', 'beat_analysis']);
     const section = safeText(input.section || input.page, 40).trim().toLowerCase();
     return allowedSections.has(section) ? { section } : {};
   }

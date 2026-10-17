@@ -79,7 +79,6 @@ var DESKTOP_ICON_SHIELD_TARGETS = [
   { selector: '#cookie-export-prompt', kind: 'cookie-export' },
   { selector: '.modal-mask', kind: 'modal', visual: true },
   { selector: '#toast', kind: 'toast', visual: true },
-  { selector: '#visual-guide', kind: 'guide', visual: true },
   { selector: '#drop-overlay', kind: 'drop', visual: true },
   { selector: '#splash', kind: 'splash', visual: true }
 ];

@@ -200,7 +200,6 @@ var FX_FAB_AUTO_HIDE_STORE_KEY = 'stellaflix-fx-fab-auto-hide-v1';
 var CONTROLS_AUTO_HIDE_STORE_KEY = 'stellaflix-controls-auto-hide-v1';
 var FREE_CAMERA_STORE_KEY = 'stellaflix-free-camera-v1';
 var HOTKEY_SETTINGS_STORE_KEY = 'stellaflix-hotkey-settings-v1';
-var VISUAL_GUIDE_SEEN_STORE_KEY = 'stellaflix-visual-guide-seen-v2';
 var CLOSE_BEHAVIOR_STORE_KEY = 'stellaflix-close-behavior-v1';
 var LAST_PLAYBACK_STORE_KEY = 'stellaflix-last-playback-v1';
 var STARTUP_AUTOPLAY_STORE_KEY = 'stellaflix-startup-autoplay-v1';
@@ -275,8 +274,6 @@ var localBeatAnalysis = { song: null, audioUrl: '', mode: 'sf', active: false, t
 var likedSongMap = {}, likeBusyMap = {}, likeStatusToken = 0;
 var collectTargetSong = null, collectBusy = false;
 var uploadTipTimer = null, uploadTipAttempts = 0;
-var visualGuideActive = false, visualGuideStep = 0, visualGuideResizeBound = false;
-var visualGuideState = { bottomWasVisible: false, searchWasPeek: false, manual: false };
 var emptyHomeActive = false;
 var homeForcedOpen = false;
 var homeSuppressed = false;

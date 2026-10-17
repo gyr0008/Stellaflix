@@ -4,7 +4,6 @@ function fallbackHomeTiles() {
     { kind: 'search', title: '搜索一首歌', sub: '原唱优先', query: '' },
     { kind: 'local', title: '导入本地音乐', sub: '本地文件也能可视化' },
     { kind: 'podcastSearch', title: '搜索播客', sub: '长内容 / 电台' },
-    { kind: 'guide', title: '看看视觉舞台', sub: '粒子 / 歌词 / 封面' },
   ];
 }
 function homeTileCover(item) {
@@ -21,7 +20,6 @@ function homeToneForItem(item, index) {
   if (item.kind === 'playlist') return 'playlist';
   if (item.kind === 'podcast' || item.kind === 'podcastSearch') return 'podcast';
   if (item.kind === 'local') return 'local';
-  if (item.kind === 'guide') return 'guide';
   if (item.kind === 'login') return 'library';
   if (item.kind === 'search') return 'search';
   return ['daily', 'playlist', 'local', 'guide', 'search'][index % 5];

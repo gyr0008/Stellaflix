@@ -109,7 +109,7 @@ function canShowShelfHoverCueAt(e) {
   if (shelfPlaybackSwitchGuardActive()) return false;
   if (!shelfHoverCue.guide) return false;
   if (document.body.classList.contains('splash-active')) return false;
-  if (visualGuideActive || emptyHomeActive || homeForcedOpen) return false;
+  if (emptyHomeActive || homeForcedOpen) return false;
   if (!shelfManager || !shelfManager.getMode || shelfManager.getMode() !== 'side') return false;
   if (shelfPinnedOpen) return false;
   if (shelfManager.hasOpenContent && shelfManager.hasOpenContent()) return false;
@@ -126,20 +126,6 @@ function shelfCueRect() {
 function shelfCueCenter() {
   var r = shelfCueRect();
   return { x: r.left + r.width * 0.58, y: r.top + r.height * 0.50 };
-}
-function setShelfGuideCueActive(on) {
-  shelfHoverCue.guide = !!on;
-  if (on) {
-    var c = shelfCueCenter();
-    shelfHoverCue.target = 1;
-    shelfHoverCue.value = Math.max(shelfHoverCue.value, 0.72);
-    shelfHoverCue.x = c.x;
-    shelfHoverCue.y = c.y;
-    shelfHoverCue.lastAt = performance.now();
-    if (typeof wakeIdleGuideLoop === 'function') wakeIdleGuideLoop();
-  } else {
-    shelfHoverCue.target = 0;
-  }
 }
 function updateShelfHoverCueFromPointer(e) {
   if (shelfPlaybackSwitchGuardActive()) {

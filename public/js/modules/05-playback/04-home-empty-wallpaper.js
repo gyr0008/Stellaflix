@@ -184,10 +184,6 @@ function openHomeLocalImport() {
   // 始终打开导入面板：有曲库时面板内提供「播放本地曲库」，避免吞掉二次导入入口
   openUploadPanel();
 }
-function openHomeProductGuide() {
-  closeLoginModal();
-  setTimeout(function () { startVisualGuide({ manual: true, source: 'home' }); }, 160);
-}
 async function waitForHomeDiscoverIdle(timeout) {
   var started = Date.now();
   while (homeDiscoverState.loading && Date.now() - started < (timeout || 2200)) {
@@ -300,7 +296,7 @@ function openHomeThirdCard() {
 }
 function openHomeLibrary() {
   if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    openHomeProductGuide();
+    showLoginModal({ source: 'home-library' });
     return;
   }
   homeSuppressed = false;
@@ -443,7 +439,6 @@ function isHomeBlankDismissClick(e) {
     '#fx-panel',
     '#playlist-panel',
     '#mini-queue-popover',
-    '#visual-guide',
     '#upload-tip',
     '#toast',
     '#trial-banner',

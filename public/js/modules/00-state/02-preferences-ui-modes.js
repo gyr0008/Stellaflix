@@ -296,7 +296,7 @@ function shouldSuppressFullscreenDiyPeek() {
   var hotkeyModal = document.getElementById('hotkey-modal');
   var fxPanelOpen = !!(fxPanel && (fxPanel.classList.contains('peek') || fxPanel.classList.contains('show')));
   var hotkeyOpen = !!(hotkeyModal && hotkeyModal.classList.contains('show'));
-  return !!(visualGuideActive || fxPanelOpen || hotkeyOpen);
+  return !!(fxPanelOpen || hotkeyOpen);
 }
 function updateFullscreenDiyPeekFromPointer(x, y) {
   var isFullscreen = !!(desktopRuntimeState.fullscreen || desktopFullscreenActive || document.fullscreenElement || document.body.classList.contains('desktop-fullscreen'));
@@ -355,8 +355,4 @@ function applyDiyMode(on, opts) {
 }
 function toggleDiyMode() {
   applyDiyMode(!diyPlayerMode, { save: true, toast: true, animate: true });
-  if (visualGuideActive) {
-    visualGuideState.mode = diyPlayerMode ? 'diy' : 'simple';
-    showVisualGuideStep(0);
-  }
 }

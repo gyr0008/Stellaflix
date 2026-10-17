@@ -13,7 +13,7 @@
  *    子元素自抬无效，必须抬 #desktop-titlebar 本身。
  *
  * 目标：世界页只留右上角 170×12 感应窄条，悬停显现只含 − □ × 的独立玻璃胶囊；
- *  ? / 更新 / 第三方音源 / DIY 在世界页不弹出。
+ *  更新 / 第三方音源 / DIY 在世界页不弹出。
  *
  * 断言面全部为 index.css 源码契约（本仓库 CSS 无运行时 harness，与
  * world-page-independent.test.js 同风格）。
@@ -63,15 +63,15 @@ test('世界页：.desktop-drag-region 整块摘除（44px 吞点击横带消失
   assert.match(b, /display:\s*none\s*!important/);
 });
 
-test('世界页：? / 更新 / 第三方音源 / DIY 四个入口不弹出', () => {
+test('世界页：更新 / 第三方音源 / DIY 三个入口不弹出', () => {
   // 选择器必须逐条写全限定：CSS 分组选择器不是相对的，`A B,#C` 会让 #C 全局命中
   const b = block(SCOPE + '\\s+#desktop-titlebar\\s+#diy-mode-btn');
   assert.ok(b, '必须有功能入口的世界页隐藏规则');
   assert.match(b, /display:\s*none\s*!important/);
-  ['#visual-guide-btn', '#update-entry', '#custom-source-btn', '#diy-mode-btn'].forEach((id) => {
+  ['#update-entry', '#custom-source-btn', '#diy-mode-btn'].forEach((id) => {
     assert.ok(
       css.includes(SCOPE.replace(/\\/g, '') + ' #desktop-titlebar ' + id),
-      '四个入口必须各自带 sfv-world-page 全限定选择器，缺：' + id
+      '三个入口必须各自带 sfv-world-page 全限定选择器，缺：' + id
     );
   });
 });
