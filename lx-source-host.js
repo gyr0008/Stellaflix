@@ -9,8 +9,9 @@
  *  - 协议错误前缀 `LX_*` 与 `ALLOWED_SOURCES/ALLOWED_ACTIONS` 为协议词汇，原样保留；
  *  - `%APPDATA%\lx-music-desktop\LxDatas` 自动迁移（上游 :22-27,95-161）读取的是
  *    第三方应用数据而非本应用身份，原样保留；
- *  - 本 task 只落地 list/import/select + 白名单/超时/回滚；resolve/探测/删除/
- *    URL 导入由后续任务（T2-T4）补齐，当前以 LX_SOURCE_NOT_IMPLEMENTED 占位。
+ *  - 本 task（T1）落地 list/import/select + 白名单/超时/回滚；T2 补齐 resolveMusicUrl
+ *    回退链+90s LRU 缓存（上游 :1087-1218）；探测/删除/URL 导入由后续任务（T3-T4）
+ *    补齐，当前以 LX_SOURCE_NOT_IMPLEMENTED 占位。
  */
 
 const fs = require('fs');
@@ -29,12 +30,15 @@ const EVENT_NAMES = Object.freeze({
 });
 
 // lx-music-desktop 自动迁移数据目录（第三方应用数据，非身份项，原样保留，上游 :22-27）
-const APPDATA_DIR = process.env.APPDATA || '';
-const LOCALAPPDATA_DIR = process.env.LOCALAPPDATA || '';
-const LX_DATA_DIRS = [
-  APPDATA_DIR && path.join(APPDATA_DIR, 'lx-music-desktop', 'LxDatas'),
-  LOCALAPPDATA_DIR && path.join(LOCALAPPDATA_DIR, 'Programs', 'lx-music-desktop', 'portable', 'LxDatas'),
-].filter(Boolean);
+// 我方调整：env 改为调用时惰性读取（上游为模块加载时快照），便于测试隔离本机真实 LxDatas。
+function lxDataDirs() {
+  const appdataDir = process.env.APPDATA || '';
+  const localAppdataDir = process.env.LOCALAPPDATA || '';
+  return [
+    appdataDir && path.join(appdataDir, 'lx-music-desktop', 'LxDatas'),
+    localAppdataDir && path.join(localAppdataDir, 'Programs', 'lx-music-desktop', 'portable', 'LxDatas'),
+  ].filter(Boolean);
+}
 
 const ALLOWED_SOURCES = new Set(['kw', 'kg', 'tx', 'wy', 'mg', 'xm', 'local']);
 const ALLOWED_ACTIONS = new Set(['musicUrl', 'lyric', 'pic']);
@@ -86,7 +90,7 @@ function readJsonIfExists(file) {
 }
 
 function lxDataFileCandidates(fileName) {
-  return LX_DATA_DIRS.map(dir => path.join(dir, fileName));
+  return lxDataDirs().map(dir => path.join(dir, fileName));
 }
 
 function readFirstLxJson(fileName) {
@@ -203,6 +207,167 @@ function metadataFromScript(script, fallbackName) {
   };
 }
 
+// —— 音乐信息归一化（上游 :844-899，无状态）——
+function normalizeMusicInfo(source, input) {
+  const info = { ...(input || {}) };
+  const fallbackIdPattern = /^(?:tx|wy|kw|kg|mg|song|row)_[0-9a-f]{12,}$/i;
+  const hasFallbackId = info.importFallbackId === true ||
+    fallbackIdPattern.test(String(info.songmid || '')) ||
+    fallbackIdPattern.test(String(info.id || ''));
+  if (hasFallbackId) {
+    for (const key of ['id', 'songmid', 'mid', 'songId', 'rid', 'musicId', 'hash', 'FileHash', 'fileHash', 'copyrightId', 'copyrightid']) {
+      if (info[key] != null) info[key] = '';
+    }
+    info.importFallbackId = true;
+  }
+  const id = info.songmid ?? info.id ?? info.hash ?? info.copyrightId ?? '';
+  info.id ??= id;
+  info.songmid ??= id;
+  info.mid ??= info.songmid;
+  info.songId ??= info.id;
+  info.rid ??= info.songmid;
+  info.musicId ??= info.songmid;
+  info.name ??= info.songName ?? info.title ?? '';
+  info.songName ??= info.name;
+  info.title ??= info.name;
+  info.singer ??= info.artist ?? info.singerName ?? '';
+  info.artist ??= info.singer;
+  info.albumName ??= info.album ?? '';
+  info.album ??= info.albumName;
+  info.meta = { ...(info.meta || {}) };
+  if (hasFallbackId) {
+    for (const key of ['mid', 'songmid', 'songid', 'id', 'hash', 'rid', 'musicId', 'copyrightId']) {
+      if (info.meta[key] != null) info.meta[key] = '';
+    }
+    for (const platformKey of ['qq', 'wy', 'kw', 'kg', 'mg']) {
+      if (info.meta[platformKey] && typeof info.meta[platformKey] === 'object') {
+        info.meta[platformKey] = {};
+      }
+    }
+  }
+  info.meta.mid ??= info.songmid;
+  info.meta.songmid ??= info.songmid;
+  info.meta.songid ??= info.id;
+  info.meta.id ??= info.id;
+  info.meta.hash ??= info.hash;
+  if (source === 'tx') {
+    info.meta.qq = { ...(info.meta.qq || {}), mid: info.songmid, songmid: info.songmid, songid: info.id };
+    info.strMediaMid ??= info.songmid;
+  } else if (source === 'wy') {
+    info.meta.wy = { ...(info.meta.wy || {}), id: info.id };
+  } else if (source === 'kw') {
+    info.meta.kw = { ...(info.meta.kw || {}), id: info.songmid, rid: info.songmid };
+  } else if (source === 'kg') {
+    info.meta.kg = { ...(info.meta.kg || {}), id: info.id, hash: info.hash };
+  } else if (source === 'mg') {
+    info.meta.mg = { ...(info.meta.mg || {}), id: info.id, copyrightId: info.copyrightId };
+  }
+  return info;
+}
+
+// —— 脚本返回值中提取播放 URL / headers（上游 :901-978，无状态）——
+function normalizeExtractedHttpUrl(text) {
+  text = String(text || '').trim();
+  if (!text) return '';
+  text = text.replace(/\\\//g, '/').replace(/^['"]|['"]$/g, '').trim();
+  if (/^\/\//.test(text)) text = 'https:' + text;
+  if (/^https?:\/\//i.test(text)) return text;
+  const embedded = text.match(/https?:\\?\/\\?\/[^\s"'<>]+/i);
+  if (embedded) return normalizeExtractedHttpUrl(embedded[0]);
+  try {
+    const decoded = decodeURIComponent(text);
+    if (decoded !== text) return normalizeExtractedHttpUrl(decoded);
+  } catch (_err) {}
+  return '';
+}
+
+function extractHttpUrl(value, depth = 0) {
+  if (depth > 5 || value == null) return '';
+  if (typeof value === 'string') {
+    const text = value.trim();
+    const direct = normalizeExtractedHttpUrl(text);
+    if (direct) return direct;
+    try { return extractHttpUrl(JSON.parse(text), depth + 1); } catch (_err) { return ''; }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractHttpUrl(item, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof value === 'object') {
+    for (const key of ['url', 'musicUrl', 'music_url', 'playUrl', 'play_url', 'audio', 'src', 'link', 'location', 'href', 'file', 'purl']) {
+      const found = extractHttpUrl(value[key], depth + 1);
+      if (found) return found;
+    }
+    for (const key of ['data', 'body', 'result', 'music', 'song', 'info', 'response']) {
+      const found = extractHttpUrl(value[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return '';
+}
+
+function sanitizePlaybackHeaders(headers) {
+  const out = {};
+  const allowed = new Set(['accept', 'cookie', 'origin', 'referer', 'referrer', 'user-agent']);
+  for (const [rawKey, rawValue] of Object.entries(headers || {})) {
+    const key = String(rawKey || '').trim().toLowerCase();
+    if (!allowed.has(key) || rawValue == null) continue;
+    const normalizedKey = key === 'referrer' ? 'referer' : key;
+    out[normalizedKey] = sanitizeHeaderValue(rawValue);
+  }
+  return out;
+}
+
+function extractPlaybackHeaders(value, depth = 0) {
+  if (depth > 5 || value == null) return {};
+  if (typeof value === 'string') {
+    try { return extractPlaybackHeaders(JSON.parse(value), depth + 1); } catch (_err) { return {}; }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractPlaybackHeaders(item, depth + 1);
+      if (Object.keys(found).length) return found;
+    }
+    return {};
+  }
+  if (typeof value !== 'object') return {};
+  for (const key of ['headers', 'header', 'requestHeaders', 'playHeaders', 'audioHeaders', 'proxyHeaders']) {
+    const headers = sanitizePlaybackHeaders(value[key]);
+    if (Object.keys(headers).length) return headers;
+  }
+  for (const key of ['data', 'body', 'result', 'music', 'song', 'info', 'response']) {
+    const found = extractPlaybackHeaders(value[key], depth + 1);
+    if (Object.keys(found).length) return found;
+  }
+  return {};
+}
+
+// —— 音质变体与降级候选表（上游 :1064-1084，无状态；探测判定归 T3）——
+const QUALITY_ALIASES = Object.freeze({
+  master: ['master', 'flac24bit', 'hires', 'lossless', 'flac'],
+  atmos_plus: ['atmos_plus', 'atmos', 'master', 'flac24bit', 'hires', 'flac'],
+  flac24bit: ['flac24bit', '24bit', '24BIT', 'hires', 'flac'],
+  hires: ['hires', 'flac24bit', '24bit', 'flac'],
+  flac: ['flac', 'lossless', 'ape'],
+  '320k': ['320k', '320', '320K', 'high'],
+  '128k': ['128k', '128', '128K', 'standard'],
+});
+
+function qualityVariants(quality) {
+  const key = String(quality || '').trim();
+  const variants = [key, ...(QUALITY_ALIASES[key] || [])].filter(Boolean);
+  return variants.filter((item, index) => variants.indexOf(item) === index);
+}
+
+function sourceSupportsQuality(supported, quality) {
+  if (!Array.isArray(supported) || !supported.length) return true;
+  const normalized = new Set(supported.map(item => String(item || '').trim().toLowerCase()).filter(Boolean));
+  return qualityVariants(quality).some(item => normalized.has(String(item || '').toLowerCase()));
+}
+
 /**
  * 工厂：每个实例持有独立的存储目录与运行时缓存。
  * initTimeoutMs / fetchImpl 为我方测试注入点（上游硬编码 10s 与 electron fetch）。
@@ -218,6 +383,9 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
   let runtime = null;
   let loading = null;
   const fetchFn = typeof fetchImpl === 'function' ? fetchImpl : null;
+  // 回退链惰性 runtime 缓存与 musicUrl 90s LRU 缓存（上游 :80,1086；实例级而非模块级）
+  const fallbackRuntimeCache = new Map();
+  const musicUrlCache = new Map();
 
   // —— 存储（上游 :121-142）——
   function readSourceStore() {
@@ -276,6 +444,22 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
     if (!selected) throw new Error('LX_SOURCE_NOT_CONFIGURED');
     saveMigratedSource(selected);
     return selected;
+  }
+
+  // —— 全部可轮换脚本记录（上游 :164-177；含 LxDatas 迁移记录，按脚本指纹去重）——
+  function allScriptRecords() {
+    const store = readSourceStore();
+    const records = store.records.filter(item => item.enabled !== false).slice();
+    const saved = readFirstLxJson('user_api.json');
+    const userApis = saved && (Array.isArray(saved) ? saved : saved.userApis);
+    if (Array.isArray(userApis)) records.push(...userApis.filter(item => item && typeof item.script === 'string'));
+    const seen = new Set();
+    return records.filter(record => {
+      const fingerprint = crypto.createHash('sha1').update(record.script).digest('hex');
+      if (seen.has(fingerprint)) return false;
+      seen.add(fingerprint);
+      return true;
+    });
   }
 
   // —— 脚本内 HTTP（上游 :272-385；electronFetch 分支改 fetchImpl 注入）——
@@ -621,7 +805,130 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
     }
   }
 
-  // —— 后续任务占位：接口名锁定本计划 Interfaces 块，实现落在 T2-T4 ——
+  // —— 解析器回退链 + 90s LRU 缓存（上游 :1087-1218；音质探测字段 T3 追加）——
+  // 接口签名为我方约定的对象参数（上游为位置参数 source, musicInfo, quality, options）。
+  async function resolveMusicUrl({ source, quality, musicInfo, excludeResolvers, maxResolvers } = {}) {
+    const excludedResolvers = new Set((Array.isArray(excludeResolvers) ? excludeResolvers : [])
+      .map(item => String(item || '').trim().toLowerCase()).filter(Boolean));
+    const requested = String(quality || '').trim();
+    const fallbackMap = {
+      master: ['master', 'flac24bit', 'hires', 'flac', '320k', '128k'],
+      atmos_plus: ['atmos_plus', 'master', 'flac24bit', 'hires', 'flac', '320k', '128k'],
+      flac24bit: ['flac24bit', 'hires', 'flac', '320k', '128k'],
+      hires: ['hires', 'flac', '320k', '128k'],
+      flac: ['flac', '320k', '128k'],
+      '320k': ['320k', '128k'],
+      '128k': ['128k'],
+    };
+    const normalizedInfo = normalizeMusicInfo(source, musicInfo);
+    const cacheKey = [
+      source,
+      normalizedInfo.songmid || normalizedInfo.id || normalizedInfo.hash || normalizedInfo.copyrightId || '',
+      requested,
+    ].join('|');
+    const cached = musicUrlCache.get(cacheKey);
+    if (!excludedResolvers.size && cached && Date.now() - cached.time < 90 * 1000) {
+      // cached 字段为我方新增（上游无），供调用方区分命中缓存与真实解析。
+      return { ok: true, source, ...cached.value, cached: true };
+    }
+    const activeHost = await getRuntime();
+    // 上游 :1110-1113：选中脚本先行，其余已装脚本惰性建 runtime 按短而确定的顺序回退轮换，
+    // 避免一次点击扇出到 20+ 脚本并等待全局超时。
+    const hostLoaders = [async () => activeHost];
+    for (const record of allScriptRecords()) {
+      if (record.id === activeHost.id) continue;
+      hostLoaders.push(async () => {
+        if (!fallbackRuntimeCache.has(record.id)) {
+          fallbackRuntimeCache.set(record.id, createRuntime(record).catch(err => {
+            fallbackRuntimeCache.delete(record.id);
+            throw err;
+          }));
+        }
+        return fallbackRuntimeCache.get(record.id);
+      });
+    }
+    const maxResolverCount = Math.max(1, Math.min(8, Number(maxResolvers) || 6));
+    const resolveWithHost = async (host) => {
+      if (excludedResolvers.has(String(host.name || '').trim().toLowerCase()) ||
+          excludedResolvers.has(String(host.id || '').trim().toLowerCase())) {
+        throw new Error('LX_SOURCE_EXCLUDED');
+      }
+      const supported = Array.isArray(host.sources[source]?.qualitys) ? host.sources[source].qualitys : [];
+      const rawCandidates = /^念心音源/i.test(String(host && host.name || ''))
+        ? ['320k', '128k', requested, 'flac']
+        : (fallbackMap[requested] || [requested, 'flac', '320k', '128k']);
+      const candidates = rawCandidates
+        .filter((item, index, all) => item && sourceSupportsQuality(supported, item) && all.indexOf(item) === index)
+        .slice(0, 2);
+      if (!host.sources[source] || !candidates.length) throw new Error('LX_QUALITY_UNSUPPORTED');
+      const hostErrors = [];
+      for (const candidate of candidates) {
+        const candidateVariants = qualityVariants(candidate)
+          .filter((item, index, all) => item && sourceSupportsQuality(supported, item) && all.indexOf(item) === index)
+          .slice(0, 2);
+        for (const candidateVariant of candidateVariants) {
+          try {
+            const result = await withTimeout(
+              host.request(source, 'musicUrl', { type: candidateVariant, quality: candidateVariant, musicInfo: normalizedInfo }),
+              LX_ACTION_TIMEOUT_MS,
+              `LX_SOURCE_TIMEOUT_${candidateVariant}`
+            );
+            // 我方新增：ok:false 为脚本失败信号（上游仅以 url 有无判定；测试 fixture 亦用此约定）。
+            if (result && typeof result === 'object' && result.ok === false) {
+              throw new Error(String(result.msg || result.message || '') || 'LX_SOURCE_RESOLVE_FAILED');
+            }
+            let url = extractHttpUrl(result);
+            const playbackHeaders = extractPlaybackHeaders(result);
+            if (/^http:\/\/mcp\.nianxinxz\.com\//i.test(url)) {
+              url = url.replace(/^http:/i, 'https:');
+            }
+            if (url) {
+              // T3 追加：probeAudioUrl 探测 / audioProbeSatisfiesQuality 降级告警（actual、probeWarning）。
+              return {
+                url,
+                headers: playbackHeaders,
+                quality: candidateVariant,
+                requestedQuality: candidate,
+                actual: null,
+                probeWarning: '',
+                resolver: host.name,
+              };
+            }
+            hostErrors.push(`${candidateVariant}:LX_SOURCE_URL_INVALID`);
+          } catch (err) {
+            hostErrors.push(`${candidateVariant}:${err && err.message ? err.message : 'LX_SOURCE_RESOLVE_FAILED'}`);
+          }
+        }
+      }
+      throw new Error(hostErrors.join(';') || 'LX_SOURCE_RESOLVE_FAILED');
+    };
+    const errors = [];
+    let tried = 0;
+    for (const loadHost of hostLoaders) {
+      if (tried >= maxResolverCount) break;
+      let host;
+      try {
+        host = await withTimeout(loadHost(), 2500, 'LX_SOURCE_INIT_TIMEOUT');
+        if (excludedResolvers.has(String(host.name || '').trim().toLowerCase()) ||
+            excludedResolvers.has(String(host.id || '').trim().toLowerCase())) continue;
+        tried++;
+        const value = await withTimeout(resolveWithHost(host), 8000, 'LX_SOURCE_RESOLVER_TIMEOUT');
+        if (value && value.url) {
+          musicUrlCache.set(cacheKey, { time: Date.now(), value });
+          if (musicUrlCache.size > 120) musicUrlCache.delete(musicUrlCache.keys().next().value);
+          return { ok: true, source, ...value };
+        }
+      } catch (error) {
+        errors.push(`${host && host.name ? host.name : 'unknown'}:${error && error.message ? error.message : 'LX_SOURCE_RESOLVE_FAILED'}`);
+      }
+    }
+    if (errors.length) console.warn('[LXSourceSequentialRejected]', errors);
+    throw new Error(tried
+      ? '当前音源及备用音源均解析失败，请切换音源后重试'
+      : '没有可用于这首歌的音源');
+  }
+
+  // —— 后续任务占位：接口名锁定本计划 Interfaces 块，实现落在 T3-T4 ——
   const notImplemented = task => () => { throw new Error(`LX_SOURCE_NOT_IMPLEMENTED:${task}`); };
 
   return {
@@ -633,7 +940,7 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
     deleteSources: notImplemented('T4'),
     listSources,
     checkSources: notImplemented('T4'),
-    resolveMusicUrl: notImplemented('T2'),
+    resolveMusicUrl,
     getLyric: notImplemented('T3'),
     picAction: notImplemented('T3'),
   };

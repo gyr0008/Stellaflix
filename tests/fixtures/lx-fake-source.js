@@ -13,9 +13,9 @@
       sources: { kg: { qualitys: ['128k', '320k', 'flac'] } }
     })
   })
-  lx.on('request', ({ action, source, quality, musicInfo, id }) => {
+  lx.on('request', ({ action, info }) => {
     if (action !== 'musicUrl') return
-    lx.send('request', { id, data: { ok: true, url: 'https://fake.example/song.mp3', quality } })
+    return { ok: true, url: 'https://fake.example/song.mp3', quality: info && info.quality }
   })
   lx.send('inited', { name: '假脚本', sources: { 'kg': { qualitys: ['128k', '320k', 'flac'] } } })
 })()
