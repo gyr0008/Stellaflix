@@ -10,8 +10,10 @@
  *  - `%APPDATA%\lx-music-desktop\LxDatas` 自动迁移（上游 :22-27,95-161）读取的是
  *    第三方应用数据而非本应用身份，原样保留；
  *  - 本 task（T1）落地 list/import/select + 白名单/超时/回滚；T2 补齐 resolveMusicUrl
- *    回退链+90s LRU 缓存（上游 :1087-1218）；探测/删除/URL 导入由后续任务（T3-T4）
- *    补齐，当前以 LX_SOURCE_NOT_IMPLEMENTED 占位。
+ *    回退链+90s LRU 缓存（上游 :1087-1218）；T3 补齐音质降级链+Range 魔数探测
+ *    （上游 :980-1062/:1064-1084/:1092-1100/:1137-1146/:1163-1184；:1134-1136
+ *    「念心音源」320k-first 硬编码按计划例外条款不移植）；删除/URL 导入/check 由
+ *    后续任务（T4）补齐，当前以 LX_SOURCE_NOT_IMPLEMENTED 占位。
  */
 
 const fs = require('fs');
@@ -345,7 +347,93 @@ function extractPlaybackHeaders(value, depth = 0) {
   return {};
 }
 
-// —— 音质变体与降级候选表（上游 :1064-1084，无状态；探测判定归 T3）——
+// —— Range 魔数探测（批 T3：移植上游 :980-1062；electronFetch→注入点 fetchImpl 参数化，
+//    :1019 User-Agent 'Mozilla/5.0 Mineradio/1.5' 做身份转换改 Stellaflix 探测 UA，
+//    Range bytes=0-131071 前 128KB 采样与 FLAC/WAV/M4A 魔数、MP3 帧头解析照抄）——
+function readMp3FrameInfo(bytes) {
+  let offset = 0;
+  if (bytes.length >= 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    offset = 10 + ((bytes[6] & 0x7f) << 21) + ((bytes[7] & 0x7f) << 14) +
+      ((bytes[8] & 0x7f) << 7) + (bytes[9] & 0x7f);
+  }
+  const mpeg1Rates = [0,32,40,48,56,64,80,96,112,128,160,192,224,256,320,0];
+  const mpeg2Rates = [0,8,16,24,32,40,48,56,64,80,96,112,128,144,160,0];
+  const sampleRates = {
+    3: [44100, 48000, 32000],
+    2: [22050, 24000, 16000],
+    0: [11025, 12000, 8000],
+  };
+  for (let i = Math.max(0, offset); i + 3 < bytes.length; i++) {
+    if (bytes[i] !== 0xff || (bytes[i + 1] & 0xe0) !== 0xe0) continue;
+    const version = (bytes[i + 1] >> 3) & 3;
+    const layer = (bytes[i + 1] >> 1) & 3;
+    const bitrateIndex = (bytes[i + 2] >> 4) & 15;
+    const sampleIndex = (bytes[i + 2] >> 2) & 3;
+    if (version === 1 || layer !== 1 || bitrateIndex === 0 || bitrateIndex === 15 || sampleIndex === 3) continue;
+    const rates = version === 3 ? mpeg1Rates : mpeg2Rates;
+    return {
+      codec: 'mp3',
+      lossless: false,
+      bitrate: rates[bitrateIndex] * 1000,
+      sampleRate: sampleRates[version][sampleIndex],
+    };
+  }
+  return null;
+}
+
+async function probeAudioUrl(url, playbackHeaders, fetchImpl) {
+  if (typeof fetchImpl !== 'function') throw new Error('LX_AUDIO_PROBE_UNAVAILABLE');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const headers = sanitizeHeaders(Object.assign({
+      Range: 'bytes=0-131071',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Stellaflix/LXSource',
+      Accept: 'audio/*,*/*;q=0.8',
+    }, playbackHeaders || {}));
+    headers.Range = 'bytes=0-131071';
+    const response = await fetchImpl(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers,
+    });
+    if (!response.ok && response.status !== 206) throw new Error(`LX_AUDIO_PROBE_HTTP_${response.status}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length >= 4 && bytes[0] === 0x66 && bytes[1] === 0x4c && bytes[2] === 0x61 && bytes[3] === 0x43) {
+      let sampleRate = 0;
+      let bitDepth = 0;
+      if (bytes.length >= 26 && (bytes[4] & 0x7f) === 0) {
+        sampleRate = (bytes[18] << 12) | (bytes[19] << 4) | (bytes[20] >> 4);
+        bitDepth = (((bytes[20] & 1) << 4) | (bytes[21] >> 4)) + 1;
+      }
+      return { codec: 'flac', lossless: true, bitrate: 0, sampleRate, bitDepth };
+    }
+    if (bytes.length >= 4 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+      return { codec: 'wav', lossless: true, bitrate: 0, sampleRate: 0 };
+    }
+    if (bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+      return { codec: 'm4a', lossless: false, bitrate: 0, sampleRate: 0 };
+    }
+    const mp3 = readMp3FrameInfo(bytes);
+    if (mp3) return mp3;
+    throw new Error('LX_AUDIO_FORMAT_UNVERIFIED');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function audioProbeSatisfiesQuality(probe, quality) {
+  if (!probe) return false;
+  if (['master', 'flac24bit'].includes(quality)) return probe.lossless === true && probe.bitDepth >= 24;
+  if (quality === 'hires') {
+    return probe.lossless === true && (probe.bitDepth >= 24 || probe.sampleRate > 48000);
+  }
+  if (quality === 'flac') return probe.lossless === true;
+  if (quality === '320k') return probe.lossless === true || probe.bitrate >= 256000;
+  return probe.lossless === true || probe.bitrate >= 96000;
+}
+
+// —— 音质变体与降级候选表（上游 :1064-1084，无状态；T3 已落探测判定）——
 const QUALITY_ALIASES = Object.freeze({
   master: ['master', 'flac24bit', 'hires', 'lossless', 'flac'],
   atmos_plus: ['atmos_plus', 'atmos', 'master', 'flac24bit', 'hires', 'flac'],
@@ -366,6 +454,23 @@ function sourceSupportsQuality(supported, quality) {
   if (!Array.isArray(supported) || !supported.length) return true;
   const normalized = new Set(supported.map(item => String(item || '').trim().toLowerCase()).filter(Boolean));
   return qualityVariants(quality).some(item => normalized.has(String(item || '').toLowerCase()));
+}
+
+// —— 音质降级链（上游 :1092-1100 fallbackMap；提为模块级并经 fallbackChainFor 导出，
+//    供计划 T3 Interfaces/Task 9 前端词汇表经路由引用；未知档回退 :1136 默认链）——
+const QUALITY_FALLBACK_MAP = Object.freeze({
+  master: ['master', 'flac24bit', 'hires', 'flac', '320k', '128k'],
+  atmos_plus: ['atmos_plus', 'master', 'flac24bit', 'hires', 'flac', '320k', '128k'],
+  flac24bit: ['flac24bit', 'hires', 'flac', '320k', '128k'],
+  hires: ['hires', 'flac', '320k', '128k'],
+  flac: ['flac', '320k', '128k'],
+  '320k': ['320k', '128k'],
+  '128k': ['128k'],
+});
+
+function fallbackChainFor(quality) {
+  const key = String(quality || '').trim();
+  return (QUALITY_FALLBACK_MAP[key] || [key, 'flac', '320k', '128k']).slice();
 }
 
 /**
@@ -805,21 +910,12 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
     }
   }
 
-  // —— 解析器回退链 + 90s LRU 缓存（上游 :1087-1218；音质探测字段 T3 追加）——
+  // —— 解析器回退链 + 90s LRU 缓存 + 音质探测（上游 :1087-1218 + :1158-1185，T2/T3 已全量落地）——
   // 接口签名为我方约定的对象参数（上游为位置参数 source, musicInfo, quality, options）。
   async function resolveMusicUrl({ source, quality, musicInfo, excludeResolvers, maxResolvers } = {}) {
     const excludedResolvers = new Set((Array.isArray(excludeResolvers) ? excludeResolvers : [])
       .map(item => String(item || '').trim().toLowerCase()).filter(Boolean));
     const requested = String(quality || '').trim();
-    const fallbackMap = {
-      master: ['master', 'flac24bit', 'hires', 'flac', '320k', '128k'],
-      atmos_plus: ['atmos_plus', 'master', 'flac24bit', 'hires', 'flac', '320k', '128k'],
-      flac24bit: ['flac24bit', 'hires', 'flac', '320k', '128k'],
-      hires: ['hires', 'flac', '320k', '128k'],
-      flac: ['flac', '320k', '128k'],
-      '320k': ['320k', '128k'],
-      '128k': ['128k'],
-    };
     const normalizedInfo = normalizeMusicInfo(source, musicInfo);
     const cacheKey = [
       source,
@@ -854,9 +950,9 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
         throw new Error('LX_SOURCE_EXCLUDED');
       }
       const supported = Array.isArray(host.sources[source]?.qualitys) ? host.sources[source].qualitys : [];
-      const rawCandidates = /^念心音源/i.test(String(host && host.name || ''))
-        ? ['320k', '128k', requested, 'flac']
-        : (fallbackMap[requested] || [requested, 'flac', '320k', '128k']);
+      // 上游 :1134-1136 对「念心音源」脚本的 320k-first 硬编码不移植（生态包袱，
+      // 我方无该脚本用户；计划 T3 例外条款）——统一走降级链，2 候选×2 变体上限（:1137-1146）。
+      const rawCandidates = fallbackChainFor(requested)
       const candidates = rawCandidates
         .filter((item, index, all) => item && sourceSupportsQuality(supported, item) && all.indexOf(item) === index)
         .slice(0, 2);
@@ -883,14 +979,31 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
               url = url.replace(/^http:/i, 'https:');
             }
             if (url) {
-              // T3 追加：probeAudioUrl 探测 / audioProbeSatisfiesQuality 降级告警（actual、probeWarning）。
+              // —— 批 T3：Range 魔数探测（上游 :1158-1185）。探测仅 advisory：
+              // 供应商静默降档时 resolver 的 URL 依然可用，由播放代理/下载写入做终验
+              // （:1164-1168 注释语义）；只有 404/410 明确死链才跳过该候选换下一档/下一 resolver
+              // （:1180-1182），其余探测失败保留 URL 并带 probeWarning。
+              let probe = null;
+              let probeWarning = '';
+              try {
+                probe = await probeAudioUrl(url, playbackHeaders, fetchFn);
+                if (!audioProbeSatisfiesQuality(probe, requested)) {
+                  probeWarning = `LX_AUDIO_QUALITY_DOWNGRADED_${probe.codec}_${probe.bitrate || 0}`;
+                  hostErrors.push(`${candidate}:${probeWarning}`);
+                }
+              } catch (probeErr) {
+                const probeMessage = probeErr && probeErr.message ? probeErr.message : 'LX_AUDIO_PROBE_FAILED';
+                hostErrors.push(`${candidate}:${probeMessage}`);
+                probeWarning = probeMessage;
+                if (/^LX_AUDIO_PROBE_HTTP_(?:404|410)$/i.test(probeMessage)) continue;
+              }
               return {
                 url,
                 headers: playbackHeaders,
                 quality: candidateVariant,
                 requestedQuality: candidate,
-                actual: null,
-                probeWarning: '',
+                actual: probe,
+                probeWarning,
                 resolver: host.name,
               };
             }
@@ -928,7 +1041,8 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
       : '没有可用于这首歌的音源');
   }
 
-  // —— 后续任务占位：接口名锁定本计划 Interfaces 块，实现落在 T3-T4 ——
+  // —— 后续任务占位：接口名锁定本计划 Interfaces 块，实现落在 T4（音质降级链+探测已随 T3 落地；
+  //    getLyric/picAction 虽标 T3，但 T3 brief 移植区段未含上游 :1220-1237，归后续编排指派）——
   const notImplemented = task => () => { throw new Error(`LX_SOURCE_NOT_IMPLEMENTED:${task}`); };
 
   return {
@@ -946,4 +1060,4 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
   };
 }
 
-module.exports = { createLxSourceHost };
+module.exports = { createLxSourceHost, QUALITY_ALIASES, fallbackChainFor };
