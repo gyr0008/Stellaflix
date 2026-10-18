@@ -442,3 +442,17 @@ test('脚本 id 防碰撞：连续导入生成互不相同的 stellaflix_ 前缀
   assert.equal(new Set(ids).size, 6)
   assert.ok(ids.every(id => /^stellaflix_\d+_[0-9a-f]+$/.test(id)))
 })
+
+test('deleteSources 非数组入参严格拒绝（上游 :755 Array.isArray ? ids : []，不 coerce 单 id）', async () => {
+  const host = createLxSourceHost({ userDataPath: tmpUserData() })
+  const a = await host.importSource('A', namedFixture('A'))
+  await assert.rejects(host.deleteSources(a.id), /LX_SOURCE_DELETE_IDS_REQUIRED/)
+  await assert.rejects(host.deleteSources(String(a.id)), /LX_SOURCE_DELETE_IDS_REQUIRED/)
+  assert.deepEqual(host.listSources().map(row => row.id), [a.id]) // 存储不动
+})
+
+test('checkSources 空库省略 ids 返回 []（与省略=查全部一致）；显式空数组仍 IDS_REQUIRED', async () => {
+  const host = createLxSourceHost({ userDataPath: tmpUserData() })
+  assert.deepEqual(await host.checkSources(), [])
+  await assert.rejects(host.checkSources([]), /LX_SOURCE_IDS_REQUIRED/)
+})

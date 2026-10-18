@@ -1008,10 +1008,16 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, checkTimeoutM
   // 上游无逐源动作冒烟（:685-694 仅起运行时并枚举 sources），本移植照上游语义。
   async function checkSources(ids) {
     const store = readSourceStore();
-    const sourceIds = (ids === undefined || ids === null)
+    const idsOmitted = (ids === undefined || ids === null);
+    const sourceIds = idsOmitted
       ? store.records.map(item => item.id)
       : normalizeSourceIds(ids);
-    if (!sourceIds.length) throw new Error('LX_SOURCE_IDS_REQUIRED');
+    if (!sourceIds.length) {
+      // 空库且省略 ids =「全部」为空，返回 []（与省略=查全部契约一致）；
+      // 显式传空仍严格报 IDS_REQUIRED（上游 :675 语义保留）。
+      if (idsOmitted && !store.records.length) return [];
+      throw new Error('LX_SOURCE_IDS_REQUIRED');
+    }
     const checked = [];
     for (const id of sourceIds) {
       const record = store.records.find(item => item.id === id);
@@ -1091,7 +1097,9 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, checkTimeoutM
   }
 
   async function deleteSources(ids) {
-    const uniqueIds = normalizeSourceIds(ids);
+    // 上游 :755 严格口径：非数组一律视作 []（拒绝），不 coerce 单 id——
+    // 与 normalizeSourceIds（上游 :625-628，setSourcesEnabled/checkSources 用的宽容版）刻意不同。
+    const uniqueIds = [...new Set((Array.isArray(ids) ? ids : []).map(id => String(id || '').trim()).filter(Boolean))];
     if (!uniqueIds.length) throw new Error('LX_SOURCE_DELETE_IDS_REQUIRED');
     const deleteSet = new Set(uniqueIds);
     const previousStore = readSourceStore();
