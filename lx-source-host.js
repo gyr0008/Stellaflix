@@ -12,8 +12,10 @@
  *  - 本 task（T1）落地 list/import/select + 白名单/超时/回滚；T2 补齐 resolveMusicUrl
  *    回退链+90s LRU 缓存（上游 :1087-1218）；T3 补齐音质降级链+Range 魔数探测
  *    （上游 :980-1062/:1064-1084/:1092-1100/:1137-1146/:1163-1184；:1134-1136
- *    「念心音源」320k-first 硬编码按计划例外条款不移植）；删除/URL 导入/check 由
- *    后续任务（T4）补齐，当前以 LX_SOURCE_NOT_IMPLEMENTED 占位。
+ *    「念心音源」320k-first 硬编码按计划例外条款不移植）；T4 补齐 URL/APIKEY 导入、
+ *    checkSources 试跑、批量启停与删除（上游 :230-270/:630-795/:797-831；删除/停用
+ *    同步清 fallbackRuntimeCache 为 T2 审查携带项，上游 :727/:771 同款）；
+ *    getLyric/picAction 归后续任务（裁决：getLyric→T7，pic 维持占位）。
  */
 
 const fs = require('fs');
@@ -162,6 +164,48 @@ function normalizeCurrentScriptInfoName(name) {
   return name;
 }
 
+// —— HTTPS 证书失败降级判定（上游 :230-240，ynx.de5.net 域证书常不匹配，端点为脚本生态公共服务非身份项）——
+function sourceUrlHttpFallback(sourceUrl, err) {
+  try {
+    const target = new URL(String(sourceUrl || '').trim());
+    const message = String((err && (err.code || err.message)) || err || '');
+    if (target.protocol === 'https:' && target.hostname === 'ynx.de5.net' && /CERT|SSL|TLS|COMMON_NAME|certificate/i.test(message)) {
+      target.protocol = 'http:';
+      return target.href;
+    }
+  } catch (_err) {}
+  return '';
+}
+
+// —— URL/APIKEY 导入归一（上游 :250-270 照抄：64-hex 展开 ynx 端点、裸域补协议、ynx https 预降级 http）——
+function normalizeImportSourceUrl(input) {
+  let text = String(input || '').trim();
+  if (!text) throw new Error('LX_SOURCE_URL_INVALID');
+  if (/^[a-f0-9]{64}$/i.test(text)) {
+    text = 'http://ynx.de5.net/API/lx-ynx.php?APIKEY=' + text;
+  } else if (/^ynx\.de5\.net\//i.test(text)) {
+    text = 'http://' + text;
+  }
+  let target;
+  try {
+    target = new URL(text);
+  } catch (_err) {
+    throw new Error('LX_SOURCE_URL_INVALID');
+  }
+  if (!/^https?:$/.test(target.protocol)) throw new Error('LX_SOURCE_URL_INVALID');
+  if (target.protocol === 'https:' && target.hostname === 'ynx.de5.net') {
+    // 这个域名的 https 证书经常不匹配，直接走官方注释给的 http。
+    target.protocol = 'http:';
+  }
+  return target.href;
+}
+
+// —— 批量 ids 归一（上游 :625-628）——
+function normalizeSourceIds(ids) {
+  return [...new Set((Array.isArray(ids) ? ids : [ids])
+    .map(id => String(id || '').trim()).filter(Boolean))];
+}
+
 // —— lx.utils.crypto（上游 :387-404）——
 function cryptoUtils() {
   return {
@@ -199,7 +243,8 @@ function metadataFromScript(script, fallbackName) {
     return match ? match[1].trim() : '';
   };
   return {
-    id: `stellaflix_${Date.now()}`,
+    // T1 审查携带整改：同毫秒导入会撞 id，追加随机短后缀；保留 stellaflix_ 前缀。
+    id: `stellaflix_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
     name: readTag('name') || String(fallbackName || 'Stellaflix 导入音源').replace(/\.js$/i, ''),
     description: readTag('description'),
     version: readTag('version') || 'unknown',
@@ -475,9 +520,10 @@ function fallbackChainFor(quality) {
 
 /**
  * 工厂：每个实例持有独立的存储目录与运行时缓存。
- * initTimeoutMs / fetchImpl 为我方测试注入点（上游硬编码 10s 与 electron fetch）。
+ * initTimeoutMs / checkTimeoutMs / fetchImpl 为我方测试注入点
+ * （上游硬编码 10s/12s 与 electron fetch；checkTimeoutMs 默认 12000 对齐上游 :685 封顶）。
  */
-function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = fetch } = {}) {
+function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, checkTimeoutMs = 12000, fetchImpl = fetch } = {}) {
   if (!userDataPath) throw new Error('LX_SOURCE_USER_DATA_PATH_REQUIRED');
 
   // 身份转换（上游 :28-30）：%APPDATA%\Mineradio\sources → userDataPath/sources
@@ -901,13 +947,230 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
     try {
       const hostRuntime = await getRuntime(true);
       persistActiveSources(record, hostRuntime.sources);
-      return { ok: true, id: record.id, name: hostRuntime.name, version: hostRuntime.version, sources: hostRuntime.sources };
+      // installed 快照对齐上游 :616；id 字段为我方新增。
+      return { ok: true, id: record.id, name: hostRuntime.name, version: hostRuntime.version, sources: hostRuntime.sources, installed: listSources() };
     } catch (err) {
       store.activeId = previousId;
       writeSourceStore(store);
       runtime = null;
       throw err;
     }
+  }
+
+  // —— 批量启停（上游 :630-671；T2 审查携带：停用的脚本必须同步清 fallbackRuntimeCache，
+  //    上游对等价缓存的操作见 :727/:771——否则停用脚本仍可被轮换命中）——
+  async function setSourcesEnabled(ids, enabled) {
+    const sourceIds = normalizeSourceIds(ids);
+    if (!sourceIds.length) throw new Error('LX_SOURCE_IDS_REQUIRED');
+    const nextEnabled = enabled !== false;
+    const previousStore = readSourceStore();
+    const existing = new Set(previousStore.records.map(item => item.id));
+    if (sourceIds.some(id => !existing.has(id))) throw new Error('LX_SOURCE_NOT_FOUND');
+
+    const nextRecords = previousStore.records.map(item =>
+      sourceIds.includes(item.id) ? { ...item, enabled: nextEnabled } : item
+    );
+    let nextActiveId = previousStore.activeId;
+    if (!nextEnabled && sourceIds.includes(nextActiveId)) {
+      const fallback = nextRecords.find(item => item.enabled !== false);
+      if (!fallback) throw new Error('LX_SOURCE_AT_LEAST_ONE_ENABLED');
+      nextActiveId = fallback.id;
+    }
+    const nextStore = { activeId: nextActiveId, records: nextRecords };
+    const previousActive = previousStore.records.find(item => item.id === previousStore.activeId);
+    const nextActive = nextRecords.find(item => item.id === nextActiveId);
+    writeSourceStore(nextStore);
+    if (!nextEnabled) sourceIds.forEach(id => fallbackRuntimeCache.delete(id));
+    if (nextActive) fs.writeFileSync(SOURCE_FILE, JSON.stringify(nextActive), 'utf8');
+    const activeChanged = previousStore.activeId !== nextActiveId;
+    if (activeChanged) runtime = null;
+    try {
+      const hostRuntime = await getRuntime(activeChanged);
+      return {
+        ok: true,
+        name: hostRuntime.name,
+        version: hostRuntime.version,
+        sources: hostRuntime.sources,
+        installed: listSources(),
+      };
+    } catch (err) {
+      writeSourceStore(previousStore);
+      try {
+        if (previousActive) fs.writeFileSync(SOURCE_FILE, JSON.stringify(previousActive), 'utf8');
+      } catch (_err) {}
+      runtime = null;
+      throw err;
+    }
+  }
+
+  // —— checkSources 试跑（上游 :673-708；返回按计划 Interfaces 拍平的 [{id, ok, sources, error}] 数组）——
+  // 语义：逐脚本起沙箱（createRuntime 要求 inited + request handler），单脚本 checkTimeoutMs（默认 12s）封顶；
+  // 上游无逐源动作冒烟（:685-694 仅起运行时并枚举 sources），本移植照上游语义。
+  async function checkSources(ids) {
+    const store = readSourceStore();
+    const sourceIds = (ids === undefined || ids === null)
+      ? store.records.map(item => item.id)
+      : normalizeSourceIds(ids);
+    if (!sourceIds.length) throw new Error('LX_SOURCE_IDS_REQUIRED');
+    const checked = [];
+    for (const id of sourceIds) {
+      const record = store.records.find(item => item.id === id);
+      if (!record) {
+        checked.push({ id, ok: false, error: 'LX_SOURCE_NOT_FOUND' });
+        continue;
+      }
+      try {
+        const hostRuntime = await withTimeout(createRuntime(record), checkTimeoutMs, 'LX_SOURCE_CHECK_TIMEOUT');
+        checked.push({
+          id,
+          ok: true,
+          name: record.name || hostRuntime.name || '未命名音源',
+          version: record.version || hostRuntime.version || '',
+          enabled: record.enabled !== false,
+          current: record.id === store.activeId,
+          sources: Object.keys(hostRuntime.sources || {}),
+        });
+      } catch (err) {
+        checked.push({
+          id,
+          ok: false,
+          name: record.name || '未命名音源',
+          version: record.version || '',
+          enabled: record.enabled !== false,
+          current: record.id === store.activeId,
+          error: err && err.message ? err.message : 'LX_SOURCE_CHECK_FAILED',
+        });
+      }
+    }
+    return checked;
+  }
+
+  // —— 删除（上游 :710-752 单删 / :754-795 批删；fallbackRuntimeCache 随删清见 :727/:771）——
+  async function deleteSource(id) {
+    id = String(id || '');
+    const previousStore = readSourceStore();
+    const target = previousStore.records.find(item => item.id === id);
+    if (!target) throw new Error('LX_SOURCE_NOT_FOUND');
+
+    const nextRecords = previousStore.records.filter(item => item.id !== id);
+    const nextStore = {
+      activeId: previousStore.activeId === id ? (nextRecords[0] && nextRecords[0].id || '') : previousStore.activeId,
+      records: nextRecords,
+    };
+    if (nextStore.activeId && !nextRecords.some(item => item.id === nextStore.activeId)) {
+      nextStore.activeId = nextRecords[0] && nextRecords[0].id || '';
+    }
+
+    const previousActive = previousStore.records.find(item => item.id === previousStore.activeId);
+    writeSourceStore(nextStore);
+    fallbackRuntimeCache.delete(id);
+
+    if (!nextRecords.length) {
+      try { fs.unlinkSync(SOURCE_FILE); } catch (_err) {}
+      runtime = null;
+      return { ok: true, name: '未配置', version: '', sources: {}, installed: [] };
+    }
+
+    const activeRecord = nextRecords.find(item => item.id === nextStore.activeId) || nextRecords[0];
+    nextStore.activeId = activeRecord.id;
+    writeSourceStore(nextStore);
+    fs.writeFileSync(SOURCE_FILE, JSON.stringify(activeRecord), 'utf8');
+
+    try {
+      const hostRuntime = await getRuntime(previousStore.activeId === id);
+      return { ok: true, name: hostRuntime.name, version: hostRuntime.version, sources: hostRuntime.sources, installed: listSources() };
+    } catch (err) {
+      writeSourceStore(previousStore);
+      try {
+        if (previousActive) fs.writeFileSync(SOURCE_FILE, JSON.stringify(previousActive), 'utf8');
+        else fs.unlinkSync(SOURCE_FILE);
+      } catch (_err) {}
+      runtime = null;
+      throw err;
+    }
+  }
+
+  async function deleteSources(ids) {
+    const uniqueIds = normalizeSourceIds(ids);
+    if (!uniqueIds.length) throw new Error('LX_SOURCE_DELETE_IDS_REQUIRED');
+    const deleteSet = new Set(uniqueIds);
+    const previousStore = readSourceStore();
+    const existingIds = new Set(previousStore.records.map(item => item.id));
+    const missing = uniqueIds.filter(id => !existingIds.has(id));
+    if (missing.length) throw new Error('LX_SOURCE_NOT_FOUND');
+
+    const nextRecords = previousStore.records.filter(item => !deleteSet.has(item.id));
+    const activeWasDeleted = deleteSet.has(previousStore.activeId);
+    const nextStore = {
+      activeId: activeWasDeleted ? (nextRecords[0] && nextRecords[0].id || '') : previousStore.activeId,
+      records: nextRecords,
+    };
+    const previousActive = previousStore.records.find(item => item.id === previousStore.activeId);
+    writeSourceStore(nextStore);
+    uniqueIds.forEach(id => fallbackRuntimeCache.delete(id));
+
+    if (!nextRecords.length) {
+      try { fs.unlinkSync(SOURCE_FILE); } catch (_err) {}
+      runtime = null;
+      return { ok: true, deleted: uniqueIds.length, name: '未配置', version: '', sources: {}, installed: [] };
+    }
+
+    const activeRecord = nextRecords.find(item => item.id === nextStore.activeId) || nextRecords[0];
+    nextStore.activeId = activeRecord.id;
+    writeSourceStore(nextStore);
+    fs.writeFileSync(SOURCE_FILE, JSON.stringify(activeRecord), 'utf8');
+    try {
+      const hostRuntime = await getRuntime(activeWasDeleted);
+      return { ok: true, deleted: uniqueIds.length, name: hostRuntime.name, version: hostRuntime.version, sources: hostRuntime.sources, installed: listSources() };
+    } catch (err) {
+      writeSourceStore(previousStore);
+      try {
+        if (previousActive) fs.writeFileSync(SOURCE_FILE, JSON.stringify(previousActive), 'utf8');
+        else fs.unlinkSync(SOURCE_FILE);
+      } catch (_err) {}
+      runtime = null;
+      throw err;
+    }
+  }
+
+  // —— URL 下载 + importSourceUrl（上游 :797-831；5MB 正文上限 :809；electron fetch→fetchImpl 注入位）——
+  function downloadSourceScript(sourceUrl) {
+    return new Promise((resolve, reject) => {
+      lxRequest(sourceUrl, {
+        method: 'GET',
+        timeout: 20000,
+        headers: { accept: 'application/javascript,text/javascript,text/plain,*/*' },
+      }, (err, response) => {
+        if (err) return reject(err);
+        if (!response || response.statusCode < 200 || response.statusCode >= 300) {
+          return reject(new Error(`LX_SOURCE_DOWNLOAD_HTTP_${response && response.statusCode || 0}`));
+        }
+        const raw = Buffer.isBuffer(response.raw) ? response.raw : Buffer.from(String(response.body || ''));
+        if (!raw.length || raw.length > 5 * 1024 * 1024) return reject(new Error('LX_SOURCE_FILE_INVALID'));
+        resolve(raw.toString('utf8'));
+      });
+    });
+  }
+
+  async function importSourceUrl(urlOrApiKey) {
+    let sourceUrl = normalizeImportSourceUrl(urlOrApiKey);
+    let script;
+    try {
+      script = await downloadSourceScript(sourceUrl);
+    } catch (err) {
+      // 上游 :820-825：HTTPS 证书类失败对 ynx 域降级 http 重试一次。
+      // （ynx https 已在 normalize 预降级，本分支为上游同款防御路径。）
+      const fallbackUrl = sourceUrlHttpFallback(sourceUrl, err);
+      if (!fallbackUrl) throw err;
+      sourceUrl = fallbackUrl;
+      script = await downloadSourceScript(sourceUrl);
+    }
+    let fileName = 'remote-source.js';
+    try {
+      fileName = decodeURIComponent(path.basename(new URL(sourceUrl).pathname)) || fileName;
+    } catch (_err) {}
+    // 本移植 importSource 签名为 (name, script)（T1 定），上游为 (script, fileName)。
+    return importSource(fileName, script);
   }
 
   // —— 解析器回退链 + 90s LRU 缓存 + 音质探测（上游 :1087-1218 + :1158-1185，T2/T3 已全量落地）——
@@ -1041,23 +1304,26 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, fetchImpl = f
       : '没有可用于这首歌的音源');
   }
 
-  // —— 后续任务占位：接口名锁定本计划 Interfaces 块，实现落在 T4（音质降级链+探测已随 T3 落地；
-  //    getLyric/picAction 虽标 T3，但 T3 brief 移植区段未含上游 :1220-1237，归后续编排指派）——
+  // —— 后续任务占位：接口名锁定本计划 Interfaces 块（裁决：getLyric 归 T7 路由一并移植；
+  //    picAction 上游无实现，维持占位不凭猜实现）——
   const notImplemented = task => () => { throw new Error(`LX_SOURCE_NOT_IMPLEMENTED:${task}`); };
 
   return {
     importSource,
-    importSourceUrl: notImplemented('T4'),
+    importSourceUrl,
     selectSource,
-    setSourcesEnabled: notImplemented('T4'),
-    deleteSource: notImplemented('T4'),
-    deleteSources: notImplemented('T4'),
+    setSourcesEnabled,
+    deleteSource,
+    deleteSources,
     listSources,
-    checkSources: notImplemented('T4'),
+    checkSources,
     resolveMusicUrl,
-    getLyric: notImplemented('T3'),
-    picAction: notImplemented('T3'),
+    getLyric: notImplemented('T7'),
+    picAction: notImplemented('PIC_NO_UPSTREAM_IMPL'),
   };
 }
 
-module.exports = { createLxSourceHost, QUALITY_ALIASES, fallbackChainFor };
+module.exports = {
+  createLxSourceHost, QUALITY_ALIASES, fallbackChainFor,
+  normalizeImportSourceUrl, sourceUrlHttpFallback,
+};

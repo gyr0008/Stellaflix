@@ -4,7 +4,10 @@ const assert = require('node:assert')
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
-const { createLxSourceHost, QUALITY_ALIASES, fallbackChainFor } = require('../lx-source-host')
+const {
+  createLxSourceHost, QUALITY_ALIASES, fallbackChainFor,
+  normalizeImportSourceUrl, sourceUrlHttpFallback,
+} = require('../lx-source-host')
 
 const fixture = () => fs.readFileSync(path.join(__dirname, 'fixtures/lx-fake-source.js'), 'utf8')
 const probeFixture = () => fs.readFileSync(path.join(__dirname, 'fixtures/lx-probe-source.js'), 'utf8')
@@ -194,4 +197,248 @@ test('QUALITY_ALIASES/fallbackChainFor 与上游 :1064-1084/:1092-1100 对齐', 
   assert.deepEqual(fallbackChainFor('bogus'), ['bogus', 'flac', '320k', '128k']) // :1136 默认链
   fallbackChainFor('flac').push('polluted') // 回传副本，不共享内部表
   assert.deepEqual(fallbackChainFor('flac'), ['flac', '320k', '128k'])
+})
+
+// —— T4：URL/APIKEY 导入 + checkSources + 批量启停删除 ——
+// 网络全部走 fetchImpl 注入桩（脚本沙箱/下载/探测共用同一注入点，上游 electronFetch 位）。
+function makeFetchStub(routes) {
+  const calls = []
+  const fn = async (url) => {
+    calls.push(String(url))
+    const entry = routes[String(url)]
+    if (entry instanceof Error) throw entry
+    if (!entry) throw new Error('LX_TEST_FETCH_UNROUTED_' + String(url))
+    return entry
+  }
+  fn.calls = calls
+  return fn
+}
+// lxRequest(fetch 分支)消费 shape：ok/status + headers.forEach + arrayBuffer
+function scriptResponse(text, status = 200) {
+  const bytes = Uint8Array.from(Buffer.from(text, 'utf8'))
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: 'OK',
+    headers: { forEach() {} },
+    arrayBuffer: async () => bytes.buffer,
+  }
+}
+const namedFixture = cn => fixture().replace('@name 假脚本', '@name ' + cn)
+const badResolveFixture = () => namedFixture('坏脚本').replace('song.mp3', '').replace(/ok: true/, 'ok: false')
+// 直接向存储追加一条「不 inited」坏记录（importSource 校验进不去，只能落盘注入）
+function appendBrokenRecord(dir, id, script = 'lx.on("request",()=>{})') {
+  const file = path.join(dir, 'sources', 'sources.json')
+  const store = JSON.parse(fs.readFileSync(file, 'utf8'))
+  store.records.push({ id, name: '坏体', version: '0.0.0', script, enabled: true })
+  fs.writeFileSync(file, JSON.stringify(store), 'utf8')
+}
+const rotQuery = (tag, quality = '320k') => ({
+  source: 'kg', quality, musicInfo: { type: 'music', name: 't', singer: 's', songmid: tag },
+})
+
+test('importSourceUrl(http URL)：fetchImpl 桩取回正文，走 importSource 校验入库', async () => {
+  const stub = makeFetchStub({ 'https://script.test/pkg/y.js': scriptResponse(fixture()) })
+  const host = createLxSourceHost({ userDataPath: tmpUserData(), fetchImpl: stub })
+  const { id, meta } = await host.importSourceUrl('https://script.test/pkg/y.js')
+  assert.deepEqual(stub.calls, ['https://script.test/pkg/y.js'])
+  assert.ok(String(id).startsWith('stellaflix_'))
+  assert.equal(meta.name, '假脚本') // 元数据来自 @name，fileName 仅兜底
+  assert.equal(host.listSources().length, 1)
+})
+
+test('importSourceUrl(64-hex APIKEY)：展开为 ynx 端点再取（上游 :250-254 原样保留）', async () => {
+  const key = '0123456789abcdef'.repeat(4)
+  const expected = 'http://ynx.de5.net/API/lx-ynx.php?APIKEY=' + key
+  const stub = makeFetchStub({ [expected]: scriptResponse(fixture()) })
+  const host = createLxSourceHost({ userDataPath: tmpUserData(), fetchImpl: stub })
+  const { id } = await host.importSourceUrl(key)
+  assert.deepEqual(stub.calls, [expected])
+  assert.ok(host.listSources().some(row => row.id === id))
+})
+
+test('ynx.de5.net https 输入直接降级 http 取回（:265-268 证书不匹配域官方绕行）', async () => {
+  const stub = makeFetchStub({ 'http://ynx.de5.net/API/fetch.js': scriptResponse(fixture()) })
+  const host = createLxSourceHost({ userDataPath: tmpUserData(), fetchImpl: stub })
+  await host.importSourceUrl('https://ynx.de5.net/API/fetch.js')
+  assert.deepEqual(stub.calls, ['http://ynx.de5.net/API/fetch.js'])
+})
+
+test('sourceUrlHttpFallback 证书降级判定（上游 :230-240，https+ynx+证书错误才回 http）', () => {
+  assert.equal(sourceUrlHttpFallback('https://ynx.de5.net/API/a.js', new Error('certificate has expired')),
+    'http://ynx.de5.net/API/a.js')
+  assert.equal(sourceUrlHttpFallback('https://ynx.de5.net/API/a.js', { code: 'CERT_HAS_EXPIRED' }),
+    'http://ynx.de5.net/API/a.js')
+  assert.equal(sourceUrlHttpFallback('https://ynx.de5.net/API/a.js', new Error('ECONNRESET')), '')
+  assert.equal(sourceUrlHttpFallback('https://other.test/a.js', new Error('CERT_HAS_EXPIRED')), '')
+  assert.equal(sourceUrlHttpFallback('http://ynx.de5.net/a.js', new Error('CERT_HAS_EXPIRED')), '')
+})
+
+test('normalizeImportSourceUrl 非法输入报 LX_SOURCE_URL_INVALID（含 63hex/ftp/空）', () => {
+  assert.throws(() => normalizeImportSourceUrl(''), /LX_SOURCE_URL_INVALID/)
+  assert.throws(() => normalizeImportSourceUrl('not a url'), /LX_SOURCE_URL_INVALID/)
+  assert.throws(() => normalizeImportSourceUrl('ftp://x.test/a.js'), /LX_SOURCE_URL_INVALID/)
+  assert.throws(() => normalizeImportSourceUrl('0123456789abcdef'.repeat(4).slice(1)), /LX_SOURCE_URL_INVALID/)
+  assert.equal(normalizeImportSourceUrl(' ynx.de5.net/API/a.js '), 'http://ynx.de5.net/API/a.js') // :255-257 裸域补协议
+})
+
+test('URL 导入失败（正文起不了沙箱）回滚：不入新记录、原激活不受影响', async () => {
+  const dir = tmpUserData()
+  const stub = makeFetchStub({
+    'https://ok.test/a.js': scriptResponse(fixture()),
+    'https://bad.test/b.js': scriptResponse('lx.on("request",()=>{})'), // 永不 inited
+  })
+  const host = createLxSourceHost({ userDataPath: dir, fetchImpl: stub, initTimeoutMs: 50 })
+  const good = await host.importSourceUrl('https://ok.test/a.js')
+  await assert.rejects(host.importSourceUrl('https://bad.test/b.js'), /LX_SOURCE_INIT_TIMEOUT/)
+  const rows = host.listSources()
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].id, good.id)
+  assert.equal(rows[0].current, true)
+  const r = await host.resolveMusicUrl(rotQuery('rbA1')) // 回滚后原链路仍可用
+  assert.equal(r.ok, true)
+})
+
+test('下载脚本正文 5MB 上限 / 空正文 → LX_SOURCE_FILE_INVALID 且不入库（上游 :809）', async () => {
+  const big = 'x'.repeat(5 * 1024 * 1024 + 1)
+  const stub = makeFetchStub({
+    'https://big.test/a.js': scriptResponse(big),
+    'https://empty.test/a.js': scriptResponse(''),
+  })
+  const host = createLxSourceHost({ userDataPath: tmpUserData(), fetchImpl: stub })
+  await assert.rejects(host.importSourceUrl('https://big.test/a.js'), /LX_SOURCE_FILE_INVALID/)
+  await assert.rejects(host.importSourceUrl('https://empty.test/a.js'), /LX_SOURCE_FILE_INVALID/)
+  assert.equal(host.listSources().length, 0)
+})
+
+test('checkSources 逐脚本起沙箱试跑：好脚本 ok:true+sources；坏体 ok:false+error；未知 id 不抛错', async () => {
+  const dir = tmpUserData()
+  const host = createLxSourceHost({ userDataPath: dir, initTimeoutMs: 40 })
+  const a = await host.importSource('A', namedFixture('A'))
+  const b = await host.importSource('B', namedFixture('B'))
+  appendBrokenRecord(dir, 'broken-1') // 注册 handler 但永不 send inited
+  const res = await host.checkSources([a.id, b.id, 'broken-1', 'ghost'])
+  assert.equal(res.length, 4)
+  assert.deepEqual(res.map(item => item.id), [a.id, b.id, 'broken-1', 'ghost'])
+  assert.equal(res[0].ok, true)
+  assert.deepEqual(res[0].sources, ['kg'])
+  assert.equal(res[0].current, false)
+  assert.equal(res[1].ok, true)
+  assert.equal(res[2].ok, false)
+  assert.match(res[2].error, /LX_SOURCE_INIT_TIMEOUT/)
+  assert.equal(res[3].ok, false)
+  assert.equal(res[3].error, 'LX_SOURCE_NOT_FOUND')
+})
+
+test('checkSources 单脚本封顶超时：外层超时先于 init 超时触发 LX_SOURCE_CHECK_TIMEOUT（默认 12s，注入点验证）', async () => {
+  const dir = tmpUserData()
+  const host = createLxSourceHost({ userDataPath: dir, initTimeoutMs: 20000, checkTimeoutMs: 30 })
+  await host.importSource('A', namedFixture('A'))
+  appendBrokenRecord(dir, 'broken-1')
+  const [entry] = await host.checkSources(['broken-1'])
+  assert.equal(entry.ok, false)
+  assert.equal(entry.error, 'LX_SOURCE_CHECK_TIMEOUT')
+})
+
+test('checkSources 省略 ids 检查全部记录；显式空数组报 LX_SOURCE_IDS_REQUIRED', async () => {
+  const dir = tmpUserData()
+  const host = createLxSourceHost({ userDataPath: dir, initTimeoutMs: 40 })
+  const a = await host.importSource('A', namedFixture('A'))
+  appendBrokenRecord(dir, 'broken-1')
+  const all = await host.checkSources()
+  assert.equal(all.length, 2)
+  assert.ok(all.some(item => item.id === a.id && item.ok === true))
+  assert.ok(all.some(item => item.id === 'broken-1' && item.ok === false))
+  await assert.rejects(host.checkSources([]), /LX_SOURCE_IDS_REQUIRED/)
+})
+
+test('setSourcesEnabled 批量停用：disabled 脚本不再被 resolveMusicUrl 轮换；重新启用恢复轮换', async () => {
+  const host = createLxSourceHost({ userDataPath: tmpUserData(), fetchImpl: offlineFetch })
+  const bad = await host.importSource('坏脚本', badResolveFixture())
+  const good = await host.importSource('好脚本', namedFixture('好脚本'))
+  const sel = await host.selectSource(bad.id)
+  assert.ok(Array.isArray(sel.installed)) // 上游 :616 返回 installed 快照
+  const r1 = await host.resolveMusicUrl(rotQuery('rotA1'))
+  assert.equal(r1.resolver, '好脚本') // 先坐实：good 在轮换后备集中，且已入 fallbackRuntimeCache
+  const res = await host.setSourcesEnabled([good.id], false)
+  assert.equal(res.ok, true)
+  assert.equal(res.installed.find(row => row.id === good.id).enabled, false)
+  await assert.rejects(host.resolveMusicUrl(rotQuery('rotA2')), /当前音源及备用音源均解析失败/)
+  await host.setSourcesEnabled([good.id], true)
+  const r3 = await host.resolveMusicUrl(rotQuery('rotA3'))
+  assert.equal(r3.resolver, '好脚本') // 停用清缓存后惰性重建 runtime 恢复轮换
+})
+
+test('setSourcesEnabled 停用当前脚本时激活迁移到启用脚本；全停用被拒且不改存储', async () => {
+  const host = createLxSourceHost({ userDataPath: tmpUserData(), fetchImpl: offlineFetch })
+  const a = await host.importSource('A', namedFixture('A'))
+  const b = await host.importSource('B', namedFixture('B'))
+  await host.selectSource(a.id)
+  await host.setSourcesEnabled([a.id], false)
+  const rows = host.listSources()
+  assert.equal(rows.find(row => row.id === a.id).enabled, false)
+  assert.equal(rows.find(row => row.id === b.id).current, true)
+  await assert.rejects(host.setSourcesEnabled([a.id, b.id], false), /LX_SOURCE_AT_LEAST_ONE_ENABLED/)
+  const after = host.listSources()
+  assert.equal(after.find(row => row.id === a.id).enabled, false) // 抛错先于写盘，store 未动
+  assert.equal(after.find(row => row.id === b.id).current, true)
+})
+
+test('setSourcesEnabled 入参校验：空 ids 报 LX_SOURCE_IDS_REQUIRED，未知 id 报 LX_SOURCE_NOT_FOUND', async () => {
+  const host = createLxSourceHost({ userDataPath: tmpUserData() })
+  await assert.rejects(host.setSourcesEnabled([], true), /LX_SOURCE_IDS_REQUIRED/)
+  await assert.rejects(host.setSourcesEnabled(['ghost'], true), /LX_SOURCE_NOT_FOUND/)
+})
+
+test('deleteSource 单删；删激活脚本时激活迁移并重写存储；未知 id 报错', async () => {
+  const dir = tmpUserData()
+  const host = createLxSourceHost({ userDataPath: dir, fetchImpl: offlineFetch })
+  const a = await host.importSource('A', namedFixture('A'))
+  const b = await host.importSource('B', namedFixture('B')) // b 为当前激活
+  const res = await host.deleteSource(b.id)
+  assert.equal(res.ok, true)
+  assert.equal(res.installed.length, 1)
+  const rows = host.listSources()
+  assert.deepEqual(rows.map(row => row.id), [a.id])
+  assert.equal(rows[0].current, true)
+  await assert.rejects(host.deleteSource('ghost'), /LX_SOURCE_NOT_FOUND/)
+})
+
+test('deleteSources 批量删：fallbackRuntimeCache 随删清（缓存携带forward），全删后进未配置态', async () => {
+  const dir = tmpUserData()
+  const host = createLxSourceHost({ userDataPath: dir, fetchImpl: offlineFetch })
+  const bad = await host.importSource('坏脚本', badResolveFixture())
+  const good = await host.importSource('好脚本', namedFixture('好脚本'))
+  await host.selectSource(bad.id)
+  const r1 = await host.resolveMusicUrl(rotQuery('delA1'))
+  assert.equal(r1.resolver, '好脚本') // 已惰性建 good 的 fallback runtime 缓存
+  const res = await host.deleteSources([good.id])
+  assert.equal(res.deleted, 1)
+  await assert.rejects(host.resolveMusicUrl(rotQuery('delA2')), /当前音源及备用音源均解析失败/)
+  const res2 = await host.deleteSources([bad.id])
+  assert.equal(res2.ok, true)
+  assert.equal(res2.name, '未配置')
+  assert.deepEqual(res2.installed, [])
+  assert.equal(host.listSources().length, 0)
+  assert.equal(fs.existsSync(path.join(dir, 'sources', 'active-source.json')), false)
+  // 无脚本态：activeScriptRecord 直接抛 LX_SOURCE_NOT_CONFIGURED（上游 :1087 前置 getRuntime 同款语义）
+  await assert.rejects(host.resolveMusicUrl(rotQuery('delA3')), /LX_SOURCE_NOT_CONFIGURED/)
+})
+
+test('deleteSources 入参校验：空 ids 报 LX_SOURCE_DELETE_IDS_REQUIRED；含未知 id 整批拒绝且存储不动', async () => {
+  const host = createLxSourceHost({ userDataPath: tmpUserData() })
+  const a = await host.importSource('A', namedFixture('A'))
+  await assert.rejects(host.deleteSources([]), /LX_SOURCE_DELETE_IDS_REQUIRED/)
+  await assert.rejects(host.deleteSources([a.id, 'ghost']), /LX_SOURCE_NOT_FOUND/)
+  assert.deepEqual(host.listSources().map(row => row.id), [a.id])
+})
+
+test('脚本 id 防碰撞：连续导入生成互不相同的 stellaflix_ 前缀 id（T1 携带整改）', async () => {
+  const host = createLxSourceHost({ userDataPath: tmpUserData() })
+  const ids = []
+  for (let i = 0; i < 6; i += 1) {
+    ids.push((await host.importSource('S' + i, namedFixture('S' + i))).id)
+  }
+  assert.equal(new Set(ids).size, 6)
+  assert.ok(ids.every(id => /^stellaflix_\d+_[0-9a-f]+$/.test(id)))
 })
