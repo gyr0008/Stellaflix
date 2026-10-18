@@ -1,0 +1,33 @@
+{
+  "songResultData": {
+    "resultList": [
+      [
+        {
+          "songId": "mg_600001",
+          "copyrightId": "CR_600001",
+          "name": "菇测试曲",
+          "singerList": [{ "name": "菇歌手" }],
+          "album": "菇专辑",
+          "albumId": "GA1",
+          "img3": "https://p5.migu.cn/3.jpg",
+          "img2": "https://p5.migu.cn/2.jpg",
+          "duration": 240
+        },
+        {
+          "songId": "mg_nocopy",
+          "name": "缺版权被过滤",
+          "singerList": []
+        }
+      ],
+      [
+        {
+          "songId": "mg_600002",
+          "copyrightId": "CR_600002",
+          "name": "无图曲",
+          "singerList": [{ "singerName": "备选歌手" }],
+          "duration": 65
+        }
+      ]
+    ]
+  }
+}

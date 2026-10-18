@@ -1,0 +1,23 @@
+{
+  "error_code": 0,
+  "data": {
+    "lists": [
+      {
+        "Audioid": 8880001,
+        "Hash": "HASH_IGNORED",
+        "FileHash": "ABCDEF0123456789",
+        "SongName": "狗测试曲",
+        "Singers": [{ "name": "狗歌手甲" }, { "singerName": "狗歌手乙" }],
+        "AlbumName": "狗专辑",
+        "AlbumID": 55,
+        "Duration": 200
+      },
+      {
+        "Audioid": 8880002,
+        "SongName": "无歌手曲",
+        "SingerName": "独歌手",
+        "Duration": 0
+      }
+    ]
+  }
+}

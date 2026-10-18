@@ -1,0 +1,35 @@
+{
+  "req": {
+    "code": 0,
+    "data": {
+      "body": {
+        "item_song": [
+          {
+            "mid": "004TesTx",
+            "id": 100200,
+            "title": "夜曲",
+            "singer": [{ "name": "周杰伦" }, { "name": "费玉清" }],
+            "album": { "mid": "08g20Z3F47tQQ0", "name": "十一月的萧邦" },
+            "file": { "media_mid": "004TesTxFile" },
+            "interval": 214
+          },
+          {
+            "mid": "004TesTx",
+            "id": 100200,
+            "title": "夜曲",
+            "singer": [{ "name": "周杰伦" }],
+            "album": { "mid": "08g20Z3F47tQQ0", "name": "十一月的萧邦" },
+            "interval": 214
+          },
+          {
+            "songmid": "003Other",
+            "songid": 100300,
+            "songname": "黑色毛衣",
+            "singer": [{ "name": "周杰伦" }],
+            "interval": 245
+          }
+        ]
+      }
+    }
+  }
+}
