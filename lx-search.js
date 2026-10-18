@@ -6,14 +6,21 @@
  * 移植自上游 Mineradio-LX-Music-1.7.0/lx-search.js：
  *  - :66-107  HTTP 层（3 次重试 + Retry-After 尊重 + 12s 超时 + UA/referer 默认头）
  *  - :109-261 五个 scraper（网易 eapi AES-128-ECB、QQ u.y.qq.com 签名、咪咕 md5 签名）
+ *  - :361-394 providerHealth 熔断冷却（3 连败武装、成功复位、单源请求旁路）
+ *  - :359-375 searchCache 命中语义（2min TTL、命中返回同一 value、缓存优先于冷却检查）
+ *  - :406-409 缓存写入门槛（songs 非空）+ 80 条上限 FIFO 逐出
  *  - :368-411 searchAll Promise.allSettled 聚合 + `source|songmid||id` 去重 + 逐源 failures
  *
  * 身份转换：源展示别名（小秋/小芸…）与 playlist 侧车随 Task 6+ 需求再评估，本文件不携带；
  * provider 端点、签名盐值、线格式逐字保留（协议词汇，非品牌身份）。
  *
- * Task 6 接缝（本任务只留桩、不启用行为）：
- *  - providerHealth 熔断冷却（上游 :361-394）
- *  - searchCache 2min TTL / 80 条上限（上游 :359、:406-409）
+ * 有意的上游偏离（批 T6 brief 规定）：
+ *  - 冷却时长曲线：上游 :391 为线性 15s×(failures-1) 封顶 120s；本实现按 brief 取
+ *    指数 2s/4s/8s… 封顶 120s（Math.min(120000, 1000 * 2 ** (failures - 2))）。
+ *  - 冷却 failures 条目键名：上游 :381 用 error:'SOURCE_COOLDOWN'；本实现按 brief 契约
+ *    用 code:'SOURCE_COOLDOWN'（普通失败仍为 {source,error}）。
+ *  - searchCache/providerHealth 上游为模块级，本实现随工厂实例作用域（与 fetchImpl/now
+ *    注入同构；底部模块级默认入口仍提供全局一致行为）。
  *
  * song 冻结形状（Task 6/8/9/10/11 消费）：
  *  { source, id, songmid?, name, singer, album, interval, pic }
@@ -47,7 +54,7 @@ function clampLimit(limit) {
   return Math.min(Math.max(Number(limit) || 12, 1), 30);
 }
 
-function createLxSearch({ fetchImpl = globalThis.fetch } = {}) {
+function createLxSearch({ fetchImpl = globalThis.fetch, now = () => Date.now() } = {}) {
   async function fetchJson(url, options = {}) {
     let lastError;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -230,14 +237,17 @@ function createLxSearch({ fetchImpl = globalThis.fetch } = {}) {
 
   const SCRAPERS = { tx: searchTx, wy: searchWy, kw: searchKw, kg: searchKg, mg: searchMg };
 
-  // ---------- Task 6 接缝（本任务禁用行为） ----------
-  // 上游 :359-375 常量形状；searchCache 读写（2min TTL、80 条上限）与
-  // providerHealth 熔断冷却（上游 :361-394）在 Task 6 接入，此处只保留 cacheKey 计算。
+  // ---------- 熔断冷却 + 搜索缓存（上游 :359-375、:361-394、:406-409；批 T6 启用） ----------
   const searchCache = new Map();
-  void searchCache; // T5 不启用缓存行为（tests 有防回归守卫）
+  const providerHealth = new Map();
   const SEARCH_CACHE_TTL_MS = 2 * 60 * 1000;
   const SEARCH_CACHE_MAX_ENTRIES = 80;
-  void SEARCH_CACHE_TTL_MS; void SEARCH_CACHE_MAX_ENTRIES;
+
+  // 上游 :363-366 providerState：懒初始化 {failures, cooldownUntil}。
+  function providerState(source) {
+    if (!providerHealth.has(source)) providerHealth.set(source, { failures: 0, cooldownUntil: 0 });
+    return providerHealth.get(source);
+  }
 
   function resolveRequestedSources(sources) {
     const list = Array.isArray(sources)
@@ -259,23 +269,36 @@ function createLxSearch({ fetchImpl = globalThis.fetch } = {}) {
     if (!q) return { songs: [], failures: [] };
     const safeLimit = clampLimit(limit);
     const requested = resolveRequestedSources(sources);
-    // Task 6 在此接入 searchCache.get(cacheKey)（cacheKey 形状照上游 :373）。
+    // 上游 :373-375：缓存键 = 源列表|limit|小写 query；命中优先于冷却检查。
     const cacheKey = `${requested.join(',')}|${safeLimit}|${q.toLowerCase()}`;
-    void cacheKey;
+    const cached = searchCache.get(cacheKey);
+    if (cached && now() - cached.time < SEARCH_CACHE_TTL_MS) return cached.value;
 
-    const settled = await Promise.allSettled(requested.map(source => SCRAPERS[source](q, safeLimit)));
+    // 上游 :376-378：requested.length===1 时整体旁路冷却（避免单源查询被永久锁死）。
+    const nowMs = now();
+    const active = requested.filter(source => requested.length === 1 || providerState(source).cooldownUntil <= nowMs);
+    const cooled = requested.filter(source => !active.includes(source));
+
+    const settled = await Promise.allSettled(active.map(source => SCRAPERS[source](q, safeLimit)));
     const songs = [];
-    const failures = [];
+    // 上游 :381 冷却失败项前置；name 别名属身份转换不携带，code 键名按 T6 契约。
+    const failures = cooled.map(source => ({ source, code: 'SOURCE_COOLDOWN' }));
     settled.forEach((result, index) => {
-      const source = requested[index];
+      const source = active[index];
+      const health = providerState(source);
       if (result.status === 'fulfilled') {
         songs.push(...result.value);
+        health.failures = 0;
+        health.cooldownUntil = 0;
       } else {
+        health.failures += 1;
+        // 上游 :391 曲线为 15s×(failures-1) 封顶 120s；T6 brief 规定指数 2s/4s… 封顶 120s。
+        if (health.failures >= 3) health.cooldownUntil = now() + Math.min(120000, 1000 * 2 ** (health.failures - 2));
         failures.push({ source, error: result.reason?.message || 'SEARCH_FAILED' });
       }
     });
     const seen = new Set();
-    return {
+    const value = {
       songs: songs.filter(song => {
         const key = `${song.source}|${song.songmid || song.id}`;
         if (!song.name || seen.has(key)) return false;
@@ -284,6 +307,12 @@ function createLxSearch({ fetchImpl = globalThis.fetch } = {}) {
       }),
       failures,
     };
+    // 上游 :406-408：仅结果非空才写缓存；超过 80 条按插入序逐出最旧。
+    if (value.songs.length) {
+      searchCache.set(cacheKey, { time: now(), value });
+      if (searchCache.size > SEARCH_CACHE_MAX_ENTRIES) searchCache.delete(searchCache.keys().next().value);
+    }
+    return value;
   }
 
   return { searchAll, searchOne };

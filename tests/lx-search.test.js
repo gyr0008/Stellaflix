@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * tests/lx-search.test.js — Task 5：lx-search.js 五家内置爬虫
+ * tests/lx-search.test.js — lx-search.js 五家内置爬虫 + 熔断冷却/搜索缓存
  * fetch 桩回放 tests/fixtures/lx-search/*.json（按移植后的 scraper 解析路径反推的最小样本），
- * 全程零真实网络。熔断冷却与 2min/80 条缓存行为属 Task 6，此处反向验证 T5 不提前引入。
+ * 全程零真实网络；冷却退避与时钟相关断言一律走注入 now（Task 6），不做墙钟等待。
  */
 
 const test = require('node:test');
@@ -302,24 +302,129 @@ test('fetchJson：非可重试错误立即上浮，不消耗三次重试', async
   assert.equal(attempt, 1);
 });
 
-// ---------- Task 6 防回归守卫 ----------
+// ---------- 熔断冷却 + 搜索缓存（Task 6，上游 :361-394 / :359-375 / :406-409） ----------
 
-test('T5 不得提前引入熔断冷却：连续失败后下一次 searchAll 仍照常出网', async () => {
-  const fixtures = { ...allFixtures(), kw: 'fail' };
-  const { impl, calls } = makeFixtureFetch(fixtures);
-  const { searchAll } = createLxSearch({ fetchImpl: impl });
-  await searchAll({ query: '测试', sources: ['kw'] });
-  const second = await searchAll({ query: '测试', sources: ['kw'] });
-  assert.equal(calls.filter((c) => c.url.includes(HOSTS.kw)).length, 2);
-  assert.deepStrictEqual(second.failures, [{ source: 'kw', error: 'LX_TEST_DOWN_kw' }]);
+test('熔断冷却：同一源连续 3 败后第 4 次 searchAll 不出网，failures 含 {source,code:"SOURCE_COOLDOWN"}，他源不受牵连', async () => {
+  const { impl, calls } = makeFixtureFetch({ ...allFixtures(), kw: 'fail' });
+  const { searchAll } = createLxSearch({ fetchImpl: impl, now: () => 1_700_000_000_000 });
+  const kwCalls = () => calls.filter((c) => c.url.includes(HOSTS.kw)).length;
+  const kgCalls = () => calls.filter((c) => c.url.includes(HOSTS.kg)).length;
+
+  for (let i = 1; i <= 3; i++) {
+    const { failures } = await searchAll({ query: `冷却${i}`, sources: ['kg', 'kw'] });
+    assert.deepStrictEqual(failures, [{ source: 'kw', error: 'LX_TEST_DOWN_kw' }]);
+  }
+  assert.equal(kwCalls(), 3);
+
+  const fourth = await searchAll({ query: '冷却4', sources: ['kg', 'kw'] });
+  assert.equal(kwCalls(), 3, '第 4 次不得再碰 kw 的 fetch');
+  assert.deepStrictEqual(fourth.failures, [{ source: 'kw', code: 'SOURCE_COOLDOWN' }]);
+  assert.equal(kgCalls(), 4, 'kg 不因 kw 冷却被跳过');
+  assert.ok(fourth.songs.some((s) => s.source === 'kg'));
 });
 
-test('T5 不得提前引入搜索缓存：同 query 二次调用照常出网', async () => {
+test('指数退避：连续失败冷却时长 2s/4s/8s/16s/32s/64s 翻倍递增，封顶 120s（注入时钟边界断言）', async () => {
+  let clock = 1_700_000_000_000;
+  const { impl, calls } = makeFixtureFetch({ ...allFixtures(), kw: 'fail' });
+  const { searchAll } = createLxSearch({ fetchImpl: impl, now: () => clock });
+  const kwCalls = () => calls.filter((c) => c.url.includes(HOSTS.kw)).length;
+
+  // 前三败逐次出网；第 3 败后武装 2s 冷却。
+  for (let i = 1; i <= 3; i++) await searchAll({ query: `退避${i}`, sources: ['kg', 'kw'] });
+  assert.equal(kwCalls(), 3);
+
+  // 每档：距上次失败 ms-1 仍拒绝，恰好 ms 放行（放行那次再败 → 进入下一档时长）。
+  // 第 9 败理论值 1000*2^7=128s，本档断言恰好 120s 放行即证明封顶生效。
+  let attempted = 3;
+  for (const ms of [2000, 4000, 8000, 16000, 32000, 64000, 120000]) {
+    attempted += 1;
+    clock += ms - 1;
+    const blocked = await searchAll({ query: `退避边界${ms}拒`, sources: ['kg', 'kw'] });
+    assert.equal(kwCalls(), attempted - 1, `上次失败后 ${ms - 1}ms 应仍处冷却`);
+    assert.deepStrictEqual(blocked.failures, [{ source: 'kw', code: 'SOURCE_COOLDOWN' }]);
+    clock += 1;
+    await searchAll({ query: `退避边界${ms}放`, sources: ['kg', 'kw'] });
+    assert.equal(kwCalls(), attempted, `上次失败后恰好 ${ms}ms 应放行`);
+  }
+});
+
+test('复位语义：源恢复成功后 strikes 清零，需再连续 3 败才重新熔断（上游 :387-388）', async () => {
+  const kwFixture = JSON.parse(readFixture('kw.json'));
+  let kwDown = true;
+  const { impl, calls } = makeFixtureFetch({
+    ...allFixtures(),
+    kw: () => {
+      if (kwDown) throw new Error('LX_TEST_DOWN_kw');
+      return jsonResponse(kwFixture);
+    },
+  });
+  const { searchAll } = createLxSearch({ fetchImpl: impl, now: () => 1_700_000_000_000 });
+  const kwCalls = () => calls.filter((c) => c.url.includes(HOSTS.kw)).length;
+
+  await searchAll({ query: '复位1', sources: ['kg', 'kw'] });
+  await searchAll({ query: '复位2', sources: ['kg', 'kw'] });
+  kwDown = false;
+  const ok = await searchAll({ query: '复位3', sources: ['kg', 'kw'] });
+  assert.deepStrictEqual(ok.failures, [], '恢复成功不再带 failures');
+  assert.ok(ok.songs.some((s) => s.source === 'kw'));
+
+  kwDown = true;
+  for (let i = 4; i <= 6; i++) await searchAll({ query: `复位${i}`, sources: ['kg', 'kw'] });
+  assert.equal(kwCalls(), 6, '复位后须再满 3 连败才冷却，第 6 次调用仍出了网');
+  const blocked = await searchAll({ query: '复位7', sources: ['kg', 'kw'] });
+  assert.deepStrictEqual(blocked.failures, [{ source: 'kw', code: 'SOURCE_COOLDOWN' }]);
+});
+
+test('上游语义保留：仅请求单源时整体旁路冷却检查（:377 requested.length===1），避免全冷却死锁', async () => {
+  const { impl, calls } = makeFixtureFetch({ ...allFixtures(), kw: 'fail' });
+  const { searchAll } = createLxSearch({ fetchImpl: impl, now: () => 1_700_000_000_000 });
+  const kwCalls = () => calls.filter((c) => c.url.includes(HOSTS.kw)).length;
+
+  for (let i = 1; i <= 4; i++) await searchAll({ query: `旁路${i}`, sources: ['kg', 'kw'] });
+  assert.equal(kwCalls(), 3, '第 4 次多源调用已被冷却拦下');
+  const solo = await searchAll({ query: '旁路单源', sources: ['kw'] });
+  assert.equal(kwCalls(), 4, '单源请求照上游语义照常出网');
+  assert.deepStrictEqual(solo.failures, [{ source: 'kw', error: 'LX_TEST_DOWN_kw' }]);
+});
+
+test('搜索缓存：同 query 2min 内命中缓存不出网，返回同一结果对象（含逐源 failures 原样回放，上游 :375/:407）', async () => {
+  let clock = 1_700_000_000_000;
+  const { impl, calls } = makeFixtureFetch({ ...allFixtures(), kw: 'fail' });
+  const { searchAll } = createLxSearch({ fetchImpl: impl, now: () => clock });
+
+  const first = await searchAll({ query: '缓存查询' });
+  assert.equal(calls.length, 5);
+  clock += 119_999;
+  const second = await searchAll({ query: '缓存查询' });
+  assert.equal(calls.length, 5, 'TTL 内二次调用不得出网');
+  assert.strictEqual(second, first, '缓存命中返回上游 :375 的同一 value 引用');
+  assert.deepStrictEqual(second.failures, [{ source: 'kw', error: 'LX_TEST_DOWN_kw' }], 'failures 随缓存原样回放');
+
+  clock += 2; // 累计 120001ms，超出 TTL（上游判定为 < 2min）
+  await searchAll({ query: '缓存查询' });
+  assert.equal(calls.length, 10, 'TTL 过期后重新出网');
+});
+
+test('仅 songs 非空才写缓存：全源失败的 searchAll 不进缓存（上游 :406 songs.length 门槛）', async () => {
+  const { impl, calls } = makeFixtureFetch({ tx: 'fail', wy: 'fail', kw: 'fail', kg: 'fail', mg: 'fail' });
+  const { searchAll } = createLxSearch({ fetchImpl: impl, now: () => 1_700_000_000_000 });
+  await searchAll({ query: '全败查询' });
+  const second = await searchAll({ query: '全败查询' });
+  assert.equal(calls.length, 10, '无结果不缓存，二次调用照常出网');
+  assert.equal(second.failures.length, 5);
+});
+
+test('缓存上限 80 条：第 81 条写入时逐出最旧条目（上游 :408 keys().next() FIFO）', async () => {
   const { impl, calls } = makeFixtureFetch(allFixtures());
-  const { searchAll } = createLxSearch({ fetchImpl: impl });
-  await searchAll({ query: '同一查询' });
-  await searchAll({ query: '同一查询' });
-  assert.equal(calls.length, 10);
+  const { searchAll } = createLxSearch({ fetchImpl: impl, now: () => 1_700_000_000_000 });
+  const kgCalls = () => calls.filter((c) => c.url.includes(HOSTS.kg)).length;
+
+  for (let i = 1; i <= 81; i++) await searchAll({ query: `条目-${i}`, sources: ['kg'] });
+  assert.equal(kgCalls(), 81);
+  await searchAll({ query: '条目-81', sources: ['kg'] });
+  assert.equal(kgCalls(), 81, '最新条目仍在缓存');
+  await searchAll({ query: '条目-1', sources: ['kg'] });
+  assert.equal(kgCalls(), 82, '最旧条目已在第 81 条写入时被逐出');
 });
 
 test('未知源：searchOne 抛 LX_SEARCH_UNKNOWN_SOURCE', async () => {
