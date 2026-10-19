@@ -8412,6 +8412,33 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---------- drpy 外挂规则仓库同步（批 3） ----------
+  // POST /api/drpy/rules/sync  body: {repoUrl}
+  // 出厂不内置任何仓库地址（合规红线）；仓库由用户自建/自选。
+  if (pn === '/api/drpy/rules/sync') {
+    try {
+      let body = '';
+      req.on('data', (c) => { body += c; if (body.length > 64 * 1024) req.destroy(); });
+      req.on('end', async () => {
+        try {
+          const { repoUrl } = JSON.parse(body || '{}');
+          const liteDir = drpySidecar.status().liteDir;
+          const result = await require('./desktop/drpy-rules-repo').syncRules(
+            repoUrl, path.join(liteDir, 'rules', 'js'));
+          res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify(result));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, reason: '请求体非法: ' + e.message }));
+        }
+      });
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
   let filePath = pn === '/' ? '/index.html' : pn;
   filePath = path.join(__dirname, 'public', filePath);
   serveStatic(res, filePath);

@@ -129,6 +129,19 @@
     return !!(source && source.type === 'drpy');
   }
 
+  /**
+   * 外挂规则仓库同步（批 3）：POST /api/drpy/rules/sync。
+   * 出厂不内置任何仓库地址；repoUrl 由用户自建/自选（合规红线）。
+   * @returns {Promise<{ok:boolean, version?:string, added:number, updated:number, removed:number, reason?:string}>}
+   */
+  function syncRules(repoUrl) {
+    return global.fetch('/api/drpy/rules/sync', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({repoUrl: String(repoUrl || '')}),
+    }).then(function (res) { return res.json(); });
+  }
+
   SFV.drpy = {
     __bridge: true,
     getStatus: getStatus,
@@ -136,5 +149,6 @@
     importModules: importModules,
     resolvePlay: resolvePlay,
     isDrpySource: isDrpySource,
+    syncRules: syncRules,
   };
 })(typeof window !== 'undefined' ? window : this);
