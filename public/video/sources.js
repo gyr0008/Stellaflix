@@ -30,6 +30,12 @@
   // ---------------------------------------------------------------- IO
 
   function proxied(url) {
+    // drpy sidecar 等本机回环地址直连：不过 /api/proxy（该路由含 SSRF 私网拦截，
+    // 且 sidecar 自带 CORS 头，本机 http 同源环境无混合内容问题）
+    if (typeof url === 'string') {
+      var m = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//.exec(url);
+      if (m) return url;
+    }
     if (SFV.source && typeof SFV.source.toProxyUrl === 'function') return SFV.source.toProxyUrl(url);
     return '/api/proxy?url=' + encodeURIComponent(url);
   }
@@ -201,7 +207,26 @@
       if (!list.length) return { ok: false, vod: null, plays: [], reason: 'not-found' };
       var vod = S.normalizeVod(list[0], n.source);
       if (!vod) return { ok: false, vod: null, plays: [], reason: 'invalid-record' };
-      var plays = S.parsePlayUrl(vod.playFrom, vod.playUrl);
+      var plays = S.parsePlayUrl(vod.playFrom, vod.playUrl, n.source.type === 'drpy');
+      // drpy(T4) 源：集地址是不透明 id，需经 ?play= 二次解析成直链。
+      // 单集解析失败保留原始 id（播放器可能仍可处理），不阻断整体。
+      if (n.source.type === 'drpy' && global.StellaflixVideo.drpy) {
+        var groups = plays.map(function (g) {
+          var eps = g.episodes.map(function (ep) {
+            return global.StellaflixVideo.drpy.resolvePlay(n.source.api, g.from, ep.url, timeout)
+              .then(function (r) { return Object.assign({}, ep, { url: r.url, rawId: ep.url }); })
+              .catch(function () { return ep; });
+          });
+          return Promise.all(eps).then(function (done) {
+            return Object.assign({}, g, { episodes: done });
+          });
+        });
+        return Promise.all(groups).then(function (resolved) {
+          plays = resolved;
+          S.writeDetailCache(cacheKey, { plays: plays, sourceId: n.source.id, vodId: vodId, ts: Date.now() });
+          return { ok: true, vod: vod, plays: plays, reason: null };
+        });
+      }
       S.writeDetailCache(cacheKey, { plays: plays, sourceId: n.source.id, vodId: vodId, ts: Date.now() });
       return { ok: true, vod: vod, plays: plays, reason: null };
     }).catch(function (e) {

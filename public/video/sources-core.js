@@ -97,6 +97,11 @@
       addedAt: input.addedAt || Date.now(),
       mirrors: mirrors,
     };
+    // drpy（T4）源扩展字段：type='drpy' 走播放地址二次解析；kind 仅用于 UI 标注
+    if (input.type === 'drpy') {
+      out.source.type = 'drpy';
+      if (input.sidecarBase) out.source.sidecarBase = String(input.sidecarBase);
+    }
     return out;
   }
 
@@ -204,9 +209,11 @@
 
   /**
    * 解析 CMS10 的 vod_play_from / vod_play_url。
+   * @param {boolean} [allowOpaque=false] - drpy(T4) 源的集地址是不透明 id（由 sidecar
+   *        二次解析成直链），置 true 放行非 http 集 URL；默认 false 维持注入防护。
    * @returns {Array<{from:string, episodes:Array<{name:string,url:string,index:number}>}>}
    */
-  function parsePlayUrl(playFrom, playUrl) {
+  function parsePlayUrl(playFrom, playUrl, allowOpaque) {
     if (!playUrl) return [];
     var froms = String(playFrom == null ? '' : playFrom).split('$$$');
     var groups = String(playUrl).split('$$$');
@@ -231,7 +238,7 @@
         }
         url = String(url).trim();
         if (!url) continue;
-        if (!/^https?:/i.test(url)) continue; // 丢弃非 http(s)，防 javascript: 等注入
+        if (!/^https?:/i.test(url) && !allowOpaque) continue; // 丢弃非 http(s)，防 javascript: 等注入
         eps.push({ name: (name || '').trim() || ('第' + (eps.length + 1) + '集'), url: url, index: eps.length });
       }
       if (eps.length) {

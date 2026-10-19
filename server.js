@@ -452,6 +452,7 @@ platformPlaylistImport.setSearchImplementation(async function (query, options) {
 });
 const { setupGlobalProxy } = require('./desktop/global-proxy');
 const hlsAdFilter = require('./desktop/hls-ad-filter');
+const { createDrpySidecar } = require('./desktop/drpy-sidecar');
 
 // 全局出口代理：若本机运行着 Clash / V2Ray 等代理并在环境变量中暴露
 // HTTP_PROXY / HTTPS_PROXY，则 server 侧所有出站 fetch 自动经其转发（详见 desktop/global-proxy.js）。
@@ -8398,16 +8399,39 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---------- drpy-lite sidecar 状态（批 2） ----------
+  if (pn === '/api/drpy/status') {
+    try {
+      const st = drpySidecar.status();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(st));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
   let filePath = pn === '/' ? '/index.html' : pn;
   filePath = path.join(__dirname, 'public', filePath);
   serveStatic(res, filePath);
 });
+
+// drpy-lite sidecar 单例（status 查询用）。port=0 随机端口：防孤儿实例占位冲突，
+// 渲染层一律经 /api/drpy/status 动态获取 baseUrl，不硬编码端口。
+const drpySidecar = createDrpySidecar({port: 0});
 
 server.listen(PORT, HOST, () => {
   console.log('======================================================');
   console.log(' 粒子音乐可视化 v2  →  http://localhost:' + PORT);
   console.log(' 登录态: ' + (userCookie ? '已登录(cookie已加载)' : '未登录'));
   console.log('======================================================');
+  // drpy-lite sidecar：规则目录出厂为空，用户自备规则（合规红线见 desktop/drpy-sidecar.js）
+  try {
+    drpySidecar.start();
+  } catch (e) {
+    console.warn('[drpy-sidecar] 启动失败（不阻断主服务）:', e.message);
+  }
 });
 
 server.clearAllLoginCredentials = clearAllRuntimeLoginCredentials;
