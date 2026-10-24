@@ -1249,7 +1249,7 @@ async function resolveLxPlaybackSong(song, options) {
           source: String(result.source || sourceName),
           quality: lxQuality
         };
-        // 上游 :31996-32002：成功解析写 90s 客户端镜像缓存（超 80 条先删最早键，镜像上限宽于服务端 LRU-120）。
+        // 上游 :31996-32002：成功解析写 90s 客户端镜像缓存（超 80 条先删最早键，镜像上限 80 窄于服务端 LRU-120）。
         // 记录整份结果对象（我方消费方还需 actual/probeWarning/source，上游仅存 url——我方适配，键与 TTL 同上游）。
         lxResolvedAudioCache[songKey] = Object.assign({}, successResult, { expiresAt: Date.now() + LX_RESOLVED_AUDIO_CACHE_TTL_MS });
         var cacheKeys = Object.keys(lxResolvedAudioCache);

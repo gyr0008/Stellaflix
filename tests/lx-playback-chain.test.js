@@ -22,7 +22,8 @@
  *  ①同曲并发两次 resolve 只发一次 fetch（在途共享同一 Promise）；
  *  ②90s 内二次播放命中 lxResolvedAudioCache（0 网络）；
  *  ③音质切换（00 的 applyPlaybackQualityToCurrentTrack）调 invalidateLxResolvedAudioCache → 下次播放重新解析；
- *  ④播放成功后注入时钟 +700ms 对队列下一首预取：不跨平台、单发不重试、失败零提示仅 console.debug，
+ *  ④播放成功后注入时钟 +700ms 对队列下一首预取（stub 槽位记录 ms，断言调度延迟 ===700 行为钉桩）：
+ *     不跨平台、单发不重试、失败零提示仅 console.debug，
  *     切曲前定时器可清除（裁决4 计时器卫生）；
  *  ⑤裁决2 计数统一：运行时链与起播失败链合并进 opts.lxChainDepth 一份共享深度，封顶 3。
  */
@@ -69,7 +70,9 @@ function makeSandbox(hooks) {
   function stubSetTimeout(fn, ms) {
     if (typeof fn !== 'function') return 0;
     if (!ms || ms <= 0) return realSetTimeout(fn, 0);
-    deferredTimers.push({ fn });
+    // 槽位记录 ms：T10④ 用它在触发前钉桩「+700ms」延迟本身
+    //（runPendingTimers 不看 ms 一律触发，光靠推进时钟无法区分 700 与 100）。
+    deferredTimers.push({ fn, ms });
     return deferredTimers.length;
   }
   function stubClearTimeout(id) {
@@ -85,6 +88,8 @@ function makeSandbox(hooks) {
     snapshot.forEach(function (slot) { if (slot) slot.fn(); });
   }
   state.runTimers = runPendingTimers;
+  // 只读窥视口：测试在 runTimers 清空槽位前取 {fn, ms} 断言延迟值（如 700ms 预取钉桩）。
+  state.pendingTimers = function () { return deferredTimers.filter(Boolean); };
   // 极简 DOM：真 showSourceFallbackNotice（模块声明会覆盖同名 stub）走卡片 DOM 路径，
   // insertBefore 时按卡片结构回收 {title, body} 进 state.notices。
   function makeEl(tag) {
@@ -813,6 +818,10 @@ test('T10④：播放成功后注入时钟 +700ms 预取队列下一首——单
   h.sandbox.trackSwitchToken = 55;
   h.exports.scheduleLxAudioPrefetch(55, 0, 'lossless');
   assert.equal(h.state.resolveCalls.length, 0, '定时器未到期不得预取');
+  // 行为钉桩 700ms：注入时钟不看 ms 一律触发，必须在触发前查槽位里的 ms 才能锁死延迟值。
+  const pend = h.state.pendingTimers();
+  assert.equal(pend.length, 1, '调度预取应登记恰一个延迟定时器');
+  assert.equal(pend[0].ms, 700, '预取延迟必须为 700ms（简报明文；上游 :32043 同款），改 100ms 必须红');
   h.state.runTimers();
   assert.equal(h.state.resolveCalls.length, 1, '注入时钟推进 700ms 后对下一首发起预取解析');
   assert.equal(h.state.resolveCalls[0].body.source, 'tx');
