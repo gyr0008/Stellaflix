@@ -10,7 +10,9 @@ const assert = require('assert');
 const path = require('path');
 const {spawn} = require('child_process');
 
-const LITE_DIR = process.env.DRPY_LITE_DIR_TEST || path.join(__dirname, '..', '..', 'drpy-lite-build');
+// drpy-lite 默认在仓库根（可选组件）；沙盒/其他布局用 DRPY_LITE_DIR_TEST 覆盖
+const LITE_DIR = process.env.DRPY_LITE_DIR_TEST || path.join(__dirname, '..', 'drpy-lite');
+const LITE_AVAILABLE = require('fs').existsSync(path.join(LITE_DIR, 'index.js'));
 const SIDE_PORT = 5759;
 
 // ---------------- 浏览器环境垫片 ----------------
@@ -44,6 +46,15 @@ function get(url, timeout) {
 }
 
 (async () => {
+  if (!LITE_AVAILABLE) {
+    console.log('SKIP drpy-bridge-integration: drpy-lite 未安装（可选组件，解压 drpy-lite/ 到仓库根后此测试生效）');
+    process.exit(0);
+  }
+  // mock 规则自管理：出厂 drpy-lite 的 rules/js 为空（红线），测试临时放入、结束删回
+  const fixtureRule = path.join(__dirname, 'fixtures', 'drpy-mock测试源.js');
+  const targetRule = path.join(LITE_DIR, 'rules', 'js', 'mock测试源.js');
+  const ruleCreatedHere = !require('fs').existsSync(targetRule);
+  if (ruleCreatedHere) require('fs').copyFileSync(fixtureRule, targetRule);
   // 0) 环境：mock 站 + drpy-lite sidecar + 真实 server.js + 渲染层脚本
   const mock = spawn(process.execPath, [path.join(LITE_DIR, 'test', 'mockserver.mjs')], {stdio: 'ignore'});
   const lite = spawn(process.execPath, [path.join(LITE_DIR, 'index.js')], {
@@ -124,5 +135,6 @@ function get(url, timeout) {
     try { srv.kill('SIGKILL'); } catch (e) {}
     try { lite.kill('SIGKILL'); } catch (e) {}
     try { mock.kill('SIGKILL'); } catch (e) {}
+    if (ruleCreatedHere) { try { require('fs').rmSync(targetRule, {force: true}); } catch (e) {} }
   }
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1); });

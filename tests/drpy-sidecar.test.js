@@ -5,11 +5,14 @@
  */
 const assert = require('assert');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const {spawn} = require('child_process');
 const {createDrpySidecar} = require('../desktop/drpy-sidecar.js');
 
-const LITE_DIR = process.env.DRPY_LITE_DIR_TEST || path.join(__dirname, '..', '..', 'drpy-lite-build');
+// drpy-lite 默认在仓库根（可选组件）；沙盒/其他布局用 DRPY_LITE_DIR_TEST 覆盖
+const LITE_DIR = process.env.DRPY_LITE_DIR_TEST || path.join(__dirname, '..', 'drpy-lite');
+const LITE_AVAILABLE = fs.existsSync(path.join(LITE_DIR, 'index.js'));
 
 // 自包含：先拉 mock 站（drpy-lite-build/test/mockserver.mjs），测完回收
 function startMock() {
@@ -30,6 +33,10 @@ function get(url) {
 }
 
 (async () => {
+  if (!LITE_AVAILABLE) {
+    console.log('SKIP drpy-sidecar: drpy-lite 未安装（可选组件，解压 drpy-lite/ 到仓库根后此测试生效）');
+    process.exit(0);
+  }
   const mock = startMock();
   await new Promise((r) => setTimeout(r, 1200)); // 等 mock 就绪
   const mgr = createDrpySidecar({liteDir: LITE_DIR, port: 5758, quiet: true});

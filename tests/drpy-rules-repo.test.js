@@ -17,7 +17,9 @@ const path = require('path');
 const {spawn} = require('child_process');
 const {syncRules, _sha256} = require('../desktop/drpy-rules-repo.js');
 
-const LITE_DIR = process.env.DRPY_LITE_DIR_TEST || path.join(__dirname, '..', '..', 'drpy-lite-build');
+// drpy-lite 默认在仓库根（可选组件）；沙盒/其他布局用 DRPY_LITE_DIR_TEST 覆盖
+const LITE_DIR = process.env.DRPY_LITE_DIR_TEST || path.join(__dirname, '..', 'drpy-lite');
+const LITE_AVAILABLE = fs.existsSync(path.join(LITE_DIR, 'index.js'));
 const PORT = 5911;
 
 const RULE_A = `var rule = { title: 'repo源A', host: 'http://127.0.0.1:5901', url: '/list/movie/fypage.html', class_name: '电影', class_url: 'movie', 一级: async function(){ return []; } };`;
@@ -50,7 +52,7 @@ function lsRules(dir) {
 }
 
 (async () => {
-  // 独立临时 rules 目录（不污染 drpy-lite-build 的正式 rules）
+  // 独立临时 rules 目录（不污染正式 rules）
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'drpy-repo-test-'));
   const rulesJsDir = path.join(tmpRoot, 'rules', 'js');
   fs.mkdirSync(rulesJsDir, {recursive: true});
@@ -63,12 +65,19 @@ function lsRules(dir) {
   });
   await new Promise(r => repo.listen(PORT, '127.0.0.1', r));
 
-  // 也拉起真 sidecar（指向临时 rules 目录）验证热加载
-  const lite = spawn(process.execPath, [path.join(LITE_DIR, 'index.js')], {
-    cwd: LITE_DIR,
-    env: Object.assign({}, process.env, {DRPY_PORT: '5757'}),
-    stdio: 'ignore',
-  });
+  if (!LITE_AVAILABLE) {
+    console.log('SKIP 热加载段: drpy-lite 未安装（可选组件），同步/回滚/消毒断言继续用本地目录验证');
+  }
+  // 也拉起真 sidecar（指向临时 rules 目录）验证热加载；drpy-lite 缺席时跳过此子进程
+  let lite = null;
+  if (LITE_AVAILABLE) {
+    lite = spawn(process.execPath, [path.join(LITE_DIR, 'index.js')], {
+      cwd: LITE_DIR,
+      env: Object.assign({}, process.env, {DRPY_PORT: '5757'}),
+      stdio: 'ignore',
+    });
+    lite.on('error', () => {}); // 可选组件缺席/异常退出不崩测试进程
+  }
   try {
     await new Promise(r => setTimeout(r, 4000));
 
@@ -79,29 +88,31 @@ function lsRules(dir) {
     assert.deepStrictEqual(lsRules(rulesJsDir), ['repo源A.js', 'repo源B.js', '用户手放.js'], '落盘清单应正确且保留用户文件');
     console.log('PASS 首次同步 added=2，用户手放文件未被触碰');
 
-    // 2) 热加载：sidecar 的 /config 应看到新模块（不重启）
-    const cfg = await (await fetch('http://127.0.0.1:5757/config?healthy=1')).json();
-    const names = (cfg.sites || []).map(s => s.name);
-    // 注意：sidecar 用的是 drpy-lite-build/rules/js（非临时目录），这里验证机制本身：
-    // 临时目录场景改用同步到真实目录的对照——见下方「真目录热加载」段
-    console.log('PASS /config 可访问（热加载对照见真目录段）', names.length);
+    // 2) 热加载：sidecar 的 /config 应看到新模块（不重启）——需 drpy-lite 就位
+    if (LITE_AVAILABLE) {
+      const cfg = await (await fetch('http://127.0.0.1:5757/config?healthy=1')).json();
+      const names = (cfg.sites || []).map(s => s.name);
+      // 注意：sidecar 用的是 drpy-lite/rules/js（非临时目录），这里验证机制本身：
+      // 临时目录场景改用同步到真实目录的对照——见下方「真目录热加载」段
+      console.log('PASS /config 可访问（热加载对照见真目录段）', names.length);
 
-    // 2b) 真目录热加载：同步 mock 仓库到 sidecar 实际 rules/js
-    const realRulesDir = path.join(LITE_DIR, 'rules', 'js');
-    const before = lsRules(realRulesDir);
-    const repo2 = makeRepoServer({'热加载验证源.js': RULE_A});
-    await new Promise(r => repo2.listen(PORT + 1, '127.0.0.1', r));
-    const r2 = await syncRules(`http://127.0.0.1:${PORT + 1}`, realRulesDir);
-    assert.strictEqual(r2.ok, true, '真目录同步应 ok: ' + r2.reason);
-    await new Promise(r => setTimeout(r, 2500)); // 等热加载
-    const cfg2 = await (await fetch('http://127.0.0.1:5757/config?healthy=1')).json();
-    const names2 = (cfg2.sites || []).map(s => s.title || s.name);
-    assert(names2.some(n => n.includes('热加载验证源') || n.includes('repo源A')), '热加载应可见新模块: ' + JSON.stringify(names2));
-    console.log('PASS 热加载：新规则不重启即生效');
-    // 清理真目录：回滚到同步前状态
-    try { fs.rmSync(path.join(realRulesDir, '热加载验证源.js'), {force: true}); } catch (e) {}
-    try { fs.rmSync(path.join(realRulesDir, '.drpy-sync-managed.json'), {force: true}); } catch (e) {}
-    repo2.close();
+      // 2b) 真目录热加载：同步 mock 仓库到 sidecar 实际 rules/js
+      const realRulesDir = path.join(LITE_DIR, 'rules', 'js');
+      const before = lsRules(realRulesDir);
+      const repo2 = makeRepoServer({'热加载验证源.js': RULE_A});
+      await new Promise(r => repo2.listen(PORT + 1, '127.0.0.1', r));
+      const r2 = await syncRules(`http://127.0.0.1:${PORT + 1}`, realRulesDir);
+      assert.strictEqual(r2.ok, true, '真目录同步应 ok: ' + r2.reason);
+      await new Promise(r => setTimeout(r, 2500)); // 等热加载
+      const cfg2 = await (await fetch('http://127.0.0.1:5757/config?healthy=1')).json();
+      const names2 = (cfg2.sites || []).map(s => s.title || s.name);
+      assert(names2.some(n => n.includes('热加载验证源') || n.includes('repo源A')), '热加载应可见新模块: ' + JSON.stringify(names2));
+      console.log('PASS 热加载：新规则不重启即生效');
+      // 清理真目录：回滚到同步前状态
+      try { fs.rmSync(path.join(realRulesDir, '热加载验证源.js'), {force: true}); } catch (e) {}
+      try { fs.rmSync(path.join(realRulesDir, '.drpy-sync-managed.json'), {force: true}); } catch (e) {}
+      repo2.close();
+    }
 
     // 3) 增量更新：改 A 内容 + 删 B
     const RULE_A2 = RULE_A.replace('repo源A', 'repo源A-v2');
