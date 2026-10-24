@@ -556,7 +556,7 @@ async function resolveAlbumGaplessPlaybackData(song) {
   if (song.type === 'podcast' || song.source === 'podcast') return null;
   var playbackProvider = normalizePlaybackProvider(songProviderKey(song));
   var requestedQuality = normalizePlaybackQualityForProvider(getProviderPlaybackQuality(playbackProvider), playbackProvider);
-  if (playbackProvider === 'netease' && requestedQuality === 'jymaster' && !hasProviderSvip('netease', loginStatus)) requestedQuality = 'hires';
+  // T12：jymaster×SVIP cookie 降级行退役——VIP 曲目由音源降级链 + probeWarning 兜底。
   var runtimeQualityCap = playbackQualityCapValue(song, playbackProvider);
   if (playbackQualityAboveCap(requestedQuality, playbackProvider, runtimeQualityCap)) requestedQuality = runtimeQualityCap;
   // T9 阶段2切换：gapless 预载统一走 /api/lx-source/resolve（静默、不跨平台换源、限时预算）。
@@ -962,8 +962,9 @@ function lxSourcePlatformLabel(sourceName) {
   return LX_SOURCE_PLATFORM_LABELS[key] || String(sourceName || '').toUpperCase() || '未知平台';
 }
 
-// Stellaflix 音质词汇 → LX 音质词（显示词汇统一与 probeWarning 态留 T12；这里只做请求映射）
-var LX_PLAYBACK_QUALITY_TO_SOURCE = { jymaster: 'master', hires: 'hires', lossless: 'flac', exhigh: '320k', standard: '128k' };
+// Stellaflix 音质词汇 → LX 音质词。T12 词汇统一后内部键即 LX 协议词（恒等直传），
+// 旧词行仅为未升级入口/陈旧偏好兜底（normalizePlaybackQuality 词汇表同样覆盖）。
+var LX_PLAYBACK_QUALITY_TO_SOURCE = { master: 'master', jymaster: 'master', flac24bit: 'flac24bit', hires: 'hires', flac: 'flac', lossless: 'flac', '320k': '320k', exhigh: '320k', '128k': '128k', standard: '128k' };
 function lxRequestQualityForPlaybackQuality(value) {
   var raw = String(value || '').trim().toLowerCase();
   if (LX_SOURCE_QUALITY_WORDS[raw]) return raw;
@@ -971,14 +972,16 @@ function lxRequestQualityForPlaybackQuality(value) {
   return LX_PLAYBACK_QUALITY_TO_SOURCE[word] || '128k';
 }
 
-// LX 实际音质词 → Stellaflix level 词（供降级提示/运行时上限沿用既有链路）
+// LX 实际音质词 → Stellaflix level 词。T12：内部词汇即 LX 五档；
+// 协议侧独立的 hires/atmos_plus 折叠进相邻档（hires→flac24bit、atmos_plus→master），
+// 降级提示与运行时上限继续沿用既有 playbackQualityRank 链路。
 function lxPlaybackLevelFromLxQuality(value) {
   var word = String(value || '').trim().toLowerCase();
-  if (word === 'master' || word === 'atmos_plus') return 'jymaster';
-  if (word === 'flac24bit' || word === 'hires') return 'hires';
-  if (word === 'flac' || word === 'lossless') return 'lossless';
-  if (word === '320k') return 'exhigh';
-  return 'standard';
+  if (word === 'master' || word === 'atmos_plus') return 'master';
+  if (word === 'flac24bit' || word === 'hires') return 'flac24bit';
+  if (word === 'flac' || word === 'lossless') return 'flac';
+  if (word === '320k') return '320k';
+  return '128k';
 }
 
 // 终态引导文案——裁决3：全项目共享的 code→文案映射，按机器 code 分支不按散文猜。
@@ -1678,7 +1681,8 @@ async function playQueueAt(idx, opts) {
       var isQishuiPlayback = playbackProvider === 'qishui';
       var isSpotifyPlayback = playbackProvider === 'spotify';
       var requestedQuality = normalizePlaybackQualityForProvider(opts.qualityOverride || getProviderPlaybackQuality(playbackProvider), playbackProvider);
-      if (playbackProvider === 'netease' && requestedQuality === 'jymaster' && !hasProviderSvip('netease', loginStatus)) requestedQuality = 'hires';
+      // T12：jymaster×SVIP cookie 降级行退役——母带档恒可请求，实际能力由音源降级链
+      // 决定并以 probeWarning 提示（见 song.lxProbeWarning → 音质 pill tooltip）。
       var runtimeQualityCap = playbackQualityCapValue(song, playbackProvider);
       if (playbackQualityAboveCap(requestedQuality, playbackProvider, runtimeQualityCap)) {
         requestedQuality = runtimeQualityCap;
@@ -1767,6 +1771,14 @@ async function playQueueAt(idx, opts) {
       var resolvedQualityText = playbackResolvedQualityText(data, playbackProvider);
       var qualityDowngraded = !!(data && data.level && playbackQualityWasDowngraded(requestedQuality, data.level, playbackProvider));
       if (qualityDowngraded && !(data && data.lxSource)) markPlaybackQualityRuntimeCap(song, playbackProvider, data.level, 'resolved-lower');
+      // T12：resolve 的 probeWarning 落到 song——驱动音质 pill tooltip
+      // 「在线音源按平台能力自动降级」（上游 index.html:23228），替代旧 cookie/VIP 门槛；
+      // 每次成功解析都覆写，防旧降级态跨曲残留。
+      var lxProbeFlag = !!(data && data.lxSource && data.lxProbeWarning);
+      if (song.lxProbeWarning !== lxProbeFlag) {
+        song.lxProbeWarning = lxProbeFlag;
+        if (typeof updatePlaybackQualityUi === 'function') updatePlaybackQualityUi();
+      }
       if (!opts.startupAutoplay && !isQQPlayback && qualityDowngraded) {
         showSourceFallbackNotice(data && data.lxSource ? '音源音质自动降级' : ((isKugouPlayback ? '酷狗' : (isQishuiPlayback ? '汽水' : '网易云')) + '音质自动降级'), '请求 ' + playbackQualityLabel(requestedQuality, playbackProvider) + '，实际播放 ' + resolvedQualityText + '。');
       } else if (!opts.startupAutoplay && opts.qualitySwitch) {

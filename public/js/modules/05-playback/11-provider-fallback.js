@@ -180,13 +180,15 @@ function playbackRestrictionMessage(song, data) {
   return message;
 }
 function qqPlaybackRetryQualities(requestedQuality, resolvedLevel) {
+  // T12：词汇总一 LX 五档——官方 QQ 兼容重试池改用 LX 词汇（服务端旧 level 词
+  // 经 normalizePlaybackQuality 词汇表归一后同轨比较）。
   requestedQuality = normalizePlaybackQualityForProvider(requestedQuality || getProviderPlaybackQuality('qq'), 'qq');
-  resolvedLevel = String(resolvedLevel || '').toLowerCase();
+  resolvedLevel = normalizePlaybackQuality(resolvedLevel || '');
   var pool = [];
-  if (requestedQuality === 'jymaster' || requestedQuality === 'hires' || requestedQuality === 'lossless' || resolvedLevel === 'hires' || resolvedLevel === 'lossless') {
-    pool = ['exhigh', 'standard'];
-  } else if (requestedQuality === 'exhigh' || resolvedLevel === 'exhigh') {
-    pool = ['standard'];
+  if (requestedQuality === 'master' || requestedQuality === 'flac24bit' || requestedQuality === 'flac' || resolvedLevel === 'flac24bit' || resolvedLevel === 'flac') {
+    pool = ['320k', '128k'];
+  } else if (requestedQuality === '320k' || resolvedLevel === '320k') {
+    pool = ['128k'];
   }
   return pool.filter(function (q) { return q !== requestedQuality; });
 }
@@ -789,7 +791,7 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
         fallbackOriginalSong: originalSong,
         fallbackCandidateSong: committedCandidate,
         sourceFallbackRecovery: recovery,
-        qqQualityTried: ['hires', 'lossless', 'exhigh', 'standard']
+        qqQualityTried: ['flac24bit', 'flac', '320k', '128k']
       };
       if (opts.resumeAt != null) fallbackPlaybackOpts.resumeAt = opts.resumeAt;
       var fallbackPromise = playQueueAt(idx, fallbackPlaybackOpts);

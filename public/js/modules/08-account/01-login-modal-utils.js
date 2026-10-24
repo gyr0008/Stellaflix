@@ -276,7 +276,11 @@ function hasProviderVip(provider, status) {
   return providerVipLevel(provider, status) !== 'none';
 }
 function hasProviderSvip(provider, status) {
-  return providerVipLevel(provider, status) === 'svip';
+  // T12（移植批）：provider-VIP 门槛恒通过——脚本源是在线播放 URL 唯一供方后，
+  // 按平台 cookie 判定音质权限失去意义；音质能力差异由服务端降级链 + probeWarning
+  // 自动兜底（「在线音源按平台能力自动降级」）。签名保留供遗留调用点编译，
+  // 音质链调用点已随 T12 拆除，账号 UI 侧由 T15/T16 清理。
+  return true;
 }
 function hasPlatformLogin(provider) {
   var st = platformStatus(provider);

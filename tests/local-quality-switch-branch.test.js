@@ -167,7 +167,7 @@ test('setPlaybackQuality on a local file matches online and replays with quality
   assert.strictEqual(sb.calls.playQueueAt.length, 1);
   const call = sb.calls.playQueueAt[0];
   assert.strictEqual(call.idx, 0);
-  assert.strictEqual(call.opts.qualityOverride, 'lossless');
+  assert.strictEqual(call.opts.qualityOverride, 'flac', 'T12 词汇总一：旧词 lossless 入参经词汇表落为 LX flac');
   assert.strictEqual(call.opts.qualitySwitch, true);
   assert.strictEqual(call.opts.resumeAt, 42.5);
   assert.strictEqual(call.opts.preserveHomeState, true);
@@ -236,5 +236,5 @@ test('plain online songs keep the existing quality-switch path (no local matchin
   await settle();
   assert.strictEqual(sb.calls.match, 0);
   assert.strictEqual(sb.calls.playQueueAt.length, 1);
-  assert.strictEqual(sb.calls.playQueueAt[0].opts.qualityOverride, 'lossless');
+  assert.strictEqual(sb.calls.playQueueAt[0].opts.qualityOverride, 'flac', 'T12 词汇总一：lossless 入参 → LX flac 重载');
 });

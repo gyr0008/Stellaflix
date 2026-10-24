@@ -771,12 +771,14 @@
         return toolError('QUALITY_PANEL_FAILED', error && error.message ? error.message : '音质面板打开失败');
       }
     }
+    // T12：音质的内部键统一为 LX 五档（master/flac24bit/flac/320k/128k），
+    // 旧词/别名保留为输入兼容，映射进新词汇表。
     var aliases = {
-      '128k': 'standard', 'standard': 'standard', 'normal': 'standard',
-      '320k': 'exhigh', 'exhigh': 'exhigh', 'high': 'exhigh', 'hq': 'exhigh',
-      'flac': 'lossless', 'lossless': 'lossless', 'sq': 'lossless',
-      'hires': 'hires', 'hi-res': 'hires', 'highres': 'hires',
-      'master': 'jymaster', 'jymaster': 'jymaster', 'svip': 'jymaster'
+      '128k': '128k', 'standard': '128k', 'normal': '128k', 'std': '128k',
+      '320k': '320k', 'exhigh': '320k', 'high': '320k', 'hq': '320k',
+      'flac': 'flac', 'lossless': 'flac', 'sq': 'flac',
+      'flac24bit': 'flac24bit', 'hires': 'flac24bit', 'hi-res': 'flac24bit', 'highres': 'flac24bit',
+      'master': 'master', 'jymaster': 'master', 'svip': 'master'
     };
     quality = aliases[quality] || '';
     if (!quality) return toolError('QUALITY_INVALID', '音质只支持标准、320k、无损、Hi-Res 或超清母带');

@@ -375,7 +375,7 @@ async function fetchBeatPrefetchAudioUrl(song) {
   }
   var isQQ = songProviderKey(song) === 'qq';
   var requestedQuality = normalizePlaybackQualityForProvider(getPlaybackQualityForSong(song), isQQ ? 'qq' : 'netease');
-  if (!isQQ && requestedQuality === 'jymaster' && !hasProviderSvip('netease', loginStatus)) requestedQuality = 'hires';
+  // T12：jymaster×SVIP cookie 降级行退役（VIP 兜底交音源降级链 + probeWarning）。
   var runtimeQualityCap = playbackQualityCapValue(song, isQQ ? 'qq' : 'netease');
   if (playbackQualityAboveCap(requestedQuality, isQQ ? 'qq' : 'netease', runtimeQualityCap)) requestedQuality = runtimeQualityCap;
   var qualityParam = '&quality=' + encodeURIComponent(requestedQuality);

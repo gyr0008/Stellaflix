@@ -294,7 +294,7 @@ test('T9②：resolver 级失败后 excludedResolvers 递增（_lxResolver 记�
   assert.equal(h.state.resolveCalls[0].body.quality, 'flac', 'Stellaflix lossless 必须映射为 LX flac');
   assert.equal(result.resolver, 'B');
   assert.equal(result.actual, 'flac', '服务端 actual 是 Range 探测对象、音质词在 quality；不得 String(probe) 变成 [object Object] 误判 standard');
-  assert.equal(h.exports.lxPlaybackLevelFromLxQuality(result.actual), 'lossless', 'level 映射必须吃到音质词而非探测对象');
+  assert.equal(h.exports.lxPlaybackLevelFromLxQuality(result.actual), 'flac', 'T12 词汇总一：level 映射吃到音质词且输出 LX 五档词汇（旧 lossless→flac）');
   assert.equal(result.proxyUrl, PROXY_B, '裁决4：proxyUrl 作不透明字符串原样返回，不得重编码');
   assert.equal(song._lxResolver, 'B', '_lxResolver 记忆字段回环');
 });
@@ -439,18 +439,23 @@ test('T9：源名与音质词汇映射 + lxPlaybackSongPayload 透传（kg hash 
   assert.equal(ex.lxNormalizeSourceName('TX'), 'tx');
   assert.equal(ex.lxNormalizeSourceName('kg'), 'kg');
 
+  // T12 词汇总一：内部键即 LX 协议词——旧词仍映射到同一档位（词汇表兜底），新词直通。
   assert.equal(ex.lxRequestQualityForPlaybackQuality('jymaster'), 'master');
   assert.equal(ex.lxRequestQualityForPlaybackQuality('hires'), 'hires');
   assert.equal(ex.lxRequestQualityForPlaybackQuality('lossless'), 'flac');
   assert.equal(ex.lxRequestQualityForPlaybackQuality('exhigh'), '320k');
   assert.equal(ex.lxRequestQualityForPlaybackQuality('standard'), '128k');
+  assert.equal(ex.lxRequestQualityForPlaybackQuality('master'), 'master');
+  assert.equal(ex.lxRequestQualityForPlaybackQuality('flac24bit'), 'flac24bit');
 
-  assert.equal(ex.lxPlaybackLevelFromLxQuality('master'), 'jymaster');
-  assert.equal(ex.lxPlaybackLevelFromLxQuality('flac24bit'), 'hires');
-  assert.equal(ex.lxPlaybackLevelFromLxQuality('hires'), 'hires');
-  assert.equal(ex.lxPlaybackLevelFromLxQuality('flac'), 'lossless');
-  assert.equal(ex.lxPlaybackLevelFromLxQuality('320k'), 'exhigh');
-  assert.equal(ex.lxPlaybackLevelFromLxQuality('128k'), 'standard');
+  // T12：lx level 回映统一到五档——hires/atmos_plus 折叠进相邻档（flac24bit/master）。
+  assert.equal(ex.lxPlaybackLevelFromLxQuality('master'), 'master');
+  assert.equal(ex.lxPlaybackLevelFromLxQuality('atmos_plus'), 'master');
+  assert.equal(ex.lxPlaybackLevelFromLxQuality('flac24bit'), 'flac24bit');
+  assert.equal(ex.lxPlaybackLevelFromLxQuality('hires'), 'flac24bit');
+  assert.equal(ex.lxPlaybackLevelFromLxQuality('flac'), 'flac');
+  assert.equal(ex.lxPlaybackLevelFromLxQuality('320k'), '320k');
+  assert.equal(ex.lxPlaybackLevelFromLxQuality('128k'), '128k');
 
   const kg = ex.lxPlaybackSongPayload({ source: 'kugou', id: '11', songmid: '11', hash: 'H123456', name: 'n', singer: 's' });
   assert.equal(kg.source, 'kg');
