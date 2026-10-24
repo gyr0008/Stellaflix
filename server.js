@@ -441,7 +441,7 @@ const mapTileCache = new Map();
 const platformPlaylistImport = require('./platform-playlist-import');
 // 平台歌单导入的跨平台匹配桥：sp/qs/am 导入歌曲无 Stellaflix 原生 id，
 // 用 lx-search 的 wy 爬虫按歌名+歌手匹配出可播版本；匹配不上的歌保留
-// needsCrossPlatformMatch，由前端 custom-source 聚合解析现场兜底。
+// needsCrossPlatformMatch，由前端 LX 解析链现场兜底（T15：旧第三方音源聚合解析路由已退役）。
 // 批 T8 换血：旧 netease 官方 API handleSearch → lxSearch.searchOne('wy')（消费批 T5 单例）。
 // 闭包定义先于下方 lxSearch const 声明但仅在请求期执行，TDZ 不触雷；输出与旧注入逐字节
 // 同形 {name,singer,songmid,picUrl,interval,source:'wy'}，import 模块零改动。错误语义照旧：
@@ -474,9 +474,6 @@ const hlsAdFilter = require('./desktop/hls-ad-filter');
     }
   } catch (e) { /* 代理失败不影响主流程 */ }
 })();
-
-// 第三方音源 bridge：由 Electron 主进程在 app ready 之后注入；纯 node 启动则保持 null
-let customSourceBridge = null;
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -1887,7 +1884,9 @@ const QQ_QUALITY_CANDIDATE_TEMPLATES = [
 function normalizeQualityPreference(value) {
   const raw = String(value || '').toLowerCase().trim();
   if (['jymaster', 'master', 'studio', 'svip'].includes(raw)) return 'jymaster';
-  if (['hires', 'hi-res', 'highres', 'zhenyin', 'spatial'].includes(raw)) return 'hires';
+  // T15（携 T12 minor）：LX 词汇 flac24bit 归 hires——本函数服务保留的 QQ 兼容
+  // vkey/推荐候选链（QQ_QUALITY_CANDIDATE_TEMPLATES），24bit FLAC 属最高解析档。
+  if (['hires', 'hi-res', 'highres', 'zhenyin', 'spatial', 'flac24bit'].includes(raw)) return 'hires';
   if (['lossless', 'flac', 'sq'].includes(raw)) return 'lossless';
   if (['exhigh', 'high', '320', '320k', 'hq'].includes(raw)) return 'exhigh';
   if (['standard', 'normal', '128', '128k', 'std'].includes(raw)) return 'standard';
@@ -5720,127 +5719,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ---------- 第三方音源解析 + 音频代理 ----------
-  if (pn === '/api/custom-source/resolve') {
-    if (req.method !== 'POST') {
-      sendJSON(res, { error: 'METHOD_NOT_ALLOWED' }, 405);
-      return;
-    }
-    const declaredLength = Number(req.headers['content-length']) || 0;
-    if (declaredLength > 256 * 1024) {
-      sendJSON(res, { error: 'REQUEST_TOO_LARGE' }, 413);
-      return;
-    }
-    try {
-      const body = await readRequestBody(req);
-      if (Buffer.byteLength(JSON.stringify(body || {})) > 256 * 1024) {
-        sendJSON(res, { error: 'REQUEST_TOO_LARGE' }, 413);
-        return;
-      }
-      if (!customSourceBridge || typeof customSourceBridge.resolve !== 'function') {
-        sendJSON(res, { attempted: false, reason: 'inactive' });
-        return;
-      }
-      const controller = new AbortController();
-      req.once('aborted', () => controller.abort(new Error('CLIENT_ABORTED')));
-      const result = await customSourceBridge.resolve({
-        song: body && body.song && typeof body.song === 'object' ? body.song : {},
-        quality: String(body && body.quality || 'hires'),
-        mode: String(body && body.mode || ''),
-        officialResult: body && body.officialResult && typeof body.officialResult === 'object' ? body.officialResult : {},
-        signal: controller.signal,
-      });
-      if (result && result.url) {
-        if (typeof customSourceBridge.issue !== 'function') throw new Error('CUSTOM_SOURCE_AUDIO_PROXY_UNAVAILABLE');
-        const ticket = customSourceBridge.issue(result.url);
-        sendJSON(res, {
-          ...result,
-          // 绝对地址（同 resolve-aggregate）：避免 /api/audio 二次代理时 Node fetch 解析相对路径 502
-          url: 'http://127.0.0.1:' + PORT + '/api/custom-source/audio?ticket=' + encodeURIComponent(ticket),
-        });
-        return;
-      }
-      sendJSON(res, result && typeof result === 'object' ? result : { attempted: true, url: '', reason: 'resolve_failed' });
-    } catch (err) {
-      console.warn('[CustomSourceResolve]', err.message || err);
-      sendJSON(res, { attempted: true, url: '', reason: 'resolve_failed', error: err.message || 'CUSTOM_SOURCE_FAILED' }, 502);
-    }
-    return;
-  }
-
-  // 聚合解析：打破平台绑定。接收歌曲元数据 → 跨平台搜索匹配真实版本（wy/tx/kg）→
-  // 交给主进程按音质降序逐候选热切换解析 → 返回 ticket 化播放地址。
-  if (pn === '/api/custom-source/resolve-aggregate') {
-    if (req.method !== 'POST') {
-      sendJSON(res, { error: 'METHOD_NOT_ALLOWED' }, 405);
-      return;
-    }
-    const declaredLength = Number(req.headers['content-length']) || 0;
-    if (declaredLength > 256 * 1024) {
-      sendJSON(res, { error: 'REQUEST_TOO_LARGE' }, 413);
-      return;
-    }
-    try {
-      const body = await readRequestBody(req);
-      if (Buffer.byteLength(JSON.stringify(body || {})) > 256 * 1024) {
-        sendJSON(res, { error: 'REQUEST_TOO_LARGE' }, 413);
-        return;
-      }
-      if (!customSourceBridge || typeof customSourceBridge.resolveAggregate !== 'function') {
-        sendJSON(res, { attempted: false, reason: 'inactive' });
-        return;
-      }
-      const song = body && body.song && typeof body.song === 'object' ? body.song : {};
-      const quality = String(body && body.quality || 'hires');
-      const meta = aggregateSongMeta(song);
-      if (!meta.title) {
-        sendJSON(res, { attempted: false, reason: 'missing_metadata' });
-        return;
-      }
-      const controller = new AbortController();
-      req.once('aborted', () => controller.abort(new Error('CLIENT_ABORTED')));
-      const candidates = await aggregateSearchCandidates(meta);
-      if (!candidates.length) {
-        sendJSON(res, { attempted: true, url: '', reason: 'aggregate_no_match' });
-        return;
-      }
-      const result = await customSourceBridge.resolveAggregate({
-        candidates: candidates.map(item => ({ song: item.song, source: item.source, score: item.score })),
-        quality,
-        signal: controller.signal,
-      });
-      if (result && result.url) {
-        if (typeof customSourceBridge.issue !== 'function') throw new Error('CUSTOM_SOURCE_AUDIO_PROXY_UNAVAILABLE');
-        const ticket = customSourceBridge.issue(result.url);
-        sendJSON(res, {
-          ...result,
-          // 必须返回绝对地址：playQueueAt 会把它包进 /api/audio?url=<fetch 目标>，
-          // Node fetch 无法解析相对路径会 502（对齐 main.js IPC 路径的绝对化行为）
-          url: 'http://127.0.0.1:' + PORT + '/api/custom-source/audio?ticket=' + encodeURIComponent(ticket),
-          matchedTitle: meta.title,
-          matchedArtist: meta.artistNames.join('、'),
-          candidateCount: candidates.length,
-        });
-        return;
-      }
-      sendJSON(res, result && typeof result === 'object' ? result : { attempted: true, url: '', reason: 'resolve_failed' });
-    } catch (err) {
-      console.warn('[CustomSourceAggregate]', err.message || err);
-      sendJSON(res, { attempted: true, url: '', reason: 'resolve_failed', error: err.message || 'AGGREGATE_RESOLVE_FAILED' }, 502);
-    }
-    return;
-  }
-
-  if (pn === '/api/custom-source/audio') {
-    if (!customSourceBridge || typeof customSourceBridge.pipe !== 'function') {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Custom source audio proxy is inactive');
-      return;
-    }
-    await customSourceBridge.pipe(url.searchParams.get('ticket') || '', req, res);
-    return;
-  }
-
   if (pn === '/api/platform/capabilities') {
     const spotifyStatus = await handleSpotifyStatus().catch(() => ({ loggedIn: false, capabilities: {} }));
     sendJSON(res, {
@@ -6427,21 +6305,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pn === '/api/spotify/song/url') {
-    try {
-      sendJSON(res, await handleSpotifySongUrl({
-        id: url.searchParams.get('id') || '',
-        providerSongId: url.searchParams.get('providerSongId') || '',
-        spotifyId: url.searchParams.get('spotifyId') || '',
-        uri: url.searchParams.get('uri') || '',
-      }));
-    } catch (err) {
-      console.error('[SpotifySongUrl]', err);
-      sendJSON(res, { provider: 'spotify', url: '', playable: false, error: err.message }, 500);
-    }
-    return;
-  }
-
   if (pn === '/api/spotify/lyric') {
     try {
       const id = url.searchParams.get('id') || '';
@@ -6711,24 +6574,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pn === '/api/qishui/song/url') {
-    try {
-      sendJSON(res, await handleQishuiSongUrl({
-        id: url.searchParams.get('id') || url.searchParams.get('trackId') || '',
-        quality: url.searchParams.get('quality') || '',
-        vipRequired: url.searchParams.get('vipRequired') || '',
-        needVip: url.searchParams.get('needVip') || url.searchParams.get('need_vip') || '',
-        onlyVipPlayable: url.searchParams.get('onlyVipPlayable') || url.searchParams.get('only_vip_playable') || '',
-        privilege: url.searchParams.get('privilege') || url.searchParams.get('mediaPrivilege') || url.searchParams.get('media_privilege') || '',
-        fee: url.searchParams.get('fee') || '',
-      }, qishuiCookie));
-    } catch (err) {
-      console.error('[QishuiSongUrl]', err);
-      sendJSON(res, { provider: 'qishui', url: '', playable: false, error: err.message }, 500);
-    }
-    return;
-  }
-
   if (pn === '/api/qishui/lyric') {
     try {
       const id = url.searchParams.get('id') || url.searchParams.get('trackId') || '';
@@ -6736,31 +6581,6 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('[QishuiLyric]', err);
       sendJSON(res, { provider: 'qishui', error: err.message, lyric: '', tlyric: '' }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/song/url') {
-    try {
-      const info = await handleKugouSongUrl({
-        hash: url.searchParams.get('hash') || url.searchParams.get('id') || '',
-        albumId: url.searchParams.get('albumId') || url.searchParams.get('album_id') || '',
-        albumAudioId: url.searchParams.get('albumAudioId') || url.searchParams.get('album_audio_id') || url.searchParams.get('mixSongId') || '',
-        mixSongId: url.searchParams.get('mixSongId') || url.searchParams.get('albumAudioId') || url.searchParams.get('album_audio_id') || '',
-        hqHash: url.searchParams.get('hqHash') || url.searchParams.get('hq_hash') || '',
-        sqHash: url.searchParams.get('sqHash') || url.searchParams.get('sq_hash') || '',
-        resHash: url.searchParams.get('resHash') || url.searchParams.get('res_hash') || '',
-        quality: url.searchParams.get('quality') || '',
-        vipRequired: url.searchParams.get('vipRequired') || '',
-        needVip: url.searchParams.get('needVip') || url.searchParams.get('need_vip') || '',
-        onlyVipPlayable: url.searchParams.get('onlyVipPlayable') || url.searchParams.get('only_vip_playable') || '',
-        privilege: url.searchParams.get('privilege') || url.searchParams.get('mediaPrivilege') || url.searchParams.get('media_privilege') || '',
-        fee: url.searchParams.get('fee') || '',
-      }, kugouCookie);
-      sendJSON(res, info);
-    } catch (err) {
-      console.error('[KugouSongUrl]', err);
-      sendJSON(res, { provider: 'kugou', url: '', playable: false, error: err.message }, 500);
     }
     return;
   }
@@ -6886,27 +6706,6 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('[KugouPlaylistAddSong]', err);
       sendJSON(res, { provider: 'kugou', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qq/song/url') {
-    try {
-      const mid = url.searchParams.get('mid') || url.searchParams.get('id') || '';
-      const mediaMid = url.searchParams.get('mediaMid') || url.searchParams.get('media_mid') || '';
-      const quality = url.searchParams.get('quality') || '';
-      const playbackHints = {
-        vipRequired: url.searchParams.get('vipRequired') || '',
-        needVip: url.searchParams.get('needVip') || url.searchParams.get('need_vip') || '',
-        onlyVipPlayable: url.searchParams.get('onlyVipPlayable') || url.searchParams.get('only_vip_playable') || '',
-        privilege: url.searchParams.get('privilege') || url.searchParams.get('mediaPrivilege') || url.searchParams.get('media_privilege') || '',
-        fee: url.searchParams.get('fee') || ''
-      };
-      const info = await handleQQSongUrl(mid, mediaMid, quality, playbackHints);
-      sendJSON(res, info);
-    } catch (err) {
-      console.error('[QQSongUrl]', err);
-      sendJSON(res, { provider: 'qq', url: '', playable: false, error: err.message }, 500);
     }
     return;
   }
@@ -8691,13 +8490,5 @@ server.isTrustedLocalApiRequest = isTrustedLocalApiRequest;
 // audioProxyUrl 的 h 参数构造/回退旧 url= 形态 + audioProxyHeadersFromQuery 白名单解析）。
 server.audioProxyUrl = audioProxyUrl;
 server.audioProxyHeadersFromQuery = audioProxyHeadersFromQuery;
-
-// 允许 Electron 主进程注入第三方音源 bridge；传 null/非法对象则卸载
-server.setCustomSourceBridge = function setCustomSourceBridge(bridge) {
-  customSourceBridge = bridge && typeof bridge === 'object' ? bridge : null;
-};
-server.getCustomSourceBridge = function getCustomSourceBridge() {
-  return customSourceBridge;
-};
 
 module.exports = server;

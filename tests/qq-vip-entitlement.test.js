@@ -543,7 +543,13 @@ function testDesktopReauthCookieSelectionAndBudgets() {
   // T9 阶段2切换：13-playback 官方五分支（含 QQ 15s 分支）已被 /api/lx-source/resolve 三级链整体替换；
   // QQ vkey/probe 的 15s 渲染端预算契约仅存活于 prefetch 链路（下一行断言），此处改守"官方播放路由不得回潮"。
   assert(!/\/api\/(?:qq|kugou|qishui|spotify)\/song\/url/.test(playbackSource), 'playback resolution must not call official platform URL APIs after the lx-source switch');
-  assert(/timeoutMs: 15000/.test(prefetchSource));
+  // T15（拆除批）：prefetch 的官方平台 song/url 兜底分支整删——节拍预取与播放同轨，
+  // 唯一供给者为 /api/lx-source/resolve（resolveAlbumGaplessPlaybackData 封装，15s 预算在 13 侧）。
+  // 原 `timeoutMs: 15000` 断言随分支一并作废，改守"预取不得再请求任何官方播放解析路由"。
+  assert(!/\/api\/(?:qq|kugou|qishui|spotify)\/song\/url|['"]\/api\/song\/url/.test(prefetchSource),
+    'beat prefetch must not request official platform URL APIs');
+  assert(/resolveAlbumGaplessPlaybackData/.test(prefetchSource), 'beat prefetch resolves through the lx-source path');
+  assert(!/\/api\/custom-source\//.test(serverSource), 'T15: 旧 custom-source 解析/代理路由必须已退役');
 
   assert(!/vipEvidence:\s*playbackVipEvidence/.test(serverSource));
   assert(!/member-track-playback/.test(serverSource));

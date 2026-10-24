@@ -155,24 +155,17 @@ test('history rendering and replay keep the currently selected tab', () => {
   assert.match(podcastSource, /rememberSearchQuery\(q\)/);
 });
 
-test('catalogue search readiness is separate from login state', () => {
-  const statuses = {
-    qishui: { loggedIn: false, searchReady: true, publicCatalog: true },
-    spotify: { loggedIn: false, searchReady: true },
-    spotifyOff: { loggedIn: false, searchReady: false },
-  };
-  const sandbox = {
-    searchProviderStatus(provider) {
-      return provider === 'spotify-off' ? statuses.spotifyOff : (statuses[provider] || {});
-    },
-  };
-  vm.runInNewContext(`${namedFunctionSource(searchSource, 'searchProviderCanSearch')}\nthis.canSearch = searchProviderCanSearch;`, sandbox);
-  assert.equal(sandbox.canSearch('qishui'), true);
-  assert.equal(sandbox.canSearch('spotify'), true);
-  assert.equal(sandbox.canSearch('spotify-off'), false);
-  assert.equal(sandbox.canSearch('netease'), true);
-  assert.equal(sandbox.canSearch('qq'), true);
-  assert.equal(sandbox.canSearch('kugou'), true);
+test('T15: 官方五平台 fan-out 死代码簇必须已整删', () => {
+  for (const dead of ['MUSIC_SEARCH_PROVIDER_ORDER', 'searchProviderStatus', 'searchProviderIsLoggedIn',
+    'searchProviderCanSearch', 'searchModeProvider', 'activeSearchProvidersForMode',
+    'searchProviderLoginNotice', 'searchProviderUrl', 'mergeSongSearchResults',
+    'searchProviderPagesHaveMore', 'searchIntentPrefersQQ', 'LX_SEARCH_SOURCE_ORDER']) {
+    assert.doesNotMatch(searchSource, new RegExp(dead), `T15：07-search.js 不得再残留 ${dead}`);
+  }
+  const fallbackSource = fs.readFileSync(
+    path.join(appRoot, 'public', 'js', 'modules', '05-playback', '11-provider-fallback.js'), 'utf8');
+  assert.doesNotMatch(fallbackSource, /SOURCE_FALLBACK_SEARCH_TIMEOUT_MS/,
+    'T15：11-provider-fallback 不得再残留 SOURCE_FALLBACK_SEARCH_TIMEOUT_MS');
 });
 
 test('ranking favors exact originals while preserving explicitly requested versions', () => {
@@ -204,16 +197,11 @@ test('ranking favors exact originals while preserving explicitly requested versi
   assert.notEqual(sandbox.key(original), sandbox.key(live), 'studio and live editions must not collapse');
 });
 
-test('search pagination carries provider offsets and ignores stale sessions', () => {
-  const providerUrl = namedFunctionSource(searchSource, 'searchProviderUrl');
-  const sandbox = { encodeURIComponent };
-  vm.runInNewContext(`${providerUrl}\nthis.url = searchProviderUrl;`, sandbox);
-  assert.match(sandbox.url('qq', '晴天', 12, 24), /limit=12&offset=24$/);
-  assert.match(sandbox.url('spotify', 'Muse', 10, 30), /limit=10&offset=30$/);
-
-  assert.match(searchSource, /fetchMusicSearchResults\(q, mode, previousPages\)/);
-  // 批 T11：官方 provider offset 分页（value.nextOffset / value.hasMore fan-out）已由
-  // /api/lx-source/search 单次聚合取代；滚动状态机保留，仅作本地分批渲染（hasMore 恒 false）。
+test('search pagination is lx-aggregate only and ignores stale sessions', () => {
+  // T15（拆除批）：provider offset 分页（逐源 URL 构造 + 五路并池）随官方 fan-out 整删，
+  // 原 vm 单测删除；previousPages 形参一并摘除（T11 起被忽略的死参数）。
+  assert.doesNotMatch(searchSource, /previousPages/, 'fetchMusicSearchResults 不得再收 previousPages');
+  assert.match(searchSource, /fetchMusicSearchResults\(q, mode\)/);
   assert.match(searchSource, /\/api\/lx-source\/search/);
   assert.match(searchSource, /hasMore:\s*false/);
   assert.match(searchSource, /new IntersectionObserver/);
@@ -222,9 +210,6 @@ test('search pagination carries provider offsets and ignores stale sessions', ()
   assert.match(searchSource, /requestSeq\s*!==\s*searchRequestSeq/);
   assert.match(searchSource, /searchMode\s*!==\s*mode/);
 
-  const mergeSource = namedFunctionSource(searchSource, 'mergeSongSearchResults');
-  assert.doesNotMatch(mergeSource, /sourceSwitchSongHasBlockedArtist/,
-    'source-switch blacklist must not remove ordinary search results');
   const scoreSource = namedFunctionSource(searchSource, 'scoreSongSearchResult');
   assert.doesNotMatch(scoreSource, /provider\s*===|searchIntentPrefersQQ/,
     'ordinary relevance must not contain platform-specific score boosts');

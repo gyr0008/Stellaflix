@@ -367,24 +367,13 @@ function normalizeBeatPrefetchState(state) {
 
 async function fetchBeatPrefetchAudioUrl(song) {
   if (!song) return null;
-  if (typeof resolveAlbumGaplessPlaybackData === 'function') {
-    var resolved = await resolveAlbumGaplessPlaybackData(song);
-    if (!resolved || !resolved.url || resolved.trial) return null;
-    // T9 裁决4：proxyUrl 不透明消费（可能含 + 编码），不得重编码。
-    return resolved.proxyUrl ? String(resolved.proxyUrl) : '/api/audio?url=' + encodeURIComponent(resolved.url);
-  }
-  var isQQ = songProviderKey(song) === 'qq';
-  var requestedQuality = normalizePlaybackQualityForProvider(getPlaybackQualityForSong(song), isQQ ? 'qq' : 'netease');
-  // T12：jymaster×SVIP cookie 降级行退役（VIP 兜底交音源降级链 + probeWarning）。
-  var runtimeQualityCap = playbackQualityCapValue(song, isQQ ? 'qq' : 'netease');
-  if (playbackQualityAboveCap(requestedQuality, isQQ ? 'qq' : 'netease', runtimeQualityCap)) requestedQuality = runtimeQualityCap;
-  var qualityParam = '&quality=' + encodeURIComponent(requestedQuality);
-  var neteaseMatchQuery = typeof neteasePlaybackMatchQuery === 'function' ? neteasePlaybackMatchQuery(song) : '';
-  var data = isQQ
-    ? await apiJson('/api/qq/song/url?mid=' + encodeURIComponent(song.mid || song.songmid || song.id || '') + '&mediaMid=' + encodeURIComponent(song.mediaMid || song.media_mid || '') + qualityParam, { timeoutMs: 15000 })
-    : await apiJson('/api/song/url?id=' + encodeURIComponent(song.id) + neteaseMatchQuery + qualityParam, { timeoutMs: 14000 });
-  if (!data || !data.url || data.trial) return null;
-  return '/api/audio?url=' + encodeURIComponent(data.url);
+  if (typeof resolveAlbumGaplessPlaybackData !== 'function') return null;
+  var resolved = await resolveAlbumGaplessPlaybackData(song);
+  if (!resolved || !resolved.url || resolved.trial) return null;
+  // T9 裁决4：proxyUrl 不透明消费（可能含 + 编码），不得重编码。
+  // T15（拆除批）：官方平台 song/url 兜底分支删除——节拍预取与播放同轨，
+  // 唯一 URL 供给者是 /api/lx-source/resolve（resolveAlbumGaplessPlaybackData 已封装）。
+  return resolved.proxyUrl ? String(resolved.proxyUrl) : '/api/audio?url=' + encodeURIComponent(resolved.url);
 }
 
 function scheduleQueueBeatPrefetch(fromIdx, delayMs, state) {

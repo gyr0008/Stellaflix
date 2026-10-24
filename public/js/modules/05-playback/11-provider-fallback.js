@@ -302,7 +302,7 @@ function isSameTitleArtist(source, candidate) {
   if (!a.length || !b.length) return false;
   return a.some(function (name) { return b.indexOf(name) >= 0; });
 }
-var SOURCE_FALLBACK_SEARCH_TIMEOUT_MS = 6500;
+// T15（拆除批）：旧官方平台搜索 fan-out 超时常量退役（零引用）。
 var SOURCE_FALLBACK_DIRECT_PROVIDERS = ['netease', 'qq', 'kugou'];
 var SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS = 20000;
 var SOURCE_FALLBACK_MAX_QUEUE_ADVANCES = 2;

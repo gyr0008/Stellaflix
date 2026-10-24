@@ -11,7 +11,7 @@ var MUSIC_SEARCH_INITIAL_VISIBLE = 18;
 var MUSIC_SEARCH_APPEND_BATCH = 14;
 var MUSIC_SEARCH_MAX_RESULTS = 180;
 // 批 T11：搜索 tabs + 聚合改指 /api/lx-source/search（上游 index.html :30655/:33253-33262）。
-var LX_SEARCH_SOURCE_ORDER = ['kw', 'kg', 'tx', 'wy', 'mg'];
+// T15（拆除批）：死常量行删除（T11 起聚合顺序由服务端 sources 参数决定）。
 var LX_SEARCH_SOURCE_LABELS = { kw: '小蜗', kg: '小狗', tx: '小秋', wy: '小芸', mg: '小菇', local: '本地' };
 var LX_SEARCH_SOURCES_ALL = 'tx,wy,kw,kg,mg'; // 上游 :33254 综合 = 五家全开，顺序原样
 var LX_SEARCH_TIMEOUT_MS = 18000; // 上游 :33255 timeoutMs:18000
@@ -749,56 +749,10 @@ function openSearchResultArtist(index) {
   if (!song) return;
   openArtistDetailForSong(song);
 }
-function searchIntentPrefersQQ(q) {
-  q = String(q || '').toLowerCase();
-  return /(^|\s)qq($|\s)|qq音乐|qq音樂/.test(q);
-}
-var MUSIC_SEARCH_PROVIDER_ORDER = ['netease', 'qq', 'kugou', 'qishui', 'spotify'];
-function searchProviderStatus(provider) {
-  if (typeof platformStatus === 'function') return platformStatus(provider);
-  if (provider === 'spotify') return spotifyLoginStatus;
-  if (provider === 'qishui') return qishuiLoginStatus;
-  if (provider === 'kugou') return kugouLoginStatus;
-  if (provider === 'qq') return qqLoginStatus;
-  return loginStatus;
-}
-function searchProviderIsLoggedIn(provider) {
-  var st = searchProviderStatus(provider);
-  return !!(st && st.loggedIn);
-}
-function searchProviderCanSearch(provider) {
-  var st = searchProviderStatus(provider) || {};
-  var capabilities = st.capabilities || {};
-  if (st.searchReady === true || st.publicCatalog === true || capabilities.search === true) return true;
-  if (provider === 'spotify') return !!(st.loggedIn && !st.reauthRequired);
-  // These providers expose public catalogue metadata search. Login still controls
-  // private recommendations, collections and playback rights, not discovery.
-  return provider === 'netease' || provider === 'qq' || provider === 'kugou' || provider === 'qishui';
-}
-function searchModeProvider(mode) {
-  return mode === 'netease' || mode === 'qq' || mode === 'kugou' || mode === 'qishui' || mode === 'spotify' ? mode : '';
-}
-function activeSearchProvidersForMode(mode) {
-  var specific = searchModeProvider(mode);
-  if (specific) return searchProviderCanSearch(specific) ? [specific] : [];
-  return MUSIC_SEARCH_PROVIDER_ORDER.filter(searchProviderCanSearch);
-}
-function searchProviderLoginNotice(mode) {
-  var specific = searchModeProvider(mode);
-  if (specific) {
-    var meta = typeof platformMeta === 'function' ? platformMeta(specific) : { label: specific };
-    return (meta.label || specific) + ' 搜索能力暂未就绪，请先完成该平台连接';
-  }
-  return '当前没有可用的音乐目录搜索源';
-}
-function searchProviderUrl(provider, q, limit, offset) {
-  var suffix = '&limit=' + limit + '&offset=' + Math.max(0, Number(offset) || 0);
-  if (provider === 'qq') return '/api/qq/search?keywords=' + encodeURIComponent(q) + suffix;
-  if (provider === 'kugou') return '/api/kugou/search?keywords=' + encodeURIComponent(q) + suffix;
-  if (provider === 'qishui') return '/api/qishui/search?keywords=' + encodeURIComponent(q) + suffix;
-  if (provider === 'spotify') return '/api/spotify/search?keywords=' + encodeURIComponent(q) + suffix;
-  return '/api/search?keywords=' + encodeURIComponent(q) + suffix;
-}
+// T15（拆除批）：官方五平台搜索 fan-out 死代码簇整删（provider 顺序表/登录态判定/
+// canSearch/mode 归一/逐源 URL 构造/五路结果并池/offset hasMore 判定/QQ 意图 boost）。
+// T11 起聚合只走 /api/lx-source/search，切源匹配只走 controlSourceSearchUrl，
+// 平台登录状态由 08-account 直接持有。
 function simpleSearchNorm(text) {
   return String(text || '').toLowerCase()
     .replace(/[（(【\[].*?[）)】\]]/g, '')
@@ -1018,38 +972,8 @@ function scoreSongSearchResult(song, q, sourceIndex) {
   if (song && song.playable === false) score -= 6;
   return score;
 }
-function mergeSongSearchResults(neteaseSongs, qqSongs, kugouSongs, qishuiSongs, spotifySongs, limit, q) {
-  var out = [];
-  var providerSeen = {};
-  var canonicalSeen = {};
-  function push(song, sourceIndex) {
-    if (!song || !song.name) return;
-    var key = songProviderKey(song) + ':' + (song.mid || song.id || (song.name + '|' + song.artist));
-    if (providerSeen[key]) return;
-    providerSeen[key] = true;
-    song._searchScore = scoreSongSearchResult(song, q, sourceIndex);
-    var canonicalKey = searchCanonicalSongKey(song);
-    if (canonicalKey && canonicalSeen[canonicalKey] != null) {
-      var existingIndex = canonicalSeen[canonicalKey];
-      if ((song._searchScore || 0) > (out[existingIndex]._searchScore || 0)) out[existingIndex] = song;
-      return;
-    }
-    if (canonicalKey) canonicalSeen[canonicalKey] = out.length;
-    out.push(song);
-  }
-  (neteaseSongs || []).forEach(function (song, i) { push(song, i); });
-  (qqSongs || []).forEach(function (song, i) { push(song, i); });
-  (kugouSongs || []).forEach(function (song, i) { push(song, i); });
-  (qishuiSongs || []).forEach(function (song, i) { push(song, i); });
-  (spotifySongs || []).forEach(function (song, i) { push(song, i); });
-  out.sort(function (a, b) { return (b._searchScore || 0) - (a._searchScore || 0); });
-  return out.slice(0, limit);
-}
-function searchProviderPagesHaveMore(providerPages) {
-  return Object.keys(providerPages || {}).some(function (provider) {
-    return !!(providerPages[provider] && providerPages[provider].hasMore);
-  });
-}
+// T15（拆除批）：五平台结果并池与逐源 offset hasMore 判定两函数随官方 fan-out 一并删除；
+// 聚合去重已由 fetchMusicSearchResults 的 online∪本地池单键去重承担。
 function mergeUniqueSearchSongPools(existing, incoming) {
   var out = [];
   var providerSeen = {};
@@ -1070,8 +994,8 @@ function mergeUniqueSearchSongPools(existing, incoming) {
 // ============================================================
 // 批 T11：搜索聚合改指 /api/lx-source/search（Task 7 契约 {ok,songs,failures}）。
 //   上游移植：单次聚合调用 :33253-33256、本地池过滤/去重 :30622-30641、
-//   online∪pool 合并去重 :33259-33265。官方平台 fan-out（activeSearchProvidersForMode/
-//   searchProviderUrl/mergeSongSearchResults 等）本轮起为死代码，留 T15 清理。
+//   online∪pool 合并去重 :33259-33265。官方平台 fan-out（provider 顺序 fan-out、逐源
+//   URL 构造、五路结果并池等）本轮起为死代码，已在 T15 清理。
 //   song 冻结形状 {source,id,songmid?,name,singer,album,interval,pic,hash?,copyrightId?}
 //   与 resolveLxPlaybackSong（T9/T10）直接兼容；仅桥接 singer→artist，不改写
 //   needsCrossPlatformMatch 等本地池既有标记（qs/sp 参考源语义沿用 11-provider-fallback）。
@@ -1092,7 +1016,15 @@ async function fetchLxSearchResults(query, options) {
   // lxSearchFailures 之前，逐源熔断/暂不可用行被泛化提示吞掉。故仅对无可用 failures 的
   // 错误体 throw；带非空 failures 的正常返回，交 caller 渲染逐源失败行。
   var lxHasFailures = !!(result && Array.isArray(result.failures) && result.failures.length);
-  if (result && (result.ok === false || result.error) && !lxHasFailures) {
+  // T15（携 T11 轮1 关注点）：null / 非对象成功体（apiJson 空 body、非 JSON 兜底）不得
+  // 折叠成「零结果」——同样上浮为异常，走 caller 的泛化失败提示。
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    var emptyErr = new Error('LX_SEARCH_AGGREGATE_FAILED code=' + String((result && result.code) || '') +
+      ' error=empty-or-malformed-body');
+    emptyErr.code = 'LX_SEARCH_FAILED';
+    throw emptyErr;
+  }
+  if ((result.ok === false || result.error) && !lxHasFailures) {
     var err = new Error('LX_SEARCH_AGGREGATE_FAILED code=' + String(result.code || '') +
       ' error=' + String(result.error || 'ok=false'));
     err.code = String(result.code || 'LX_SEARCH_FAILED');
@@ -1168,7 +1100,7 @@ function lxSearchFailureRowsHtml() {
       '" role="status">' + escHtml(lxSearchFailureText(failure)) + '</div>';
   }).join('');
 }
-async function fetchMusicSearchResults(q, mode, previousPages) {
+async function fetchMusicSearchResults(q, mode) {
   searchProviderNotice = '';
   lxSearchFailures = [];
   mode = String(mode || 'all');
@@ -1265,7 +1197,7 @@ async function loadNextMusicSearchPage(expectedKey) {
   var q = searchMusicRenderState.query;
   var mode = searchMusicRenderState.mode;
   try {
-    var page = await fetchMusicSearchResults(q, mode, searchMusicRenderState.providerPages);
+    var page = await fetchMusicSearchResults(q, mode);
     if (requestSeq !== searchRequestSeq || expectedKey !== searchMusicRenderState.key || expectedKey !== searchLastResultQuery || searchMode !== mode || $input.value.trim() !== q) return false;
     var before = searchMusicRenderState.songs.length;
     var merged = mergeUniqueSearchSongPools(searchMusicRenderState.songs, page.songs || []);
