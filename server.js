@@ -428,6 +428,10 @@ const {
 } = require('./cuefield/feedback-log');
 const { planCuefieldTransitionFromCache } = require('./cuefield/stellaflix-bridge');
 const agentApi = require('./agent-api');
+// LX 脚本源宿主 + 内置爬虫（批 T7，移植上游 server.js:2725-3145 路由族的底层实现，
+// 宿主沙箱见 lx-source-host.js，五家免 cookie 爬虫与冷却/缓存见 lx-search.js）。
+const { createLxSourceHost } = require('./lx-source-host');
+const { createLxSearch } = require('./lx-search');
 // 世界页数据代理（M4）：Radio Browser / USGS / CelesTrak 免 key 源
 const worldApi = require('./world-api');
 // 世界页「一起看」房间信令（M5）：本地内存房间 + 轮询信箱
@@ -471,6 +475,29 @@ let customSourceBridge = null;
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
+
+// —— LX 脚本源单例（批 T7，裁决7）——
+// userDataPath：desktop/main.js 现状未向 server 注入用户数据目录 env（主进程自持
+// STABLE_USER_DATA_PATH = appData/<产品名>，见 desktop/main.js:151），故按计划约定键名
+// STELLAFLIX_USER_DATA；纯 node / 未注入时回退 %APPDATA%\Stellaflix —— 与桌面端 stable
+// 用户目录同根同层，两条启动路径落位一致。
+function resolveLxSourceUserDataPath() {
+  const fromEnv = String(process.env.STELLAFLIX_USER_DATA || '').trim();
+  if (fromEnv) return fromEnv;
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  return path.join(appData, 'Stellaflix');
+}
+const lxSourceHost = createLxSourceHost({ userDataPath: resolveLxSourceUserDataPath() });
+const lxSearch = createLxSearch();
+
+// 裁决6：宿主终态失败为两条中文文案（lx-source-host.js resolveMusicUrl 末端 throw），
+// 路由层据此映射机器可读 code（error 字段仍保留原文，T9 前端按 code 分流）。
+// 其余 code 直接取自异常消息中的 LX_* 词法段（如 LX_SOURCE_INIT_TIMEOUT /
+// LX_SOURCE_REQUEST_HANDLER_MISSING / LX_QUALITY_UNSUPPORTED / LX_SOURCE_DOWNLOAD_HTTP_500 …）。
+const LX_SOURCE_TERMINAL_CODES = Object.freeze({
+  '当前音源及备用音源均解析失败，请切换音源后重试': 'LX_SOURCE_RESOLVE_ALL_FAILED',
+  '没有可用于这首歌的音源': 'LX_SOURCE_NO_RESOLVER',
+});
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const DEFAULT_COOKIE_FILE = path.join(__dirname, '.cookie');
 const DEFAULT_QQ_COOKIE_FILE = path.join(__dirname, '.qq-cookie');
@@ -961,6 +988,23 @@ function isCrossSiteWrite(req) {
   const site = String(req.headers['sec-fetch-site'] || '');
   if (site && site !== 'same-origin' && site !== 'none') return true;
   return false;
+}
+// isTrustedLocalApiRequest（批 T7，移植上游 server.js:311-323）：cross-site 一律拒；
+// 无 Origin / Origin:null（curl、Electron 主进程等本机无头流量）放行；否则必须
+// http://127.0.0.1|localhost|[::1]:<PORT>。裁决2：仅施加于 /api/lx-source/* 路由族，
+// 全局 isCrossSiteWrite 守卫保持原样，本批不向其它 /api 路由回铺。
+function isTrustedLocalApiRequest(req) {
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (fetchSite === 'cross-site') return false;
+  const origin = String(req.headers.origin || '').trim();
+  if (!origin || origin === 'null') return true;
+  try {
+    const parsed = new URL(origin);
+    const localHost = parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '::1';
+    return parsed.protocol === 'http:' && localHost && String(parsed.port || '80') === String(PORT);
+  } catch (_err) {
+    return false;
+  }
 }
 function sendJSON(res, data, status) {
   res.writeHead(status || 200, {
@@ -6017,33 +6061,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---------- AI 助手音乐搜索桥 (LX 兼容契约) ----------
-  // agent-music-tools.js 自 LX-Music 移植, 调用 /api/lx-source/search 与 /api/lx-source/status。
-  // Stellaflix 无 LX 后端, 这里桥接到真实搜索引擎 (/api/search -> handleSearch), 并返回 LX 形状响应,
-  // 同时 /api/lx-source/status 返回内置音源就绪态, 让 AI 助手音乐搜索可用且不 404。
-  if (pn === '/api/lx-source/search') {
-    try {
-      const q = url.searchParams.get('q') || url.searchParams.get('keywords') || '';
-      const limit = Math.max(1, Math.min(50, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      if (!q) { sendJSON(res, { ok: true, songs: [], failures: [] }); return; }
-      const songs = await handleSearch(q, limit, offset);
-      sendJSON(res, { ok: true, songs: songs, failures: [], source: 'netease', note: 'proxied via /api/search' });
-    } catch (err) {
-      console.error('[LxSourceSearch]', err);
-      sendJSON(res, { ok: false, songs: [], failures: [{ source: 'netease', reason: err.message || 'SEARCH_FAILED' }] }, 500);
-    }
-    return;
-  }
-  if (pn === '/api/lx-source/status') {
-    sendJSON(res, {
-      ok: true,
-      name: 'Stellaflix',
-      version: APP_VERSION,
-      installed: [{ name: 'netease', enabled: true, note: 'built-in cloudsearch' }],
-      enabledCount: 1
-    });
-    return;
-  }
+  // 旧 netease 假桩（/api/lx-source/search + status）已随批 T7 删除，
+  // 由真实 /api/lx-source/* 路由族（见下方「LX 脚本源路由族」段）接管同名路径。
 
   // ---------- 平台歌单导入（platform-playlist-import.js，自 Mineradio 移植）----------
   // body: { input: 分享链接/纯数字歌单 ID, source: tx|wy|kw|kg|kgc|mg|sp|qs|am（可选） }
@@ -8168,6 +8187,187 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---------- LX 脚本源路由族（批 T7，移植上游 server.js:2725-3145 各段） ----------
+  // 9 条路由：status/resolve/lyric/import/select/toggle/check/delete/search。
+  // 裁决1：playlist-search:3118、playlist-square:3132、daily-hot/platform-charts/
+  // song-cover-search:3060-3104 不在移植范围（searchPlaylists 爬虫已裁、推荐路由无消费方、
+  // 163 官方 API 冲突「平台API全下线」裁决）；本前缀下未知子路径统一 404 LX_ROUTE_NOT_FOUND。
+  // 裁决2：本地信任闸仅施加于本路由族；全局 isCrossSiteWrite 守卫不动。
+  if (pn.startsWith('/api/lx-source/')) {
+    if (!isTrustedLocalApiRequest(req)) {
+      sendJSON(res, { ok: false, error: 'FORBIDDEN_ORIGIN', code: 'FORBIDDEN_ORIGIN' }, 403);
+      return;
+    }
+    const lxRequirePost = () => {
+      if (req.method === 'POST') return true;
+      sendJSON(res, { ok: false, error: 'METHOD_NOT_ALLOWED', code: 'METHOD_NOT_ALLOWED' }, 405);
+      return false;
+    };
+    // 裁决6：终态失败映射机器码 —— 优先取异常消息中的 LX_* 词法段；
+    // 两条中文终态查 LX_SOURCE_TERMINAL_CODES；其余按路由给定的兜底码。error 保留原文。
+    const lxRouteError = (err, status, fallbackCode) => {
+      const message = err && err.message ? String(err.message) : '';
+      const direct = message.match(/LX_[A-Z0-9_]+/);
+      const mapped = Object.prototype.hasOwnProperty.call(LX_SOURCE_TERMINAL_CODES, message)
+        ? LX_SOURCE_TERMINAL_CODES[message] : '';
+      const code = direct ? direct[0] : (mapped || fallbackCode);
+      sendJSON(res, { ok: false, error: message || fallbackCode, code }, status);
+    };
+
+    if (pn === '/api/lx-source/status') {
+      // 上游 :2725 走 lxSourceHost.status()（会起沙箱）；我方 host 无该方法，直接由
+      // listSources() 落盘快照组装（空库也稳定返回 {ok,sources:[],active:null}，不起沙箱）。
+      // installed/name/version/enabledCount 为旧桩既有顶层字段兼容位（agent-music-tools.js:516
+      // 仍读之；完整退役留 T9/T10，裁决8）。
+      try {
+        const installed = lxSourceHost.listSources();
+        const active = installed.find(item => item.current && item.enabled) || null;
+        sendJSON(res, {
+          ok: true,
+          sources: installed,
+          active: active ? active.id : null,
+          name: active ? active.name : '未配置',
+          version: active ? active.version : '',
+          installed,
+          enabledCount: installed.filter(item => item.enabled).length,
+        });
+      } catch (err) {
+        lxRouteError(err, 503, 'LX_SOURCE_UNAVAILABLE');
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/resolve') {
+      if (!lxRequirePost()) return;
+      // spec §5 引导态（我方新增码）：一脚本未装 → 200 + LX_NO_SOURCES，T9 前端按码分流。
+      if (!lxSourceHost.listSources().length) {
+        sendJSON(res, { ok: false, error: '未导入任何 LX 脚本音源', code: 'LX_NO_SOURCES' });
+        return;
+      }
+      try {
+        const body = await readRequestBody(req);
+        const source = String(body.source || '').toLowerCase();
+        const musicInfo = body.musicInfo && typeof body.musicInfo === 'object' ? body.musicInfo : {};
+        // 我方 host 为对象参数签名（上游 :2743 为位置参数 source, musicInfo, quality, opts，裁决4）。
+        const result = await lxSourceHost.resolveMusicUrl({
+          source,
+          quality: String(body.quality || ''),
+          musicInfo,
+          excludeResolvers: Array.isArray(body.excludeResolvers) ? body.excludeResolvers : [],
+          maxResolvers: Math.max(1, Math.min(8, Number(body.maxResolvers) || 6)),
+        });
+        // proxyUrl 沿我方 /api/audio?url= 既有约定（server.js /api/audio 段 +
+        // 13-playback-start-audio.js:766 同款；上游 audioProxyUrl 不存在，裁决3）。
+        // 播放头 headers 暂未随 proxyUrl 透传 —— 由 T8 /api/audio 增强承接。
+        sendJSON(res, { ...result, proxyUrl: '/api/audio?url=' + encodeURIComponent(result.url) });
+      } catch (err) {
+        console.warn('[LXSourceResolve]', err && err.message);
+        lxRouteError(err, 502, 'LX_SOURCE_RESOLVE_FAILED');
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/lyric') {
+      if (!lxRequirePost()) return;
+      // 上游 :2755 段：resolveLyrics → 我方 host.getLyric（批 T7 移植，上游 lx-source-host.js:1220-1237）。
+      try {
+        const body = await readRequestBody(req);
+        const source = String(body.source || '').toLowerCase();
+        const musicInfo = body.musicInfo && typeof body.musicInfo === 'object' ? body.musicInfo : {};
+        const lyrics = await lxSourceHost.getLyric(source, musicInfo);
+        sendJSON(res, { ok: true, source, ...lyrics });
+      } catch (err) {
+        console.warn('[LXSourceLyric]', err && err.message);
+        lxRouteError(err, 502, 'LX_SOURCE_LYRIC_FAILED');
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/import') {
+      if (!lxRequirePost()) return;
+      try {
+        const body = await readRequestBody(req);
+        // 我方 importSource 签名 (name, script)（T1 定；上游 :2992 为 (script, fileName)，裁决4）。
+        const result = body.url
+          ? await lxSourceHost.importSourceUrl(body.url)
+          : await lxSourceHost.importSource(String(body.fileName || ''), body.script);
+        sendJSON(res, { ok: true, ...result });
+      } catch (err) {
+        lxRouteError(err, 400, 'LX_SOURCE_IMPORT_FAILED');
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/select') {
+      if (!lxRequirePost()) return;
+      try {
+        const body = await readRequestBody(req);
+        sendJSON(res, await lxSourceHost.selectSource(body.id));
+      } catch (err) {
+        lxRouteError(err, 400, 'LX_SOURCE_SELECT_FAILED');
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/toggle') {
+      if (!lxRequirePost()) return;
+      try {
+        const body = await readRequestBody(req);
+        const ids = Array.isArray(body.ids) ? body.ids : body.id;
+        sendJSON(res, await lxSourceHost.setSourcesEnabled(ids, body.enabled !== false));
+      } catch (err) {
+        lxRouteError(err, 400, 'LX_SOURCE_TOGGLE_FAILED');
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/check') {
+      if (!lxRequirePost()) return;
+      try {
+        const body = await readRequestBody(req);
+        const ids = Array.isArray(body.ids) ? body.ids : body.id;
+        sendJSON(res, await lxSourceHost.checkSources(ids)); // 上游 :3037 同款：成功返回逐源结果数组
+      } catch (err) {
+        lxRouteError(err, 400, 'LX_SOURCE_CHECK_FAILED');
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/delete') {
+      if (!lxRequirePost()) return;
+      try {
+        const body = await readRequestBody(req);
+        sendJSON(res, Array.isArray(body.ids)
+          ? await lxSourceHost.deleteSources(body.ids)
+          : await lxSourceHost.deleteSource(body.id));
+      } catch (err) {
+        lxRouteError(err, 400, 'LX_SOURCE_DELETE_FAILED');
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/search') {
+      try {
+        // 我方 searchAll 为对象参数（上游 :3107 位置参数 q + opts，裁决4）；
+        // sources/limit 以查询串透传，由 lx-search 内部 resolveRequestedSources/clampLimit 解析。
+        const result = await lxSearch.searchAll({
+          query: url.searchParams.get('q') || url.searchParams.get('keywords') || '',
+          limit: url.searchParams.get('limit'),
+          sources: url.searchParams.get('sources'),
+        });
+        // 顶层 {ok, songs, failures} 保留旧桩兼容形态（裁决8，agent-music-tools 读 songs/failures）。
+        const ok = result.songs.length > 0 || result.failures.length === 0;
+        sendJSON(res, { ...result, ok }, ok ? 200 : 502);
+      } catch (err) {
+        sendJSON(res, { ok: false, songs: [], failures: [], error: err.message || 'LX_SEARCH_FAILED', code: 'LX_SEARCH_FAILED' }, 502);
+      }
+      return;
+    }
+
+    sendJSON(res, { ok: false, error: 'LX_ROUTE_NOT_FOUND', code: 'LX_ROUTE_NOT_FOUND' }, 404);
+    return;
+  }
+
   // ---------- 音频代理 (支持 Range) ----------
   if (pn === '/api/audio') {
     try {
@@ -8412,6 +8612,8 @@ server.listen(PORT, HOST, () => {
 
 server.clearAllLoginCredentials = clearAllRuntimeLoginCredentials;
 server.agentApi = agentApi;
+// 批 T7：本地信任闸暴露给测试直断言分支（tests/lx-source-routes.test.js）。
+server.isTrustedLocalApiRequest = isTrustedLocalApiRequest;
 
 // 允许 Electron 主进程注入第三方音源 bridge；传 null/非法对象则卸载
 server.setCustomSourceBridge = function setCustomSourceBridge(bridge) {

@@ -15,7 +15,7 @@
  *    「念心音源」320k-first 硬编码按计划例外条款不移植）；T4 补齐 URL/APIKEY 导入、
  *    checkSources 试跑、批量启停与删除（上游 :230-270/:630-795/:797-831；删除/停用
  *    同步清 fallbackRuntimeCache 为 T2 审查携带项，上游 :727/:771 同款）；
- *    getLyric/picAction 归后续任务（裁决：getLyric→T7，pic 维持占位）。
+ *    getLyric 已随批 T7 路由移植（上游 :1220-1237）；picAction 上游无实现，维持占位。
  */
 
 const fs = require('fs');
@@ -1312,8 +1312,31 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, checkTimeoutM
       : '没有可用于这首歌的音源');
   }
 
-  // —— 后续任务占位：接口名锁定本计划 Interfaces 块（裁决：getLyric 归 T7 路由一并移植；
-  //    picAction 上游无实现，维持占位不凭猜实现）——
+  // —— getLyric（批 T7：移植上游 lx-source-host.js:1220-1237 resolveLyrics，接口名按计划锁定为 getLyric。
+  //    沙箱管道与 resolveMusicUrl 同款——取 active host runtime（getRuntime 内含脚本回退与初始化）后
+  //    经 runtime.request 派发 lyric 动作；上游即仅用 active 宿主不做逐 resolver 轮换，照抄语义。
+  //    字符串返回与 {data:{...}} 包裹的字段别名归一表（lyric/lrc/lyrics、tlyric/tlrc/trans/translation、
+  //    rlyric/roma/romalrc、lxlyric/wordLyric/yrc）逐字保留。）——
+  async function getLyric(source, musicInfo) {
+    const host = await getRuntime();
+    if (!host.sources[source]) throw new Error('LX_SOURCE_UNSUPPORTED');
+    const result = await host.request(source, 'lyric', {
+      musicInfo: normalizeMusicInfo(source, musicInfo),
+    });
+    if (typeof result === 'string') {
+      return { lyric: result, tlyric: '', rlyric: '', lxlyric: '' };
+    }
+    const raw = result && typeof result === 'object' ? result : {};
+    const body = raw.data && typeof raw.data === 'object' ? raw.data : raw;
+    return {
+      lyric: body.lyric || body.lrc || body.lyrics || '',
+      tlyric: body.tlyric || body.tlrc || body.trans || body.translation || '',
+      rlyric: body.rlyric || body.roma || body.romalrc || '',
+      lxlyric: body.lxlyric || body.wordLyric || body.yrc || '',
+    };
+  }
+
+  // —— picAction 占位维持：上游无实现、无消费方（批 T7 裁决：不凭猜实现）——
   const notImplemented = task => () => { throw new Error(`LX_SOURCE_NOT_IMPLEMENTED:${task}`); };
 
   return {
@@ -1326,7 +1349,7 @@ function createLxSourceHost({ userDataPath, initTimeoutMs = 10000, checkTimeoutM
     listSources,
     checkSources,
     resolveMusicUrl,
-    getLyric: notImplemented('T7'),
+    getLyric,
     picAction: notImplemented('PIC_NO_UPSTREAM_IMPL'),
   };
 }
