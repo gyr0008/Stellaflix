@@ -440,16 +440,21 @@ const worldRoomApi = require('./world-room-api');
 const mapTileCache = new Map();
 const platformPlaylistImport = require('./platform-playlist-import');
 // 平台歌单导入的跨平台匹配桥：sp/qs/am 导入歌曲无 Stellaflix 原生 id，
-// 用 netease cloudsearch 按歌名+歌手匹配出可播版本；匹配不上的歌保留
+// 用 lx-search 的 wy 爬虫按歌名+歌手匹配出可播版本；匹配不上的歌保留
 // needsCrossPlatformMatch，由前端 custom-source 聚合解析现场兜底。
+// 批 T8 换血：旧 netease 官方 API handleSearch → lxSearch.searchOne('wy')（消费批 T5 单例）。
+// 闭包定义先于下方 lxSearch const 声明但仅在请求期执行，TDZ 不触雷；输出与旧注入逐字节
+// 同形 {name,singer,songmid,picUrl,interval,source:'wy'}，import 模块零改动。错误语义照旧：
+// searchOne 抛出即 rejected，由 platform-playlist-import.js bridgeSearchAll 的 catch 兜底为
+// failures:[{source:'bridge',...}]（tests/platform-playlist-import.test.js 锁定）。
 platformPlaylistImport.setSearchImplementation(async function (query, options) {
   const limit = Math.max(1, Math.min(30, Number(options && options.limit) || 10));
-  const songs = await handleSearch(String(query || ''), limit, 0);
+  const songs = await lxSearch.searchOne('wy', { query: String(query || ''), limit });
   return {
     ok: true,
     songs: (Array.isArray(songs) ? songs : []).map(s => ({
-      name: s.name, singer: s.artist || '', songmid: String(s.id || ''),
-      picUrl: s.cover || '', interval: s.interval || 0, source: 'wy',
+      name: s.name, singer: s.singer || '', songmid: String(s.songmid || s.id || ''),
+      picUrl: s.pic || '', interval: s.interval || 0, source: 'wy',
     })),
     failures: [],
   };
@@ -3710,6 +3715,51 @@ function audioProxyHeadersFor(audioUrl, range) {
   } catch (e) {}
   if (range) headers.Range = range;
   return headers;
+}
+
+// —— /api/audio 增强合并（批 T8，逐字移植上游 server.js:353-383，身份命名不变）——
+// proxyUrl 经 audioProxyUrl 追加 h=base64url(JSON) 播放头参数，/api/audio 侧由
+// audioProxyHeadersFromQuery 解析并按白名单转发上游；CRLF 消毒（上游 :373）防头注入。
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value || {}), 'utf8').toString('base64url');
+}
+function parseBase64UrlJson(value) {
+  try {
+    if (!value) return {};
+    return JSON.parse(Buffer.from(String(value), 'base64url').toString('utf8')) || {};
+  } catch (_err) {
+    return {};
+  }
+}
+function audioProxyHeadersFromQuery(value) {
+  const raw = parseBase64UrlJson(value);
+  const out = {};
+  const allowed = new Set(['accept', 'cookie', 'origin', 'referer', 'user-agent']);
+  for (const [rawKey, rawValue] of Object.entries(raw || {})) {
+    const key = String(rawKey || '').trim().toLowerCase();
+    if (!allowed.has(key) || rawValue == null) continue;
+    out[key] = String(rawValue).replace(/[\r\n]+/g, ' ');
+  }
+  return out;
+}
+function audioProxyUrl(originalUrl, headers) {
+  if (!originalUrl) return '';
+  const params = new URLSearchParams({ url: originalUrl });
+  if (headers && Object.keys(headers).length) params.set('h', base64UrlJson(headers));
+  return '/api/audio?' + params.toString();
+}
+// 大小写无关头合并：overrides（audioProxyHeadersFromQuery 的小写白名单键）需覆盖 base
+//（audioProxyHeadersFor 的 'User-Agent'/'Referer' 混合大小写默认）。同名异案键若并存，
+// undici Headers 初始化按 append 语义会把值拼成 "a, b"，故先删旧键再写入。
+function mergeAudioProxyRequestHeaders(base, overrides) {
+  const out = Object.assign({}, base);
+  for (const [key, value] of Object.entries(overrides || {})) {
+    for (const existing of Object.keys(out)) {
+      if (existing.toLowerCase() === key.toLowerCase()) delete out[existing];
+    }
+    out[key] = value;
+  }
+  return out;
 }
 
 function qishuiAudioAuthFromUrl(audioUrl) {
@@ -8256,10 +8306,11 @@ const server = http.createServer(async (req, res) => {
           excludeResolvers: Array.isArray(body.excludeResolvers) ? body.excludeResolvers : [],
           maxResolvers: Math.max(1, Math.min(8, Number(body.maxResolvers) || 6)),
         });
-        // proxyUrl 沿我方 /api/audio?url= 既有约定（server.js /api/audio 段 +
-        // 13-playback-start-audio.js:766 同款；上游 audioProxyUrl 不存在，裁决3）。
-        // 播放头 headers 暂未随 proxyUrl 透传 —— 由 T8 /api/audio 增强承接。
-        sendJSON(res, { ...result, proxyUrl: '/api/audio?url=' + encodeURIComponent(result.url) });
+        // proxyUrl 沿我方 /api/audio 约定（上游 audioProxyUrl 不存在，裁决3）；批 T8 还债闭环：
+        // 改经 audioProxyUrl(url, headers)（上游 :378-383 移植）构造，resolve 播放头 headers
+        // 以 h=base64url(JSON) 白名单参数随 proxyUrl 透传，/api/audio 侧解析转发上游。
+        // headers 为空时不带 h —— 旧 '/api/audio?url=' 形态原样工作（无 h = 现状行为）。
+        sendJSON(res, { ...result, proxyUrl: audioProxyUrl(result && result.url, result && result.headers) });
       } catch (err) {
         console.warn('[LXSourceResolve]', err && err.message);
         lxRouteError(err, 502, 'LX_SOURCE_RESOLVE_FAILED');
@@ -8373,6 +8424,17 @@ const server = http.createServer(async (req, res) => {
     try {
       const audioUrl = url.searchParams.get('url');
       if (!audioUrl) { res.writeHead(400); res.end('Missing url'); return; }
+      // 批 T8（上游 :3149-3155）：协议白名单 + localhost 族主机名拒绝；校验前置到
+      // qishui #auth= 解密路径之前，两条出站（解密 fetch / 直代理 fetch）一并覆盖。
+      // 上游 :3152 正则逐字移植（其对 127.x.x.1 全量 IP 的盲区为上游原样，见 task-8-report）。
+      try {
+        const target = new URL(String(audioUrl));
+        if (!/^https?:$/.test(target.protocol)) throw new Error('INVALID_AUDIO_URL');
+        if (/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?)$/i.test(target.hostname)) throw new Error('LOCAL_AUDIO_URL_BLOCKED');
+      } catch (err) {
+        sendJSON(res, { ok: false, error: err.message || 'INVALID_AUDIO_URL' }, 400);
+        return;
+      }
       const range = req.headers.range || '';
       if (audioUrl.includes('#auth=')) {
         const decrypted = await getQishuiDecryptedAudio(audioUrl);
@@ -8381,8 +8443,16 @@ const server = http.createServer(async (req, res) => {
           return;
         }
       }
-      const hdr = audioProxyHeadersFor(audioUrl, range);
-      const up = await fetchWithTimeout(audioUrl, { headers: hdr }, 9000);
+      // 批 T8 合并序（上游 :3169-3179）：宿主逐站默认 → h 白名单播放头覆盖 → 客户端 Range/If-Range。
+      const hdr = mergeAudioProxyRequestHeaders(
+        audioProxyHeadersFor(audioUrl, range),
+        audioProxyHeadersFromQuery(url.searchParams.get('h'))
+      );
+      if (req.headers['if-range']) hdr['If-Range'] = String(req.headers['if-range']);
+      const up = await fetchWithTimeout(audioUrl, {
+        method: req.method === 'HEAD' ? 'HEAD' : 'GET', // 批 T8（上游 :3171）：HEAD 直通
+        headers: hdr,
+      }, 9000);
       const out = {
         'Content-Type': audioContentTypeForUrl(audioUrl, up.headers.get('content-type')),
         ...(res._cors || {}),
@@ -8391,8 +8461,11 @@ const server = http.createServer(async (req, res) => {
       };
       const cl = up.headers.get('content-length'); if (cl) out['Content-Length'] = cl;
       const cr = up.headers.get('content-range');  if (cr) out['Content-Range']  = cr;
+      // 批 T8（上游 :3187）：响应头白名单透传扩 etag / last-modified（断点续传校验用）。
+      const et = up.headers.get('etag');           if (et) out['ETag']          = et;
+      const lm = up.headers.get('last-modified');  if (lm) out['Last-Modified'] = lm;
       res.writeHead(up.status, out);
-      if (!up.body) { res.end(); return; }
+      if (req.method === 'HEAD' || !up.body) { res.end(); return; } // 批 T8（上游 :3192）
       const reader = up.body.getReader();
       let clientClosed = false;
       const closeReader = () => {
@@ -8614,6 +8687,10 @@ server.clearAllLoginCredentials = clearAllRuntimeLoginCredentials;
 server.agentApi = agentApi;
 // 批 T7：本地信任闸暴露给测试直断言分支（tests/lx-source-routes.test.js）。
 server.isTrustedLocalApiRequest = isTrustedLocalApiRequest;
+// 批 T8：/api/audio 增强助手同风格暴露（tests/lx-audio-proxy.test.js 直测
+// audioProxyUrl 的 h 参数构造/回退旧 url= 形态 + audioProxyHeadersFromQuery 白名单解析）。
+server.audioProxyUrl = audioProxyUrl;
+server.audioProxyHeadersFromQuery = audioProxyHeadersFromQuery;
 
 // 允许 Electron 主进程注入第三方音源 bridge；传 null/非法对象则卸载
 server.setCustomSourceBridge = function setCustomSourceBridge(bridge) {

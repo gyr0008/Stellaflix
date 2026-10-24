@@ -81,7 +81,9 @@ function jsonResponse(payload, status = 200) {
 function lxScript(name, mode = 'ok') {
   const musicUrlReply = mode === 'fail'
     ? "{ ok: false, msg: 'LX_TEST_URL_FAIL' }"
-    : "{ ok: true, url: 'https://fake.example/song.mp3', quality: task.info && task.info.quality }";
+    : mode === 'headers'
+      ? "{ ok: true, url: 'https://fake.example/song-h.mp3', quality: task.info && task.info.quality, headers: { 'user-agent': 'lx-fixture-ua', referer: 'https://fixture.example/', cookie: 'k=1', 'x-evil': 'should-be-sanitized' } }"
+      : "{ ok: true, url: 'https://fake.example/song.mp3', quality: task.info && task.info.quality }";
   return [
     '/*',
     ` * @name ${name}`,
@@ -227,7 +229,7 @@ const resolveBody = extra => JSON.stringify(Object.assign(
   extra || {}
 ));
 
-test('POST /api/lx-source/resolve 成功返回 url/proxyUrl（/api/audio?url= 约定，headers 留 T8）', async () => {
+test('POST /api/lx-source/resolve 成功返回 url/proxyUrl（/api/audio?url= 约定；headers 空则不带 h，T8 已闭环）', async () => {
   const { status, body } = await apiJson('/api/lx-source/resolve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -253,6 +255,46 @@ test('resolve 同参数 90s 内二次命中缓存 cached:true 且仍带 proxyUrl
   assert.equal(body.ok, true);
   assert.equal(body.cached, true);
   assert.equal(body.proxyUrl, '/api/audio?url=' + encodeURIComponent('https://fake.example/song.mp3'));
+});
+
+// ---------- T8 还债：resolve 播放头 headers 经 audioProxyUrl 随 proxyUrl h 参数透传 ----------
+test('resolve 播放头非空时 proxyUrl 携带 h（base64url JSON 白名单头；批 T8，旧 url= 形态不变）', async () => {
+  const imp = await apiJson('/api/lx-source/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileName: '带头脚本.js', script: lxScript('带头脚本', 'headers') }),
+  });
+  assert.equal(imp.status, 200);
+  const idC = imp.body.id;
+  try {
+    const { status, body } = await apiJson('/api/lx-source/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'kg', quality: '320k', musicInfo: { type: 'music', name: '带头测试歌', singer: 's', songmid: 'KG-H' } }),
+    });
+    assert.equal(status, 200);
+    assert.equal(body.ok, true);
+    // 宿主 sanitizePlaybackHeaders 白名单外键（x-evil）已被剔除
+    assert.deepEqual(body.headers, { 'user-agent': 'lx-fixture-ua', referer: 'https://fixture.example/', cookie: 'k=1' });
+    const params = new URLSearchParams(String(body.proxyUrl).replace('/api/audio?', ''));
+    assert.equal(params.get('url'), 'https://fake.example/song-h.mp3');
+    const h = Buffer.from(String(params.get('h')), 'base64url').toString('utf8');
+    assert.deepEqual(JSON.parse(h), body.headers);
+    // 二次命中缓存后 h 仍随 proxyUrl 在（缓存值含 headers）。
+    const again = await apiJson('/api/lx-source/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'kg', quality: '320k', musicInfo: { type: 'music', name: '带头测试歌', singer: 's', songmid: 'KG-H' } }),
+    });
+    assert.equal(again.body.cached, true);
+    assert.equal(again.body.proxyUrl, body.proxyUrl);
+  } finally {
+    await apiJson('/api/lx-source/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: idC }),
+    });
+  }
 });
 
 test('resolve 全链失败 → 502 + 中文终态映射为机器码 LX_SOURCE_RESOLVE_ALL_FAILED', async () => {
