@@ -368,7 +368,6 @@ const {
 } = require('./qq-vip-api');
 const {
   handleKugouSearch,
-  handleKugouSongUrl,
   handleKugouLyric,
   handleKugouGuessLike,
   handleKugouUserPlaylists,
@@ -402,7 +401,6 @@ const {
   handleQishuiComments,
   handleQishuiCreateComment,
   handleQishuiLyric,
-  handleQishuiSongUrl,
 } = require('./qishui-api');
 const qishuiQrLogin = require('./qishui-qr-login');
 const {
@@ -419,7 +417,6 @@ const {
   handleSpotifyLibrarySet,
   handleSpotifyPlaylistAddSong,
   handleSpotifyCreatePlaylist,
-  handleSpotifySongUrl,
   handleSpotifyLyric,
 } = require('./spotify-api');
 const {

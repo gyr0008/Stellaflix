@@ -1512,14 +1512,11 @@ function checkQishuiProviderGuard() {
   if (!/\/luna\/pc\/track_v2/.test(qishuiText) || !/function fetchQishuiPcTrackV2/.test(qishuiText) || !/function resolveQishuiDownloadInfo/.test(qishuiText) || !/play_info_list/.test(qishuiText) || !/url_player_info/.test(qishuiText) || !/video_model/.test(qishuiText)) {
     fail('Qishui playback must resolve PC track_v2 audio from play_info_list, url_player_info, or video_model');
   }
-  const qishuiSongRouteStart = serverText.indexOf("if (pn === '/api/qishui/song/url')");
-  const qishuiSongRouteEnd = serverText.indexOf("if (pn === '/api/qishui/lyric')", qishuiSongRouteStart);
-  const qishuiSongRouteText = serverText.slice(qishuiSongRouteStart, qishuiSongRouteEnd);
-  if (qishuiSongRouteStart < 0 || qishuiSongRouteEnd <= qishuiSongRouteStart ||
-      !/handleQishuiSongUrl\(\{/.test(qishuiSongRouteText) ||
-      !/quality: url\.searchParams\.get\('quality'\)/.test(qishuiSongRouteText) ||
-      !/\}, qishuiCookie\)/.test(qishuiSongRouteText)) {
-    fail('server.js must pass the saved Qishui cookie into /api/qishui/song/url');
+  // T15（拆除批）：/api/qishui/song/url 官方播放解析路由已退役——汽水在线地址唯一供给者
+  // 改为 /api/lx-source/resolve；本项改守「旧路由不得回潮」。汽水 cookie 仍服务登录/歌单/
+  // 评论等保留路由，解密机器（下方 TrackDecryptor 断言）随 /api/audio 保留。
+  if (/if \(pn === '\/api\/qishui\/song\/url'\)/.test(serverText)) {
+    fail('T15: /api/qishui/song/url must stay retired (lx-source is the only online URL supplier)');
   }
   if (!/TrackDecryptor/.test(serverText) || !/qishui-audio-decryptor/.test(serverText) || !/function getQishuiDecryptedAudio/.test(serverText) || !/audioUrl\.includes\('#auth='\)/.test(serverText) || !/sendAudioBuffer/.test(serverText)) {
     fail('Qishui encrypted #auth audio must be decrypted by /api/audio with Range support');
