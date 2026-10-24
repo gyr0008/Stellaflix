@@ -1965,9 +1965,6 @@
         <button class="source-fallback-close" type="button" onclick="closeSourceFallbackNotice()">×</button>
       </div>
       <div id="source-fallback-body" class="source-fallback-body"></div>
-      <!-- 批 T13（spec §5）：LX_NO_SOURCES 终态时由 13 播放链接线、lxSourceManager.attachNoticeOpenAction 翻出 -->
-      <button type="button" class="lx-source-notice-open-btn" data-lx-open-manager="1" hidden
-        onclick="window.lxSourceManager && window.lxSourceManager.openFromNotice()">打开音源管理</button>
     </div>
 
   </div>
@@ -2258,7 +2255,7 @@
      <div class="lx-source-bulk-bar">
        <label class="lx-source-bulk-selectall">
          <input class="lx-source-check" type="checkbox" data-source-select-all
-           onchange="window.lxSourceManager && window.lxSourceManager.updateBulkSelection()">全选</label>
+           onchange="window.lxSourceManager && window.lxSourceManager.applySelectAll()">全选</label>
        <span class="lx-source-bulk-count" data-source-bulk-count id="lx-source-bulk-count">已选 0 个</span>
        <button type="button" class="lx-source-bulk-enable" data-source-bulk-enable disabled
          onclick="window.lxSourceManager && window.lxSourceManager.bulkSetEnabled(true)">批量启用</button>

@@ -1396,6 +1396,16 @@ function lxResolvedAudioCacheKey(song, quality) {
 }
 function invalidateLxResolvedAudioCache(song) {
   var prefix = lxResolvedAudioCacheKey(song, '').replace(/\|$/, '');
+  // 空参/nullish/无身份字段（前缀退化成纯分隔符，如 '{}' → '|||'）= 整库失效。
+  // 源集合变更（启用/停用/删除/切换/导入后，T13 源管理经 window 钩子传空参调用）时，真实键
+  // （'tx|123|…'）不会命中退化前缀 → 必须整库重置（上游 analog：全缓存 reset），否则陈旧地址全存活。
+  if (!prefix.replace(/\|/g, '')) {
+    Object.keys(lxResolvedAudioCache).forEach(function (key) { delete lxResolvedAudioCache[key]; });
+    // 在途去重表一并清：变更前的并发解析不得在变更后被 fromCache 复用（残留单曲在途回写于下次解析自愈，
+    // finally 处 `lxResolveInflight[songKey] === chainPromise` 判空安全）。
+    Object.keys(lxResolveInflight).forEach(function (key) { delete lxResolveInflight[key]; });
+    return;
+  }
   Object.keys(lxResolvedAudioCache).forEach(function (key) {
     if (key.indexOf(prefix) === 0) delete lxResolvedAudioCache[key];
   });

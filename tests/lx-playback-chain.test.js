@@ -943,3 +943,39 @@ test('T10⑥：接线锁定——切曲清预取定时器/播放成功调度预�
   assert.ok(src13.includes('options.allowCacheLayer !== false'), 'resolve 入口识别 allowCacheLayer 开关');
   assert.ok(read(P_00).includes('invalidateLxResolvedAudioCache'), '音质切换路径（00）挂钩客户端缓存失效（裁决5）');
 });
+
+// ============================================================
+// 批 T13 修复轮1：window 失效钩子整库清空（源管理经空参调用，真实键不再被 '|||' 退化前缀漏网）
+// ============================================================
+
+test('T13修复R1：window.invalidateLxResolvedAudioCache() 空参整库清真实键；{} 同样全清；具体 song 仍按曲 scoped', async () => {
+  const PROXY = '/api/audio?url=https%3A%2F%2Fcdn.example%2Fa.flac';
+  const h = makeHarness({ resolve: OK_RESOLVE(PROXY, 'R1', 'flac') });
+  // 走正常 resolve + 缓存写入路径落真实形状键（source|id|…），非 '|||' 退化键。
+  await h.exports.resolveLxPlaybackSong({ source: 'tx', id: '123', name: '曲一', singer: '甲' }, { quality: 'lossless', excludeResolvers: [] });
+  await h.exports.resolveLxPlaybackSong({ source: 'wy', id: '456', name: '曲二', singer: '乙' }, { quality: 'lossless', excludeResolvers: [] });
+  const keys = Object.keys(h.sandbox.lxResolvedAudioCache);
+  assert.equal(keys.length, 2, '两曲各写一条 90s 镜像缓存');
+  assert.ok(keys.some((k) => k.indexOf('tx|123') === 0) && keys.some((k) => k.indexOf('wy|456') === 0), '缓存键必须是真实形状');
+  // 在途去重表也放一条，验证整库重置一并清。
+  h.sandbox.lxResolveInflight['tx|999|z|z|flac'] = Promise.resolve({ ok: true });
+
+  // 旧实现（song 缺省 → 前缀 '|||'）此时真实键全存活；修复后空参必须整库清空。
+  h.sandbox.invalidateLxResolvedAudioCache(); // = 源管理 window 钩子传空参（T13 修复轮1）
+  assert.equal(Object.keys(h.sandbox.lxResolvedAudioCache).length, 0, '空参必须整库清空真实键');
+  assert.equal(Object.keys(h.sandbox.lxResolveInflight).length, 0, '整库重置同时清在途去重表');
+
+  // 历史误用形态 `{}` 现在也必须触发整库重置（不再退化成 '|||'）。
+  await h.exports.resolveLxPlaybackSong({ source: 'tx', id: '300', name: '曲三', singer: '丙' }, { quality: 'lossless', excludeResolvers: [] });
+  h.sandbox.invalidateLxResolvedAudioCache({});
+  assert.equal(Object.keys(h.sandbox.lxResolvedAudioCache).length, 0, '{} 退化前缀不得漏网——同样整库清空');
+
+  // 回归护栏：具体 song 失效只清该曲，不误伤全库（前缀 scoped 语义保留）。
+  await h.exports.resolveLxPlaybackSong({ source: 'tx', id: '400', name: '曲四', singer: '丁' }, { quality: 'lossless', excludeResolvers: [] });
+  await h.exports.resolveLxPlaybackSong({ source: 'wy', id: '500', name: '曲五', singer: '戊' }, { quality: 'lossless', excludeResolvers: [] });
+  assert.equal(Object.keys(h.sandbox.lxResolvedAudioCache).length, 2);
+  h.exports.invalidateLxResolvedAudioCache({ source: 'tx', id: '400', name: '曲四', singer: '丁' });
+  const remain = Object.keys(h.sandbox.lxResolvedAudioCache);
+  assert.equal(remain.length, 1, '单曲失效只清 tx|400');
+  assert.ok(remain[0].indexOf('wy|500') === 0, '保留的必须是另一首的键（未过度收口）');
+});

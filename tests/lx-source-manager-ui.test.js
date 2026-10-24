@@ -89,7 +89,10 @@ function makeEl(tag) {
       },
       contains(name) { return classes.has(name); },
     },
-    addEventListener() {},
+    __listeners: {},
+    addEventListener(type, fn) {
+      if (typeof fn === 'function') (el.__listeners[type] || (el.__listeners[type] = [])).push(fn);
+    },
     removeEventListener() {},
     setAttribute(key, value) {
       attrs[key] = String(value);
@@ -175,6 +178,7 @@ function makeSandbox(hooks) {
     toasts: [],
     confirmations: [],
     cacheInvalidations: 0,
+    cacheInvalidateArgs: [],
     prefetchCleared: 0,
     availabilityCells: new Map(),
     bulkButtons: {},
@@ -191,6 +195,7 @@ function makeSandbox(hooks) {
     'source-fallback-notice': makeEl('div'),
     'source-fallback-stack': makeEl('div'),
     'lx-source-bulk-count': makeEl('span'),
+    'lx-source-url-modal': makeEl('div'),
   };
   const mask = registry['lx-source-manager-mask'];
   mask.setAttribute('data-open', '0');
@@ -243,7 +248,7 @@ function makeSandbox(hooks) {
     },
     confirm(message) { state.confirmations.push(String(message)); return hooks.confirm !== false; },
     showToast(text) { state.toasts.push(String(text)); },
-    invalidateLxResolvedAudioCache() { state.cacheInvalidations++; },
+    invalidateLxResolvedAudioCache(arg) { state.cacheInvalidations++; state.cacheInvalidateArgs.push(arg === undefined ? '<noarg>' : arg); },
     clearLxAudioPrefetchTimer() { state.prefetchCleared++; },
     fetch: async (url, opts) => {
       const route = String(url || '');
@@ -258,7 +263,7 @@ function makeSandbox(hooks) {
         return jsonResponse(payload, payload && payload.ok === false ? 400 : 200);
       }
       if (route.indexOf('/api/lx-source/check') === 0) {
-        // server.js:8372 —— 本分支 check 路由直发 host 数组本体（非上游 {checked} 包壳）。
+        // server.js:8380 —— 本分支 check 路由直发 host 数组本体（非上游 {checked} 包壳）。
         const payload = hooks.check
           ? hooks.check(body)
           : (body.ids || []).map((id, i) => ({ id, ok: i === 0, name: id, sources: i === 0 ? ['tx'] : [], error: i === 0 ? '' : 'LX_SOURCE_CHECK_TIMEOUT' }));
@@ -519,4 +524,103 @@ test('T13⑥c：空库开面板 → 未装脚本引导可见（spec §5：不能
   const guide = read('public/index.html');
   const idx = guide.indexOf('lx-source-empty-guide');
   assert.match(guide.slice(idx, idx + 800), /导入/, '引导块必须指向导入通道');
+});
+
+// ---------- 批 T13 修复轮1：全选下发 / 遮罩懒绑 / 弹窗遮罩 / 徽章失败回填 ----------
+
+test('T13修复·全选：勾全选把 checked 下发到每一行，计数与批量钮随之联动；取消清空（旧实现只读不下发）', async () => {
+  const h = makeHarness();
+  await h.manager.refreshBadge();
+  const rowA = { checked: false, getAttribute: () => 'src-a' };
+  const rowB = { checked: false, getAttribute: () => 'src-b' };
+  h.state.checks = [rowA, rowB];
+  const selectAll = makeEl('input');
+  selectAll.checked = false;
+  h.state.bulkButtons['select-all'] = selectAll;
+  ['enable', 'disable', 'check', 'delete'].forEach((k) => {
+    const btn = makeEl('button'); btn.disabled = true; h.state.bulkButtons['bulk-' + k] = btn;
+  });
+  h.state.bulkButtons['bulk-count'] = makeEl('span');
+
+  selectAll.checked = true;
+  h.manager.applySelectAll();
+  assert.equal(rowA.checked, true, '全选必须把行 checkbox 置 checked（下发到行）');
+  assert.equal(rowB.checked, true);
+  assert.equal(h.state.bulkButtons['bulk-count'].textContent, '已选 2 个', '下发后计数=选中行数');
+  assert.equal(h.state.bulkButtons['bulk-enable'].disabled, false, '有选中时批量钮必须解禁');
+
+  selectAll.checked = false;
+  h.manager.applySelectAll();
+  assert.equal(rowA.checked, false, '取消全选必须清空行勾选');
+  assert.equal(rowB.checked, false);
+  assert.equal(h.state.bulkButtons['bulk-count'].textContent, '已选 0 个');
+  assert.equal(h.state.bulkButtons['bulk-enable'].disabled, true);
+});
+
+test('T13修复·遮罩：背景点击关闭监听在首次 open 才懒绑（模块加载期面板 DOM 尚不存在，载入即绑会静默失联）', async () => {
+  const h = makeHarness();
+  const mask = h.registry['lx-source-manager-mask'];
+  assert.ok(!mask.__listeners.click, 'open 之前不得有遮罩监听（钉死懒绑，杜绝模块 load 期绑死 null）');
+  await h.manager.open();
+  assert.ok(mask.__listeners.click && mask.__listeners.click.length === 1, '首次 open 懒绑恰一个背景关闭监听');
+  await h.manager.open();
+  assert.equal(mask.__listeners.click.length, 1, '重复 open 不得重绑（once-flag）');
+  mask.setAttribute('data-open', '1');
+  mask.__listeners.click[0]({ target: mask });
+  assert.equal(mask.getAttribute('data-open'), '0', '点击遮罩背景必须关闭面板');
+  mask.setAttribute('data-open', '1');
+  mask.__listeners.click[0]({ target: makeEl('div') });
+  assert.equal(mask.getAttribute('data-open'), '1', '点击对话框内部不得关闭');
+});
+
+test('T13修复·弹窗：链接导入弹窗背景点击关闭（懒绑，与面板同款，上游 :29927）', () => {
+  const h = makeHarness();
+  const modal = h.registry['lx-source-url-modal'];
+  h.manager.openUrlModal();
+  assert.ok(modal.__listeners.click && modal.__listeners.click.length === 1, 'openUrlModal 懒绑背景关闭');
+  modal.style.display = 'flex';
+  modal.__listeners.click[0]({ target: modal });
+  assert.equal(modal.style.display, 'none', '点击弹窗背景必须关闭');
+  h.manager.openUrlModal();
+  assert.equal(modal.__listeners.click.length, 1, '重复 open 不重绑（元素级 once-flag）');
+});
+
+test('T13修复·徽章失败：refreshLxSourceBadge 的 catch 内重新 getElementById（不复用 try 前的 null 局部量）', () => {
+  const src = read(P_15);
+  const start = src.indexOf('async function refreshLxSourceBadge');
+  const fn = src.slice(start, src.indexOf('// —— 面板行渲染', start));
+  const catchAt = fn.indexOf('catch');
+  assert.ok(catchAt > 0, 'refreshLxSourceBadge 必须有 catch 分支');
+  assert.ok(!/var\s+label\s*=\s*document\.getElementById/.test(fn.slice(0, catchAt)),
+    'try 之前不应预查 label/count（首屏徽章 DOM 未注入会拿到 null 并被 catch 复用）');
+  assert.ok(fn.slice(catchAt).includes("document.getElementById('lx-source-top-label')"),
+    'catch 内必须重新查询徽章 label');
+});
+
+test('T13修复·携带1b：源变更调用 window 失效钩子必须传空参/nullish（整库语义，不得塞具体 song）', async () => {
+  const h = makeHarness({
+    import: () => ({ ok: true, id: 'src-c', meta: { name: '洛雪C', version: '0.1' } }),
+  });
+  await h.manager.refreshBadge();
+  await h.manager.selectSource('src-b');
+  await h.manager.toggleSource('src-a');
+  await h.manager.deleteSource('src-b');
+  await h.manager.importFiles([{ name: 'c.js', text: async () => 'x' }]);
+  assert.ok(h.state.cacheInvalidateArgs.length >= 4, '四动作各触发一次失效钩子');
+  const scoped = h.state.cacheInvalidateArgs.find((a) => a && typeof a === 'object' && Object.keys(a).length > 0);
+  assert.equal(scoped, undefined, '失效必须整库（空参/nullish）；传带身份 song 会退化成前缀漏网真实键');
+});
+
+test('T13修复·④parity：APIKEY 展开期望值取自 lx-source-host.normalizeImportSourceUrl（防字面量漂移）', () => {
+  const host = require('../lx-source-host');
+  assert.equal(typeof host.normalizeImportSourceUrl, 'function', '服务端归一函数必须可 require');
+  const h = makeHarness();
+  const KEY = 'c'.repeat(64);
+  for (const input of [KEY, 'ynx.de5.net/API/x.php?k=1', 'https://ynx.de5.net/API/lx-ynx.php', 'https://example.com/source.js']) {
+    assert.equal(h.manager.normalizeUrlInput(input), host.normalizeImportSourceUrl(input),
+      'UI 归一必须与 host 归一对同输入逐字节等价（任一侧漂移即红）');
+  }
+  // UI 层对非法输入返回 ''，host 抛 LX_SOURCE_URL_INVALID——语义差异显式钉住。
+  assert.equal(h.manager.normalizeUrlInput('ftp://example.com/x.js'), '');
+  assert.throws(() => host.normalizeImportSourceUrl('ftp://example.com/x.js'), /LX_SOURCE_URL_INVALID/);
 });

@@ -39,8 +39,6 @@ function applyLxSourceBadge(info) {
 }
 
 async function refreshLxSourceBadge() {
-  var label = document.getElementById('lx-source-top-label');
-  var count = document.getElementById('lx-source-top-count');
   try {
     var info = await apiJson('/api/lx-source/status?t=' + Date.now(), { timeoutMs: 8000 });
     if (!info || !info.ok) throw new Error((info && (info.error || info.code)) || 'SOURCE_UNAVAILABLE');
@@ -48,9 +46,13 @@ async function refreshLxSourceBadge() {
     applyLxSourceBadge(info);
   } catch (e) {
     lxSourceManagerInfo = null;
+    // catch 内重新查询：本模块在 index-loader 解析期执行，徽章 DOM（index.html 内联于 loader 之后）
+    // 首屏可能尚未注入 → 复用 try 前预查的 null 局部量会漏回填「不可用」（T13 修复轮1）。
+    var label = document.getElementById('lx-source-top-label');
+    var count = document.getElementById('lx-source-top-count');
+    var button = document.getElementById('lx-source-top-btn');
     if (label) label.textContent = '音源：不可用';
     if (count) count.textContent = '';
-    var button = document.getElementById('lx-source-top-btn');
     if (button) button.setAttribute('title', '当前音源加载失败');
   }
 }
@@ -125,6 +127,7 @@ async function openLxSourceManager() {
   if (!mask) return;
   mask.setAttribute('data-open', '1');
   mask.setAttribute('aria-hidden', 'false');
+  bindLxSourceMaskDismiss();
   if (!lxSourceManagerInfo) await refreshLxSourceBadge();
   renderLxSourcePanel();
 }
@@ -164,11 +167,27 @@ function updateLxSourceBulkSelection() {
   });
 }
 
+// 全选下发（上游 index.html:29619-29626）：把 select-all 的 checked 广播到每一行 checkbox，
+// 再复用 updateLxSourceBulkSelection 重算计数/批量态。只由全选框的 onchange 触发——
+// 行框仍走 updateBulkSelection，避免勾选单行时被全选的 checked 反向覆写。
+function applyLxSourceSelectAll() {
+  var mask = lxSourceManagerMask();
+  if (!mask) return;
+  var selectAll = mask.querySelector('[data-source-select-all]');
+  if (!selectAll) return;
+  var on = !!selectAll.checked;
+  Array.prototype.slice.call(mask.querySelectorAll('[data-source-check]') || [])
+    .forEach(function (check) { check.checked = on; });
+  updateLxSourceBulkSelection();
+}
+
 // —— 缓存失效（台账携带1：13:1459-1461 预留钩子，源状态一变全清镜像+撤预取）——
 function lxSourceInvalidatePlaybackCaches() {
   try {
+    // 整库失效：源集合一变（切换/启停/删除/导入），所有曲目的解析地址都可能变——
+    // 必须传空参/nullish 触发 13 的整库重置；传 `{}` 会退化成 '|||' 前缀漏掉真实键（T13 修复轮1）。
     if (typeof window !== 'undefined' && typeof window.invalidateLxResolvedAudioCache === 'function') {
-      window.invalidateLxResolvedAudioCache({});
+      window.invalidateLxResolvedAudioCache();
     }
     if (typeof window !== 'undefined' && typeof window.clearLxAudioPrefetchTimer === 'function') {
       window.clearLxAudioPrefetchTimer();
@@ -259,7 +278,7 @@ async function checkLxSourceAvailability(ids) {
   if (!ids.length) return null;
   var mask = lxSourceManagerMask();
   try {
-    // check 例外：本分支路由成功体是 host 的逐源数组本体（server.js:8372），
+    // check 例外：本分支路由成功体是 host 的逐源数组本体（server.js:8380），
     // 无 {ok} 包壳，不能走 lxSourcePost 的 ok 校验——用 lxSourceCheckRows 判别形态。
     var result = await apiJson('/api/lx-source/check', {
       method: 'POST',
@@ -435,6 +454,7 @@ function openLxSourceUrlModal() {
   } else {
     modal.style.display = 'flex';
   }
+  bindLxSourceUrlModalDismiss(modal);
   var input = document.getElementById('lx-source-url-value');
   if (input && input.focus) setTimeout(function () { input.focus(); }, 0);
 }
@@ -483,7 +503,10 @@ async function submitLxSourceUrl() {
 }
 
 // —— LX_NO_SOURCES 引导接线（spec §5，13 模块终态分支调用）——
-// 在最近一张换源通知卡（或静态 #source-fallback-notice）上挂「打开音源管理」按钮。
+// 在最近一张换源通知卡上挂「打开音源管理」按钮；无卡时兜底挂到静态 #source-fallback-notice。
+// 卡片由 11-provider-fallback ensureSourceFallbackStack 动态建（showSourceFallbackNotice 先于本钩子），
+// 故正常路径总是命中 stack.firstChild——T13 修复轮1 撤掉了 #source-fallback-notice 内的死静态槽位，
+// 无卡兜底改走下方动态建钮分支（existing 命中仅作同卡幂等去重）。
 function attachLxNoticeOpenAction() {
   var stack = document.getElementById('source-fallback-stack');
   var target = (stack && stack.firstChild) ? stack.firstChild : document.getElementById('source-fallback-notice');
@@ -492,7 +515,7 @@ function attachLxNoticeOpenAction() {
   var existing = kids.find(function (child) {
     return child.getAttribute && child.getAttribute('data-lx-open-manager');
   });
-  if (existing) { existing.hidden = false; return; } // 静态槽位（#source-fallback-notice 内联）翻出即走
+  if (existing) { existing.hidden = false; return; } // 同卡重复 attach：翻出既有钮（幂等）
   var btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'lx-source-notice-open-btn';
@@ -507,14 +530,30 @@ async function openLxSourceManagerFromNotice() {
   await openLxSourceManager();
 }
 
-// —— 遮罩点击关闭（背景区域）——
-(function initLxSourceManagerMaskDismiss() {
+// —— 遮罩/弹窗背景点击关闭（懒绑）——
+// 面板与 URL 弹窗的 DOM 内联于 index-loader 之后（index.html:2241 晚于 :2009 loader 脚本标签），
+// 模块在解析期执行时 getElementById 返回 null → 载入即绑会静默失联。改在首次 open 时绑，once-flag 防重绑。
+// 同仓惯例见 14-custom-source-integration.js:817 / 19-outer-poster-bridge.js:398（readyState 兜底懒绑）。
+var lxSourceMaskDismissBound = false;
+function bindLxSourceMaskDismiss() {
+  if (lxSourceMaskDismissBound) return;
   var mask = lxSourceManagerMask();
   if (!mask || typeof mask.addEventListener !== 'function') return;
   mask.addEventListener('click', function (event) {
     if (event && event.target === mask) closeLxSourceManager();
   });
-})();
+  lxSourceMaskDismissBound = true;
+}
+
+// 链接导入弹窗背景点击关闭（上游 :29927 同款遮罩撤下）。弹窗为动态建壳、关闭仅隐藏，
+// 元素长期复用 → once-flag 挂在元素自身，避免每次 open 叠加监听。
+function bindLxSourceUrlModalDismiss(modal) {
+  if (!modal || typeof modal.addEventListener !== 'function' || modal.__lxUrlDismissBound) return;
+  modal.addEventListener('click', function (event) {
+    if (event && event.target === modal) closeLxSourceUrlModal();
+  });
+  modal.__lxUrlDismissBound = true;
+}
 
 if (typeof window !== 'undefined') {
   window.lxSourceManager = {
@@ -541,6 +580,7 @@ if (typeof window !== 'undefined') {
     submitUrl: submitLxSourceUrl,
     onUrlInput: onLxSourceUrlInput,
     updateBulkSelection: updateLxSourceBulkSelection,
+    applySelectAll: applyLxSourceSelectAll,
     getSelectedSourceIds: getSelectedSourceIds,
     attachNoticeOpenAction: attachLxNoticeOpenAction,
   };
