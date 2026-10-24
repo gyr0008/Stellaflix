@@ -1965,6 +1965,9 @@
         <button class="source-fallback-close" type="button" onclick="closeSourceFallbackNotice()">×</button>
       </div>
       <div id="source-fallback-body" class="source-fallback-body"></div>
+      <!-- 批 T13（spec §5）：LX_NO_SOURCES 终态时由 13 播放链接线、lxSourceManager.attachNoticeOpenAction 翻出 -->
+      <button type="button" class="lx-source-notice-open-btn" data-lx-open-manager="1" hidden
+        onclick="window.lxSourceManager && window.lxSourceManager.openFromNotice()">打开音源管理</button>
     </div>
 
   </div>
@@ -2223,6 +2226,59 @@
 
  <!-- 世界页 hearthere parity 步骤①：globe SDK ESM 桥接（@maptiler/sdk 3.9.0 + maplibre 5.6.2） -->
  <script type="module" src="video/world-globe-esm.js"></script>
+
+ <!-- 批 T13（移植上游 index.html:5667-5672）：LX 音源顶栏徽章（启用数/总数） -->
+ <div id="lx-source-top-right" aria-label="音源管理">
+   <button id="lx-source-top-btn" type="button" title="音源管理" aria-label="音源管理"
+     onclick="window.lxSourceManager && window.lxSourceManager.open()">
+     <svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
+     <span id="lx-source-top-label">音源：读取中</span>
+     <span id="lx-source-top-count" aria-hidden="true"></span>
+   </button>
+ </div>
+
+ <!-- 批 T13：LX 源管理面板（#lx-source-manager-mask，上游 :29553-29595 动态建壳改为我方内联 DOM） -->
+ <div id="lx-source-manager-mask" class="lx-source-manager-mask" data-open="0" aria-hidden="true">
+   <div class="lx-source-manager-dialog" role="dialog" aria-modal="true" aria-label="管理播放音源">
+     <div class="lx-source-manager-head">
+       <div class="lx-source-manager-head-main">
+         <strong>管理播放音源</strong>
+         <small id="lx-source-manager-count">已导入 0 个音源；可逐个启用、停用或检查可用性</small>
+       </div>
+       <button class="lx-source-close-btn" type="button" data-source-close
+         onclick="window.lxSourceManager && window.lxSourceManager.close()">关闭</button>
+     </div>
+     <div class="lx-source-safety">安全提示：音源会执行代码，只导入你信任的来源。</div>
+     <div class="lx-source-manager-head-actions">
+       <button type="button" class="lx-source-import-btn" data-source-import-file
+         onclick="window.lxSourceManager && window.lxSourceManager.importFilePicker()">导入文件</button>
+       <button type="button" class="lx-source-import-btn" data-source-import-url
+         onclick="window.lxSourceManager && window.lxSourceManager.openUrlModal()">导入链接</button>
+     </div>
+     <div class="lx-source-bulk-bar">
+       <label class="lx-source-bulk-selectall">
+         <input class="lx-source-check" type="checkbox" data-source-select-all
+           onchange="window.lxSourceManager && window.lxSourceManager.updateBulkSelection()">全选</label>
+       <span class="lx-source-bulk-count" data-source-bulk-count id="lx-source-bulk-count">已选 0 个</span>
+       <button type="button" class="lx-source-bulk-enable" data-source-bulk-enable disabled
+         onclick="window.lxSourceManager && window.lxSourceManager.bulkSetEnabled(true)">批量启用</button>
+       <button type="button" class="lx-source-bulk-disable" data-source-bulk-disable disabled
+         onclick="window.lxSourceManager && window.lxSourceManager.bulkSetEnabled(false)">批量停用</button>
+       <button type="button" class="lx-source-bulk-check" data-source-bulk-check disabled
+         onclick="window.lxSourceManager && window.lxSourceManager.bulkCheck()">检查可用性</button>
+       <button type="button" class="lx-source-bulk-delete" data-source-bulk-delete disabled
+         onclick="window.lxSourceManager && window.lxSourceManager.bulkDelete()">批量删除</button>
+     </div>
+     <div class="lx-source-manager-list" id="lx-source-manager-list"></div>
+     <!-- 批 T13（spec §5 未装脚本引导，我方新增态、上游无）：公开分发首日不能白屏 -->
+     <div class="lx-source-empty-guide" id="lx-source-empty-guide" hidden>
+       <div class="lx-source-empty-title">尚未导入任何 LX 脚本音源</div>
+       <div class="lx-source-empty-desc">没有音源脚本时在线播放会失败。请使用上方「导入文件」选择 .js 音源脚本，或用「导入链接」粘贴音源地址 / 64 位 APIKEY。</div>
+       <div class="lx-source-empty-warn">安全提示：音源会执行代码，只导入你信任的来源。</div>
+     </div>
+   </div>
+ </div>
+ <!-- lx-source-manager-mask 面板结束 -->
 
  <!-- 第三方音源：模态 DOM -->
  <div id="custom-source-modal-overlay" class="custom-source-modal-overlay" data-open="0" aria-hidden="true">

@@ -1287,7 +1287,15 @@ async function resolveLxPlaybackSong(song, options) {
 
   var terminalCode = lastCode || (resolvable ? 'LX_SOURCE_RESOLVE_ALL_FAILED' : 'LX_SOURCE_NO_RESOLVER');
   var guidance = lxSourceGuidanceText(terminalCode);
-  if (!silent) showSourceFallbackNotice('音源解析失败', guidance);
+  if (!silent) {
+    showSourceFallbackNotice('音源解析失败', guidance);
+    // 批 T13（spec §5，裁决3 的最小接线）：一脚本未装的终态附「打开音源管理」引导按钮，
+    // 由源管理面板（15-lxSourceManager）挂上；不重构本链，只加钩子。
+    if ((terminalCode === 'LX_NO_SOURCES' || terminalCode === 'LX_SOURCE_NOT_CONFIGURED') &&
+        typeof window !== 'undefined' && window.lxSourceManager) {
+      window.lxSourceManager.attachNoticeOpenAction();
+    }
+  }
   var terminalError = new Error(guidance);
   terminalError.code = terminalCode;
   terminalError.lxTerminal = true;
