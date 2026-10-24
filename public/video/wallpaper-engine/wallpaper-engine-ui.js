@@ -250,10 +250,10 @@ function bindWallpaperEngineLibraryEvents() {
 }
 
 function initializeWallpaperEngineLibrary() {
-  // 2026-08-19: 移植自 Stellaflix 2.1.0 — Wallpaper Engine 默认启用
+  // 批4：停用/启用 toggle — 停用态下不自动恢复壁纸（选择仍保留，启用时重放）。
   bindWallpaperEngineLibraryEvents();
   updateWallpaperEngineEntryUi();
-  if (!wallpaperEngineSelection.active) return;
+  if (!wallpaperEngineEnabled || !wallpaperEngineSelection.active) return;
   setTimeout(function () {
     loadWallpaperEngineLibrary(false, false).then(function () {
       var item = wallpaperEngineProjectById(wallpaperEngineSelection.id);

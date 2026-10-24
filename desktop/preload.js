@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   updateWallpaperEngineGlassSurface: (payload) => ipcRenderer.send('stellaflix-wallpaper-engine-glass-surface', payload || {}),
   reportWallpaperEnginePointerActivity: (payload) => ipcRenderer.send('stellaflix-wallpaper-engine-pointer-activity', payload || {}),
   stopWallpaperEngineScene: (payload) => ipcRenderer.invoke('stellaflix-wallpaper-engine-stop-scene', payload || {}),
+  reportWallpaperEngineDiag: (payload) => ipcRenderer.send('stellaflix-wallpaper-engine-diag', payload || {}),
   onWallpaperEngineHostBoundsChanged: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, payload) => callback(payload || {});

@@ -366,6 +366,8 @@ function makePlaybackEnv() {
     wallpaperEngineNativeSessionId: '',
     WALLPAPER_ENGINE_SWITCH_FADE_MS: 440,
     WALLPAPER_ENGINE_HOST_RECOVERY_MAX_ATTEMPTS: 3,
+    // 批4 起 apply 入口有 enabled 闸（state.js 的 wallpaperEngineEnabled），行为环境按默认启用铺垫
+    wallpaperEngineEnabled: true,
     wallpaperEngineSelection: { id: item.id, kind: 'engine', mediaType: 'video', active: true }
   };
   vm.createContext(sandbox);

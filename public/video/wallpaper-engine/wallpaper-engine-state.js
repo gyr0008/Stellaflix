@@ -1,4 +1,19 @@
+(function () {
+  // 离线诊断：主进程开启 STELLAFLIX_WE_DIAG=1 时，preload 会暴露
+  // reportWallpaperEngineDiag；这里把渲染层关键节点写进同一个日志文件。
+  function weDiag(event, fields) {
+    try {
+      var api = wallpaperEngineDesktopApi();
+      if (api && typeof api.reportWallpaperEngineDiag === 'function') {
+        api.reportWallpaperEngineDiag(Object.assign({ event: event }, fields || {}));
+      }
+    } catch (e) { }
+  }
+  window.__stellaflixWeDiag = weDiag;
+})();
+
 var WALLPAPER_ENGINE_SELECTION_STORE_KEY = 'stellaflix-wallpaper-engine-selection-v1';
+var WALLPAPER_ENGINE_ENABLED_STORE_KEY = 'stellaflix-wallpaper-engine-enabled-v1';
 var WALLPAPER_ENGINE_HIDDEN_STORE_KEY = 'stellaflix-wallpaper-engine-hidden-v1';
 var WALLPAPER_ENGINE_FAVORITE_STORE_KEY = 'stellaflix-wallpaper-engine-favorites-v1';
 var wallpaperEngineProjects = [];
@@ -50,22 +65,18 @@ var WALLPAPER_ENGINE_FIRST_FRAME_TIMEOUT_MS = 8000;
 var WALLPAPER_ENGINE_FREEZE_FADE_MS = 180;
 var WALLPAPER_ENGINE_HOST_RECOVERY_MAX_ATTEMPTS = 3;
 var WALLPAPER_ENGINE_POINTER_ACTIVITY_INTERVAL_MS = 8;
+var wallpaperEnginePointerActivityLastSentX = -1;
+var wallpaperEnginePointerActivityLastSentY = -1;
 
-// 2026-08-19: 移植自 Stellaflix 2.1.0 — Wallpaper Engine 默认启用
-// 渲染侧跟随主进程开关；若主进程未暴露（如浏览器调试），默认启用
-var WALLPAPER_ENGINE_ENABLED = (function () {
-  try {
-    if (window.desktopWindow && typeof window.desktopWindow.wallpaperEngineEnabled === 'boolean') {
-      return window.desktopWindow.wallpaperEngineEnabled;
-    }
-  } catch (e) { }
-  return true;
-})();
+// 批4：停用/启用 toggle。原 2026-08-19 的一次性 WALLPAPER_ENGINE_ENABLED 常量
+// 统一为可变 wallpaperEngineEnabled（localStorage 持久化，见 readWallpaperEngineEnabled）。
 
 function cancelWallpaperEnginePointerActivity() {
   if (wallpaperEnginePointerActivityTimer) clearTimeout(wallpaperEnginePointerActivityTimer);
   wallpaperEnginePointerActivityTimer = 0;
   wallpaperEnginePointerActivityLastSentAt = 0;
+  wallpaperEnginePointerActivityLastSentX = -1;
+  wallpaperEnginePointerActivityLastSentY = -1;
 }
 
 function wallpaperEnginePointerActivityReady() {
@@ -87,15 +98,21 @@ function wallpaperEnginePointerActivityReady() {
 function flushWallpaperEnginePointerActivity() {
   wallpaperEnginePointerActivityTimer = 0;
   if (!wallpaperEnginePointerActivityHasPoint || !wallpaperEnginePointerActivityReady()) return;
+  var nextX = wallpaperEnginePointerActivityLatestX;
+  var nextY = wallpaperEnginePointerActivityLatestY;
+  // Skip no-op IPC when the pointer stayed on the same quantized cell.
+  if (nextX === wallpaperEnginePointerActivityLastSentX && nextY === wallpaperEnginePointerActivityLastSentY) return;
   var api = wallpaperEngineDesktopApi();
   if (!api || typeof api.reportWallpaperEnginePointerActivity !== 'function') return;
   wallpaperEnginePointerActivityLastSentAt = typeof performance !== 'undefined' && performance.now
     ? performance.now() : Date.now();
+  wallpaperEnginePointerActivityLastSentX = nextX;
+  wallpaperEnginePointerActivityLastSentY = nextY;
   try {
     api.reportWallpaperEnginePointerActivity({
       sessionId: String(wallpaperEngineNativeSessionId || ''),
-      xUnit: wallpaperEnginePointerActivityLatestX,
-      yUnit: wallpaperEnginePointerActivityLatestY
+      xUnit: nextX,
+      yUnit: nextY
     });
   } catch (e) { }
 }
@@ -178,6 +195,34 @@ function readWallpaperEngineSelection() {
 
 var wallpaperEngineSelection = readWallpaperEngineSelection();
 
+// 批4：停用/启用 toggle。Stellaflix 默认启用（v1.4.3 反向默认，覆盖 upstream 默认停用）：
+// 仅显式存 '0'/'false' 才停用；无存储值时回退主进程开关（缺省启用）。
+function wallpaperEngineMainEnabledFlag() {
+  try {
+    if (window.desktopWindow && typeof window.desktopWindow.wallpaperEngineEnabled === 'boolean') {
+      return window.desktopWindow.wallpaperEngineEnabled ? '1' : '0';
+    }
+  } catch (e) { }
+  return '1';
+}
+
+function readWallpaperEngineEnabled() {
+  var raw = null;
+  try { raw = localStorage.getItem(WALLPAPER_ENGINE_ENABLED_STORE_KEY); } catch (e) { }
+  if (raw == null || raw === '') raw = wallpaperEngineMainEnabledFlag();
+  return raw !== '0' && raw !== 'false';
+}
+
+var wallpaperEngineEnabled = readWallpaperEngineEnabled();
+
+function saveWallpaperEngineEnabled() {
+  try { localStorage.setItem(WALLPAPER_ENGINE_ENABLED_STORE_KEY, wallpaperEngineEnabled ? '1' : '0'); } catch (e) { }
+}
+
+function wallpaperEngineBackgroundActive() {
+  return wallpaperEngineEnabled && !!wallpaperEngineSelection.active;
+}
+
 function saveWallpaperEngineSelection() {
   try { localStorage.setItem(WALLPAPER_ENGINE_SELECTION_STORE_KEY, JSON.stringify(normalizeWallpaperEngineSelection(wallpaperEngineSelection))); }
   catch (e) { }
@@ -257,8 +302,10 @@ function wallpaperEngineProjectLabel(item) {
 
 function updateWallpaperEngineEntryUi(message) {
   var value = document.getElementById('wallpaper-engine-value');
+  var toggle = document.getElementById('wallpaper-engine-toggle-btn');
   var restore = document.getElementById('wallpaper-engine-restore-btn');
-  var active = !!wallpaperEngineSelection.active;
+  var active = wallpaperEngineBackgroundActive();
+  var selected = !!wallpaperEngineSelection.id;
   if (value) {
     if (message) value.textContent = message;
     else if (active && wallpaperEngineRuntimeError) value.textContent = wallpaperEngineRuntimeError + ' · 已显示原背景';
@@ -269,6 +316,18 @@ function updateWallpaperEngineEntryUi(message) {
     else if (active && wallpaperEngineSelection.kind === 'engine') value.textContent = (wallpaperEngineSelection.title || '已选择') + ' · WE 引擎实时运行';
     else if (active) value.textContent = (wallpaperEngineSelection.title || '已选择') + ' · 原背景保留';
     else value.textContent = '未启用 · 原背景保留';
+  }
+  if (value && !message && selected && !active) {
+    value.textContent = (wallpaperEngineSelection.title || '已选择') + ' · 已停用';
+  }
+  if (toggle) {
+    toggle.disabled = !wallpaperEngineEnabled && wallpaperEngineLibraryBusy;
+    toggle.classList.toggle('on', wallpaperEngineEnabled);
+    toggle.textContent = wallpaperEngineEnabled ? '停用' : '启用';
+    toggle.title = wallpaperEngineEnabled
+      ? '停用 Wallpaper Engine，恢复原背景'
+      : (selected ? '启用已选择的 Wallpaper Engine 壁纸' : '先选择 Wallpaper Engine 壁纸');
+    toggle.setAttribute('aria-pressed', wallpaperEngineEnabled ? 'true' : 'false');
   }
   if (restore) restore.disabled = !active;
 }

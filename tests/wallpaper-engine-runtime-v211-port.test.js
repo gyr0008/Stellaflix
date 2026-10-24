@@ -265,7 +265,34 @@ test('source pins: v2.1.1 port landed with Stellaflix identity', async () => {
   assert.equal(/MINERADIO/.test(source), false);
   // B4 sentinel guard survives the port.
   assert.match(source, /if \(!process\.versions \|\| !process\.versions\.electron\) return null;/);
-  // Item 9 (diag logging) is explicitly out of scope for this batch.
-  assert.equal(/weDiag/.test(source), false);
-  assert.equal(/noteWeDiagEvent/.test(source), false);
+  // Item 9 (diag logging) landed later, in batch 3c (tests/wallpaper-engine-desktop-resident-diag.test.js).
+  assert.match(source, /const WE_DIAG_ENABLED = process\.env\.STELLAFLIX_WE_DIAG === '1';/);
+  assert.match(source, /function noteWeDiagEvent\(event, payload = \{\}\)/);
+  assert.match(source, /noteWeDiagEvent,$/m);
+});
+
+test('source pins: ghost fix parks the WE source window offscreen once the thumbnail lives', async () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../desktop/wallpaper-engine-runtime.js'),
+    'utf8'
+  );
+  // Steady state (thumbnail ready): the mirror window keeps following the host
+  // rect, but during any recent host move the real WE source window is parked
+  // at -32000 while its size is still synced — SWP_ASYNCWINDOWPOS lag made the
+  // stale-position source smear a ghost (plus the corner-region triangle).
+  // Steady-state parking was falsified on-device: wallpaper64 restores its own
+  // scene window back onto the host (observed at rest == hostRect, stable), so
+  // parking must ride the same DRAG_FOLLOW_RECENT_MS window as fast-follow.
+  // lastMoveTickAt updates before the follow block, so a tick that observes a
+  // move is itself inside the 200ms window and parks immediately.
+  assert.match(source, /SetWindowPos\(Handle, surfaceInsertAfter, hostRect\.Left, hostRect\.Top, width, height,/);
+  assert.match(source, /bool sourceWindowRecent = Environment\.TickCount - lastMoveTickAt < DRAG_FOLLOW_RECENT_MS;/);
+  assert.match(source, /SetWindowPos\(sourceWindow, Handle,\s*\n\s*sourceWindowRecent \? -32000 : hostRect\.Left,\s*\n\s*sourceWindowRecent \? -32000 : hostRect\.Top,\s*\n\s*width, height,/);
+  // Startup path (no thumbnail yet) must keep placing the real source over the
+  // empty DWM destination — the black-flash guard stays intact.
+  assert.match(source, /SetWindowPos\(sourceWindow, surfaceInsertAfter, hostRect\.Left, hostRect\.Top, width, height,/);
+  assert.match(source, /SetWindowPos\(Handle, sourceWindow, hostRect\.Left, hostRect\.Top, width, height,/);
+  // The parked call still carries the async flag so the busy WE render thread
+  // never blocks the 4ms follow loop.
+  assert.match(source, /sourceWindowRecent \? -32000 : hostRect\.Top,\s*\n\s*width, height,\s*\n\s*SWP_NOACTIVATE \| SWP_SHOWWINDOW \| SWP_ASYNCWINDOWPOS\)/);
 });

@@ -94,8 +94,9 @@ function renderWallpaperEngineManualRoots() {
   var roots = wallpaperEngineLibrarySnapshot && Array.isArray(wallpaperEngineLibrarySnapshot.manualRoots)
     ? wallpaperEngineLibrarySnapshot.manualRoots : [];
   host.innerHTML = roots.map(function (root) {
-    return '<span class="wallpaper-engine-root-chip"><span title="手动导入目录">' + escHtml(root.name || '导入目录') + '</span>' +
-      '<button type="button" data-wallpaper-action="remove-root" data-root-id="' + escHtml(root.id || '') + '" title="移除此索引目录">×</button></span>';
+    var isMedia = root.kind === 'media';
+    return '<span class="wallpaper-engine-root-chip"><span title="' + (isMedia ? '手动导入文件' : '手动导入目录') + '">' + escHtml(root.name || (isMedia ? '导入视频' : '导入目录')) + '</span>' +
+      '<button type="button" data-wallpaper-action="remove-root" data-root-id="' + escHtml(root.id || '') + '" title="' + (isMedia ? '移除此索引文件' : '移除此索引目录') + '">×</button></span>';
   }).join('');
 }
 

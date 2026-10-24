@@ -97,6 +97,7 @@ function wallpaperEngineLayerReady(kind, token) {
   if (token !== wallpaperEngineLayerToken || !wallpaperEngineSelection.active) return;
   cancelWallpaperEngineHostRecovery(true);
   document.body.classList.remove('wallpaper-engine-loading');
+  if (window.__stellaflixWeDiag) window.__stellaflixWeDiag('renderer-layer-ready', { kind: kind });
   var layer = document.getElementById('wallpaper-engine-layer');
   if (!layer) return;
   layer.classList.remove('ready', 'image-ready', 'video-ready', 'engine-ready', 'freeze-ready');
@@ -144,6 +145,7 @@ function describeWallpaperEngineMediaFailure(item, error) {
 function wallpaperEngineLayerFailed(item, attemptedKind, token, error) {
   if (token !== wallpaperEngineLayerToken) return;
   document.body.classList.remove('wallpaper-engine-loading');
+  if (window.__stellaflixWeDiag) window.__stellaflixWeDiag('renderer-layer-failed', { attemptedKind: attemptedKind });
   var nativeStopPromise = Promise.resolve({ ok: true });
   if (attemptedKind === 'engine') {
     cancelWallpaperEngineFirstFrameWait();
@@ -190,10 +192,11 @@ function wallpaperEngineLayerFailed(item, attemptedKind, token, error) {
 }
 
 function applyWallpaperEngineBackground(item, quiet) {
-  // 2026-08-19: 移植自 Stellaflix 2.1.0 — Wallpaper Engine 默认启用，允许壁纸播放/恢复
+  // 批4：enabled 闸收进 apply 入口——可见性恢复/宿主重启等回灌路径都经此函数，
+  // 停用态下任何路径都无法绕过 toggle 直接播放壁纸。
   item = item || wallpaperEngineProjectById(wallpaperEngineSelection.id);
   console.log('[Wallpaper Engine] applyWallpaperEngineBackground called, item:', item ? item.title : 'null', 'selection.active:', wallpaperEngineSelection.active);
-  if (!item || !wallpaperEngineSelection.active) {
+  if (!item || !wallpaperEngineEnabled || !wallpaperEngineSelection.active) {
     wallpaperEngineRuntimeError = item ? '' : '项目离线';
     restoreOriginalBackgroundAfterWallpaperEngine();
     clearWallpaperEngineLayerMedia(0);
@@ -219,6 +222,7 @@ function applyWallpaperEngineBackground(item, quiet) {
   // so a translucent (window-opacity) background cannot expose the desktop or
   // the WE window while it loads. Cleared by layer ready/failed/restore.
   document.body.classList.add('wallpaper-engine-loading');
+  if (window.__stellaflixWeDiag) window.__stellaflixWeDiag('renderer-load-begin', { kind: kind, hasPreview: item.hasPreview === true });
   if (!layer || !image || !video) return false;
   updateWallpaperEngineEntryUi('正在加载 ' + (item.title || '壁纸') + '…');
 
@@ -298,6 +302,9 @@ function activateWallpaperEngineItem(id) {
     console.warn('[Wallpaper Engine] Item not playable, skipping');
     return;
   }
+  // 批4：用户显式选中即转正 enabled（保持我方「选中即应用」语义，不跟 upstream 的未选引导）。
+  wallpaperEngineEnabled = true;
+  saveWallpaperEngineEnabled();
   wallpaperEngineSelection = normalizeWallpaperEngineSelection({
     active: true,
     id: item.id,
@@ -319,10 +326,55 @@ function activateWallpaperEngineItem(id) {
   closeWallpaperEngineLibrary();
 }
 
+function toggleWallpaperEngineBackground() {
+  if (wallpaperEngineEnabled) {
+    deactivateWallpaperEngineBackground(true);
+    return;
+  }
+  if (wallpaperEngineLibraryBusy) {
+    updateWallpaperEngineEntryUi();
+    showToast('Wallpaper Engine 库正在更新，请稍后再启用');
+    return;
+  }
+  if (!wallpaperEngineSelection.id) {
+    updateWallpaperEngineEntryUi();
+    showToast('请先识别并选择 Wallpaper Engine 壁纸');
+    openWallpaperEngineLibrary();
+    return;
+  }
+  wallpaperEngineEnabled = true;
+  saveWallpaperEngineEnabled();
+  wallpaperEngineRuntimeError = '';
+  wallpaperEngineSelection.active = true;
+  saveWallpaperEngineSelection();
+  updateWallpaperEngineEntryUi();
+  var item = wallpaperEngineProjectById(wallpaperEngineSelection.id);
+  if (item) {
+    applyWallpaperEngineBackground(item, false);
+    return;
+  }
+  loadWallpaperEngineLibrary(false, false).then(function () {
+    var selected = wallpaperEngineProjectById(wallpaperEngineSelection.id);
+    if (selected) {
+      applyWallpaperEngineBackground(selected, false);
+      return;
+    }
+    wallpaperEngineEnabled = false;
+    wallpaperEngineSelection.active = false;
+    saveWallpaperEngineEnabled();
+    saveWallpaperEngineSelection();
+    wallpaperEngineRuntimeError = '项目离线';
+    updateWallpaperEngineEntryUi();
+    showToast('未找到已选择的 Wallpaper Engine 项目');
+  });
+}
+
 function deactivateWallpaperEngineBackground(quiet) {
   cancelWallpaperEngineHostRecovery(true);
   wallpaperEngineDesktopPreviewActive = false;
   wallpaperEngineDesktopPreviewUsesAsset = false;
+  wallpaperEngineEnabled = false;
+  saveWallpaperEngineEnabled();
   wallpaperEngineSelection.active = false;
   if (wallpaperEngineHostBoundsRestartTimer) {
     clearTimeout(wallpaperEngineHostBoundsRestartTimer);
@@ -375,6 +427,21 @@ function restartWallpaperEngineAfterHostBoundsChange() {
 
 function handleWallpaperEngineHostBoundsChange(payload) {
   var phase = String(payload && payload.phase || 'restart');
+  if (phase === 'resident') {
+    var residentSessionId = String(payload && payload.sessionId || '');
+    if (!wallpaperEngineSelection.active
+      || wallpaperEngineSelection.kind !== 'engine'
+      || wallpaperEngineCaptureMode !== 'dwm-thumbnail'
+      || residentSessionId !== String(wallpaperEngineNativeSessionId || '')) return;
+    // 主窗最小化不再销毁原生 DWM 基层：只恢复渲染侧视觉状态，
+    // Scene 与 helper 全程驻留，无需重建或重新采集。
+    wallpaperEngineHostBoundsPreparing = false;
+    wallpaperEngineDesktopPreviewActive = false;
+    wallpaperEngineDesktopPreviewUsesAsset = false;
+    clearWallpaperEngineFreezeFrame(false);
+    updateWallpaperEngineEntryUi();
+    return;
+  }
   if (phase === 'restart') {
     if (!wallpaperEngineHostBoundsPreparing && !wallpaperEngineDesktopPreviewActive) return;
     // BrowserWindow.show()/restore can fire before Chromium has published the

@@ -964,7 +964,7 @@ body.wallpaper-engine-loading #custom-bg {
 #wallpaper-engine-layer {
   position: fixed;
   inset: 0;
-  z-index: 2;
+  z-index: 0;
   overflow: hidden;
   isolation: isolate;
   border-radius: 0;
@@ -995,8 +995,7 @@ html:has(body.wallpaper-engine-dwm-active) {
 
 body.wallpaper-engine-dwm-active #custom-bg,
 body.wallpaper-engine-dwm-active #album-bg,
-body.wallpaper-engine-dwm-active #album-bg-next,
-body.wallpaper-engine-dwm-active #canvas-container {
+body.wallpaper-engine-dwm-active #album-bg-next {
   opacity: 0 !important;
   visibility: hidden !important;
 }
@@ -1126,12 +1125,13 @@ html:fullscreen body.desktop-shell #wallpaper-engine-freeze {
 /* 背景板是封面派生的整幅画面，与封面模糊底图/自定义背景叠层会互相糊掉，启用时让位。 */
 body.cover-wallpaper-board-active #album-bg,body.cover-wallpaper-board-active #custom-bg,body.cover-wallpaper-board-active #theme-bg-tint{opacity:0!important}
 
+/* 底色组只压 opacity，不再 visibility 掉布局（上游软化）。
+   #canvas-container 不隐藏：粒子画布透明底，z=1 浮在 z=0 的壁纸层之上，
+   壁纸在粒子后面双显（主人 10-18 真机反馈拍板，对齐上游）。 */
 body.wallpaper-engine-active #custom-bg,
 body.wallpaper-engine-active #album-bg,
-body.wallpaper-engine-active #album-bg-next,
-body.wallpaper-engine-active #canvas-container {
-  opacity: 0 !important;
-  visibility: hidden !important
+body.wallpaper-engine-active #album-bg-next {
+  opacity: 0 !important
 }
 
 body.custom-bg-glass-active #custom-bg::after {
@@ -12106,7 +12106,7 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode {
 
 .wallpaper-engine-actions {
   display: grid;
-  grid-template-columns: minmax(74px, 1fr) minmax(82px, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
   width: clamp(172px, 39vw, 224px)
 }
@@ -12123,6 +12123,13 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode {
 .wallpaper-engine-actions .fx-mini-btn:disabled {
   opacity: .34;
   cursor: default
+}
+
+.wallpaper-engine-actions .fx-mini-btn.on {
+  color: rgba(236, 250, 255, .98);
+  border-color: rgba(113, 211, 255, .46);
+  background: rgba(48, 153, 224, .2);
+  box-shadow: inset 0 0 0 1px rgba(131, 220, 255, .12), 0 0 18px rgba(35, 145, 220, .16)
 }
 
 .wallpaper-engine-library-modal {
@@ -16675,6 +16682,12 @@ body.panel-reordering .mini-queue-item.is-reordering {
   box-sizing: border-box
 }
 
+/* 批4 v2.0.10：WE 行三列布局（42px 图标 | 标签 | clamp 容纳停用/识别/恢复三钮），
+   与 public/video/wallpaper-engine.css 的 !important 终版规则 lockstep。 */
+#fx-panel .fx-console-group-body .lyric-color-row.image-pick-row.wallpaper-engine-row {
+  grid-template-columns: 42px minmax(0, 1fr) clamp(176px, 40vw, 224px)
+}
+
 #fx-panel .fx-console-group-body .image-pick-row .fx-color-row-label {
   min-width: 0;
   overflow: hidden
@@ -16697,7 +16710,7 @@ body.panel-reordering .mini-queue-item.is-reordering {
 }
 
 #fx-panel .fx-console-group-body .wallpaper-engine-actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr))
+  grid-template-columns: repeat(3, minmax(0, 1fr))
 }
 
 #fx-panel .fx-console-group-body .image-pick-row .fx-mini-btn {

@@ -20,7 +20,7 @@ const {
   LocalMusicLibrary,
   registerLocalMusicScheme,
 } = require('./local-music-library');
-const { WallpaperEngineRuntime } = require('./wallpaper-engine-runtime');
+const { WallpaperEngineRuntime, noteWeDiagEvent } = require('./wallpaper-engine-runtime');
 const { FullDesktopModeRuntime } = require('./full-desktop-mode-runtime');
 // Platform auth helpers are only needed on login/migration paths. Lazy-load so
 // cold start does not pull kugou/qishui/spotify modules before the window shows.
@@ -190,6 +190,11 @@ let wallpaperEngineHostVisibilityResumePending = false;
 let wallpaperEngineHostVisibilityResumeTimer = null;
 let wallpaperEngineHostVisibilityOperation = 0;
 let wallpaperEngineHostVisibilityStopPromise = null;
+// minimize-resident：DWM 缩略图会话在主窗最小化期间原地驻留（v2.1.1），
+// restore 时只发 phase:'resident' 通知，不再重启 Scene。
+let wallpaperEngineHostVisibilityResidentMinimized = false;
+// rendererLifecycle 停机去重：pagehide/导航/渲染进程崩溃并发时共享同一次清理。
+let wallpaperEngineRendererCleanupPromise = null;
 let fullDesktopModeHostVisibilityTransitionDepth = 0;
 let wallpaperEngineDesktopIconLayeringQueue = Promise.resolve(true);
 const WALLPAPER_ENGINE_CAPTURE_GRANT_MS = 12000;
@@ -1093,6 +1098,7 @@ async function prepareWallpaperEngineProjectPreviewBeforeDesktopEmbedding(win, r
   }
 
   wallpaperEngineHostVisibilitySuspended = true;
+  wallpaperEngineHostVisibilityResidentMinimized = false;
   wallpaperEngineHostVisibilityOperation += 1;
   finishWallpaperEngineVisibleHostResume(win);
   cancelWallpaperEngineHostBoundsRestart();
@@ -1165,14 +1171,42 @@ function cancelWallpaperEngineHostBoundsRestart() {
   wallpaperEngineHostBoundsOperation += 1;
 }
 
-function stopWallpaperEngineRuntimeForRenderer(reason = '') {
+function stopWallpaperEngineRuntimeForRenderer(reason = '', options = {}) {
+  const rendererLifecycle = options && options.rendererLifecycle === true;
   wallpaperEngineCaptureOperation += 1;
+  if (rendererLifecycle) {
+    wallpaperEngineGlassCaptureOperation += 1;
+    wallpaperEngineCapturePreparationOperation = 0;
+  }
   cancelWallpaperEngineHostBoundsRestart();
   clearWallpaperEngineCaptureGrant();
-  return wallpaperEngineRuntime.stop({ forceHelperCleanup: true }).catch((error) => {
-    console.warn('[Wallpaper Engine] renderer cleanup failed:', reason || 'renderer-reset', error && error.message || error);
-    return { ok: false, stopped: false, error: String(error && (error.message || error.name) || error || 'WALLPAPER_ENGINE_STOP_FAILED') };
-  });
+  if (wallpaperEngineRendererCleanupPromise) return wallpaperEngineRendererCleanupPromise;
+  if (rendererLifecycle) {
+    if (wallpaperEngineHostVisibilityResumeTimer) clearTimeout(wallpaperEngineHostVisibilityResumeTimer);
+    wallpaperEngineHostVisibilityResumeTimer = null;
+    wallpaperEngineHostVisibilitySuspended = false;
+    wallpaperEngineHostVisibilityResumePending = false;
+    wallpaperEngineHostVisibilityResidentMinimized = false;
+    wallpaperEngineHostVisibilityOperation += 1;
+  }
+  const cleanup = Promise.resolve()
+    .then(() => wallpaperEngineRuntime.stop({ forceHelperCleanup: true }))
+    .then((result) => {
+      if (rendererLifecycle && result && result.stopped !== true && (result.active || wallpaperEngineRuntime.pending)) {
+        return wallpaperEngineRuntime.stop({ forceHelperCleanup: true });
+      }
+      return result;
+    })
+    .catch((error) => {
+      console.warn('[Wallpaper Engine] renderer cleanup failed:', reason || 'renderer-reset', error && error.message || error);
+      return { ok: false, stopped: false, error: String(error && (error.message || error.name) || error || 'WALLPAPER_ENGINE_STOP_FAILED') };
+    })
+    .finally(() => {
+      if (rendererLifecycle && wallpaperEngineRendererCleanupPromise === cleanup) wallpaperEngineRendererCleanupPromise = null;
+      if (rendererLifecycle) wallpaperEngineHostVisibilityStopPromise = null;
+    });
+  if (rendererLifecycle) wallpaperEngineRendererCleanupPromise = cleanup;
+  return cleanup;
 }
 
 function setMainWindowBackgroundThrottling(win, enabled) {
@@ -1194,6 +1228,27 @@ function finishWallpaperEngineVisibleHostResume(win) {
 
 function suspendWallpaperEngineForHiddenHost(win, reason = 'hidden') {
   if (!win || win.isDestroyed()) return Promise.resolve({ ok: true, stopped: false });
+  const normalizedReason = String(reason || 'hidden').toLowerCase();
+  const runtimeStatus = wallpaperEngineRuntime.getStatus();
+  if (/^minimi[sz]e(?:d)?$/.test(normalizedReason)
+    && runtimeStatus
+    && runtimeStatus.active === true
+    && runtimeStatus.captureMode === 'dwm-thumbnail'
+    && runtimeStatus.dwmSurfaceReady === true) {
+    // The DWM helper is an independent native surface that can stay resident
+    // while Chromium is minimized. Stopping it here would discard the Scene
+    // state and force a visible reload (transparent -> black gap) on restore.
+    wallpaperEngineHostVisibilityResidentMinimized = true;
+    finishWallpaperEngineVisibleHostResume(win);
+    cancelWallpaperEngineHostBoundsRestart();
+    return Promise.resolve({
+      ok: true,
+      stopped: false,
+      preserved: true,
+      sessionId: String(runtimeStatus.sessionId || ''),
+    });
+  }
+  wallpaperEngineHostVisibilityResidentMinimized = false;
   if (wallpaperEngineHostVisibilitySuspended) {
     return wallpaperEngineHostVisibilityStopPromise || Promise.resolve({ ok: true, stopped: true });
   }
@@ -1215,7 +1270,30 @@ function resumeWallpaperEngineForVisibleHost(win, reason = 'visible') {
   const desktopMode = fullDesktopModeRuntime.getStatus('wallpaper-engine-visible-host');
   if (appQuitting || (desktopMode.enabled === true
     && (desktopMode.interactive !== true || desktopMode.phase !== 'interactive'))) return;
-  if (!wallpaperEngineHostVisibilitySuspended) return;
+  if (!wallpaperEngineHostVisibilitySuspended) {
+    if (!wallpaperEngineHostVisibilityResidentMinimized) return;
+    // minimize 时保留了原生 DWM 会话：restore 只需通知渲染层 phase:'resident'
+    // 恢复视觉状态，Scene 与 helper 全程驻留，不需要 stop/restart 重采集。
+    wallpaperEngineHostVisibilityResidentMinimized = false;
+    const residentStatus = wallpaperEngineRuntime.getStatus();
+    if (!residentStatus || residentStatus.active !== true || residentStatus.captureMode !== 'dwm-thumbnail') return;
+    setMainWindowBackgroundThrottling(win, false);
+    const notifyResident = () => {
+      if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return;
+      try {
+        win.webContents.send('stellaflix-wallpaper-engine-host-bounds-changed', {
+          phase: 'resident',
+          reason: String(reason || 'visible'),
+          sessionId: String(residentStatus.sessionId || ''),
+          forceVisibleHost: true,
+        });
+      } catch (_) { }
+    };
+    setTimeout(notifyResident, 80);
+    setTimeout(notifyResident, 420);
+    setTimeout(() => finishWallpaperEngineVisibleHostResume(win), 900);
+    return;
+  }
   wallpaperEngineHostVisibilitySuspended = false;
   wallpaperEngineHostVisibilityResumePending = true;
   const visibilityOperation = ++wallpaperEngineHostVisibilityOperation;
@@ -1672,7 +1750,6 @@ function configureLocalAppPermissions() {
           || current.active !== true
           || current.sessionId !== grant.sessionId
           || current.dwmGlassSurfaceReady !== true
-          || current.dwmGlassSurfaceActive !== true
           || !sourceMatch
           || Number(sourceMatch[1]) !== Number(current.dwmGlassSurfaceWindowId)
           || String(source && source.name || '') !== 'Stellaflix WE DWM Surface') {
@@ -4274,7 +4351,25 @@ ipcMain.handle('stellaflix-wallpaper-engine-runtime-status', async (event, paylo
 ipcMain.handle('stellaflix-wallpaper-engine-start-scene', async (event, payload = {}) => {
   let operation = 0;
   let startedSessionId = '';
+  let restoreHostTopTimer = null;
+  let hostTopRaised = false;
+  // Declared at handler scope so the finally block can always reach it, even
+  // on an early return before the raise happened.
+  const restoreHostTop = () => {
+    if (restoreHostTopTimer) {
+      clearTimeout(restoreHostTopTimer);
+      restoreHostTopTimer = null;
+    }
+    if (!hostTopRaised) return;
+    hostTopRaised = false;
+    const current = mainWindow;
+    if (!current || current.isDestroyed()) return;
+    try { current.setAlwaysOnTop(false); } catch (_) { }
+  };
   try {
+    if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
+    const pendingRendererCleanup = wallpaperEngineRendererCleanupPromise;
+    if (pendingRendererCleanup) await pendingRendererCleanup;
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
     operation = ++wallpaperEngineCaptureOperation;
     const desktopMode = fullDesktopModeRuntime.getStatus('wallpaper-engine-start-scene');
@@ -4282,6 +4377,25 @@ ipcMain.handle('stellaflix-wallpaper-engine-start-scene', async (event, payload 
       || (desktopMode.enabled === true
         && (desktopMode.interactive !== true || desktopMode.phase !== 'interactive'))) {
       return { ok: false, error: 'WALLPAPER_ENGINE_HOST_SUSPENDED' };
+    }
+    const hostWin = mainWindow;
+    // Wallpaper Engine opens its pop-out as a normal top-level window at the
+    // host rect. It is created black and sits above the host until the embed
+    // step can push it behind, which reads as the whole player flashing
+    // black for a moment. Raise the host above that level for the duration
+    // of the start/embed sequence so the pop-out can never cover it, then
+    // restore the previous topmost state. A watchdog restores even if the
+    // runtime wedges.
+    const hostWasTop = !!(hostWin && typeof hostWin.isAlwaysOnTop === 'function' && hostWin.isAlwaysOnTop());
+    if (hostWin && !hostWin.isDestroyed() && !hostWasTop) {
+      try {
+        hostWin.setAlwaysOnTop(true, 'screen-saver');
+        hostTopRaised = true;
+      } catch (_) { }
+    }
+    if (hostTopRaised) {
+      restoreHostTopTimer = setTimeout(restoreHostTop, 10000);
+      if (restoreHostTopTimer && typeof restoreHostTopTimer.unref === 'function') restoreHostTopTimer.unref();
     }
     const physicalBounds = wallpaperEnginePhysicalContentBounds(mainWindow, payload);
     const display = physicalBounds.display;
@@ -4358,6 +4472,10 @@ ipcMain.handle('stellaflix-wallpaper-engine-start-scene', async (event, payload 
       clearWallpaperEngineCaptureGrant();
     }
     return { ok: false, error: error.code || error.message || 'WALLPAPER_ENGINE_SCENE_START_FAILED', sessionId: startedSessionId };
+  } finally {
+    // The native helper owns the layering from here on; drop the temporary
+    // host raise as soon as the embed sequence is done (success or not).
+    restoreHostTop();
   }
 });
 
@@ -4410,7 +4528,7 @@ ipcMain.handle('stellaflix-wallpaper-engine-prepare-glass-capture', async (event
     const status = wallpaperEngineRuntime.getStatus();
     if (!status || status.active !== true || status.sessionId !== sessionId
       || status.captureMode !== 'dwm-thumbnail'
-      || status.dwmGlassSurfaceReady !== true || status.dwmGlassSurfaceActive !== true) {
+      || status.dwmGlassSurfaceReady !== true) {
       return { ok: false, error: 'WALLPAPER_ENGINE_DWM_GLASS_SURFACE_UNAVAILABLE' };
     }
     const source = await wallpaperEngineRuntime.getDwmGlassCaptureSource(sessionId, {
@@ -4513,20 +4631,49 @@ ipcMain.on('stellaflix-wallpaper-engine-pointer-activity', (event, payload = {})
   } catch (_) { }
 });
 
+ipcMain.on('stellaflix-wallpaper-engine-diag', (_event, payload = {}) => {
+  // 离线诊断通道（STELLAFLIX_WE_DIAG=1 才有输出）：渲染层只转发事件名与少量字段，
+  // 任何来源都允许 —— 它不改变状态、只写日志，泄露面与 console 相当。
+  try { noteWeDiagEvent(String(payload && payload.event || 'renderer'), payload); } catch (_) { }
+});
+
 ipcMain.handle('stellaflix-wallpaper-engine-stop-scene', async (event, payload = {}) => {
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    const sessionId = String(payload.sessionId || '');
+    const sessionId = String(payload && payload.sessionId || '');
     const stopAll = payload && payload.all === true || !sessionId;
+    const rendererLifecycle = payload && payload.rendererLifecycle === true;
+    const runtimeStatus = wallpaperEngineRuntime.getStatus();
+    const pendingLifecycleSession = rendererLifecycle && sessionId
+      && !!(wallpaperEngineRuntime.pending && wallpaperEngineRuntime.pending.sessionId === sessionId);
+    const activeLifecycleSession = rendererLifecycle && sessionId
+      && !!(runtimeStatus && runtimeStatus.active === true && runtimeStatus.sessionId === sessionId);
+    const currentLifecycleSession = pendingLifecycleSession || activeLifecycleSession;
+    const differentPendingSession = !!(wallpaperEngineRuntime.pending && wallpaperEngineRuntime.pending.sessionId !== sessionId);
     // Invalidate pending preparation before awaiting the old source shutdown.
     // Otherwise a new start can begin during the close wait and then be
     // incorrectly superseded when this stop handler resumes.
+    if (rendererLifecycle && wallpaperEngineCaptureGrant && wallpaperEngineCaptureGrant.sessionId === sessionId) {
+      clearWallpaperEngineCaptureGrant(sessionId);
+    }
     if (stopAll) {
       wallpaperEngineCaptureOperation += 1;
+      wallpaperEngineGlassCaptureOperation += 1;
+      wallpaperEngineCapturePreparationOperation = 0;
       cancelWallpaperEngineHostBoundsRestart();
       clearWallpaperEngineCaptureGrant();
+    } else if (currentLifecycleSession) {
+      if (pendingLifecycleSession || !differentPendingSession) {
+        wallpaperEngineCaptureOperation += 1;
+        wallpaperEngineGlassCaptureOperation += 1;
+        wallpaperEngineCapturePreparationOperation = 0;
+        cancelWallpaperEngineHostBoundsRestart();
+      }
     }
-    const result = await wallpaperEngineRuntime.stop(stopAll ? '' : sessionId);
+    const stopOptions = { forceHelperCleanup: rendererLifecycle };
+    const result = stopAll
+      ? await wallpaperEngineRuntime.stop(stopOptions)
+      : await wallpaperEngineRuntime.stop({ ...stopOptions, sessionId });
     const current = wallpaperEngineRuntime.getStatus();
     if (!stopAll && (!current.active || (wallpaperEngineCaptureGrant && wallpaperEngineCaptureGrant.sessionId === sessionId))) {
       clearWallpaperEngineCaptureGrant(sessionId);
@@ -6378,11 +6525,11 @@ async function createWindowOnce() {
   win.webContents.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
     if (!isMainFrame || isInPlace || !isTrustedMainDocumentUrl(url)) return;
     win.__stellaflixTrustedMainDocumentReady = null;
-    stopWallpaperEngineRuntimeForRenderer('main-frame-navigation');
+    stopWallpaperEngineRuntimeForRenderer('main-frame-navigation', { rendererLifecycle: true });
     closeWallpaperWindow('main-frame-navigation').catch(() => {});
   });
   win.webContents.once('destroyed', () => {
-    stopWallpaperEngineRuntimeForRenderer('webcontents-destroyed');
+    stopWallpaperEngineRuntimeForRenderer('webcontents-destroyed', { rendererLifecycle: true });
     closeWallpaperWindow('webcontents-destroyed').catch(() => {});
   });
 
@@ -6398,7 +6545,7 @@ async function createWindowOnce() {
   });
   win.webContents.on('render-process-gone', (_event, details) => {
     const cleanupPromise = Promise.allSettled([
-      stopWallpaperEngineRuntimeForRenderer(`render-process-gone:${details && details.reason || 'unknown'}`),
+      stopWallpaperEngineRuntimeForRenderer(`render-process-gone:${details && details.reason || 'unknown'}`, { rendererLifecycle: true }),
       closeWallpaperWindow(`main-renderer-gone:${details && details.reason || 'unknown'}`),
     ]);
     const error = new Error(`renderer process gone: ${details && details.reason || 'unknown'} exitCode=${details && details.exitCode}`);
@@ -6606,6 +6753,7 @@ async function createWindowOnce() {
     cancelWallpaperEngineHostBoundsRestart();
     fullDesktopModeHostVisibilityTransitionDepth = 0;
     wallpaperEngineHostVisibilitySuspended = false;
+    wallpaperEngineHostVisibilityResidentMinimized = false;
     wallpaperEngineHostVisibilityOperation += 1;
     wallpaperEngineHostVisibilityStopPromise = null;
     finishWallpaperEngineVisibleHostResume(win);

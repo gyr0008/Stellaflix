@@ -6,6 +6,34 @@ const path = require('path');
 const childProcess = require('child_process');
 const { discoverSteamLibraries: defaultDiscoverSteamLibraries } = require('./wallpaper-engine-library');
 
+// 诊断开关：设置 STELLAFLIX_WE_DIAG=1 时，把壁纸启动各阶段耗时与窗口层级
+// 事件逐行追加到用户目录下的 wallpaper-engine-diag.log，只写文件，
+// 不弹窗、不改窗口、不影响任何交互。用于用户正常使用时离线定位加载闪烁。
+const WE_DIAG_ENABLED = process.env.STELLAFLIX_WE_DIAG === '1';
+const weDiagState = { file: '', t0: 0 };
+function weDiag(event, fields = {}) {
+  if (!WE_DIAG_ENABLED) return;
+  try {
+    if (!weDiagState.file) {
+      const base = process.env.LOCALAPPDATA || process.env.APPDATA || process.cwd();
+      weDiagState.file = path.join(base, 'Stellaflix', 'wallpaper-engine-diag.log');
+      fs.mkdirSync(path.dirname(weDiagState.file), { recursive: true });
+      if (!weDiagState.t0) weDiagState.t0 = Date.now();
+    }
+    const t = Date.now() - (weDiagState.t0 || Date.now());
+    const extra = Object.entries(fields)
+      .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+      .join(' ');
+    fs.appendFileSync(weDiagState.file, `${new Date().toISOString()} +${t}ms ${event}${extra ? ' ' + extra : ''}\n`);
+  } catch (_) { }
+}
+// 暴露给 main.js diag IPC 的渲染层事件入口：同一份日志、同一个开关。
+function noteWeDiagEvent(event, payload = {}) {
+  const fields = { ...payload };
+  delete fields.event;
+  weDiag(`renderer:${event || 'unknown'}`, fields);
+}
+
 const SIGNER_PATTERN = /\bSkutta Software\b/i;
 const MIN_WIDTH = 64;
 const MAX_WIDTH = 7680;
@@ -1475,7 +1503,20 @@ public sealed class StellaflixWeDwmSurfaceHost : Form {
       // 4ms 节拍，源窗口由 WE 在帧间自行应用，最多晚一帧且平滑。
       if (!SetWindowPos(Handle, surfaceInsertAfter, hostRect.Left, hostRect.Top, width, height,
           SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS)) throw new Win32Exception(Marshal.GetLastWin32Error());
-      if (!SetWindowPos(sourceWindow, Handle, hostRect.Left, hostRect.Top, width, height,
+      // 源窗口在「宿主近期在动」时停放到屏幕外：它被镜像窗覆盖，位置没有视觉
+      // 价值，而 SWP_ASYNCWINDOWPOS 要 300ms-1.5s 才被 WE 渲染线程应用，拖拽中
+      // 旧位置的场景窗就是残影（含圆角滞后三角）。注：10-18 曾判「常驻停放被
+      // 真机证伪（WE 把场景窗拉回宿主位）」——该观察实为误读：那次会话的 DWM
+      // 激活链从未完成（prepare 闸依赖控制栏可见，影视首页永假），helper 停在
+      // else 分支每拍把源窗回投宿主位，看起来像「被拉回」。常驻停放并未被
+      // 真正证伪；当前 200ms 拖拽感知窗口是已双态真机验证的设计，维持不变。
+      // 尺寸仍须每拍同步——场景按源窗口尺寸渲染、视差按客户端坐标映射；
+      // 异步标志保留，避免跨进程同步调用卡住 4ms 跟随节拍。
+      bool sourceWindowRecent = Environment.TickCount - lastMoveTickAt < DRAG_FOLLOW_RECENT_MS;
+      if (!SetWindowPos(sourceWindow, Handle,
+          sourceWindowRecent ? -32000 : hostRect.Left,
+          sourceWindowRecent ? -32000 : hostRect.Top,
+          width, height,
           SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS)) throw new Win32Exception(Marshal.GetLastWin32Error());
     } else {
       // Until WGC has primed the SVG sampler, show the real source above the
@@ -2062,6 +2103,7 @@ class WallpaperEngineRuntime {
         || session.dwmSurfaceProcess !== child) {
         if (!ready && stderr.trim()) {
           console.warn(`[Wallpaper Engine] DWM surface unavailable: ${stderr.trim().replace(/\s+/g, ' ').slice(0, 400)}`);
+          weDiag('dwm-helper-unavailable', { stderr: stderr.trim().replace(/\s+/g, ' ').slice(0, 200) });
         }
         if (session.dwmSurfaceProcess === child) this._stopSessionDwmSurface(session);
         return false;
@@ -2076,6 +2118,7 @@ class WallpaperEngineRuntime {
       if (typeof child.once === 'function') {
         child.once('exit', () => {
           if (session.dwmSurfaceProcess !== child) return;
+          weDiag('dwm-helper-exited', { sessionId: session.sessionId, pid: child.pid });
           session.dwmSurfaceProcess = null;
           session.dwmSurfaceReady = false;
           session.dwmSurfaceActive = false;
@@ -2175,15 +2218,21 @@ class WallpaperEngineRuntime {
     }
     try { stdin.write('D\n', 'ascii'); }
     catch (_) { throw runtimeError('WALLPAPER_ENGINE_DWM_SURFACE_FAILED'); }
+    const activateStartedAt = this.now();
+    weDiag('dwm-activate-begin', { sessionId: session.sessionId });
     const deadline = this.now() + 2200;
     while (this.now() <= deadline) {
       if (this.disposed || this.active !== session || session.stopping === true
         || session.dwmSurfaceProcess !== child) {
         throw runtimeError('WALLPAPER_ENGINE_START_SUPERSEDED');
       }
-      if (session.dwmSurfaceActive === true) return this._publicSession(session);
+      if (session.dwmSurfaceActive === true) {
+        weDiag('dwm-activate-ok', { sessionId: session.sessionId, ms: Math.round(this.now() - activateStartedAt) });
+        return this._publicSession(session);
+      }
       await this.sleep(20);
     }
+    weDiag('dwm-activate-failed', { sessionId: session.sessionId, ms: Math.round(this.now() - activateStartedAt) });
     throw runtimeError('WALLPAPER_ENGINE_DWM_SURFACE_FAILED');
   }
 
@@ -2265,8 +2314,11 @@ class WallpaperEngineRuntime {
       throw runtimeError('WALLPAPER_ENGINE_SESSION_MISMATCH');
     }
     const expectedWindowId = String(Math.max(0, Number(session.dwmSurfaceWindowId) || 0));
+    // dwmGlassSurfaceActive only tracks control-bar visibility; requiring it here
+    // made DWM activation impossible on the video home (bar is display:none there),
+    // leaving the helper in the visible-source branch and ghosting on window drags.
     if (session.dwmSurfaceReady !== true || session.dwmGlassSurfaceReady !== true
-      || session.dwmGlassSurfaceActive !== true || !/^\d+$/.test(expectedWindowId)
+      || !/^\d+$/.test(expectedWindowId)
       || expectedWindowId === '0'
       || Number(session.dwmGlassSurfaceWindowId) !== Number(session.dwmSurfaceWindowId)) {
       throw runtimeError('WALLPAPER_ENGINE_DWM_GLASS_SURFACE_UNAVAILABLE');
@@ -3746,8 +3798,11 @@ class WallpaperEngineRuntime {
     }
     if (session.embedPromise) return session.embedPromise;
     const generation = this.generation;
+    const embedStartedAt = Date.now();
+    weDiag('embed-begin', { sessionId: session.sessionId });
     const operation = (async () => {
       let embedding = await this._controlSessionWindow('embed', session, String(session.sourceId || ''), host);
+      weDiag('embed-attempt', { ms: Date.now() - embedStartedAt, aligned: embedding.aligned === true });
       for (let attempt = 0; attempt < 3 && embedding.aligned !== true; attempt += 1) {
         const hostWidth = Math.max(1, Number(embedding.hostRight) - Number(embedding.hostLeft));
         const hostHeight = Math.max(1, Number(embedding.hostBottom) - Number(embedding.hostTop));
@@ -3777,6 +3832,7 @@ class WallpaperEngineRuntime {
       session.dwmSurfaceHostCornerRadius = clampInteger(host.cornerRadius, 0, 512, 0);
       session.dwmSurfaceDesktopIconLayering = host.desktopIconLayering === true;
       session.captureAttached = true;
+      weDiag('embed-ok', { sessionId: session.sessionId, totalMs: Date.now() - embedStartedAt });
       return this._publicSession(session);
     })();
     session.embedPromise = operation;
@@ -4030,6 +4086,8 @@ class WallpaperEngineRuntime {
     };
     this.pending = session;
     let startStage = 'discover-target';
+    const stageStartedAt = Date.now();
+    weDiag('start-begin', { sessionId: session.sessionId, id: session.id });
 
     try {
       const [installation, target] = await Promise.all([
@@ -4040,6 +4098,7 @@ class WallpaperEngineRuntime {
       if (!installation.available || !installation.executable) {
         throw runtimeError(installation.reason || 'WALLPAPER_ENGINE_NOT_INSTALLED');
       }
+      weDiag('stage-done', { stage: startStage, ms: Date.now() - stageStartedAt });
       const projectFile = target && target.projectFile;
       const scenePackage = target && target.scenePackage;
       const projectStat = projectFile && path.isAbsolute(projectFile) && path.extname(projectFile).toLowerCase() === '.json'
@@ -4059,11 +4118,13 @@ class WallpaperEngineRuntime {
       if (generation !== this.generation || this.disposed || this.pending !== session) {
         throw runtimeError('WALLPAPER_ENGINE_START_SUPERSEDED');
       }
+      weDiag('stage-done', { stage: startStage, ms: Date.now() - stageStartedAt });
       session.muteProperties = sanitizeMuteProperties(target && target.muteProperties);
       startStage = 'prepare-silent-project';
       session.launchFile = projectStat
         ? await this._prepareSilentLaunchFile(session, projectFile, scenePackage)
         : scenePackage;
+      weDiag('stage-done', { stage: startStage, ms: Date.now() - stageStartedAt });
       const previous = this.active;
       if (previous && previous.sessionId !== session.sessionId) {
         startStage = 'close-previous-window';
@@ -4074,6 +4135,7 @@ class WallpaperEngineRuntime {
         if (generation !== this.generation || this.disposed || this.pending !== session) {
           throw runtimeError('WALLPAPER_ENGINE_START_SUPERSEDED');
         }
+        weDiag('stage-done', { stage: startStage, ms: Date.now() - stageStartedAt });
       }
       // Reap untracked leftovers from earlier sessions whose close was never
       // confirmed. They are not this.active, so the stop above cannot see them,
@@ -4083,9 +4145,11 @@ class WallpaperEngineRuntime {
       if (generation !== this.generation || this.disposed) {
         throw runtimeError('WALLPAPER_ENGINE_START_SUPERSEDED');
       }
+      weDiag('stage-done', { stage: startStage, ms: Date.now() - stageStartedAt });
       startStage = 'open-initial-window';
       await this._openInitialSessionWindow(session, generation);
       if (generation !== this.generation || this.disposed) throw runtimeError('WALLPAPER_ENGINE_START_SUPERSEDED');
+      weDiag('stage-done', { stage: startStage, ms: Date.now() - stageStartedAt });
       let earlyMuteError = null;
       const earlyMutePromise = this._muteSession(session, session.muteProperties)
         .then(() => true)
@@ -4107,6 +4171,7 @@ class WallpaperEngineRuntime {
       if (generation !== this.generation || this.disposed) throw runtimeError('WALLPAPER_ENGINE_START_SUPERSEDED');
       session.sourceId = String(captureSource && captureSource.id || '');
       session.windowSourceId = session.sourceId;
+      weDiag('stage-done', { stage: startStage, ms: Date.now() - stageStartedAt, sourceId: session.sourceId });
       startStage = 'apply-location-audio-properties';
       const mutedBeforeCapture = await earlyMutePromise;
       if (!mutedBeforeCapture) {
@@ -4121,9 +4186,11 @@ class WallpaperEngineRuntime {
 
       this.active = session;
       if (this.pending === session) this.pending = null;
+      weDiag('start-ok', { sessionId: session.sessionId, totalMs: Date.now() - stageStartedAt });
       return this._publicSession(session);
     } catch (error) {
       console.warn(`[Wallpaper Engine] native Scene start failed at ${startStage}:`, error && (error.code || error.message) || error);
+      weDiag('start-failed', { stage: startStage, ms: Date.now() - stageStartedAt, code: (error && error.code) || '', message: String((error && error.message) || error).slice(0, 200) });
       if (this.pending === session) this.pending = null;
       if (session.launched && (!this.active || this.active.sessionId !== session.sessionId)) {
         await this._closeSession(session);
@@ -4261,4 +4328,5 @@ module.exports = {
   readWallpaperPackageScene,
   forceSceneAudioSilent,
   nativeDwmThumbnailSurfaceScript,
+  noteWeDiagEvent,
 };
