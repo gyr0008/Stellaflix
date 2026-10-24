@@ -560,10 +560,13 @@ async function resolveAlbumGaplessPlaybackData(song) {
   var runtimeQualityCap = playbackQualityCapValue(song, playbackProvider);
   if (playbackQualityAboveCap(requestedQuality, playbackProvider, runtimeQualityCap)) requestedQuality = runtimeQualityCap;
   // T9 阶段2切换：gapless 预载统一走 /api/lx-source/resolve（静默、不跨平台换源、限时预算）。
+  // T10：allowCacheLayer:false 绕开 90s 客户端镜像缓存——混流交接的地址必须当场新鲜
+  //（T4 教训：源切换后陈旧 URL 喂进交接链会直接播死）。
   try {
     var resolved = await resolveLxPlaybackSong(song, {
       quality: requestedQuality,
       allowCrossPlatformFallback: false,
+      allowCacheLayer: false,
       silent: true,
       timeoutMs: 15000,
       maxResolvers: 3
@@ -933,6 +936,9 @@ async function playLocalQueueSong(song, idx, token, firstVisualPlay, opts, resum
 // :32325-32355(resolver 级重试+死URL去重) / :32358-32372(跨平台换源) /
 // :32380-32396(onerror 断点重解析封顶3)。逻辑移植，命名/DOM/路径全部 Stellaflix 化；
 // 播放解析统一指 /api/lx-source/resolve，不再走任何官方平台五分支。
+// 移植批 T10 追加：:31826-31857(lxResolvedAudioCache 90s 客户端镜像+在途去重+按曲失效) /
+// :32026-32043+挂撤点 :32249/:32374(播放成功 700ms 后下曲静默预取)；
+// 裁决2：运行时链+起播失败链合并进 opts.lxChainDepth 一份共享深度、合计封顶 3。
 // 三级失败链状态机：
 //   一级 resolver 级：同曲多次 /resolve（服务端轮换 resolver；失败/死URL 把
 //        song._lxResolver 记忆排入 excludeResolvers——裁决2，绕开服务端 90s 缓存）；
@@ -1140,13 +1146,16 @@ async function resolveCrossPlatformPlaybackFallback(song, failedSource, excluded
 // 统一解析入口（brief Interfaces：resolveLxPlaybackSong(song, {quality, excludeResolvers})
 //   → {url(proxyUrl), actual, probeWarning, resolver}）。
 // async 声明不随 Annex B 泄漏——文件尾显式挂 window（同 00-api-quality-output.js 约定）。
+// T10：入口先查 lxResolvedAudioCache（90s 镜像缓存，上游 :31956-31960），并发同曲共享
+// lxResolveInflight 单条 Promise（上游 :31961-31967/:32007-32012）；prefetch 强制静默、
+// allowCacheLayer:false 供 gapless 预载绕缓存（T4 预裁：交接地址必须新鲜，不喂陈旧 URL）。
 async function resolveLxPlaybackSong(song, options) {
   song = song || {};
   options = options || {};
   var sourceName = lxNormalizeSourceName(song.source || song.provider || song.type);
   var excluded = Array.isArray(options.excludeResolvers) ? options.excludeResolvers.slice(0, 8) : [];
   var attempted = Array.isArray(options.attemptedUrls) ? options.attemptedUrls.map(String) : [];
-  var silent = !!options.silent;
+  var silent = !!(options.silent || options.prefetch);
   var allowCross = options.allowCrossPlatformFallback !== false;
   var attempts = Math.max(1, Number(options.attempts) || 3);
   var maxResolvers = Math.max(3, Math.min(8, Number(options.maxResolvers) || 6));
@@ -1162,6 +1171,33 @@ async function resolveLxPlaybackSong(song, options) {
 
   // needsCrossPlatformMatch / sp·qs·am 等非可解析平台：跳过一级，直接二级（上游 :31945-31949 语义）。
   var resolvable = LX_SOURCE_RESOLVABLE.test(sourceName);
+  var songKey = lxResolvedAudioCacheKey(song, lxQuality);
+  var useCacheLayer = resolvable && song.needsCrossPlatformMatch !== true && options.allowCacheLayer !== false;
+  if (useCacheLayer) {
+    var cached = cachedLxResolvedAudio(song, lxQuality, excluded);
+    if (cached) {
+      song._lxResolver = String(cached.resolver || '');
+      return {
+        ok: true,
+        url: String(cached.url || ''),
+        proxyUrl: String(cached.proxyUrl || cached.url || ''),
+        actual: String(cached.actual || ''),
+        probeWarning: !!cached.probeWarning,
+        resolver: song._lxResolver,
+        source: String(cached.source || sourceName),
+        quality: lxQuality,
+        fromCache: true
+      };
+    }
+    if (!excluded.length && lxResolveInflight[songKey]) {
+      var pendingResult = await lxResolveInflight[songKey];
+      var pendingRecord = lxResolvedAudioCache[songKey];
+      song._lxResolver = String((pendingRecord && pendingRecord.resolver) || (pendingResult && pendingResult.resolver) || '');
+      return Object.assign({}, pendingResult, { fromCache: true });
+    }
+  }
+
+  var chainPromise = (async function runLxResolveChain() {
   if (resolvable && song.needsCrossPlatformMatch !== true) {
     var payload = lxPlaybackSongPayload(song);
     for (var attempt = 0; attempt < attempts; attempt++) {
@@ -1185,6 +1221,7 @@ async function resolveLxPlaybackSong(song, options) {
         lastCode = 'LX_SOURCE_RESOLVE_ALL_FAILED';
         lastMessage = aborted ? '音源解析超时，请换音源或稍后重试' : String((resolveError && resolveError.message) || resolveError);
         excludeResolver(song._lxResolver);
+        invalidateLxResolvedAudioCache(song);
         if (!silent && attempt < attempts - 1) showSourceFallbackNotice('当前音源不可用', '正在重试并切换备用音源…');
         continue;
       }
@@ -1195,13 +1232,14 @@ async function resolveLxPlaybackSong(song, options) {
           lastCode = 'LX_SOURCE_RESOLVE_ALL_FAILED';
           lastMessage = '备用音源返回了相同的失效地址';
           excludeResolver(result.resolver);
+          invalidateLxResolvedAudioCache(song);
           continue;
         }
         if (!silent && attempt > 0) {
           showSourceFallbackNotice('已自动切换音源', '原音源无法播放，已改用：' + (result.resolver || '备用音源') + '。');
         }
         song._lxResolver = String(result.resolver || '');
-        return {
+        var successResult = {
           ok: true,
           url: String(result.url || ''),
           proxyUrl: finalUrl,
@@ -1211,6 +1249,12 @@ async function resolveLxPlaybackSong(song, options) {
           source: String(result.source || sourceName),
           quality: lxQuality
         };
+        // 上游 :31996-32002：成功解析写 90s 客户端镜像缓存（超 80 条先删最早键，镜像上限宽于服务端 LRU-120）。
+        // 记录整份结果对象（我方消费方还需 actual/probeWarning/source，上游仅存 url——我方适配，键与 TTL 同上游）。
+        lxResolvedAudioCache[songKey] = Object.assign({}, successResult, { expiresAt: Date.now() + LX_RESOLVED_AUDIO_CACHE_TTL_MS });
+        var cacheKeys = Object.keys(lxResolvedAudioCache);
+        if (cacheKeys.length > 80) delete lxResolvedAudioCache[cacheKeys[0]];
+        return successResult;
       }
       var code = String((result && (result.code || lxCodeFromMessage(result.error || result.message))) || 'LX_SOURCE_RESOLVE_ALL_FAILED');
       lastCode = code;
@@ -1221,6 +1265,7 @@ async function resolveLxPlaybackSong(song, options) {
         break;
       }
       excludeResolver(song._lxResolver);
+      invalidateLxResolvedAudioCache(song);
       if (!silent && attempt < attempts - 1) showSourceFallbackNotice('当前音源不可用', '正在重试并切换备用音源…');
     }
   }
@@ -1244,6 +1289,56 @@ async function resolveLxPlaybackSong(song, options) {
   terminalError.code = terminalCode;
   terminalError.lxTerminal = true;
   throw terminalError;
+  })();
+
+  if (useCacheLayer && !excluded.length) lxResolveInflight[songKey] = chainPromise;
+  try {
+    return await chainPromise;
+  } finally {
+    if (useCacheLayer && lxResolveInflight[songKey] === chainPromise) delete lxResolveInflight[songKey];
+  }
+}
+
+// —— T10 下曲预取（上游 :32014-32043 scheduleImportedLxAudioPrefetch 移植；
+// 挂/撤点同上游 :32249 切曲即清 / :32374 播放成功后调度）——
+// 成功起播 700ms 后对队列下一首做一次静默解析写入 lxResolvedAudioCache，切到该曲时 0 等待。
+// 裁决3 平价：上游 {prefetch:true, allowCrossPlatformFallback:false, maxResolvers:3, timeoutMs:18000}
+// 中 timeoutMs/prefetch 是客户端概念（apiJson 限时 + 全静默），maxResolvers 服务端已有对应，
+// 跨平台抑制由 allowCrossPlatformFallback:false 客户端闸门完成；attempts:1 保证预取单发出网
+// （上游预取走的是单次 resolveImportedLxAudio，不是整条重试循环）。失败仅 console.debug（:32040），
+// 不弹卡片、不 toast、不触发任何重入链。裁决4 计时器卫生：唯一句柄 lxAudioPrefetchTimer，
+// schedule 先撤旧、playQueueAt 头部 clearLxAudioPrefetchTimer()、回调自清零。
+function clearLxAudioPrefetchTimer() {
+  if (lxAudioPrefetchTimer) {
+    clearTimeout(lxAudioPrefetchTimer);
+    lxAudioPrefetchTimer = 0;
+  }
+}
+function nextLxAudioPrefetchSong(songIndex) {
+  if (Array.isArray(playQueue) && playQueue.length > 1 && Number.isFinite(Number(songIndex)) && Number(songIndex) >= 0) {
+    return playQueue[(Number(songIndex) + 1) % playQueue.length] || null;
+  }
+  return null;
+}
+function scheduleLxAudioPrefetch(token, songIndex, quality) {
+  clearLxAudioPrefetchTimer();
+  lxAudioPrefetchTimer = setTimeout(function () {
+    lxAudioPrefetchTimer = 0;
+    if (token !== trackSwitchToken || playMode === 'single') return;
+    var nextSong = nextLxAudioPrefetchSong(songIndex);
+    var nextSource = lxNormalizeSourceName(nextSong && (nextSong.source || nextSong.provider || nextSong.type));
+    if (!nextSong || !LX_SOURCE_RESOLVABLE.test(nextSource)) return;
+    resolveLxPlaybackSong(nextSong, {
+      quality: quality,
+      prefetch: true,
+      allowCrossPlatformFallback: false,
+      attempts: 1,
+      maxResolvers: 3,
+      timeoutMs: 18000
+    }).catch(function (error) {
+      console.debug('[LXAudioPrefetch]', nextSong && nextSong.name, error && (error.message || error));
+    });
+  }, 700);
 }
 
 // 运行时断点重解析挂钩（上游 :32376-32396 audio.onerror 移植）。
@@ -1266,10 +1361,53 @@ function claimLxPlaybackReentry(token) {
   return true;
 }
 
+// —— T10 客户端缓存 + 在途去重（上游 :31826-31857 移植）——
+// 服务端 lx-source-host.js 已有 90s LRU-120 musicUrl 缓存；lxResolvedAudioCache 是其客户端镜像：
+// 90s 内同曲同音质二次播放 0 网络。缓存键沿用上游构成（归一源名 | songmid/id/hash/FileHash/
+// copyrightId | 曲名 | 歌手 | LX 音质词），T9 修正案的冻结形状 hash/copyrightId 直接进身份位。
+// 在途去重 lxResolveInflight：同一首歌并发解析共享同一条 Promise（只发一次请求）；带排除集的
+// 失败链重进不参与去重（上游 :31961/:32007 语义——排除状态不同的两次解析不是同一请求）。
+// 失效三条路：resolver 级失败/异常/死URL（上游 :32349 循环内语义）、起播失败重进、音质切换（裁决5）。
+var lxResolvedAudioCache = Object.create(null);
+var lxResolveInflight = Object.create(null);
+var lxAudioPrefetchTimer = 0;
+var LX_RESOLVED_AUDIO_CACHE_TTL_MS = 90 * 1000;
+function lxResolvedAudioCacheKey(song, quality) {
+  song = song || {};
+  var sourceName = lxNormalizeSourceName(song.source || song.provider || song.type);
+  return [
+    sourceName,
+    song.songmid || song.id || song.hash || song.FileHash || song.copyrightId || '',
+    song.name || song.title || '',
+    song.singer || song.artist || '',
+    quality || ''
+  ].join('|');
+}
+function invalidateLxResolvedAudioCache(song) {
+  var prefix = lxResolvedAudioCacheKey(song, '').replace(/\|$/, '');
+  Object.keys(lxResolvedAudioCache).forEach(function (key) {
+    if (key.indexOf(prefix) === 0) delete lxResolvedAudioCache[key];
+  });
+}
+function cachedLxResolvedAudio(song, quality, excludedResolvers) {
+  var key = lxResolvedAudioCacheKey(song, quality);
+  var record = lxResolvedAudioCache[key];
+  if (!record || record.expiresAt <= Date.now()) {
+    if (record) delete lxResolvedAudioCache[key];
+    return null;
+  }
+  var excluded = (excludedResolvers || []).map(function (value) { return String(value || '').trim().toLowerCase(); });
+  if (record.resolver && excluded.indexOf(String(record.resolver).trim().toLowerCase()) >= 0) return null;
+  return record;
+}
+
 function armLxRuntimeErrorFallback(ctx) {
   ctx = ctx || {};
   var retryDepth = Math.max(0, Number(ctx.retryDepth) || 0);
-  if (!ctx.media || retryDepth >= 3) return false;
+  // 裁决2（T10）：运行时链与起播失败链不再各自封顶 3（合计可长出 6 次重入），合并进随 opts
+  // 流转的共享深度 ctx.chainDepth（opts.lxChainDepth），一份闸门封顶 3；retryDepth 保留仅作诊断。
+  var chainDepth = Math.max(0, Number(ctx.chainDepth) || 0);
+  if (!ctx.media || Math.max(retryDepth, chainDepth) >= 3) return false;
   ctx.media.onerror = function () {
     if (ctx.token !== trackSwitchToken) return;
     if (!claimLxPlaybackReentry(ctx.token)) {
@@ -1277,6 +1415,9 @@ function armLxRuntimeErrorFallback(ctx) {
       ctx.media.onerror = null;
       return;
     }
+    // T10：正在播放的地址刚被证明失效，先作废该曲客户端缓存（同上游 :32349 失败即 invalidate），
+    // 重入解析不许被 90s 镜像缓存拖回死地址。
+    invalidateLxResolvedAudioCache(ctx.song);
     var resumeSeconds = Math.max(0, Number(ctx.media.currentTime) || 0);
     var nextExcluded = Array.isArray(ctx.excluded) ? ctx.excluded.slice() : [];
     var playingResolver = String(ctx.resolver || (ctx.song && ctx.song._lxResolver) || '').trim().toLowerCase();
@@ -1287,6 +1428,7 @@ function armLxRuntimeErrorFallback(ctx) {
     showSourceFallbackNotice('播放中断，正在自动换源', '当前音源连接失败，正在从断点附近重新匹配备用音源…');
     var retryOpts = Object.assign({}, ctx.opts || {}, {
       lxRuntimeRetry: retryDepth + 1,
+      lxChainDepth: chainDepth + 1,
       resumeAt: resumeSeconds,
       lxExcludeResolvers: nextExcluded,
       lxAttemptedUrls: nextAttempted,
@@ -1308,7 +1450,13 @@ function armLxRuntimeErrorFallback(ctx) {
   return true;
 }
 
-if (typeof window !== 'undefined') { window.resolveLxPlaybackSong = resolveLxPlaybackSong; }
+if (typeof window !== 'undefined') {
+  window.resolveLxPlaybackSong = resolveLxPlaybackSong;
+  // T10：源管理 UI（T13）在音源启用/停用/删除等响应回来后要清客户端镜像缓存，
+  // 防服务端 90s 陈旧缓存（T4 发现）被客户端再叠加一层 90s。
+  window.invalidateLxResolvedAudioCache = invalidateLxResolvedAudioCache;
+  window.clearLxAudioPrefetchTimer = clearLxAudioPrefetchTimer;
+}
 // —— T9 播放链统一：音源解析三级失败链（止）——
 // ============================================================
 
@@ -1349,6 +1497,8 @@ async function playQueueAt(idx, opts) {
     markPlayPhase('cancel-previous-track');
     cancelBeatAnalysisTimer();
     cancelBeatPrefetchTimer();
+    // T10（裁决4 计时器卫生）：换曲即撤销上一曲排队的下曲预取（上游 :32249 同位语义）。
+    clearLxAudioPrefetchTimer();
     if (typeof resetCuefieldAutoMix === 'function') {
       resetCuefieldAutoMix(opts.cuefieldAutoMix ? 'cuefield-handoff' : 'track-switch', {
         preservePreparedAudio: !!opts.cuefieldAutoMix,
@@ -1549,7 +1699,10 @@ async function playQueueAt(idx, opts) {
         var lxResolved = await resolveLxPlaybackSong(song, {
           quality: requestedQuality,
           excludeResolvers: lxExcludedResolvers,
-          attemptedUrls: lxAttemptedUrls
+          attemptedUrls: lxAttemptedUrls,
+          // T10（裁决5）：音质切换重载必须绕过缓存取新音质地址——缓存键含音质词，
+          // 同键命中意味着新旧同音质，显式绕缓存只为防御与语义直白。
+          allowCacheLayer: !qualitySwitch
         });
         data = {
           url: lxResolved.url || lxResolved.proxyUrl,
@@ -1715,6 +1868,8 @@ async function playQueueAt(idx, opts) {
           attempted: lxAttemptedUrls,
           proxyAudioUrl: String(proxyAudioUrl),
           retryDepth: Number(opts.lxRuntimeRetry) || 0,
+          // 裁决2（T10）：与起播失败链共享一份深度闸门（opts.lxChainDepth），合计封顶 3。
+          chainDepth: Number(opts.lxChainDepth) || 0,
           quality: requestedQuality
         });
       }
@@ -1803,11 +1958,16 @@ async function playQueueAt(idx, opts) {
         // T9 修复轮1：起播失败即摘掉运行时钩——本分支与 armLxRuntimeErrorFallback 共用
         // 同一个共享 audio 载体，钩不摘则两条链可能同 token 并发重入（3×3）。
         if (playbackMedia) playbackMedia.onerror = null;
-        // T9 第一级（播放启动失败重进）：lx 解析成功但媒体起播失败 → 排除当前 resolver 后重走三级链，上限 3 次。
-        if (data && data.lxSource && (Number(opts.lxStartRetryDepth) || 0) < 3) {
+        // T9 第一级（播放启动失败重进）：lx 解析成功但媒体起播失败 → 排除当前 resolver 后重走三级链。
+        // 裁决2（T10）：闸门改读共享深度 opts.lxChainDepth（运行时链+起播失败链合计封顶 3，不再是各自 3）；
+        // lxStartRetryDepth 保留仅作诊断。
+        if (data && data.lxSource && (Number(opts.lxChainDepth) || 0) < 3) {
           // 单链闸：本 token 若已被运行时 onerror 链占坑，则那条链正在重解析，这里既不再
           // 发第二条，也不落到下面的官方回退/跳过队列项分支（否则同曲多重失败提示+多重链）。
           if (!claimLxPlaybackReentry(token)) return false;
+          // T10：起播失败说明刚解析出的地址不可用，作废该曲客户端缓存（上游 :32349 同位），
+          // 重入必须重新解析而不是 90s 内复用死地址。
+          invalidateLxResolvedAudioCache(song);
           var lxStartExclude = lxExcludedResolvers.slice();
           var lxStartAttempted = lxAttemptedUrls.slice();
           if (data.resolver) lxStartExclude.push(String(data.resolver));
@@ -1823,6 +1983,7 @@ async function playQueueAt(idx, opts) {
             lxExcludeResolvers: lxStartExclude,
             lxAttemptedUrls: lxStartAttempted,
             lxStartRetryDepth: (Number(opts.lxStartRetryDepth) || 0) + 1,
+            lxChainDepth: (Number(opts.lxChainDepth) || 0) + 1,
             suppressPlayFailureNotice: true
           }));
           if (token !== trackSwitchToken) return lxStartRetry === true;
@@ -1922,6 +2083,8 @@ async function playQueueAt(idx, opts) {
         scheduleCuefieldAutoMixPrepare(token, idx, cuefieldPrepareDelay);
       }
       scheduleAlbumGaplessPreloadForCurrent(token, albumGaplessHandoff ? 'album-gapless-handoff-started' : 'track-started');
+      // T10：lx 起播成功后 700ms 预取队列下一首（上游 :32374 同位）；播客豁免路由不预取。
+      if (data && data.lxSource) scheduleLxAudioPrefetch(token, idx, requestedQuality);
       safePlaybackStep('shelf-preview-suppress-end', suppressShelfPreviewForPlaybackSwitch);
       if (typeof completeSourceFallbackRecovery === 'function') {
         completeSourceFallbackRecovery(sourceFallbackRecoveryFromOptions(opts));

@@ -126,6 +126,9 @@ function switchLocalQualityPlaybackTo(targetQuality) {
   function replay(qualityOverride) {
     var opts = { qualitySwitch: true, resumeAt: resumeAt, preserveHomeState: true };
     if (qualityOverride) opts.qualityOverride = qualityOverride;
+    // T10 裁决5：本地↔在线重载同走 qualitySwitch 闸门，顺带作废该曲客户端解析缓存。
+    var switchSong = playQueue[idx];
+    if (switchSong && typeof invalidateLxResolvedAudioCache === 'function') invalidateLxResolvedAudioCache(switchSong);
     return Promise.resolve(playQueueAt(idx, opts));
   }
   closePanel();
@@ -423,6 +426,9 @@ function canReloadCurrentTrackForQuality() {
 function applyPlaybackQualityToCurrentTrack(nextQuality, provider) {
   var song = currentIdx >= 0 && currentIdx < playQueue.length ? playQueue[currentIdx] : null;
   provider = normalizePlaybackProvider(provider || songProviderKey(song));
+  // T10 裁决5：音质切换 = 该曲已解析地址一律作废（13-playback-start-audio.js 的
+  // lxResolvedAudioCache 90s 客户端镜像按曲清，防旧音质/旧音源陈旧地址拖住新请求）。
+  if (song && typeof invalidateLxResolvedAudioCache === 'function') invalidateLxResolvedAudioCache(song);
   var label = playbackQualityLabel(nextQuality || getProviderPlaybackQuality(provider), provider);
   if (!canReloadCurrentTrackForQuality()) {
     showToast('音质偏好: ' + label + ' · 下次播放生效');

@@ -17,6 +17,14 @@
  *        kg hash / mg copyrightId 透传（裁决1）、CustomSourceIntegration 退役边
  *        （含 index.html 标题栏 #custom-source-btn 内联守卫）、
  *        T9 修复轮1：同一失败 URL 的运行时链与起播失败链合计只重入 playQueueAt 一次。
+ *
+ * T10 追加（客户端缓存 + 在途去重 + 下曲预取，上游 :31826-31857 / :32026-32043 / :32249 / :32374）：
+ *  ①同曲并发两次 resolve 只发一次 fetch（在途共享同一 Promise）；
+ *  ②90s 内二次播放命中 lxResolvedAudioCache（0 网络）；
+ *  ③音质切换（00 的 applyPlaybackQualityToCurrentTrack）调 invalidateLxResolvedAudioCache → 下次播放重新解析；
+ *  ④播放成功后注入时钟 +700ms 对队列下一首预取：不跨平台、单发不重试、失败零提示仅 console.debug，
+ *     切曲前定时器可清除（裁决4 计时器卫生）；
+ *  ⑤裁决2 计数统一：运行时链与起播失败链合并进 opts.lxChainDepth 一份共享深度，封顶 3。
  */
 
 const test = require('node:test');
@@ -54,15 +62,29 @@ function makeSandbox(hooks) {
     notices: [],
     toasts: [],
     playQueueAtCalls: [],
+    debugs: [],
   };
   const realSetTimeout = setTimeout;
   const deferredTimers = [];
   function stubSetTimeout(fn, ms) {
     if (typeof fn !== 'function') return 0;
     if (!ms || ms <= 0) return realSetTimeout(fn, 0);
-    deferredTimers.push(fn);
+    deferredTimers.push({ fn });
     return deferredTimers.length;
   }
+  function stubClearTimeout(id) {
+    const i = Number(id) - 1;
+    if (Number.isFinite(i) && i >= 0 && i < deferredTimers.length) deferredTimers[i] = null;
+    return 0;
+  }
+  // 注入时钟：T10 预取测试用「+700ms 触发所有在途定时器」模拟；触发前先清空槽位，
+  // 使回调内再次 schedule 的定时器留到下一轮 runTimers。
+  function runPendingTimers() {
+    const snapshot = deferredTimers.slice();
+    for (let i = 0; i < deferredTimers.length; i++) deferredTimers[i] = null;
+    snapshot.forEach(function (slot) { if (slot) slot.fn(); });
+  }
+  state.runTimers = runPendingTimers;
   // 极简 DOM：真 showSourceFallbackNotice（模块声明会覆盖同名 stub）走卡片 DOM 路径，
   // insertBefore 时按卡片结构回收 {title, body} 进 state.notices。
   function makeEl(tag) {
@@ -113,7 +135,10 @@ function makeSandbox(hooks) {
     return el;
   }
   const sandbox = {
-    console: { log() {}, info() {}, warn() {}, error() {}, debug() {} },
+    console: {
+      log() {}, info() {}, warn() {}, error() {},
+      debug() { state.debugs.push(Array.prototype.slice.call(arguments).map(String).join(' ')); },
+    },
     Date,
     Math,
     JSON,
@@ -132,14 +157,18 @@ function makeSandbox(hooks) {
     encodeURIComponent,
     decodeURIComponent,
     setTimeout: stubSetTimeout,
-    clearTimeout() { return 0; },
+    clearTimeout: stubClearTimeout,
     setInterval: stubSetTimeout,
-    clearInterval() { return 0; },
+    clearInterval: stubClearTimeout,
     requestAnimationFrame() { return 0; },
     AbortController,
     trackSwitchToken: 101,
     playQueue: [],
     currentIdx: 0,
+    playMode: 'order',
+    audio: null,
+    forcePlaybackControlsInteractive() {},
+    songProviderKey(s) { return String((s && (s.providerKey || s.source || s.provider)) || ''); },
     playbackQualityPrefs: {},
     PLAYBACK_QUALITY_DEFAULTS: {
       netease: 'hires',
@@ -206,7 +235,9 @@ function makeHarness(hooks) {
   const wrapped = 'try {\n' + source + '\n' +
     'window.__exports = { lxNormalizeSourceName, lxSourcePlatformLabel, lxPlaybackSongPayload, lxRequestQualityForPlaybackQuality, ' +
     'lxPlaybackLevelFromLxQuality, lxSourceGuidanceText, resolveLxPlaybackSong, resolveCrossPlatformPlaybackFallback, ' +
-    'armLxRuntimeErrorFallback, claimLxPlaybackReentry, applyCrossPlatformSongMatch, searchAlternatePlatformSong };\n' +
+    'armLxRuntimeErrorFallback, claimLxPlaybackReentry, applyCrossPlatformSongMatch, searchAlternatePlatformSong, ' +
+    'lxResolvedAudioCacheKey, invalidateLxResolvedAudioCache, cachedLxResolvedAudio, ' +
+    'scheduleLxAudioPrefetch, clearLxAudioPrefetchTimer, nextLxAudioPrefetchSong, applyPlaybackQualityToCurrentTrack };\n' +
     '} catch (e) { window.__loadError = e; }\n';
   vm.createContext(sandbox);
   vm.runInContext(wrapped, sandbox, { filename: 'lx-playback-chain.bundle-sim.js' });
@@ -528,7 +559,7 @@ function extractIfBlock(src, marker) {
 }
 
 const START_FAIL_PARAMS = [
-  'claimLxPlaybackReentry', 'data', 'forcePlaybackControlsInteractive', 'idx', 'isQQPlayback',
+  'claimLxPlaybackReentry', 'data', 'forcePlaybackControlsInteractive', 'idx', 'invalidateLxResolvedAudioCache', 'isQQPlayback',
   'lxAttemptedUrls', 'lxExcludedResolvers', 'opts', 'playbackMedia', 'playbackProvider',
   'playQueueAt', 'proxyAudioUrl', 'requestedQuality', 'retryNeteaseSourceMatchPlayback',
   'retryQQPlaybackWithCompatibleQuality', 'retryPlaybackOpts', 'settleExpiredSourceFallbackPlayback',
@@ -563,6 +594,7 @@ function makeStartFailureBranch(h, override) {
     lxExcludedResolvers: [],
     lxAttemptedUrls: [],
     claimLxPlaybackReentry: h.exports.claimLxPlaybackReentry,
+    invalidateLxResolvedAudioCache: h.exports.invalidateLxResolvedAudioCache,
     playQueueAt: h.sandbox.playQueueAt,
     showSourceFallbackNotice: h.sandbox.showSourceFallbackNotice,
     showToast: h.sandbox.showToast,
@@ -694,4 +726,206 @@ test('T9：CustomSourceIntegration 退役边——modulePaths/agent/搜索/回�
     /id="custom-source-btn"[^>]*onclick="window\.openCustomSourceModal && window\.openCustomSourceModal\(\)"/,
     '#custom-source-btn 的内联 onclick 必须是 window.openCustomSourceModal && 守卫式（与弹窗内其余 CustomSourceIntegration 入口同一守卫形态）',
   );
+});
+
+// ============================================================
+// T10：客户端缓存 + 在途去重 + 下曲预取（上游 :31826-31857 / :32026-32043 / :32249 / :32374）
+// ============================================================
+
+const OK_RESOLVE = (proxy, resolver, quality) => () => ({
+  ok: true, source: 'wy', url: 'https://cdn.example/' + resolver + '.flac',
+  proxyUrl: proxy, resolver, quality: quality || 'flac', actual: { codec: 'flac' },
+});
+
+test('T10：缓存键构成——归一源名|songmid/id/hash/FileHash/copyrightId|曲名|歌手|LX音质词（上游 :31830-31840）', () => {
+  const h = makeHarness({});
+  const ex = h.exports;
+  assert.equal(ex.lxResolvedAudioCacheKey({ source: 'netease', id: '1', name: 'a', singer: 'b' }, 'flac'), 'wy|1|a|b|flac');
+  assert.equal(ex.lxResolvedAudioCacheKey({ source: 'kugou', hash: 'H9', name: 'a', singer: 'b' }, '320k'), 'kg|H9|a|b|320k', 'kg 冻结形状以 hash 作身份位');
+  assert.equal(ex.lxResolvedAudioCacheKey({ source: 'mg', copyrightId: 'C9', name: 'a', singer: 'b' }, '128k'), 'mg|C9|a|b|128k', 'mg 冻结形状以 copyrightId 作身份位');
+  assert.equal(ex.lxResolvedAudioCacheKey({ source: 'qq', songmid: 'M1', title: 't', artist: 's' }, 'hires'), 'tx|M1|t|s|hires', 'songmid 优先于 id；title/artist 回退同上游');
+});
+
+test('T10①：同曲并发两次 resolve 只发一次 fetch（在途共享同一 Promise，上游 :31961-31967/:32007-32012）', async () => {
+  const PROXY = '/api/audio?url=https%3A%2F%2Fcdn.example%2Fa.flac';
+  const h = makeHarness({ resolve: OK_RESOLVE(PROXY, 'R1', 'flac') });
+  const song = { source: 'wy', id: '777', name: '并发曲', singer: '歌手A' };
+  const results = await Promise.all([
+    h.exports.resolveLxPlaybackSong(song, { quality: 'lossless', excludeResolvers: [] }),
+    h.exports.resolveLxPlaybackSong(song, { quality: 'lossless', excludeResolvers: [] }),
+  ]);
+  assert.equal(h.state.resolveCalls.length, 1, '并发双 resolve 必须折叠成一次网络请求');
+  assert.equal(results[0].proxyUrl, PROXY);
+  assert.equal(results[1].proxyUrl, PROXY, '在途去重复用同一结果');
+  assert.equal(results[1].fromCache, true);
+  assert.equal(song._lxResolver, 'R1', '等待方也要回写 _lxResolver 记忆（上游 :31962-31966 读在途记录）');
+  assert.equal(Object.keys(h.sandbox.lxResolveInflight).length, 0, 'settle 后在途表必须清空（finally 回收）');
+});
+
+test('T10②：90s 内二次播放命中 lxResolvedAudioCache 零网络；不同音质不同键照常出网', async () => {
+  const PROXY = '/api/audio?url=https%3A%2F%2Fcdn.example%2Fa.flac';
+  const h = makeHarness({ resolve: OK_RESOLVE(PROXY, 'R1', 'flac') });
+  const song = { source: 'wy', id: '777', name: '缓存曲', singer: '歌手A' };
+  const first = await h.exports.resolveLxPlaybackSong(song, { quality: 'lossless', excludeResolvers: [] });
+  assert.equal(h.state.resolveCalls.length, 1);
+  const second = await h.exports.resolveLxPlaybackSong(song, { quality: 'lossless', excludeResolvers: [] });
+  assert.equal(h.state.resolveCalls.length, 1, '90s 内二次播放不得再出网');
+  assert.equal(second.fromCache, true);
+  assert.equal(second.proxyUrl, first.proxyUrl, '缓存的 proxyUrl 原样复用（裁决4 不透明字符串）');
+  assert.equal(second.actual, 'flac');
+  assert.equal(song._lxResolver, 'R1');
+  const key = h.exports.lxResolvedAudioCacheKey(song, 'flac');
+  const record = h.sandbox.lxResolvedAudioCache[key];
+  assert.ok(record && record.expiresAt - Date.now() <= 90000 && record.expiresAt - Date.now() > 80000, 'TTL=90s（上游 LX_RESOLVED_AUDIO_CACHE_TTL_MS）');
+  // 排除集命中缓存记录的 resolver 时缓存视为未命中（失败链重进不被缓存拖住）
+  await h.exports.resolveLxPlaybackSong(song, { quality: 'lossless', excludeResolvers: ['R1'] });
+  assert.equal(h.state.resolveCalls.length, 2, 'record.resolver 在排除集内必须绕过缓存');
+  // 不同音质 → 不同键 → 出网
+  await h.exports.resolveLxPlaybackSong(song, { quality: 'exhigh', excludeResolvers: [] });
+  assert.equal(h.state.resolveCalls.length, 3);
+});
+
+test('T10③：invalidateLxResolvedAudioCache 按曲作废全部音质条目；音质切换路径挂钩（裁决5）', async () => {
+  const PROXY = '/api/audio?url=https%3A%2F%2Fcdn.example%2Fa.flac';
+  const h = makeHarness({ resolve: OK_RESOLVE(PROXY, 'R1', 'flac') });
+  const song = { source: 'netease', id: '777', name: '音质切换曲', singer: '歌手A' };
+  await h.exports.resolveLxPlaybackSong(song, { quality: 'lossless', excludeResolvers: [] });
+  await h.exports.resolveLxPlaybackSong(song, { quality: 'exhigh', excludeResolvers: [] });
+  assert.equal(Object.keys(h.sandbox.lxResolvedAudioCache).length, 2, 'flac + 320k 各占一条');
+  h.sandbox.playQueue = [song];
+  h.sandbox.currentIdx = 0;
+  h.sandbox.audio = { src: 'https://play.example/cur', paused: false, ended: false, currentTime: 3.25 };
+  h.exports.applyPlaybackQualityToCurrentTrack('exhigh', 'netease');
+  // 注：00 里的裸 playQueueAt 引用解析到 13 的真实声明（同 try 块 Annex B 作用域链），
+  // 缺 UI 全局会早退异步 reject（被 applyPlaybackQualityToCurrentTrack 的 .catch 吞掉），
+  // 因此这里锁「可重载判定成立（走了切音质 toast）+ 缓存已作废」，不锁桩重入记录。
+  assert.ok(h.state.toasts.some((t) => t.indexOf('正在切换音质') === 0), '音质切换必须走 canReload→重载路径');
+  assert.equal(Object.keys(h.sandbox.lxResolvedAudioCache).length, 0, '音质切换必须调 invalidateLxResolvedAudioCache(song) 清掉该曲全部缓存（裁决5）');
+  await h.exports.resolveLxPlaybackSong(song, { quality: 'exhigh', excludeResolvers: [] });
+  assert.equal(h.state.resolveCalls.length, 3, '失效后下一次播放重新解析');
+});
+
+test('T10④：播放成功后注入时钟 +700ms 预取队列下一首——单发、禁跨平台、失败零提示仅 console.debug、切曲清定时器（裁决3/4）', async () => {
+  const FAIL = () => ({ ok: false, code: 'LX_SOURCE_RESOLVE_ALL_FAILED', error: '预取目标解析失败' });
+  const h = makeHarness({ resolve: FAIL });
+  const next = { source: 'tx', songmid: 'M1', name: '下一首', singer: '歌手B' };
+  h.sandbox.playQueue = [{ source: 'wy', id: '1', name: '当前', singer: 'a' }, next];
+  h.sandbox.trackSwitchToken = 55;
+  h.exports.scheduleLxAudioPrefetch(55, 0, 'lossless');
+  assert.equal(h.state.resolveCalls.length, 0, '定时器未到期不得预取');
+  h.state.runTimers();
+  assert.equal(h.state.resolveCalls.length, 1, '注入时钟推进 700ms 后对下一首发起预取解析');
+  assert.equal(h.state.resolveCalls[0].body.source, 'tx');
+  assert.equal(h.state.resolveCalls[0].body.quality, 'flac', '预取沿当前播放音质词入键');
+  assert.equal(h.state.resolveCalls[0].body.maxResolvers, 3, '上游预取 maxResolvers:3 平价');
+  // 失败终态在微任务里落地：冲刷后再断言零提示。
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.searchCalls.length, 0, '预取禁跨平台换源（allowCrossPlatformFallback:false）');
+  assert.equal(h.state.notices.length, 0, '预取失败不得弹任何换源/终态卡片');
+  assert.equal(h.state.toasts.length, 0, '预取失败不得 toast');
+  assert.equal(h.state.playQueueAtCalls.length, 0, '预取失败不得触发重试链');
+  assert.ok(h.state.debugs.some((d) => d.indexOf('[LXAudioPrefetch]') === 0), '失败仅 console.debug（上游 :32040）');
+  // 定时器卫生：清除后到期不触发
+  const OK = makeHarness({ resolve: OK_RESOLVE('/api/audio?url=https%3A%2F%2Fcdn.example%2Fb.mp3', 'R2', '320k') });
+  OK.sandbox.playQueue = [{ source: 'tx', id: '1', name: '当前', singer: 'a' }, next];
+  OK.sandbox.trackSwitchToken = 55;
+  OK.exports.scheduleLxAudioPrefetch(55, 0, 'exhigh');
+  OK.exports.clearLxAudioPrefetchTimer();
+  OK.state.runTimers();
+  assert.equal(OK.state.resolveCalls.length, 0, '切曲前必须能 clearTimeout（lxAudioPrefetchTimer 可撤销）');
+  // token 过期（已换曲）不触发
+  OK.sandbox.trackSwitchToken = 56;
+  OK.exports.scheduleLxAudioPrefetch(55, 0, 'exhigh');
+  OK.state.runTimers();
+  assert.equal(OK.state.resolveCalls.length, 0, 'token 与 trackSwitchToken 不一致不得预取');
+  // 单曲循环不预取
+  const single = makeHarness({ resolve: OK_RESOLVE('/api/audio?url=https%3A%2F%2Fcdn.example%2Fc.mp3', 'R3', '320k') });
+  single.sandbox.playQueue = [{ source: 'tx', id: '1', name: '当前', singer: 'a' }, next];
+  single.sandbox.trackSwitchToken = 70;
+  single.sandbox.playMode = 'single';
+  single.exports.scheduleLxAudioPrefetch(70, 0, 'exhigh');
+  single.state.runTimers();
+  assert.equal(single.state.resolveCalls.length, 0, 'playMode=single 不预取（上游 :32030）');
+  // 正常路径：命中下一首并写入缓存
+  const fire = makeHarness({ resolve: OK_RESOLVE('/api/audio?url=https%3A%2F%2Fcdn.example%2Fd.mp3', 'R4', '320k') });
+  fire.sandbox.playQueue = [{ source: 'tx', id: '1', name: '当前', singer: 'a' }, { source: 'wy', id: '9', name: '下一首', singer: 'b' }];
+  fire.sandbox.trackSwitchToken = 80;
+  fire.exports.scheduleLxAudioPrefetch(80, 0, 'exhigh');
+  fire.state.runTimers();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fire.state.resolveCalls.length, 1);
+  assert.equal(fire.state.resolveCalls[0].body.source, 'wy');
+  assert.equal(Object.keys(fire.sandbox.lxResolvedAudioCache).length, 1, '预取成功也要写入缓存（这正是预取的意义）');
+  // 队列只有一首歌时不预取
+  const solo = makeHarness({ resolve: OK_RESOLVE('/api/audio?url=https%3A%2F%2Fcdn.example%2Fe.mp3', 'R5', '320k') });
+  solo.sandbox.playQueue = [{ source: 'tx', id: '1', name: '唯一', singer: 'a' }];
+  solo.sandbox.trackSwitchToken = 90;
+  solo.exports.scheduleLxAudioPrefetch(90, 0, 'exhigh');
+  solo.state.runTimers();
+  assert.equal(solo.state.resolveCalls.length, 0);
+});
+
+test('T10⑤（裁决2）：运行时链+起播失败链合并进 opts.lxChainDepth 一份共享深度，单曲自动重入合计封顶 3', async () => {
+  const h = makeHarness({});
+  const dispatched = [];
+  h.sandbox.playQueueAt = (idx, opts) => {
+    dispatched.push(opts);
+    h.sandbox.trackSwitchToken++; // 模拟真 playQueueAt 头部 token++，让下一环的 claim 闸放行
+    return Promise.resolve(true);
+  };
+  h.sandbox.trackSwitchToken = 700;
+  // 第 1 次重入：起播失败链（0→1）
+  const media1 = { currentTime: 0, onerror: null };
+  assert.equal(await makeStartFailureBranch(h, { token: 700, trackSwitchToken: 700, playbackMedia: media1, opts: {} }), true);
+  assert.equal(dispatched.length, 1);
+  assert.equal(dispatched[0].lxChainDepth, 1, '起播失败链要递增共享深度');
+  assert.equal(dispatched[0].lxStartRetryDepth, 1, '旧每链计数保留仅作诊断');
+  // 第 2 次重入：运行时 onerror 链接棒（1→2）
+  h.sandbox.trackSwitchToken = 701;
+  const media2 = { currentTime: 8, onerror: null };
+  assert.equal(h.exports.armLxRuntimeErrorFallback({
+    media: media2, token: 701, idx: 4, song: { source: 'wy', id: '777', name: 'x', singer: 'y' },
+    opts: {}, resolver: 'A', excluded: [], attempted: [], proxyAudioUrl: 'p', retryDepth: 0, chainDepth: 1, quality: 'flac',
+  }), true, 'chainDepth=1 时运行时链照常挂钩');
+  media2.onerror();
+  assert.equal(dispatched.length, 2);
+  assert.equal(dispatched[1].lxChainDepth, 2, '运行时链与起播失败链共用同一深度');
+  assert.equal(dispatched[1].lxRuntimeRetry, 1, '旧每链计数保留仅作诊断');
+  // 第 3 次重入（2→3）
+  const media3 = { currentTime: 0, onerror: null };
+  assert.equal(h.exports.armLxRuntimeErrorFallback({
+    media: media3, token: 702, idx: 4, song: { source: 'wy', id: '777', name: 'x', singer: 'y' },
+    opts: {}, resolver: 'A', excluded: [], attempted: [], proxyAudioUrl: 'p', retryDepth: 0, chainDepth: 2, quality: 'flac',
+  }), true);
+  media3.onerror();
+  assert.equal(dispatched.length, 3);
+  assert.equal(dispatched[2].lxChainDepth, 3);
+  // 封顶后：两条链都收口
+  const cappedMedia = { currentTime: 0, onerror: null };
+  assert.equal(h.exports.armLxRuntimeErrorFallback({
+    media: cappedMedia, token: 703, idx: 4, song: {}, opts: {}, resolver: 'A',
+    excluded: [], attempted: [], proxyAudioUrl: 'p', retryDepth: 0, chainDepth: 3, quality: 'flac',
+  }), false, '共享深度封顶 3：运行时链不再挂钩');
+  assert.equal(await makeStartFailureBranch(h, {
+    token: 703, trackSwitchToken: 703, playbackMedia: { currentTime: 0, onerror: null }, opts: { lxChainDepth: 3 },
+  }), false, '共享深度封顶 3：起播失败链不再重入');
+  assert.equal(dispatched.length, 3, '一首失败曲的两条自动重入链合计最多 3 次重入（不再是 3+3=6）');
+});
+
+test('T10⑥：接线锁定——切曲清预取定时器/播放成功调度预取/起播失败与解析失败失效缓存/gapless 预载绕缓存（上游 :32249/:32349/:32374）', () => {
+  const src13 = read(P_13);
+  const play = src13.slice(src13.indexOf('async function playQueueAt'));
+  assert.ok(play.includes('clearLxAudioPrefetchTimer();'), 'playQueueAt 头部要清上一曲预取定时器（上游 :32249）');
+  assert.ok(play.includes('scheduleLxAudioPrefetch(token, idx, requestedQuality)'), '播放成功后调度 700ms 下曲预取（上游 :32374）');
+  assert.ok(play.includes('invalidateLxResolvedAudioCache(song);'), '起播失败链进入重解析前作废客户端缓存（上游 :32349）');
+  assert.ok(play.includes('(Number(opts.lxChainDepth) || 0) < 3'), '起播失败链闸门改读共享深度（裁决2）');
+  assert.ok(play.includes('chainDepth: Number(opts.lxChainDepth) || 0'), '运行时链闸门喂共享深度');
+  const resolveRegion = src13.slice(src13.indexOf('async function resolveLxPlaybackSong'), src13.indexOf('function nextLxAudioPrefetchSong'));
+  assert.ok(resolveRegion.includes('cachedLxResolvedAudio(song, lxQuality, excluded)'), 'resolve 入口先查客户端缓存（上游 :31956）');
+  assert.ok(resolveRegion.includes('lxResolveInflight[songKey]'), '在途去重表接线（上游 :31961/:32007）');
+  assert.ok(resolveRegion.includes('LX_RESOLVED_AUDIO_CACHE_TTL_MS'), '成功解析写入 90s TTL 缓存（上游 :31996-32000）');
+  assert.ok((resolveRegion.match(/invalidateLxResolvedAudioCache\(song\)/g) || []).length >= 3, 'resolver 级失败/异常/死URL 都要作废缓存（上游 :32349 循环内语义）');
+  assert.ok(src13.includes('allowCacheLayer: false'), 'gapless 预载显式绕缓存（T4 预裁：避免 90s 陈旧 URL 喂进混流交接）');
+  assert.ok(src13.includes('options.allowCacheLayer !== false'), 'resolve 入口识别 allowCacheLayer 开关');
+  assert.ok(read(P_00).includes('invalidateLxResolvedAudioCache'), '音质切换路径（00）挂钩客户端缓存失效（裁决5）');
 });
