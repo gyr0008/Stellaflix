@@ -137,14 +137,20 @@
           <input id="search-input" type="text" placeholder="搜索歌曲、歌手..." autocomplete="off" spellcheck="false">
         </div>
         <div id="search-mode-tabs" class="search-mode-tabs" role="tablist" aria-label="Search mode">
-          <button id="search-mode-song" class="active" type="button" onclick="setSearchMode('song')"
-            aria-selected="true">All</button>
-          <button id="search-mode-netease" type="button" onclick="setSearchMode('netease')"
-            aria-selected="false">NE</button>
-          <button id="search-mode-qq" type="button" onclick="setSearchMode('qq')" aria-selected="false">QQ</button>
-          <button id="search-mode-kugou" type="button" onclick="setSearchMode('kugou')" aria-selected="false">KG</button>
-          <button id="search-mode-qishui" type="button" onclick="setSearchMode('qishui')" aria-selected="false">QS</button>
-          <button id="search-mode-spotify" type="button" onclick="setSearchMode('spotify')" aria-selected="false">SP</button>
+          <button id="search-mode-all" class="active" type="button" data-search-source="all"
+            onclick="setSearchMode('all')" aria-selected="true">综合</button>
+          <button id="search-mode-kw" type="button" data-search-source="kw"
+            onclick="setSearchMode('kw')" aria-selected="false">小蜗</button>
+          <button id="search-mode-kg" type="button" data-search-source="kg"
+            onclick="setSearchMode('kg')" aria-selected="false">小狗</button>
+          <button id="search-mode-tx" type="button" data-search-source="tx"
+            onclick="setSearchMode('tx')" aria-selected="false">小秋</button>
+          <button id="search-mode-wy" type="button" data-search-source="wy"
+            onclick="setSearchMode('wy')" aria-selected="false">小芸</button>
+          <button id="search-mode-mg" type="button" data-search-source="mg"
+            onclick="setSearchMode('mg')" aria-selected="false">小菇</button>
+          <button id="search-mode-local" type="button" data-search-source="local"
+            onclick="setSearchMode('local')" aria-selected="false">本地</button>
           <button id="search-mode-podcast" type="button" onclick="setSearchMode('podcast')"
             aria-selected="false">Podcast</button>
         </div>

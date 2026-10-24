@@ -5,16 +5,23 @@ var searchLastResultQuery = '';
 var searchProviderNotice = '';
 var SEARCH_HISTORY_STORE_KEY = 'stellaflix-search-history';
 var SEARCH_HISTORY_STORE_VERSION = 3;
-var SEARCH_HISTORY_MODES = ['song', 'netease', 'qq', 'kugou', 'qishui', 'spotify', 'podcast'];
+// 历史迁移兼容：新 tab 键集在前，旧官方平台键仅保留读取迁移（T15 退役）。
+var SEARCH_HISTORY_MODES = ['all', 'kw', 'kg', 'tx', 'wy', 'mg', 'local', 'song', 'netease', 'qq', 'kugou', 'qishui', 'spotify', 'podcast'];
 var MUSIC_SEARCH_INITIAL_VISIBLE = 18;
 var MUSIC_SEARCH_APPEND_BATCH = 14;
 var MUSIC_SEARCH_MAX_RESULTS = 180;
+// 批 T11：搜索 tabs + 聚合改指 /api/lx-source/search（上游 index.html :30655/:33253-33262）。
+var LX_SEARCH_SOURCE_ORDER = ['kw', 'kg', 'tx', 'wy', 'mg'];
+var LX_SEARCH_SOURCE_LABELS = { kw: '小蜗', kg: '小狗', tx: '小秋', wy: '小芸', mg: '小菇', local: '本地' };
+var LX_SEARCH_SOURCES_ALL = 'tx,wy,kw,kg,mg'; // 上游 :33254 综合 = 五家全开，顺序原样
+var LX_SEARCH_TIMEOUT_MS = 18000; // 上游 :33255 timeoutMs:18000
+var lxSearchFailures = [];
 var searchLoadMoreObserver = null;
 var pendingSearchProviderPages = null;
 var searchMusicRenderState = {
   key: '',
   query: '',
-  mode: 'song',
+  mode: 'all',
   songs: [],
   visibleCount: 0,
   appending: false,
@@ -42,7 +49,7 @@ function isMusicSearchMode(mode) {
   return mode !== 'podcast';
 }
 function searchResultKey(q, mode) {
-  return (mode || searchMode || 'song') + '|' + String(q || '').trim();
+  return (mode || searchMode || 'all') + '|' + String(q || '').trim();
 }
 function disconnectSearchLoadMoreObserver() {
   if (searchLoadMoreObserver) searchLoadMoreObserver.disconnect();
@@ -52,7 +59,7 @@ function resetSearchMusicRenderState() {
   disconnectSearchLoadMoreObserver();
   searchMusicRenderState.key = '';
   searchMusicRenderState.query = '';
-  searchMusicRenderState.mode = 'song';
+  searchMusicRenderState.mode = 'all';
   searchMusicRenderState.songs = [];
   searchMusicRenderState.visibleCount = 0;
   searchMusicRenderState.appending = false;
@@ -160,53 +167,34 @@ function runSearchHistory(q) {
   doSearch(q);
   $input.focus();
 }
+// 批 T11：tab 键集移植上游 :5684-5694——综合(all)/kw/kg/tx/wy/mg/本地(local)；
+// 官方平台 tab 退役（provider 死代码留 T15），播客 tab 本轮保留（T16 退役）。
+var SEARCH_MODE_TAB_KEYS = ['all', 'kw', 'kg', 'tx', 'wy', 'mg', 'local', 'podcast'];
+var SEARCH_MODE_PLACEHOLDERS = {
+  all: '搜索歌曲、歌手...',
+  kw: '搜索酷我音乐...',
+  kg: '搜索酷狗音乐...',
+  tx: '搜索 QQ 音乐...',
+  wy: '搜索网易云音乐...',
+  mg: '搜索咪咕音乐...',
+  local: '搜索本地歌单...',
+  podcast: '搜索播客、电台...'
+};
 function updateSearchModeTabs() {
-  var songBtn = document.getElementById('search-mode-song');
-  var neteaseBtn = document.getElementById('search-mode-netease');
-  var qqBtn = document.getElementById('search-mode-qq');
-  var kugouBtn = document.getElementById('search-mode-kugou');
-  var qishuiBtn = document.getElementById('search-mode-qishui');
-  var spotifyBtn = document.getElementById('search-mode-spotify');
-  var podcastBtn = document.getElementById('search-mode-podcast');
-  if (songBtn) {
-    songBtn.classList.toggle('active', searchMode === 'song');
-    songBtn.setAttribute('aria-selected', searchMode === 'song' ? 'true' : 'false');
-  }
-  if (neteaseBtn) {
-    neteaseBtn.classList.toggle('active', searchMode === 'netease');
-    neteaseBtn.setAttribute('aria-selected', searchMode === 'netease' ? 'true' : 'false');
-  }
-  if (qqBtn) {
-    qqBtn.classList.toggle('active', searchMode === 'qq');
-    qqBtn.setAttribute('aria-selected', searchMode === 'qq' ? 'true' : 'false');
-  }
-  if (kugouBtn) {
-    kugouBtn.classList.toggle('active', searchMode === 'kugou');
-    kugouBtn.setAttribute('aria-selected', searchMode === 'kugou' ? 'true' : 'false');
-  }
-  if (qishuiBtn) {
-    qishuiBtn.classList.toggle('active', searchMode === 'qishui');
-    qishuiBtn.setAttribute('aria-selected', searchMode === 'qishui' ? 'true' : 'false');
-  }
-  if (spotifyBtn) {
-    spotifyBtn.classList.toggle('active', searchMode === 'spotify');
-    spotifyBtn.setAttribute('aria-selected', searchMode === 'spotify' ? 'true' : 'false');
-  }
-  if (podcastBtn) {
-    podcastBtn.classList.toggle('active', searchMode === 'podcast');
-    podcastBtn.setAttribute('aria-selected', searchMode === 'podcast' ? 'true' : 'false');
-  }
-  if ($input) {
-    $input.placeholder = searchMode === 'podcast'
-      ? '搜索播客、电台...'
-      : (searchMode === 'kugou' ? '搜索酷狗音乐...' : (searchMode === 'qq' ? '搜索 QQ 音乐...' : (searchMode === 'netease' ? '搜索网易云音乐...' : '搜索歌曲、歌手...')));
-  }
-  if ($input && searchMode === 'qishui') $input.placeholder = '搜索汽水音乐匹配源...';
-  if ($input && searchMode === 'spotify') $input.placeholder = '搜索 Spotify 匹配源...';
+  SEARCH_MODE_TAB_KEYS.forEach(function (key) {
+    var btn = document.getElementById('search-mode-' + key);
+    if (!btn) return;
+    btn.classList.toggle('active', searchMode === key);
+    btn.setAttribute('aria-selected', searchMode === key ? 'true' : 'false');
+  });
+  if ($input) $input.placeholder = SEARCH_MODE_PLACEHOLDERS[searchMode] || SEARCH_MODE_PLACEHOLDERS.all;
   requestAnimationFrame(updateSearchPillGlassDisplacementMap);
 }
 function setSearchMode(mode) {
-  mode = (mode === 'podcast' || mode === 'netease' || mode === 'qq' || mode === 'kugou' || mode === 'qishui' || mode === 'spotify') ? mode : 'song';
+  mode = String(mode || '');
+  // 兼容旧调用方（04-home-empty-wallpaper 等）：'song' 是旧「综合」键。
+  if (mode === 'song') mode = 'all';
+  mode = (mode === 'podcast' || mode === 'all' || /^(?:kw|kg|tx|wy|mg|local)$/.test(mode)) ? mode : 'all';
   if (searchMode === mode) return;
   searchMode = mode;
   updateSearchModeTabs();
@@ -442,6 +430,14 @@ document.addEventListener('click', function (e) {
 });
 updateSearchModeTabs();
 
+// 上游 :30655 六家源标签映射（tx/wy/kw/kg/mg + 本地池 local），未命中回落 'LX'。
+function lxSearchSourceKey(song) {
+  var raw = String((song && song.source) || '').toLowerCase();
+  return /^(kw|kg|tx|wy|mg|local)$/.test(raw) ? raw : '';
+}
+function lxSearchSourceLabel(key) {
+  return LX_SEARCH_SOURCE_LABELS[key] || 'LX';
+}
 function songProviderKey(song) {
   if (song && (song.provider === 'lx-custom-source' || song.source === 'lx-custom-source' || song.type === 'lx-custom-source')) return 'lx-custom-source';
   if (song && (song.provider === 'spotify' || song.source === 'spotify' || song.type === 'spotify' || song.spotifyId || song.spotifyUri)) return 'spotify';
@@ -453,8 +449,10 @@ function songProviderKey(song) {
 function songSourceTagHtml(song, opts) {
   opts = opts || {};
   var rawKey = song && (song.resolvedPlaybackProvider || song.playbackProvider || song.audioProvider || song.providerResolved || '');
-  var key = /^(netease|qq|kugou|qishui|spotify|lx-custom-source)$/.test(String(rawKey || '')) ? String(rawKey) : songProviderKey(song);
-  var label = key === 'qq' ? 'QQ' : (key === 'kugou' ? 'KG' : (key === 'qishui' ? 'QS' : (key === 'spotify' ? 'SP' : (key === 'lx-custom-source' ? (song && song.sourceLabel || song.resolvedSourceLabel || 'CS') : 'NE'))));
+  var knownKey = /^(netease|qq|kugou|qishui|spotify|lx-custom-source)$/.test(String(rawKey || ''));
+  var lxKey = knownKey ? '' : lxSearchSourceKey(song);
+  var key = knownKey ? String(rawKey) : (lxKey || songProviderKey(song));
+  var label = lxKey ? lxSearchSourceLabel(lxKey) : (key === 'qq' ? 'QQ' : (key === 'kugou' ? 'KG' : (key === 'qishui' ? 'QS' : (key === 'spotify' ? 'SP' : (key === 'lx-custom-source' ? (song && song.sourceLabel || song.resolvedSourceLabel || 'CS') : 'NE')))));
   if (opts.switcher) {
     return '<button type="button" class="tag-source ' + (key === 'lx-custom-source' ? 'custom' : key) + ' control-source-chip" title="切换音源" aria-haspopup="true" onclick="toggleControlSourceSwitcher(event)">' + label + '</button>';
   }
@@ -473,7 +471,7 @@ function controlSourceProviders() {
   return base;
 }
 function controlSourceProviderTitle(provider) {
-  if (provider === 'lx-custom-source') return '第三方音源';
+  // T11：'lx-custom-source' 死分支清除（T9 已切断第三方音源开关条目注入）。
   var item = controlSourceProviders().filter(function (p) { return p.key === provider; })[0];
   return item ? item.title : provider;
 }
@@ -1069,74 +1067,132 @@ function mergeUniqueSearchSongPools(existing, incoming) {
   (incoming || []).forEach(push);
   return out;
 }
+// ============================================================
+// 批 T11：搜索聚合改指 /api/lx-source/search（Task 7 契约 {ok,songs,failures}）。
+//   上游移植：单次聚合调用 :33253-33256、本地池过滤/去重 :30622-30641、
+//   online∪pool 合并去重 :33259-33265。官方平台 fan-out（activeSearchProvidersForMode/
+//   searchProviderUrl/mergeSongSearchResults 等）本轮起为死代码，留 T15 清理。
+//   song 冻结形状 {source,id,songmid?,name,singer,album,interval,pic,hash?,copyrightId?}
+//   与 resolveLxPlaybackSong（T9/T10）直接兼容；仅桥接 singer→artist，不改写
+//   needsCrossPlatformMatch 等本地池既有标记（qs/sp 参考源语义沿用 11-provider-fallback）。
+async function fetchLxSearchResults(query, options) {
+  options = options || {};
+  query = String(query || '').trim();
+  var sources = String(options.sources || LX_SEARCH_SOURCES_ALL);
+  var limit = Number(options.limit) || 12; // 上游 :33255 limit=12
+  var url = '/api/lx-source/search?q=' + encodeURIComponent(query) +
+    '&limit=' + limit + '&sources=' + encodeURIComponent(sources);
+  var result = await apiJson(url, { timeoutMs: LX_SEARCH_TIMEOUT_MS });
+  return {
+    songs: result && Array.isArray(result.songs) ? result.songs : [],
+    failures: result && Array.isArray(result.failures) ? result.failures : []
+  };
+}
+function normalizeLxSearchSong(raw) {
+  var song = Object.assign({}, raw || {});
+  song.name = String(song.name || '');
+  song.singer = String(song.singer || song.artist || '');
+  song.artist = song.singer;
+  song.album = String(song.album || song.albumName || '');
+  if (!song.picUrl) song.picUrl = song.pic || song.cover || '';
+  var lxKey = lxSearchSourceKey(song);
+  if (lxKey) song.sourceLabel = lxSearchSourceLabel(lxKey);
+  return song;
+}
+// 上游 :30605-30620 lxSearchPool 移植：Stellaflix 的对应池是本地用户歌单（userPlaylists）。
+function lxSearchPool() {
+  var pool = [];
+  var lists = Array.isArray(window.userPlaylists) ? window.userPlaylists : [];
+  lists.forEach(function (pl) {
+    if (pl && Array.isArray(pl.songs)) pool = pool.concat(pl.songs);
+  });
+  return pool;
+}
+// 上游 :30622-30641 searchLxSongs 移植：单源 tab 先按 source 过滤，再逐字段匹配 +
+// `source|songmid||id|name|singer` 去重，q 空 60 条 / q 非空 80 条封顶。
+function searchLxPoolSongs(q, mode) {
+  q = String(q || '').trim();
+  var pool = lxSearchPool();
+  var nq = simpleSearchNorm(q);
+  var seen = Object.create(null);
+  return pool.filter(function (song) {
+    if (/^(tx|wy|kw|kg|mg)$/.test(mode) && String(song.source || '').toLowerCase() !== mode) return false;
+    var matches = !q || simpleSearchNorm([
+      song.name, song.singer || song.artist, song.album || song.albumName, song.title
+    ].filter(Boolean).join(' ')).indexOf(nq) >= 0;
+    if (!matches) return false;
+    var key = [
+      song.source || '',
+      song.songmid || song.id || '',
+      simpleSearchNorm(song.name),
+      simpleSearchNorm(song.singer || song.artist)
+    ].join('|');
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).slice(0, q ? 80 : 60);
+}
+function lxSearchFailureLabel(sourceKey) {
+  var label = LX_SEARCH_SOURCE_LABELS[sourceKey];
+  return label || sourceKey || '音源';
+}
+function lxSearchFailureText(failure) {
+  failure = failure || {};
+  var label = lxSearchFailureLabel(String(failure.source || '').toLowerCase());
+  if (failure.code === 'SOURCE_COOLDOWN') return label + ' 连续失败，已进入熔断冷却，稍后自动恢复';
+  return label + ' 暂不可用' + (failure.error ? '（' + String(failure.error) + '）' : '');
+}
+// failures → 行内错误条（设计稿 :81「SOURCE_COOLDOWN 在搜索面板逐源展示」；
+// 文案沿上游 :33168/:33174「… 暂不可用」）。
+function lxSearchFailureRowsHtml() {
+  return (Array.isArray(lxSearchFailures) ? lxSearchFailures : []).map(function (failure) {
+    var sourceKey = String((failure && failure.source) || '').toLowerCase();
+    var code = String((failure && failure.code) || '');
+    return '<div class="search-error-row lx-source-failure' + (sourceKey ? ' ' + escHtml(sourceKey) + '-source' : '') +
+      '" data-lx-source-failure="' + escHtml(sourceKey) + '" data-lx-failure-code="' + escHtml(code) +
+      '" role="status">' + escHtml(lxSearchFailureText(failure)) + '</div>';
+  }).join('');
+}
 async function fetchMusicSearchResults(q, mode, previousPages) {
   searchProviderNotice = '';
-  var providers = activeSearchProvidersForMode(mode);
-  if (!providers.length) {
-    searchProviderNotice = searchProviderLoginNotice(mode);
-    return { songs: [], providerPages: {}, hasMore: false };
+  lxSearchFailures = [];
+  mode = String(mode || 'all');
+  if (mode === 'song') mode = 'all'; // 旧综合键兼容
+  var poolSongs = searchLxPoolSongs(q, mode);
+  if (mode === 'local') return { songs: poolSongs, providerPages: {}, hasMore: false };
+  var online = [];
+  try {
+    // 上游 :33254：综合 = 五家全开，其余 tab 单源。
+    var sourcesParam = mode === 'all' ? LX_SEARCH_SOURCES_ALL : mode;
+    var result = await fetchLxSearchResults(q, { sources: sourcesParam, limit: 12 });
+    online = result.songs.map(normalizeLxSearchSong);
+    lxSearchFailures = result.failures;
+  } catch (err) {
+    console.warn('[LxSourceSearch]', err);
+    searchProviderNotice = '音源搜索暂时失败，请稍后重试';
   }
-  previousPages = previousPages && typeof previousPages === 'object' ? previousPages : null;
-  var providerPages = {};
-  Object.keys(previousPages || {}).forEach(function (provider) {
-    providerPages[provider] = Object.assign({}, previousPages[provider]);
-  });
-  var pageLimitByProvider = { netease: 18, qq: 12, kugou: 12, qishui: 12, spotify: 10 };
-  var fetchProviders = providers.filter(function (provider) {
-    return !previousPages || !previousPages[provider] || previousPages[provider].hasMore;
-  });
-  var result = await Promise.allSettled(fetchProviders.map(function (provider) {
-    var previous = previousPages && previousPages[provider];
-    var offset = previous ? Math.max(0, Number(previous.nextOffset) || 0) : 0;
-    var limit = pageLimitByProvider[provider] || 12;
-    return apiJson(searchProviderUrl(provider, q, limit, offset)).then(function (value) {
-      return { provider: provider, offset: offset, requestedLimit: limit, value: value || {} };
-    });
-  }));
-  var songsByProvider = { netease: [], qq: [], kugou: [], qishui: [], spotify: [] };
-  fetchProviders.forEach(function (provider, index) {
-    var entry = result[index];
-    if (!entry || entry.status !== 'fulfilled') {
-      console.warn(controlSourceProviderTitle(provider) + ' search failed:', entry && entry.reason);
-      providerPages[provider] = Object.assign({}, providerPages[provider] || {}, { hasMore: false, failed: true });
-      return;
-    }
-    var response = entry.value || {};
-    var value = response.value || {};
-    var songs = Array.isArray(value.songs) ? value.songs : [];
-    var offset = response.offset;
-    var requestedLimit = response.requestedLimit;
-    var nextOffset = Number(value.nextOffset);
-    if (!isFinite(nextOffset) || nextOffset <= offset) nextOffset = offset + songs.length;
-    var hasMore = value.hasMore === true;
-    if (value.hasMore == null) hasMore = songs.length >= requestedLimit;
-    if (!songs.length || nextOffset <= offset) hasMore = false;
-    providerPages[provider] = {
-      offset: offset,
-      limit: Number(value.limit) || requestedLimit,
-      nextOffset: nextOffset,
-      hasMore: hasMore,
-      total: Number(value.total) || 0,
-      failed: false
-    };
-    songsByProvider[provider] = songs;
-    if (value.message && !songs.length && !searchProviderNotice) searchProviderNotice = value.message;
-  });
-  var songs = mergeSongSearchResults(
-    songsByProvider.netease,
-    songsByProvider.qq,
-    songsByProvider.kugou,
-    songsByProvider.qishui,
-    songsByProvider.spotify,
-    MUSIC_SEARCH_MAX_RESULTS,
-    q
-  );
-  return { songs: songs, providerPages: providerPages, hasMore: searchProviderPagesHaveMore(providerPages) };
+  if (lxSearchFailures.length && !searchProviderNotice) {
+    searchProviderNotice = lxSearchFailures.map(function (failure) {
+      return lxSearchFailureLabel(String((failure && failure.source) || '').toLowerCase());
+    }).join('、') + ' 暂不可用';
+  }
+  // 上游 :33259-33265：online 优先 concat 本地池，按 `source|songmid||id|name` 去重。
+  var mergedSeen = Object.create(null);
+  var songs = online.concat(poolSongs).filter(function (song) {
+    var key = String(song.source || '') + '|' + String(song.songmid || song.id || '') + '|' + String(song.name || '');
+    if (mergedSeen[key]) return false;
+    mergedSeen[key] = true;
+    return true;
+  }).slice(0, MUSIC_SEARCH_MAX_RESULTS);
+  // lx 聚合无远端 offset：hasMore 恒 false，滚动加载只做本地分批渲染。
+  return { songs: songs, providerPages: {}, hasMore: false };
 }
 function searchSongResultHtml(s, i) {
     var vipTag = songVipTagHtml(s);
     var sourceTag = songSourceTagHtml(s);
-    var sourceClass = songProviderKey(s) + '-source';
+    // 上游 :30656 行类：search-result lx-source <sourceKey>-source。
+    var lxKey = lxSearchSourceKey(s);
+    var sourceClass = lxKey ? ('lx-source ' + lxKey + '-source') : (songProviderKey(s) + '-source');
     var thumb = songCoverSrc(s, 80);
     var imgTag = thumb
       ? '<img src="' + thumb + '" alt="" loading="lazy" onerror="this.style.opacity=0.2">'
@@ -1264,11 +1320,19 @@ function renderSongSearchResults(songs) {
   searchMusicRenderState.visibleCount = Math.min(playlist.length, MUSIC_SEARCH_INITIAL_VISIBLE);
   var html = '';
   for (var i = 0; i < searchMusicRenderState.visibleCount; i++) html += searchSongResultHtml(playlist[i], i);
-  $results.innerHTML = html + searchLoadMoreSentinelHtml();
+  $results.innerHTML = html + lxSearchFailureRowsHtml() + searchLoadMoreSentinelHtml();
   $results.classList.add('show');
   syncLikeStatusForSongs(playlist.slice(0, searchMusicRenderState.visibleCount));
   if (window.gsap) animateListItems($results, '.search-result', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 18 });
   observeSearchLoadMoreSentinel();
+}
+// 上游 :30645-30674 renderLxSongResults 移植：行 DOM 结构/源标签/失败条遵循上游 lx-source
+// 语义，渲染管线复用 Stellaflix 现有分批加载状态机（renderSongSearchResults），
+// 上游批量选择工具条与 gsap 动画为上游专属边，不搬运。
+function renderLxSongResults(songs, q) {
+  playlist = Array.isArray(songs) ? songs : [];
+  searchLastResultQuery = searchResultKey(q || '__lx_library__', searchMode);
+  renderSongSearchResults(playlist);
 }
 
 async function doSearch(q, opts) {
@@ -1294,7 +1358,8 @@ async function doSearch(q, opts) {
       resetSearchMusicRenderState();
       playlist = [];
       searchLastResultQuery = '';
-      $results.innerHTML = '<div class="search-empty">' + escHtml(searchProviderNotice || '没有找到相关歌曲') + '</div>';
+      $results.innerHTML = '<div class="search-empty">' + escHtml(searchProviderNotice || '没有找到相关歌曲') + '</div>' +
+        lxSearchFailureRowsHtml();
       $results.classList.add('show');
       return;
     }
@@ -1307,7 +1372,7 @@ async function doSearch(q, opts) {
       providerPages: searchData.providerPages || {},
       hasMore: !!searchData.hasMore
     };
-    renderSongSearchResults(songs);
+    renderLxSongResults(songs, q);
     if (opts.autoPlayFirst) playSearchResult(0);
   } catch (err) {
     console.error('Search:', err);

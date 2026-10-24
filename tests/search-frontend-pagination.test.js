@@ -212,8 +212,10 @@ test('search pagination carries provider offsets and ignores stale sessions', ()
   assert.match(sandbox.url('spotify', 'Muse', 10, 30), /limit=10&offset=30$/);
 
   assert.match(searchSource, /fetchMusicSearchResults\(q, mode, previousPages\)/);
-  assert.match(searchSource, /value\.nextOffset/);
-  assert.match(searchSource, /value\.hasMore/);
+  // 批 T11：官方 provider offset 分页（value.nextOffset / value.hasMore fan-out）已由
+  // /api/lx-source/search 单次聚合取代；滚动状态机保留，仅作本地分批渲染（hasMore 恒 false）。
+  assert.match(searchSource, /\/api\/lx-source\/search/);
+  assert.match(searchSource, /hasMore:\s*false/);
   assert.match(searchSource, /new IntersectionObserver/);
   assert.match(searchSource, /MUSIC_SEARCH_INITIAL_VISIBLE\s*=\s*18/);
   assert.match(searchSource, /loadNextMusicSearchPage\(expectedKey\)/);
