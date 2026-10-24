@@ -157,51 +157,6 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   pickImage: () => ipcRenderer.invoke('stellaflix-pick-media', 'image'),
   pickVideo: () => ipcRenderer.invoke('stellaflix-pick-media', 'video'),
   fileToBlob: (absolutePath) => ipcRenderer.invoke('stellaflix-file-to-blob', String(absolutePath || '')),
-  // ── 第三方音源（custom-source / 青听音乐） ──
-  customSource: {
-    isSupported: true,
-    getState: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_GET_STATE'),
-    listInstalled: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_LIST_INSTALLED'),
-    listAvailableBundled: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_LIST_AVAILABLE_BUNDLED'),
-    importScriptFromUrl: (url) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_IMPORT_SCRIPT_URL', String(url || '')),
-    importScriptFromText: (text) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_IMPORT_SCRIPT_TEXT', String(text || '')),
-    enable: (pkgId) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_ENABLE', String(pkgId || '')),
-    disable: (pkgId) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_DISABLE', String(pkgId || '')),
-    installBundled: (pkgId) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_INSTALL_BUNDLED', String(pkgId || '')),
-    remove: (pkgId) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_REMOVE', String(pkgId || '')),
-    parsePreviewFromText: (text) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_PARSE_PREVIEW', String(text || '')),
-    getPolicy: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_GET_POLICY'),
-    setPolicy: (patch) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_SET_POLICY', patch && typeof patch === 'object' ? patch : {}),
-    checkUpdates: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_CHECK_UPDATES'),
-    openScriptDirectory: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_OPEN_SCRIPT_DIRECTORY'),
-    // 解析后端地址（用户自填的 musicserver 类端点）
-    getBackend: () => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_GET_BACKEND'),
-    setBackend: (patch) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_SET_BACKEND', patch && typeof patch === 'object' ? patch : {}),
-    // 播放链路直通解析（绕开 HTTP 路由，保证第三方音源模式可用）
-    resolveOnline: (payload) => ipcRenderer.invoke('STELLAFLIX_CUSTOM_SOURCE_RESOLVE_ONLINE', payload && typeof payload === 'object' ? payload : {}),
-    onEvent: (callback) => {
-      if (typeof callback !== 'function') return () => {};
-      const listener = (_e, payload) => callback(payload || {});
-      ipcRenderer.on('STELLAFLIX_CUSTOM_SOURCE_EVENT', listener);
-      return () => ipcRenderer.removeListener('STELLAFLIX_CUSTOM_SOURCE_EVENT', listener);
-    },
-    onLog: (callback) => {
-      if (typeof callback !== 'function') return () => {};
-      const listener = (_e, payload) => callback(payload || {});
-      ipcRenderer.on('STELLAFLIX_CUSTOM_SOURCE_LOG', listener);
-      return () => ipcRenderer.removeListener('STELLAFLIX_CUSTOM_SOURCE_LOG', listener);
-    },
-    onStateChange: (callback) => {
-      if (typeof callback !== 'function') return () => {};
-      const listener = (_e, payload) => callback(payload || {});
-      ipcRenderer.on('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', listener);
-      ipcRenderer.on('STELLAFLIX_CUSTOM_SOURCE_REFRESH_ACTIVATION', listener);
-      return () => {
-        ipcRenderer.removeListener('STELLAFLIX_CUSTOM_SOURCE_STATE_CHANGE', listener);
-        ipcRenderer.removeListener('STELLAFLIX_CUSTOM_SOURCE_REFRESH_ACTIVATION', listener);
-      };
-    },
-  },
 });
 
 window.addEventListener('DOMContentLoaded', () => {

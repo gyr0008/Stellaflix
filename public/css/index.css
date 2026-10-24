@@ -602,8 +602,7 @@ body.desktop-shell #desktop-titlebar::after {
   box-shadow: 0 0 16px rgba(255, 83, 103, .56)
 }
 
-body.desktop-shell #desktop-titlebar #update-entry,
-body.desktop-shell #desktop-titlebar #custom-source-btn {
+body.desktop-shell #desktop-titlebar #update-entry {
   width: 30px;
   height: 30px;
   min-width: 30px;
@@ -615,24 +614,6 @@ body.desktop-shell #desktop-titlebar #custom-source-btn {
   color: rgba(224, 250, 255, .70);
   backdrop-filter: none;
   -webkit-backdrop-filter: none
-}
-
-body.desktop-shell #desktop-titlebar #custom-source-btn svg,
-#custom-source-btn svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.9;
-  stroke-linecap: round;
-  stroke-linejoin: round
-}
-
-#custom-source-btn.active,
-body.desktop-shell #desktop-titlebar #custom-source-btn.active {
-  color: #bafff2;
-  border-color: rgba(0, 245, 212, .32);
-  background: rgba(0, 245, 212, .09)
 }
 
 body.desktop-shell #desktop-titlebar #update-entry.available {
@@ -649,8 +630,7 @@ body.desktop-shell #desktop-titlebar #update-entry::after {
   display: none
 }
 
-body.desktop-shell #desktop-titlebar #update-entry:hover,
-body.desktop-shell #desktop-titlebar #custom-source-btn:hover {
+body.desktop-shell #desktop-titlebar #update-entry:hover {
   background: rgba(255, 83, 103, .10);
   border-color: rgba(255, 83, 103, .32);
   color: #fff;
@@ -660,11 +640,9 @@ body.desktop-shell #desktop-titlebar #custom-source-btn:hover {
 /* ── 影视空间：标题栏玻璃覆盖（透明、无边框） ── */
 body.video-space-active.desktop-shell #desktop-titlebar .desktop-window-btn,
 body.video-space-active.desktop-shell #desktop-titlebar #update-entry,
-body.video-space-active.desktop-shell #desktop-titlebar #custom-source-btn,
 body.video-space-active.desktop-shell #desktop-titlebar #diy-mode-btn{background:transparent!important;box-shadow:none!important;border-color:transparent!important;color:rgba(224,250,255,.72)}
 body.video-space-active.desktop-shell #desktop-titlebar .desktop-window-btn:hover,
-body.video-space-active.desktop-shell #desktop-titlebar #update-entry:hover,
-body.video-space-active.desktop-shell #desktop-titlebar #custom-source-btn:hover{background:rgba(4,8,10,.42)!important;color:#fff}
+body.video-space-active.desktop-shell #desktop-titlebar #update-entry:hover{background:rgba(4,8,10,.42)!important;color:#fff}
 body.video-space-active.desktop-shell #desktop-titlebar #diy-mode-btn:hover{background:rgba(255,83,103,.10)!important;border-color:rgba(255,83,103,.34)!important;color:#fff}
 body.video-space-active.desktop-shell #desktop-titlebar #diy-mode-btn.on{background:rgba(255,83,103,.13)!important;border-color:rgba(255,83,103,.50)!important;color:#fff!important;box-shadow:0 12px 34px rgba(255,83,103,.09),inset 0 1px 0 rgba(255,255,255,.08)!important}
 
@@ -699,7 +677,6 @@ body.desktop-shell.sfv-world-page #desktop-titlebar .desktop-drag-region {
 }
 
 body.desktop-shell.sfv-world-page #desktop-titlebar #update-entry,
-body.desktop-shell.sfv-world-page #desktop-titlebar #custom-source-btn,
 body.desktop-shell.sfv-world-page #desktop-titlebar #diy-mode-btn {
   display: none !important;
 }
@@ -18871,233 +18848,6 @@ body.desktop-shell.desktop-wallpaper-mode.diy-mode #bottom-bar.stage-mode {
     width: calc(100vw - var(--desktop-safe-left) - var(--desktop-safe-right) - 24px);
   }
 }
-/* ==================== 第三方音源：入口按钮 / 模态 / 列表 ==================== */
-/* 入口按钮已迁移至 desktop 标题栏（id="custom-source-btn"），与上游 Extended 项目一致（置于 ? / 更新 / 第三方音源 / DIY / 窗口控制）。
-   对应尺寸 30×30、SVG 图标（电源插头路径）、hover / active 配色见上方 #desktop-titlebar #custom-source-btn 声明。 */
-
-.custom-source-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(10, 12, 20, 0.55);
-  backdrop-filter: blur(6px);
-  z-index: 9990;
-  display: none;
-  align-items: center;
-  justify-content: center;
-}
-.custom-source-modal-overlay[data-open='1'] { display: flex; }
-
-.custom-source-modal {
-  width: min(820px, 92vw);
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--glass-bg);
-  color: #e7ecff;
-  border-radius: 22px;
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(34px) saturate(1.34);
-  -webkit-backdrop-filter: blur(34px) saturate(1.34);
-  overflow: hidden;
-  /* 面板内玻璃边框/光晕改为白调，避免全局青色变量渗入 */
-  --glass-border: rgba(255, 255, 255, .30);
-  --glass-shadow: 0 22px 64px rgba(0, 0, 0, .30), 0 0 34px rgba(255, 255, 255, .052), inset 0 1px 0 rgba(255, 255, 255, .16), inset 0 -24px 58px rgba(0, 0, 0, .16);
-  --glass-shadow-focus: 0 24px 72px rgba(0, 0, 0, .34), 0 0 0 1px rgba(255, 255, 255, .13), 0 0 42px rgba(255, 255, 255, .075), inset 0 1px 0 rgba(255, 255, 255, .20);
-}
-.custom-source-modal header {
-  padding: 14px 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--glass-border-soft);
-  background: transparent;
-}
-.custom-source-modal header h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .02em; }
-.custom-source-modal header .close-btn {
-  border: 0; background: transparent; color: #cdd3ff;
-  cursor: pointer; font-size: 20px; line-height: 1;
-  width: 30px; height: 30px; border-radius: 8px;
-  transition: background .15s ease, color .15s ease;
-}
-.custom-source-modal header .close-btn:hover { background: rgba(255,255,255,.12); color: #fff; }
-
-.custom-source-modal .tabs {
-  display: flex;
-  gap: 6px;
-  padding: 10px 14px 0;
-  border-bottom: 1px solid var(--glass-border-soft);
-}
-.custom-source-modal .tab-btn {
-  border: 0; background: transparent;
-  color: #a9b0d4; padding: 8px 12px;
-  border-radius: 8px 8px 0 0; cursor: pointer;
-  font-size: 13px;
-  border-bottom: 2px solid transparent;
-}
-.custom-source-modal .tab-btn[data-active='1'] {
-  color: #fff;
-  border-bottom-color: var(--glass-border);
-  background: rgba(255, 255, 255, 0.10);
-}
-
-.custom-source-modal .body {
-  flex: 1;
-  min-height: 320px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 14px 18px;
-  /* 隐藏右侧 + 底部滚动条（保留滚动能力） */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-.custom-source-modal .body::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
-.custom-source-modal .body::-webkit-scrollbar-thumb,
-.custom-source-modal .body::-webkit-scrollbar-track { display: none !important; }
-.custom-source-modal .body .panel { display: none; overflow-x: hidden; }
-.custom-source-modal .body .panel[data-active='1'] { display: block; }
-.custom-source-modal .body .panel::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
-
-.custom-source-modal .row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 10px 0;
-  flex-wrap: wrap;
-}
-.custom-source-modal .row label { font-size: 13px; color: #b6c0e4; min-width: 92px; }
-.custom-source-modal input[type='url'],
-.custom-source-modal input[type='text'],
-.custom-source-modal textarea {
-  flex: 1;
-  min-width: 260px;
-  background: rgba(0,0,0,0.28);
-  border: 1px solid var(--glass-border);
-  color: #e7ecff;
-  padding: 9px 12px;
-  border-radius: 14px;
-  font-size: 13px;
-  outline: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
-  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
-}
-.custom-source-modal textarea { min-height: 120px; resize: vertical; font-family: ui-monospace, Consolas, Menlo, monospace; scrollbar-width: none; -ms-overflow-style: none; }
-.custom-source-modal textarea::-webkit-scrollbar { display: none !important; }
-.custom-source-modal input:focus, .custom-source-modal textarea:focus {
-  border-color: var(--glass-border);
-  background: var(--glass-bg-focus);
-  box-shadow: var(--glass-shadow-focus);
-}
-.custom-source-modal .btn-primary,
-.custom-source-modal .btn-secondary,
-.custom-source-modal .btn-ghost {
-  border: 0; padding: 9px 14px; border-radius: 14px; cursor: pointer;
-  font-size: 13px; line-height: 1;
-  transition: filter .15s ease, transform .1s ease, background .15s ease, box-shadow .15s ease, color .15s ease;
-}
-.custom-source-modal .btn-primary {
-  background: var(--glass-bg-focus);
-  color: #fff;
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-}
-.custom-source-modal .btn-secondary {
-  background: rgba(255, 255, 255, .06);
-  color: #fff;
-  border: 1px solid var(--glass-border-soft);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
-}
-.custom-source-modal .btn-ghost {
-  background: transparent; color: #b6c0e4;
-  border: 1px solid var(--glass-border-soft);
-}
-.custom-source-modal .btn-primary:hover,
-.custom-source-modal .btn-secondary:hover { filter: brightness(1.08); box-shadow: var(--glass-shadow-focus); }
-.custom-source-modal .btn-primary:active,
-.custom-source-modal .btn-secondary:active { transform: translateY(1px); }
-
-.custom-source-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
-.custom-source-item {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 16px;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border-soft);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
-}
-.custom-source-item .meta h4 { margin: 0 0 4px; font-size: 14px; color: #fff; }
-.custom-source-item .meta .sub { font-size: 12px; color: #a4acce; line-height: 1.55; }
-.custom-source-item .actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-.custom-source-item .actions .pill {
-  padding: 4px 8px; border-radius: 999px;
-  font-size: 11px; line-height: 1;
-}
-.custom-source-item .actions .pill.enabled { background: rgba(76,200,130,0.18); color: #7ee6a7; }
-.custom-source-item .actions .pill.disabled { background: rgba(255,170,80,0.16); color: #ffbe70; }
-.custom-source-item .actions .pill.bundled { background: rgba(122,162,255,0.16); color: #9ab6ff; }
-
-.custom-source-mode-switch {
-  display: inline-flex;
-  background: rgba(255, 255, 255, .06);
-  border: 1px solid var(--glass-border);
-  border-radius: 999px;
-  overflow: hidden;
-  padding: 3px;
-  gap: 2px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
-}
-.custom-source-mode-switch button {
-  border: 0; background: transparent;
-  color: #b6c0e4; padding: 6px 12px;
-  border-radius: 999px; cursor: pointer;
-  font-size: 12px;
-  transition: background .15s ease, color .15s ease;
-}
-.custom-source-mode-switch button[data-active='1'] {
-  background: var(--glass-bg-focus);
-  color: #fff;
-  box-shadow: 0 0 0 1px var(--glass-border), var(--glass-shadow);
-}
-.custom-source-hint {
-  margin: 10px 0 0;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, .06);
-  border: 1px dashed var(--glass-border);
-  color: #e7ecff;
-  font-size: 12px;
-  line-height: 1.6;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
-}
-.custom-source-log-window {
-  margin-top: 12px;
-  background: rgba(0,0,0,0.35);
-  border: 1px solid var(--glass-border-soft);
-  border-radius: 14px;
-  padding: 10px 12px;
-  max-height: 400px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  /* 隐藏日志区右/下滚动条，保留滚轮滚动 */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  font-family: ui-monospace, Consolas, Menlo, monospace;
-  font-size: 12px;
-  color: #cdd3ff;
-  white-space: pre-wrap;
-  word-break: break-word;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
-}
-.custom-source-log-window::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
-.custom-source-log-window::-webkit-scrollbar-thumb,
-.custom-source-log-window::-webkit-scrollbar-track { display: none !important; }
-.custom-source-log-window .line { padding: 2px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); }
-.custom-source-log-window .line:last-child { border-bottom: 0; }
-.custom-source-log-window .line.warn { color: #ffbe70; }
-.custom-source-log-window .line.error { color: #ff8989; }
-.custom-source-log-window .line.info { color: #99b3ff; }
 
 /* ============================================================
    Radio Modes — 音乐电台弹窗样式 (补全移植时缺失的 UI 层)

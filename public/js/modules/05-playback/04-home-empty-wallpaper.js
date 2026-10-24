@@ -462,8 +462,6 @@ function isHomeBlankDismissClick(e) {
       if (SFV.sourcePicker && SFV.sourcePicker.isOpen && SFV.sourcePicker.isOpen()) return false;
       if (SFV.SearchFilter && SFV.SearchFilter.isOpen && SFV.SearchFilter.isOpen()) return false;
     }
-    var csOverlay = document.getElementById('custom-source-modal-overlay');
-    if (csOverlay && csOverlay.getAttribute('data-open') === '1') return false;
     if (document.querySelector('.sfv-bgm-modal-overlay')) return false;
   } catch (err) { /* 守卫失败不阻断空白关闭 */ }
   var target = e.target;
@@ -506,8 +504,6 @@ function isHomeBlankDismissClick(e) {
     '.sfv-picker',
     '.sfv-picker-modal-backdrop',
     '.sfv-picker-captcha-backdrop',
-    '.custom-source-modal-overlay',
-    '.custom-source-modal',
     '.sf-filter-layer',
     '.sf-filter-scrim',
     '.sf-filter-sheet'

@@ -98,7 +98,7 @@ function makeModalSandbox() {
     openPlaylistPanelTab: () => {},
     toggleUploadPanel: () => {},
     openHomeLocalImport: () => {},
-    openCustomSourceModal: () => {},
+    lxSourceManager: { open: () => {} },
     docListeners, registry, cancelBtn, confirmBtn, inputEl, hintEl,
     fireDoc(type, event) { (docListeners[type] || []).slice().forEach(fn => fn(event)); },
   };

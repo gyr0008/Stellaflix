@@ -108,12 +108,6 @@ body.video-space-active > .sfv-bgm-pop,
 body.video-player-active > .sfv-bgm-pop {
   z-index: 2147483502;
 }
-/* 第三方音源面板（custom-source-modal-overlay 默认 z-index:9990）
-   影视态下同样低于顶栏，点顶栏会穿透；抬到登录弹窗同级。 */
-body.video-space-active > .custom-source-modal-overlay,
-body.video-player-active > .custom-source-modal-overlay {
-  z-index: 2147483500;
-}
 /* 多源面板内二级弹层（别名/手动检索、验证码）同样低于顶栏，一并抬升 */
 body.video-space-active > .sfv-picker-modal-backdrop,
 body.video-player-active > .sfv-picker-modal-backdrop {

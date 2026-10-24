@@ -54,15 +54,6 @@
             <path class="update-arrow" d="M8.7 10.7 12 7.4l3.3 3.3"></path>
           </svg>
         </button>
-        <button id="custom-source-btn" class="icon-btn" type="button" onclick="window.openCustomSourceModal && window.openCustomSourceModal()" title="第三方音源"
-          aria-label="第三方音源">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 22v-5" />
-            <path d="M9 8V2" />
-            <path d="M15 8V2" />
-            <path d="M18 8v5a6 6 0 0 1-12 0V8Z" />
-          </svg>
-        </button>
         <button id="diy-mode-btn" class="desktop-mode-btn" type="button" onclick="toggleDiyMode()" title="开启 DIY 玩家模式"
           aria-label="开启 DIY 玩家模式" aria-pressed="false">DIY</button>
         <button class="desktop-window-btn" data-window-action="minimize" title="最小化" aria-label="最小化">
@@ -2276,83 +2267,6 @@
    </div>
  </div>
  <!-- lx-source-manager-mask 面板结束 -->
-
- <!-- 第三方音源：模态 DOM -->
- <div id="custom-source-modal-overlay" class="custom-source-modal-overlay" data-open="0" aria-hidden="true">
-   <div class="custom-source-modal" role="dialog" aria-modal="true" aria-label="第三方音源管理器">
-     <header>
-       <h3>第三方音源管理器</h3>
-       <button class="close-btn" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.closeModal()" aria-label="关闭">×</button>
-     </header>
-     <div class="tabs" role="tablist">
-       <button class="tab-btn" type="button" data-tab="overview" data-active="1" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.switchTab('overview')">概览 / 模式</button>
-       <button class="tab-btn" type="button" data-tab="installed" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.switchTab('installed')">已安装</button>
-       <button class="tab-btn" type="button" data-tab="bundled" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.switchTab('bundled')">内置音源</button>
-       <button class="tab-btn" type="button" data-tab="import" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.switchTab('import')">导入 / 新增</button>
-       <button class="tab-btn" type="button" data-tab="log" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.switchTab('log')">日志</button>
-     </div>
-     <div class="body">
-       <section class="panel" data-panel="overview" data-active="1">
-         <div class="row">
-           <label>取源模式</label>
-           <div id="custom-source-mode-switch" class="custom-source-mode-switch">
-             <button type="button" data-mode="official-first" data-active="1" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setMode('official-first')">官方优先</button>
-             <button type="button" data-mode="custom-first" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setMode('custom-first')">自定义优先</button>
-            <button type="button" data-mode="aggregate" data-active="0" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setMode('aggregate')">聚合解析</button>
-           </div>
-         </div>
-         <div class="row">
-           <label>解析后端地址</label>
-           <input id="custom-source-backend-url" type="text" placeholder="https://your-musicserver.example/v1/music/resolve-url" style="flex:1;min-width:240px;">
-           <button class="btn-primary" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.setBackendUrl((document.getElementById('custom-source-backend-url')||{}).value)">保存</button>
-         </div>
-       </section>
-       <section class="panel" data-panel="installed" data-active="0">
-         <div class="row" style="justify-content:space-between;">
-           <span style="color:#b6c0e4;font-size:13px;">已安装的第三方音源（启用状态下会参与取源）</span>
-           <div>
-             <button class="btn-ghost" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.openScriptDirectory()">打开脚本目录</button>
-             <button class="btn-secondary" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.refreshInstalled()">刷新</button>
-           </div>
-         </div>
-         <div id="custom-source-installed-list" class="custom-source-list"></div>
-       </section>
-       <section class="panel" data-panel="bundled" data-active="0">
-         <div class="row" style="justify-content:space-between;">
-           <span style="color:#b6c0e4;font-size:13px;">内置音源（打包进桌面端、可一键安装）</span>
-           <button class="btn-secondary" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.refreshBundled()">刷新</button>
-         </div>
-         <div id="custom-source-bundled-list" class="custom-source-list"></div>
-       </section>
-       <section class="panel" data-panel="import" data-active="0">
-         <div class="row">
-           <label>URL 导入</label>
-           <input id="custom-source-import-url" type="url" placeholder="https://.../source.js 或洛雪 2.0 音源地址">
-           <button class="btn-primary" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.importByUrl()">导入</button>
-         </div>
-         <div class="row">
-           <label>脚本粘贴</label>
-           <textarea id="custom-source-import-text" placeholder="在此粘贴音源脚本源码（洛雪自定义音源 2.0.0）"></textarea>
-         </div>
-         <div class="row">
-           <label></label>
-           <div style="display:flex;gap:8px;">
-             <button class="btn-secondary" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.previewScript()">预览校验</button>
-             <button class="btn-primary" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.importByText()">安装脚本</button>
-             <span id="custom-source-import-status" style="color:#a9b0d4;font-size:12px;align-self:center;"></span>
-           </div>
-         </div>
-      </section>
-       <section class="panel" data-panel="log" data-active="0">
-         <div class="row" style="justify-content:space-between;">
-           <span style="color:#b6c0e4;font-size:13px;">运行日志（脚本 import / 网络 / resolve 时会产出）</span>
-           <button class="btn-ghost" type="button" onclick="window.CustomSourceIntegration && window.CustomSourceIntegration.clearLog()">清空日志</button>
-         </div>
-         <div id="custom-source-log-window" class="custom-source-log-window"></div>
-       </section>
-     </div>
-   </div>
- </div>
  </body>
 
 </html>

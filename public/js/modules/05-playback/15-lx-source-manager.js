@@ -533,7 +533,7 @@ async function openLxSourceManagerFromNotice() {
 // —— 遮罩/弹窗背景点击关闭（懒绑）——
 // 面板与 URL 弹窗的 DOM 内联于 index-loader 之后（index.html:2241 晚于 :2009 loader 脚本标签），
 // 模块在解析期执行时 getElementById 返回 null → 载入即绑会静默失联。改在首次 open 时绑，once-flag 防重绑。
-// 同仓惯例见 14-custom-source-integration.js:817 / 19-outer-poster-bridge.js:398（readyState 兜底懒绑）。
+// 同仓惯例见 19-outer-poster-bridge.js:398（readyState 兜底懒绑）。
 var lxSourceMaskDismissBound = false;
 function bindLxSourceMaskDismiss() {
   if (lxSourceMaskDismissBound) return;

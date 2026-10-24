@@ -157,6 +157,18 @@ var AUDIO_INPUT_BRIDGE_STORE_KEY = 'stellaflix-audio-input-bridge-v1';
 var PROVIDER_VIP_AUDIT_STORE_KEY = 'stellaflix-provider-vip-audit-v1';
 var QQ_PLAYBACK_VIP_EVIDENCE_STORE_KEY = 'stellaflix-qq-playback-vip-evidence-v1';
 var LOGIN_COOKIE_EXPORT_STORE_KEY = 'stellaflix-login-cookie-export-v1';
+// T14（拆除批）：旧桌面 custom-source 偏好键一次性迁移——读旧键→无操作→删键，
+// 防真机残留（14-custom-source-integration.js 与 desktop/custom-source/ 已退役，
+// 新链使用 lx-source-* 服务端存储，前端无对应键；刻意保留读取动作以完成清桩）。
+var LEGACY_CUSTOM_SOURCE_STORE_KEY = 'stellaflix-custom-source-v1';
+(function migrateLegacyCustomSourceStoreKey() {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    var legacyValue = localStorage.getItem(LEGACY_CUSTOM_SOURCE_STORE_KEY);
+    if (legacyValue === null) return;
+    localStorage.removeItem(LEGACY_CUSTOM_SOURCE_STORE_KEY);
+  } catch (_) { /* 隐私模式/存储禁用时静默跳过 */ }
+})();
 // T12（移植批）：播放音质词汇统一为 LX 协议五档——内部键直接使用 lx 脚本源音质词
 // （master/flac24bit/flac/320k/128k，上游 index.html:31807-31822 lxSourceQualityCandidates
 // 的候选词表），旧词 jymaster/hires/lossless/exhigh/standard 仅作持久化/入口别名，

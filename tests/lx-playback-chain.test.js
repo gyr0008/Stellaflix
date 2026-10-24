@@ -15,7 +15,7 @@
  *  ④重匹配再穷尽→按机器 code 分支的终态引导文案；
  *  扩展：audio.onerror 断点重解析封顶 3、proxyUrl 不透明消费（裁决4）、
  *        kg hash / mg copyrightId 透传（裁决1）、CustomSourceIntegration 退役边
- *        （含 index.html 标题栏 #custom-source-btn 内联守卫）、
+ *        （T14 收口：14-* 文件本体 + index.html 入口钮/旧模态 DOM 已删）、
  *        T9 修复轮1：同一失败 URL 的运行时链与起播失败链合计只重入 playQueueAt 一次。
  *
  * T10 追加（客户端缓存 + 在途去重 + 下曲预取，上游 :31826-31857 / :32026-32043 / :32249 / :32374）：
@@ -718,24 +718,23 @@ test('T9：searchAlternatePlatformSong 新查询实现指 /api/lx-source/search 
   assert.equal(none, null, '空 query 不出网直接 null');
 });
 
-// ---------- 14-custom-source-integration 退役边 ----------
+// ---------- 14-custom-source-integration 退役边（T14 收口） ----------
 
-test('T9：CustomSourceIntegration 退役边——modulePaths/agent/搜索/回退/播放链全部脱钩，文件保留待 T14', () => {
+test('T14：CustomSourceIntegration 退役边收口——modulePaths/agent/搜索/回退/播放链脱钩，文件与入口钮/模态已删', () => {
   const loader = read('public/js/index-loader.js');
-  assert.ok(!loader.includes('14-custom-source-integration.js'), 'index-loader modulePaths 必须先卸掉 14-custom-source-integration');
+  assert.ok(!loader.includes('14-custom-source-integration.js'), 'index-loader modulePaths 不得再登记 14-custom-source-integration.js');
   for (const p of ['public/js/agent-adapter.js', P_13, P_11, 'public/js/modules/05-playback/07-search.js']) {
     assert.ok(!read(p).includes('CustomSourceIntegration'), p + ' 不应再引用 CustomSourceIntegration');
   }
-  assert.ok(fs.existsSync(path.join(ROOT, 'public/js/modules/05-playback/14-custom-source-integration.js')), '文件本体保留，T14 才删');
-
-  // index.html 侧的入口断边：14 不再被 import → openCustomSourceModal 在生产页面里是未定义全局，
-  // 标题栏那颗钮必须带守卫，否则 T9→T14 窗口内点击直接 ReferenceError（T14 删文件+删钮一并收）。
-  const indexHtml = read('public/index.html');
-  assert.match(
-    indexHtml,
-    /id="custom-source-btn"[^>]*onclick="window\.openCustomSourceModal && window\.openCustomSourceModal\(\)"/,
-    '#custom-source-btn 的内联 onclick 必须是 window.openCustomSourceModal && 守卫式（与弹窗内其余 CustomSourceIntegration 入口同一守卫形态）',
+  assert.ok(
+    !fs.existsSync(path.join(ROOT, 'public/js/modules/05-playback/14-custom-source-integration.js')),
+    'T14：14-custom-source-integration.js 文件本体必须已删除'
   );
+
+  // T9 携带的守卫断边收口：钮与旧模态 DOM 随 T14 一并删除，index.html 不得再有 custom-source 残留
+  //（'lx-custom-source' provider 词汇是跨平台换源标签体系，属 T15 台账，另测）。
+  const indexHtml = read('public/index.html');
+  assert.ok(!indexHtml.includes('custom-source'), 'index.html 不得再残留 custom-source 入口钮/模态 DOM');
 });
 
 // ============================================================

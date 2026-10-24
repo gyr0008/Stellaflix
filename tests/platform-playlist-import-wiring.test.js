@@ -72,7 +72,7 @@ function makeSandbox() {
     openPlaylistPanelTab: () => {},
     toggleUploadPanel: () => {},
     openHomeLocalImport: () => {},
-    openCustomSourceModal: () => {},
+    lxSourceManager: { open: () => {} },
     calls,
   };
   sandbox.window = sandbox;
