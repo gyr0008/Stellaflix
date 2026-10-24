@@ -16,6 +16,10 @@
  *  扩展：tab 模式→sources 参数（综合=五家、单源=该源）、local tab 不出网只查本地池、
  *        合并去重（上游 :33259-33265 `source|songmid||id|name`）、
  *        setSearchMode 键集归一（含旧 'song' 兼容别名）。
+ *  修复轮1（评审 Important 两条）：
+ *        ① kg.hash / mg.copyrightId 经 normalizeLxSearchSong 透传进 playlist 交接钉桩；
+ *        ② ok:false 错误体（LX_SEARCH_FAILED 等）必须上浮为失败分支（复用 catch 路径），
+ *           不得渲染成「没有找到相关歌曲」；空结果 + failures 的行内条路径同批钉桩。
  */
 
 const test = require('node:test');
@@ -378,4 +382,73 @@ test('T11扩展：local tab 只查本地歌单池不出网；综合模式 online
   assert.equal(h.state.searchCalls.length, 1, 'local 模式不得再触发任何网络调用');
   assert.equal(local.songs.length, 1);
   assert.equal(String(local.songs[0].name), '本地晴天');
+});
+
+// ---------- T11 修复轮1：失败态上浮 + hash/copyrightId 透传钉桩 ----------
+
+test('T11修复①：kg.hash / mg.copyrightId 经 normalizeLxSearchSong 原样透传进歌曲与 playlist 交接', async () => {
+  const KG = { source: 'kg', id: 'A1', songmid: 'SM1', hash: 'HASH_KG_1', name: '小狗曲', singer: 'G', album: '', interval: '', pic: '' };
+  const MG = { source: 'mg', id: 'B2', copyrightId: 'CR_MG_999', name: '小菇曲', singer: 'M', album: '', interval: '', pic: '' };
+  const h = makeHarness({ search: () => ({ ok: true, songs: [KG, MG], failures: [] }) });
+  const page = await h.exports.fetchMusicSearchResults('某曲', 'all');
+  const kg = page.songs.find((s) => s.source === 'kg');
+  const mg = page.songs.find((s) => s.source === 'mg');
+  assert.ok(kg && mg, 'fixtures 必须进入合并结果');
+  assert.equal(kg.hash, 'HASH_KG_1', 'T9 裁决：kg 结果携带 hash，必须透传供 resolveLxPlaybackSong 消费');
+  assert.equal(mg.copyrightId, 'CR_MG_999', 'T9 裁决：mg 结果携带 copyrightId，必须透传供播放解析消费');
+  // 冻结形状其余键也不得被 Object.assign 桥接吞掉
+  assert.equal(kg.songmid, 'SM1');
+  assert.equal(kg.singer, 'G');
+  assert.equal(kg.artist, 'G', 'singer→artist 桥接保持不变');
+
+  h.state.$input.value = '某曲';
+  await h.exports.doSearch('某曲', { autoPlayFirst: false });
+  const handed = h.sandbox.playlist;
+  assert.equal(handed.find((s) => s.source === 'kg')?.hash, 'HASH_KG_1',
+    'hash 必须存活到 renderLxSongResults 的 playlist 交接（07-search.js Object.assign 段）');
+  assert.equal(handed.find((s) => s.source === 'mg')?.copyrightId, 'CR_MG_999',
+    'copyrightId 必须存活到 playlist 交接');
+});
+
+test('T11修复②：ok:false 错误体（LX_SEARCH_FAILED，无 failures）必须走失败分支，不得渲染成"没有找到相关歌曲"', async () => {
+  const h = makeHarness({
+    search: () => ({ ok: false, songs: [], failures: [], error: 'aggregate blew up', code: 'LX_SEARCH_FAILED' }),
+  });
+  // 单元层：fetchLxSearchResults 对失败体必须 throw（与网络错误同一条 catch 路径）
+  await assert.rejects(
+    () => h.exports.fetchLxSearchResults('某曲', { sources: 'tx,wy,kw,kg,mg' }),
+    'ok:false / error 响应体必须上浮为异常',
+  );
+  // 行为层：聚合失败渲染既有失败态，而非空结果文案
+  h.state.$input.value = '某曲';
+  await h.exports.doSearch('某曲', { autoPlayFirst: false });
+  const html = h.state.$results.innerHTML;
+  assert.ok(!/没有找到相关歌曲/.test(html),
+    '服务端失败体不得再被当成"查无结果"渲染');
+  assert.match(html, /音源搜索暂时失败，请稍后重试/,
+    '必须复用 fetchMusicSearchResults catch 分支的既有失败提示（searchProviderNotice）');
+  assert.deepEqual(h.state.unexpectedRoutes, [], '失败路径同样不得触发官方 fan-out');
+});
+
+test('T11修复③：空结果 + failures 数组按既有行为渲染熔断/暂不可用行内条', async () => {
+  const h = makeHarness({
+    search: () => ({
+      ok: true,
+      songs: [],
+      failures: [
+        { source: 'kg', code: 'SOURCE_COOLDOWN' },
+        { source: 'mg', error: 'HTTP_503' },
+      ],
+    }),
+  });
+  h.state.$input.value = '查无此曲';
+  await h.exports.doSearch('查无此曲', { autoPlayFirst: false });
+  const html = h.state.$results.innerHTML;
+  const kgRow = /<div[^>]*data-lx-source-failure="kg"[^>]*>[^<]*<\/div>/.exec(html);
+  assert.ok(kgRow, '空结果时 kg 冷却失败条必须挂在空态提示后');
+  assert.match(kgRow[0], /小狗[\s\S]*熔断/, '冷却条沿 T11 既有熔断文案');
+  const mgRow = /<div[^>]*data-lx-source-failure="mg"[^>]*>[^<]*<\/div>/.exec(html);
+  assert.ok(mgRow, '空结果时 mg 普通失败条必须渲染');
+  assert.match(mgRow[0], /小菇[\s\S]*暂不可用/);
+  assert.equal(h.sandbox.playlist.length, 0, '失败不产出歌曲，playlist 保持空');
 });

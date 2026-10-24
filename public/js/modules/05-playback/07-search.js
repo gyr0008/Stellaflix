@@ -1083,6 +1083,16 @@ async function fetchLxSearchResults(query, options) {
   var url = '/api/lx-source/search?q=' + encodeURIComponent(query) +
     '&limit=' + limit + '&sources=' + encodeURIComponent(sources);
   var result = await apiJson(url, { timeoutMs: LX_SEARCH_TIMEOUT_MS });
+  // T11 修复轮1（评审 Important①）：apiJson 不拦 res.ok，服务端失败体（LX_SEARCH_FAILED 502 /
+  // 安全闸 403 / LX_NO_SOURCES 等 {ok:false,error,code} JSON）原样返回。此前被折叠成
+  // {songs:[],failures:[]} 渲染为「没有找到相关歌曲」——此处上浮为异常，复用下方
+  // fetchMusicSearchResults 对网络错误的既有 catch 失败路径（searchProviderNotice 空态提示）。
+  if (result && (result.ok === false || result.error)) {
+    var err = new Error('LX_SEARCH_AGGREGATE_FAILED code=' + String(result.code || '') +
+      ' error=' + String(result.error || 'ok=false'));
+    err.code = String(result.code || 'LX_SEARCH_FAILED');
+    throw err;
+  }
   return {
     songs: result && Array.isArray(result.songs) ? result.songs : [],
     failures: result && Array.isArray(result.failures) ? result.failures : []
