@@ -540,7 +540,9 @@ function testDesktopReauthCookieSelectionAndBudgets() {
     vkeyBudget + audioProbeBudget < 15000,
     'the complete QQ URL handler deadline must finish before the renderer 15s request deadline'
   );
-  assert((playbackSource.match(/timeoutMs: 15000/g) || []).length >= 2);
+  // T9 阶段2切换：13-playback 官方五分支（含 QQ 15s 分支）已被 /api/lx-source/resolve 三级链整体替换；
+  // QQ vkey/probe 的 15s 渲染端预算契约仅存活于 prefetch 链路（下一行断言），此处改守"官方播放路由不得回潮"。
+  assert(!/\/api\/(?:qq|kugou|qishui|spotify)\/song\/url/.test(playbackSource), 'playback resolution must not call official platform URL APIs after the lx-source switch');
   assert(/timeoutMs: 15000/.test(prefetchSource));
 
   assert(!/vipEvidence:\s*playbackVipEvidence/.test(serverSource));

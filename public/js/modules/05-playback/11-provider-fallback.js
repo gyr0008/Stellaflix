@@ -486,29 +486,76 @@ function alternatePlaybackProviders(song) {
 function alternatePlaybackProvider(song) {
   return alternatePlaybackProviders(song)[0] || '';
 }
+var LX_SOURCE_SEARCH_TIMEOUT_MS = 22000;
 async function searchAlternatePlatformSong(song, requestedTarget, recovery) {
-  var target = requestedTarget || alternatePlaybackProvider(song);
-  if (!target || !sourceFallbackProviderReady(target)) return null;
+  // T9 阶段2切换：换源检索统一指 /api/lx-source/search（不再依赖平台登录态）。
+  var target = typeof lxNormalizeSourceName === 'function' ? lxNormalizeSourceName(requestedTarget) : '';
   if (recovery && !sourceFallbackRecoveryCanContinue(recovery)) return null;
-  var artist = artistNameParts(song)[0] || '';
-  var query = [song.name || song.title || '', song.artist || artist].filter(Boolean).join(' ').trim();
+  var reference = song ? Object.assign({}, song, { artist: song.artist || song.singer || '' }) : null;
+  if (!reference) return null;
+  var artist = artistNameParts(reference)[0] || '';
+  var query = [reference.name || reference.title || '', reference.artist || artist].filter(Boolean).join(' ').trim();
   if (!query) return null;
-  var url = target === 'qq'
-    ? '/api/qq/search?keywords=' + encodeURIComponent(query) + '&limit=8'
-    : (target === 'kugou'
-      ? '/api/kugou/search?keywords=' + encodeURIComponent(query) + '&limit=8'
-      : '/api/search?keywords=' + encodeURIComponent(query) + '&limit=12');
+  var sourcesParam = /^(?:tx|wy|kw|kg|mg)$/.test(target) ? target : ['wy', 'kw', 'kg', 'mg', 'tx'].join(',');
+  var url = '/api/lx-source/search?q=' + encodeURIComponent(query) + '&limit=16&sources=' + encodeURIComponent(sourcesParam);
   var data = await awaitSourceFallbackBudget(
-    apiJson(url, { timeoutMs: SOURCE_FALLBACK_SEARCH_TIMEOUT_MS }),
+    apiJson(url, { timeoutMs: LX_SOURCE_SEARCH_TIMEOUT_MS }),
     recovery
   );
   if (data === sourceFallbackBudgetTimeoutResult || (recovery && !sourceFallbackRecoveryCanContinue(recovery))) return null;
-  var list = data && (data.songs || data.result || []);
+  var list = (data && (data.songs || data.result)) || [];
   for (var i = 0; i < list.length; i++) {
-    if (typeof sourceCandidateRejectReason === 'function' && sourceCandidateRejectReason(song, list[i], target)) continue;
-    if (isSameTitleArtist(song, list[i])) return cloneSong(list[i]);
+    var candidate = list[i];
+    if (!candidate) continue;
+    var view = Object.assign({}, candidate, { artist: candidate.artist || candidate.singer || '' });
+    if (typeof sourceCandidateRejectReason === 'function' && sourceCandidateRejectReason(reference, view, target)) continue;
+    if (!isSameTitleArtist(reference, view)) continue;
+    var out = typeof cloneSong === 'function' ? cloneSong(view) : view;
+    if (!out.singer) out.singer = view.artist || '';
+    return out;
   }
   return null;
+}
+// 跨平台命中后改写歌曲身份（上游 Mineradio applyCrossPlatformSongMatch :31858-31892 移植，
+// 去掉 saveImportedLxPlaylists/applyLxCoverForStatus 等导入播放列表专属副作用）。
+function applyCrossPlatformSongMatch(song, candidate, sourceName) {
+  song = song || {};
+  candidate = candidate || {};
+  var previousSource = typeof lxNormalizeSourceName === 'function'
+    ? lxNormalizeSourceName(song.source || song.provider || song.type)
+    : String(song.source || '');
+  if (!song.referenceSource && /^(?:sp|am|qs)$/.test(previousSource)) song.referenceSource = previousSource;
+  var playbackFields = [
+    'id', 'songmid', 'mid', 'songId', 'rid', 'hash', 'FileHash', 'fileHash', 'strMediaMid',
+    'albumId', 'albumMid', 'copyrightId', 'copyrightid', 'albumName', 'interval', 'duration',
+    'types', 'picUrl', 'cover', 'img', 'lrcUrl', 'trcUrl', 'mrcUrl'
+  ];
+  playbackFields.forEach(function (key) {
+    if (candidate[key] != null && candidate[key] !== '') song[key] = candidate[key];
+  });
+  song.source = sourceName;
+  song.provider = sourceName;
+  song.channel = sourceName;
+  song.singer = candidate.singer || candidate.artist || song.singer || song.artist || '未知歌手';
+  song.artist = song.singer;
+  song.picUrl = candidate.picUrl || candidate.pic || candidate.cover || candidate.img || song.picUrl || song.cover || '';
+  song.cover = song.picUrl || song.cover || '';
+  song.meta = Object.assign({}, song.meta || {}, candidate.meta || {}, {
+    source: sourceName,
+    channel: sourceName,
+    crossPlatformMatched: true
+  });
+  song.needsCrossPlatformMatch = false;
+  song.crossPlatformMatchedAt = Date.now();
+  var label = typeof lxSourcePlatformLabel === 'function' ? lxSourcePlatformLabel(sourceName) : String(sourceName || '音源');
+  song.sourceLabel = label;
+  song.resolvedSourceLabel = label + '（跨平台自动换源）';
+  song.resolvedPlaybackProvider = 'lx-custom-source';
+  try {
+    safeRenderQueuePanel('cross-platform-match', { scrollCurrent: miniQueueOpen });
+    safeShelfRebuild('cross-platform-match');
+  } catch (renderError) { console.warn('[CrossPlatformMatchRender]', renderError); }
+  return song;
 }
 function sourceFallbackSongKey(song) {
   if (!song) return '';
@@ -648,18 +695,7 @@ async function skipFailedQueueItem(idx, token, message, opts) {
 }
 async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
   opts = opts || {};
-  // 第三方音源失败：当 official-first 失败后 custom 作为最后一级、或 custom-first / aggregate 时，
-  // 允许优先让 CustomSourceIntegration 给出一次补锅机会。
-  var integration = window.CustomSourceIntegration;
-  if (integration && typeof integration.fallbackOnPlaybackFailure === 'function') {
-    try {
-      var rescue = await integration.fallbackOnPlaybackFailure(song, data, idx, token, opts);
-      if (rescue && rescue.result === true) return true;
-      if (rescue && rescue.result === false) return false;
-    } catch (customFallbackErr) {
-      console.warn('[CustomSource] fallback hook error', customFallbackErr && customFallbackErr.message || customFallbackErr);
-    }
-  }
+  // T9 阶段2切换：第三方音源补锅钩子退役（播放链统一三级失败链已接管跨平台换源）。
   if (opts.fallbackDepth > 0) {
     if (opts.fallbackOriginalSong && opts.fallbackCandidateSong) {
       restoreSourceFallbackQueueItem(idx, opts.fallbackOriginalSong, opts.fallbackCandidateSong, token);
@@ -707,9 +743,32 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
         return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);
       }
       if (!alternate) continue;
-      var alternateData = typeof resolveAlbumGaplessPlaybackData === 'function'
-        ? await awaitSourceFallbackBudget(resolveAlbumGaplessPlaybackData(alternate), recovery)
-        : null;
+      var alternateData = null;
+      if (typeof resolveLxPlaybackSong === 'function') {
+        // T9 阶段2切换：候选解析统一走 lx 链（不再二次跨平台换源、静默、限时预算）。
+        var candidatePromise = Promise.resolve()
+          .then(function () {
+            return resolveLxPlaybackSong(alternate, {
+              allowCrossPlatformFallback: false,
+              silent: true,
+              timeoutMs: 15000,
+              maxResolvers: 3
+            });
+          })
+          .then(function (r) {
+            return r ? {
+              url: r.url || r.proxyUrl,
+              proxyUrl: r.proxyUrl,
+              level: typeof lxPlaybackLevelFromLxQuality === 'function' ? lxPlaybackLevelFromLxQuality(r.actual) : '',
+              source: r.source,
+              resolver: r.resolver,
+              lxSource: true
+            } : null;
+          }, function () { return null; });
+        alternateData = await awaitSourceFallbackBudget(candidatePromise, recovery);
+      } else if (typeof resolveAlbumGaplessPlaybackData === 'function') {
+        alternateData = await awaitSourceFallbackBudget(resolveAlbumGaplessPlaybackData(alternate), recovery);
+      }
       if (token !== trackSwitchToken) return false;
       if (alternateData === sourceFallbackBudgetTimeoutResult || !sourceFallbackRecoveryCanContinue(recovery)) {
         return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);

@@ -82,52 +82,29 @@
       toast('没有可播放的歌曲信息');
       return { ok: false, reason: 'NO_SONG' };
     }
-    // 优先使用青听音乐等内置第三方音源桥，替代被 stub 的 LX 镜像播放
-    var CSI = window.CustomSourceIntegration;
-    if (!CSI || typeof CSI.resolveOnlinePlaybackData !== 'function' || !CSI.hasBridge()) {
-      toast('当前版本暂不支持 LX 镜像播放（第三方音源未就绪）');
-      return { ok: false, reason: 'NOT_SUPPORTED' };
-    }
+    // T9 阶段2切换：LX 镜像播放直接委托统一播放链——playQueueAt 内部走
+    // /api/lx-source/resolve 三级失败链（resolver 重试→跨平台重匹配→终态引导），
+    // 不再依赖已退役的第三方音源桥预解析。
     if (typeof window.playQueueAt !== 'function') {
       toast('播放器尚未就绪，请稍后重试');
       return { ok: false, reason: 'PLAYER_NOT_READY' };
     }
     try {
-      console.log('[playLxMirrorSong] resolving via custom-source for:', song.name || song.title, song.artist || '');
-      // 只做聚合预解析（跨平台匹配真实可播放版本，flac24bit→flac→320k→128k 音质降序热切换），
-      // 播放本身一律交给 playQueueAt。此前直连 audio.play() 会漏写 audio.__stellaflixQueueItemKey，
-      // 用户再点播放时 togglePlay 判定队列项不匹配 → 重跑聚合解析，表现为"切歌后卡在假播放态"。
-      var resolved = await CSI.resolveOnlinePlaybackData(song, {
-        requestedQuality: 'hires',
-        mode: 'aggregate',
-        preResolve: true
-      });
-      console.log('[playLxMirrorSong] aggregate resolve result:', resolved);
-      if (!resolved || resolved.override !== true || !resolved.data || !resolved.data.url) {
-        var reason = resolved && resolved.reason ? resolved.reason : 'RESOLVE_FAILED';
-        console.warn('[playLxMirrorSong] resolve failed reason=', reason, 'resolved=', resolved);
-        toast('第三方音源未能解析到音频：' + reason);
-        return { ok: false, reason: reason, resolveResult: resolved };
-      }
-      var data = resolved.data;
+      console.log('[playLxMirrorSong] delegating to unified lx-source playback chain for:', song.name || song.title, song.artist || '');
+      var playSong = Object.assign({}, song);
       if (!Array.isArray(window.playQueue)) window.playQueue = [];
       window.playQueue.length = 0;
-      window.playQueue.push(song);
+      window.playQueue.push(playSong);
       window.currentIdx = 0;
-      // preResolvedPlaybackData 让 playQueueAt 直接复用已解析的 ticket URL，
-      // 不再重复发起 24s 聚合解析（见 14-custom-source-integration.js aggregate 分支守卫）。
-      var started = await window.playQueueAt(0, {
-        manual: true,
-        preResolvedPlaybackData: data
-      });
+      var started = await window.playQueueAt(0, { manual: true });
       if (started !== true) {
         console.warn('[playLxMirrorSong] playQueueAt reported failure for:', song.name || song.title);
         return { ok: false, reason: 'PLAYBACK_FAILED' };
       }
-      var sourceName = String(data.sourceLabel || data.source || '第三方音源');
+      var sourceName = String(playSong.resolvedSourceLabel || playSong.sourceLabel || playSong.playbackSource || 'LX 音源');
       toast('正在播放：' + String(song.name || song.title || '未知歌曲') + '（' + sourceName + '）');
-      console.log('[playLxMirrorSong] playback started via playQueueAt with', sourceName, data.url);
-      return { ok: true, source: sourceName, url: data.url };
+      console.log('[playLxMirrorSong] playback started via unified lx chain, source:', sourceName);
+      return { ok: true, source: sourceName };
     } catch (error) {
       console.warn('[playLxMirrorSong] error:', error);
       toast('LX 镜像播放失败：' + (error && error.message ? error.message : '未知错误'));

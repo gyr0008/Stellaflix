@@ -469,10 +469,7 @@ function controlSourceProviders() {
     { key: 'qishui', label: 'QS', title: '汽水' },
     { key: 'spotify', label: 'SP', title: 'Spotify' }
   ];
-  var integration = window.CustomSourceIntegration;
-  if (integration && typeof integration.appendSourceSwitcherEntries === 'function') {
-    return base.concat(integration.appendSourceSwitcherEntries() || []);
-  }
+  // T9 阶段2切换：第三方音源开关条目注入退役（音源管理面板由 T13 接管）。
   return base;
 }
 function controlSourceProviderTitle(provider) {

@@ -370,7 +370,8 @@ async function fetchBeatPrefetchAudioUrl(song) {
   if (typeof resolveAlbumGaplessPlaybackData === 'function') {
     var resolved = await resolveAlbumGaplessPlaybackData(song);
     if (!resolved || !resolved.url || resolved.trial) return null;
-    return '/api/audio?url=' + encodeURIComponent(resolved.url);
+    // T9 裁决4：proxyUrl 不透明消费（可能含 + 编码），不得重编码。
+    return resolved.proxyUrl ? String(resolved.proxyUrl) : '/api/audio?url=' + encodeURIComponent(resolved.url);
   }
   var isQQ = songProviderKey(song) === 'qq';
   var requestedQuality = normalizePlaybackQualityForProvider(getPlaybackQualityForSong(song), isQQ ? 'qq' : 'netease');

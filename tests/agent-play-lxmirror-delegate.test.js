@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * AI 助手播放通道（agent-adapter.js playLxMirrorSong）行为测试
- * 方案A：解析聚合音源后必须委托主播放通道 playQueueAt，而不是直接 audio.play()。
+ * AI 助手播放通道（agent-adapter.js playLxMirrorSong）行为测试（T9 阶段2切换后契约）。
+ * LX 镜像播放入口不再依赖已退役的第三方音源桥：直接委托主播放通道 playQueueAt
+ * （其内部统一走 /api/lx-source/resolve 三级失败链）；不直连 audio.play()、不做聚合预解析。
  * 运行：node --test tests/agent-play-lxmirror-delegate.test.js
  */
 
@@ -16,11 +17,9 @@ const appRoot = path.join(__dirname, '..');
 const adapterPath = path.join(appRoot, 'public', 'js', 'agent-adapter.js');
 const source = fs.readFileSync(adapterPath, 'utf8');
 
-const TICKET_URL = 'http://127.0.0.1:3000/api/custom-source/audio?ticket=abc123';
-
 function makeSandbox(options) {
   options = options || {};
-  const calls = { playQueueAt: [], directPlay: [], resolve: [], toasts: [] };
+  const calls = { playQueueAt: [], directPlay: [], toasts: [] };
   const audioEl = {
     src: '',
     paused: false,
@@ -47,20 +46,15 @@ function makeSandbox(options) {
   sandbox.trackSwitchToken = 0;
   sandbox.playing = false;
   sandbox.audio = options.audioInitiallyNull ? null : audioEl;
-  const bridgeReady = options.bridgeReady !== false;
-  sandbox.CustomSourceIntegration = {
-    hasBridge: () => bridgeReady,
-    resolveOnlinePlaybackData: async (song, ctx) => {
-      calls.resolve.push(ctx);
-      if (options.resolveFailure) return { override: false, reason: 'no-match' };
-      return { override: true, data: { url: TICKET_URL, level: 'flac', source: '聚合解析 · 青听', sourceMatch: true } };
-    },
-  };
   if (!options.noPlayQueueAt) {
     sandbox.playQueueAt = async (idx, opts) => {
       calls.playQueueAt.push({ idx, opts });
+      if (typeof options.onPlayQueueAt === 'function') options.onPlayQueueAt(sandbox.playQueue[idx]);
       return options.playQueueAtResult !== undefined ? options.playQueueAtResult : true;
     };
+  }
+  if (options.playLxMirrorThrows) {
+    sandbox.playQueueAt = async () => { throw new Error('chain terminal guidance'); };
   }
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'agent-adapter.js' });
@@ -68,41 +62,50 @@ function makeSandbox(options) {
   return sandbox;
 }
 
-const song = { name: '东风破', artist: '周杰伦', id: 123, provider: 'netease', type: 'song' };
+const song = { name: '东风破', artist: '周杰伦', id: 123, source: 'wy', provider: 'wy', type: 'song' };
 
-test('playLxMirrorSong delegates to playQueueAt with the pre-resolved aggregate url', async () => {
+test('T9：playLxMirrorSong 源码不再引用 CustomSourceIntegration（第三方音源桥退役边）', () => {
+  assert.ok(!source.includes('CustomSourceIntegration'), 'agent-adapter 不得再引用 CustomSourceIntegration');
+  assert.ok(!source.includes('resolveOnlinePlaybackData'), '不得再走聚合预解析');
+});
+
+test('T9：playLxMirrorSong 直接委托 playQueueAt（统一播放链），不预解析', async () => {
   const sb = makeSandbox();
   const result = await sb.window.playLxMirrorSong(0, 0, song);
-  assert.strictEqual(sb.calls.playQueueAt.length, 1, 'must call playQueueAt exactly once');
+  assert.strictEqual(sb.calls.playQueueAt.length, 1, '必须恰好调用一次 playQueueAt');
   const [call] = sb.calls.playQueueAt;
   assert.strictEqual(call.idx, 0);
   assert.strictEqual(call.opts.manual, true);
-  assert.ok(call.opts.preResolvedPlaybackData, 'must pass preResolvedPlaybackData so aggregate is not re-run');
-  assert.strictEqual(call.opts.preResolvedPlaybackData.url, TICKET_URL);
+  assert.ok(!call.opts.preResolvedPlaybackData, '不再传 preResolvedPlaybackData——解析由三级链完成');
   assert.strictEqual(result.ok, true);
 });
 
-test('playLxMirrorSong never calls audio.play() directly — main channel owns playback', async () => {
+test('T9：playLxMirrorSong 绝不直连 audio.play()——主通道独占播放', async () => {
   const sb = makeSandbox();
   await sb.window.playLxMirrorSong(0, 0, song);
-  assert.strictEqual(sb.calls.directPlay.length, 0, 'direct audio.play() bypasses queueItemKey/token guards — forbidden');
+  assert.strictEqual(sb.calls.directPlay.length, 0, '直连 play() 会漏写 queueItemKey/token 守卫——禁止');
 });
 
-test('playLxMirrorSong queues the song so playQueue state matches the delegated index', async () => {
-  const sb = makeSandbox();
+test('T9：playLxMirrorSong 入队的是歌曲副本且队列索引一致（链内字段改写不污染调用方对象）', async () => {
+  const sb = makeSandbox({
+    onPlayQueueAt: (queued) => { queued._lxResolver = 'B'; queued.source = 'tx'; },
+  });
   await sb.window.playLxMirrorSong(0, 0, song);
   assert.strictEqual(sb.window.playQueue.length, 1);
-  assert.strictEqual(sb.window.playQueue[0], song);
+  assert.notStrictEqual(sb.window.playQueue[0], song, '必须拷贝入队，链内改写不回传调用方 song');
+  assert.strictEqual(sb.window.playQueue[0].name, song.name);
   assert.strictEqual(sb.window.currentIdx, 0);
+  assert.strictEqual(song._lxResolver, undefined, '原对象不受链内状态字段影响');
 });
 
-test('playLxMirrorSong reports failure when playQueueAt returns false', async () => {
+test('T9：playQueueAt 返回 false → PLAYBACK_FAILED', async () => {
   const sb = makeSandbox({ playQueueAtResult: false });
   const result = await sb.window.playLxMirrorSong(0, 0, song);
   assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.reason, 'PLAYBACK_FAILED');
 });
 
-test('playLxMirrorSong reports PLAYER_NOT_READY without touching audio when playQueueAt is missing', async () => {
+test('T9：playQueueAt 缺失 → PLAYER_NOT_READY，不触碰音频', async () => {
   const sb = makeSandbox({ noPlayQueueAt: true });
   const result = await sb.window.playLxMirrorSong(0, 0, song);
   assert.strictEqual(result.ok, false);
@@ -110,19 +113,27 @@ test('playLxMirrorSong reports PLAYER_NOT_READY without touching audio when play
   assert.strictEqual(sb.calls.directPlay.length, 0);
 });
 
-test('playLxMirrorSong still reports resolve failure without delegating', async () => {
-  const sb = makeSandbox({ resolveFailure: true });
-  const result = await sb.window.playLxMirrorSong(0, 0, song);
+test('T9：无歌曲信息 → NO_SONG', async () => {
+  const sb = makeSandbox();
+  const result = await sb.window.playLxMirrorSong(0, 0, null);
   assert.strictEqual(result.ok, false);
-  assert.strictEqual(result.reason, 'no-match');
+  assert.strictEqual(result.reason, 'NO_SONG');
   assert.strictEqual(sb.calls.playQueueAt.length, 0);
 });
 
-test('playLxMirrorSong keeps aggregate pre-resolve semantics for the tool result', async () => {
-  const sb = makeSandbox();
+test('T9：成功后 source 取链内写回的标签（resolvedSourceLabel/sourceLabel 优先）', async () => {
+  const sb = makeSandbox({
+    onPlayQueueAt: (queued) => { queued.resolvedSourceLabel = '小秋（跨平台自动换源）'; },
+  });
   const result = await sb.window.playLxMirrorSong(0, 0, song);
-  assert.strictEqual(sb.calls.resolve.length, 1);
-  assert.strictEqual(sb.calls.resolve[0].mode, 'aggregate');
-  assert.strictEqual(sb.calls.resolve[0].preResolve, true);
-  assert.strictEqual(result.url, TICKET_URL);
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.source, '小秋（跨平台自动换源）');
+});
+
+test('T9：链抛终态错误 → PLAYBACK_FAILED 且 toast 带出引导文案', async () => {
+  const sb = makeSandbox({ playLxMirrorThrows: true });
+  const result = await sb.window.playLxMirrorSong(0, 0, song);
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.reason, 'PLAYBACK_FAILED');
+  assert.ok(sb.calls.toasts.some((t) => t.includes('chain terminal guidance')), '异常文案必须经 toast 呈现');
 });

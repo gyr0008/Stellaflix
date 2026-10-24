@@ -553,38 +553,34 @@ async function retryNeteaseSourceMatchPlayback(song, data, idx, token, opts, req
 
 async function resolveAlbumGaplessPlaybackData(song) {
   if (!song || song.type === 'local' || song.source === 'local' || song.localUrl) return null;
+  if (song.type === 'podcast' || song.source === 'podcast') return null;
   var playbackProvider = normalizePlaybackProvider(songProviderKey(song));
   var requestedQuality = normalizePlaybackQualityForProvider(getProviderPlaybackQuality(playbackProvider), playbackProvider);
   if (playbackProvider === 'netease' && requestedQuality === 'jymaster' && !hasProviderSvip('netease', loginStatus)) requestedQuality = 'hires';
   var runtimeQualityCap = playbackQualityCapValue(song, playbackProvider);
   if (playbackQualityAboveCap(requestedQuality, playbackProvider, runtimeQualityCap)) requestedQuality = runtimeQualityCap;
-  var qualityParam = '&quality=' + encodeURIComponent(requestedQuality);
-  if (playbackProvider === 'qq') {
-    return apiJson('/api/qq/song/url?mid=' + encodeURIComponent(song.mid || song.songmid || song.id || '') + '&mediaMid=' + encodeURIComponent(song.mediaMid || song.media_mid || '') + qqPlaybackEvidenceQuery(song) + qualityParam, { timeoutMs: 15000 });
+  // T9 阶段2切换：gapless 预载统一走 /api/lx-source/resolve（静默、不跨平台换源、限时预算）。
+  try {
+    var resolved = await resolveLxPlaybackSong(song, {
+      quality: requestedQuality,
+      allowCrossPlatformFallback: false,
+      silent: true,
+      timeoutMs: 15000,
+      maxResolvers: 3
+    });
+    if (!resolved || !(resolved.url || resolved.proxyUrl)) return null;
+    return {
+      url: resolved.url || resolved.proxyUrl,
+      proxyUrl: resolved.proxyUrl,
+      level: lxPlaybackLevelFromLxQuality(resolved.actual),
+      source: resolved.source,
+      resolver: resolved.resolver,
+      lxSource: true
+    };
+  } catch (err) {
+    console.warn('[AlbumGapless] lx-source preload resolve failed:', (song && (song.name || song.id)) || '', err && err.message || err);
+    return null;
   }
-  if (playbackProvider === 'kugou') {
-    return apiJson('/api/kugou/song/url?hash=' + encodeURIComponent(song.hash || song.fileHash || song.audioHash || song.id || '') +
-      '&albumId=' + encodeURIComponent(song.albumId || song.album_id || '') +
-      '&albumAudioId=' + encodeURIComponent(song.albumAudioId || song.album_audio_id || song.mixSongId || '') +
-      '&mixSongId=' + encodeURIComponent(song.mixSongId || '') +
-      '&hqHash=' + encodeURIComponent(song.hqHash || song.hq_hash || '') +
-      '&sqHash=' + encodeURIComponent(song.sqHash || song.sq_hash || '') +
-      '&resHash=' + encodeURIComponent(song.resHash || song.res_hash || '') +
-      '&vipRequired=' + encodeURIComponent(song.vipRequired || song.needVip || song.onlyVipPlayable || song.only_vip_playable ? '1' : '') +
-      '&privilege=' + encodeURIComponent(song.privilege || song.Privilege || song.mediaPrivilege || song.media_privilege || '') +
-      '&fee=' + encodeURIComponent(song.fee || song.Fee || '') +
-      qualityParam, { timeoutMs: 9000 });
-  }
-  if (playbackProvider === 'qishui') {
-    return apiJson('/api/qishui/song/url?id=' + encodeURIComponent(song.id || song.providerSongId || '') + qqPlaybackEvidenceQuery(song) + qualityParam, { timeoutMs: 9000 });
-  }
-  if (playbackProvider === 'spotify') {
-    return apiJson('/api/spotify/song/url?id=' + encodeURIComponent(song.id || song.providerSongId || song.spotifyId || '') +
-      '&spotifyId=' + encodeURIComponent(song.spotifyId || '') +
-      '&uri=' + encodeURIComponent(song.spotifyUri || song.uri || '') +
-      qualityParam, { timeoutMs: 9000 });
-  }
-  return apiJson('/api/song/url?id=' + encodeURIComponent(song.id || '') + neteasePlaybackMatchQuery(song) + qualityParam, { timeoutMs: 14000 });
 }
 
 function consumeAlbumGaplessPreload(preload) {
@@ -763,7 +759,7 @@ async function scheduleAlbumGaplessPreloadForCurrent(token, reason) {
       || !albumGaplessQueueCanAdvance(currentIdx)
     ) return false;
     if (!data || !data.url) return false;
-    var proxyAudioUrl = '/api/audio?url=' + encodeURIComponent(data.url);
+    var proxyAudioUrl = data.proxyUrl ? String(data.proxyUrl) : '/api/audio?url=' + encodeURIComponent(data.url);
     var media = new Audio();
     media.crossOrigin = 'anonymous';
     media.preload = 'auto';
@@ -928,6 +924,370 @@ async function playLocalQueueSong(song, idx, token, firstVisualPlay, opts, resum
   }, firstVisualPlay ? 680 : 520);
   return true;
 }
+
+// ============================================================
+// —— T9 播放链统一：音源解析三级失败链（起）——
+// 移植批（阶段2切换）：上游 Mineradio index.html :31693-31745(lxSongPlayPayload) /
+// :31861-31939(applyCrossPlatformSongMatch→11-provider-fallback.js /
+// resolveCrossPlatformAudioFallback) / :31941-32013(resolveImportedLxAudio 骨架) /
+// :32325-32355(resolver 级重试+死URL去重) / :32358-32372(跨平台换源) /
+// :32380-32396(onerror 断点重解析封顶3)。逻辑移植，命名/DOM/路径全部 Stellaflix 化；
+// 播放解析统一指 /api/lx-source/resolve，不再走任何官方平台五分支。
+// 三级失败链状态机：
+//   一级 resolver 级：同曲多次 /resolve（服务端轮换 resolver；失败/死URL 把
+//        song._lxResolver 记忆排入 excludeResolvers——裁决2，绕开服务端 90s 缓存）；
+//   二级 跨平台重匹配：/api/lx-source/search 找同名异平台版本再 resolve，
+//        命中后 applyCrossPlatformSongMatch 改写歌曲身份；
+//   三级 终态引导：按机器 code（LX_NO_SOURCES / LX_SOURCE_NOT_CONFIGURED /
+//        LX_SOURCE_RESOLVE_ALL_FAILED / LX_SOURCE_NO_RESOLVER）分支文案——裁决3。
+// proxyUrl 一律作不透明字符串消费，绝不重编码/字符串改写——裁决4。
+
+var LX_SOURCE_RESOLVABLE = /^(?:tx|wy|kw|kg|mg)$/;
+var LX_SOURCE_QUALITY_WORDS = { master: 1, atmos_plus: 1, flac24bit: 1, hires: 1, flac: 1, '320k': 1, '128k': 1 };
+
+function lxNormalizeSourceName(value) {
+  var sourceName = String(value || '').toLowerCase();
+  return ({ qq: 'tx', netease: 'wy', kuwo: 'kw', kugou: 'kg', migu: 'mg', qishui: 'qs', spotify: 'sp' })[sourceName] || sourceName;
+}
+
+var LX_SOURCE_PLATFORM_LABELS = { tx: 'QQ 音乐', wy: '网易云', kw: '酷我音乐', kg: '酷狗音乐', mg: '咪咕音乐', qs: '汽水音乐', sp: 'Spotify' };
+function lxSourcePlatformLabel(sourceName) {
+  var key = lxNormalizeSourceName(sourceName);
+  return LX_SOURCE_PLATFORM_LABELS[key] || String(sourceName || '').toUpperCase() || '未知平台';
+}
+
+// Stellaflix 音质词汇 → LX 音质词（显示词汇统一与 probeWarning 态留 T12；这里只做请求映射）
+var LX_PLAYBACK_QUALITY_TO_SOURCE = { jymaster: 'master', hires: 'hires', lossless: 'flac', exhigh: '320k', standard: '128k' };
+function lxRequestQualityForPlaybackQuality(value) {
+  var raw = String(value || '').trim().toLowerCase();
+  if (LX_SOURCE_QUALITY_WORDS[raw]) return raw;
+  var word = typeof normalizePlaybackQuality === 'function' ? normalizePlaybackQuality(raw) : raw;
+  return LX_PLAYBACK_QUALITY_TO_SOURCE[word] || '128k';
+}
+
+// LX 实际音质词 → Stellaflix level 词（供降级提示/运行时上限沿用既有链路）
+function lxPlaybackLevelFromLxQuality(value) {
+  var word = String(value || '').trim().toLowerCase();
+  if (word === 'master' || word === 'atmos_plus') return 'jymaster';
+  if (word === 'flac24bit' || word === 'hires') return 'hires';
+  if (word === 'flac' || word === 'lossless') return 'lossless';
+  if (word === '320k') return 'exhigh';
+  return 'standard';
+}
+
+// 终态引导文案——裁决3：全项目共享的 code→文案映射，按机器 code 分支不按散文猜。
+function lxSourceGuidanceText(code) {
+  code = String(code || '').trim().toUpperCase();
+  if (code === 'LX_NO_SOURCES' || code === 'LX_SOURCE_NOT_CONFIGURED') {
+    return '还没有可用音源，请在「音源管理」导入或启用音源后重试。';
+  }
+  if (code === 'LX_SOURCE_RESOLVE_ALL_FAILED' || code === 'LX_SOURCE_NO_RESOLVER') {
+    return '当前音源及备用音源均解析失败，跨平台自动换源也没有匹配到可播版本，请在「音源管理」切换音源或稍后重试。';
+  }
+  if (code === 'LX_SOURCE_UNSUPPORTED') {
+    return '当前音源不支持这首歌的解析，请切换音源后重试。';
+  }
+  return '音源解析失败，请稍后重试或切换音源。';
+}
+
+function lxCodeFromMessage(message) {
+  var match = /LX_[A-Z0-9_]+/.exec(String(message || ''));
+  return match ? match[0] : '';
+}
+
+// 上游 :31693-31745 lxSongPlayPayload 移植（含 fallbackId 合成 id 清零与 meta 构造）。
+// 裁决1：kg 依赖 hash/FileHash、mg 依赖 copyrightId——lx-search 爬虫形状扩展后这两个
+// 字段随歌曲对象进来，这里透传进 payload 与 meta，供沙箱脚本解析。
+function lxPlaybackSongPayload(song) {
+  song = song || {};
+  var sourceName = lxNormalizeSourceName(song.source || song.provider || song.type);
+  var fallbackIdPattern = /^(?:tx|wy|kw|kg|mg|song|row)_[0-9a-f]{12,}$/i;
+  var hasFallbackId = song.importFallbackId === true ||
+    fallbackIdPattern.test(String(song.songmid || '')) ||
+    fallbackIdPattern.test(String(song.id || ''));
+  var primaryId = hasFallbackId ? '' : (song.songmid != null && song.songmid !== '' ? song.songmid
+    : (song.id != null && song.id !== '' ? song.id
+    : (song.hash || song.FileHash || song.copyrightId || song.rid || song.mid || '')));
+  var payload = {
+    name: song.name || song.title || '',
+    singer: song.singer || song.artist || '',
+    source: sourceName,
+    id: hasFallbackId ? '' : (song.id != null && song.id !== '' ? song.id : primaryId),
+    songmid: hasFallbackId ? '' : (song.songmid != null && song.songmid !== '' ? song.songmid : primaryId),
+    mid: hasFallbackId ? '' : (song.mid || song.songmid || primaryId),
+    songId: hasFallbackId ? '' : (song.songId || song.id || primaryId),
+    rid: hasFallbackId ? '' : (song.rid || song.songmid || song.id || primaryId),
+    img: song.picUrl || song.img || song.cover || song.coverUrl || '',
+    picUrl: song.picUrl || song.img || song.cover || song.coverUrl || '',
+    albumId: song.albumId || '',
+    interval: song.interval || song.duration || '',
+    albumName: song.albumName || song.album || '',
+    types: Array.isArray(song.types) ? song.types : [],
+    meta: Object.assign({}, song.meta || {})
+  };
+  ['hash', 'FileHash', 'fileHash', 'strMediaMid', 'albumMid', 'copyrightId', 'copyrightid', 'lrcUrl', 'trcUrl', 'mrcUrl'].forEach(function (key) {
+    if (hasFallbackId && !/Url$/i.test(key)) return;
+    if (song[key] != null && song[key] !== '') payload[key] = song[key];
+  });
+  if (sourceName === 'tx') {
+    payload.meta.qq = Object.assign({}, payload.meta.qq || {}, {
+      mid: hasFallbackId ? '' : (song.songmid || song.mid || primaryId),
+      songmid: hasFallbackId ? '' : (song.songmid || song.mid || primaryId),
+      songid: hasFallbackId ? '' : (song.id || song.songId || '')
+    });
+  } else if (sourceName === 'wy') {
+    payload.meta.wy = Object.assign({}, payload.meta.wy || {}, { id: hasFallbackId ? '' : (song.id || song.songmid || primaryId) });
+  } else if (sourceName === 'kw') {
+    payload.meta.kw = Object.assign({}, payload.meta.kw || {}, { rid: hasFallbackId ? '' : (song.rid || song.songmid || song.id || primaryId) });
+  } else if (sourceName === 'kg') {
+    var kgHash = hasFallbackId ? '' : (song.hash || song.FileHash || song.fileHash || song.songmid || primaryId);
+    payload.hash = payload.hash || kgHash;
+    payload.FileHash = payload.FileHash || kgHash;
+    payload.meta.kg = Object.assign({}, payload.meta.kg || {}, { hash: kgHash, FileHash: kgHash });
+  } else if (sourceName === 'mg') {
+    var mgId = hasFallbackId ? '' : (song.copyrightId || song.copyrightid || song.songmid || song.id || primaryId);
+    payload.copyrightId = payload.copyrightId || mgId;
+    payload.meta.mg = Object.assign({}, payload.meta.mg || {}, { copyrightId: mgId });
+  }
+  return payload;
+}
+
+function lxUsableResolveResult(result) {
+  return !!(result && result.ok && (/^https?:\/\//i.test(String(result.url || '')) || /^\/api\/audio\?/i.test(String(result.proxyUrl || ''))));
+}
+
+// 服务端 /resolve 的 actual 是 Range 探测对象（{codec,lossless,...}），音质词在 quality
+// （实际命中的降级档）。仅当 actual 已是字符串（未来契约）才直取，否则取 quality——
+// 防 String(probe) 变成 '[object Object]' 把一切命中误判为 standard。
+function lxActualQualityWord(result) {
+  if (!result) return '';
+  if (typeof result.actual === 'string' && result.actual) return result.actual;
+  return String(result.quality || '');
+}
+
+// 二级：跨平台重匹配（上游 :31893-31939 resolveCrossPlatformAudioFallback 移植）。
+// 搜索走 /api/lx-source/search（剔除失败源），候选逐个 resolve，命中后交
+// 11-provider-fallback.js 的 applyCrossPlatformSongMatch 改写歌曲身份。
+async function resolveCrossPlatformPlaybackFallback(song, failedSource, excludedResolvers, options) {
+  song = song || {};
+  options = options || {};
+  var referenceSinger = String(song.singer || song.artist || '').trim();
+  if (referenceSinger === '未知歌手' || /^(?:https?:\/\/|www\.)/i.test(referenceSinger)) referenceSinger = '';
+  var query = [song.name || song.title, referenceSinger].filter(Boolean).join(' ').trim();
+  if (!query) return null;
+  var excluded = Array.isArray(excludedResolvers) ? excludedResolvers.slice(0, 8) : [];
+  var attemptedUrls = Array.isArray(options.attemptedUrls) ? options.attemptedUrls.map(String) : [];
+  var sourceNames = ['wy', 'kw', 'kg', 'mg', 'tx'].filter(function (source) { return source !== failedSource; });
+  var referenceName = typeof normalizeMatchText === 'function' ? normalizeMatchText(song.name || song.title || '') : String(song.name || '').toLowerCase();
+  try {
+    var alternatives = await apiJson('/api/lx-source/search?q=' + encodeURIComponent(query) +
+      '&limit=16&sources=' + encodeURIComponent(sourceNames.join(',')), { timeoutMs: 22000 });
+    var candidates = alternatives && Array.isArray(alternatives.songs) ? alternatives.songs.filter(function (candidate) {
+      if (!candidate || String(candidate.source || '') === failedSource) return false;
+      if (!referenceName || typeof normalizeMatchText !== 'function') return true;
+      var candidateName = normalizeMatchText(candidate.name || '');
+      return candidateName === referenceName || candidateName.indexOf(referenceName) >= 0 || referenceName.indexOf(candidateName) >= 0;
+    }).slice(0, 10) : [];
+    for (var i = 0; i < candidates.length; i++) {
+      var candidate = candidates[i];
+      var candidateSource = lxNormalizeSourceName(candidate.source);
+      if (!LX_SOURCE_RESOLVABLE.test(candidateSource)) continue;
+      try {
+        var resolved = await apiJson('/api/lx-source/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source: candidateSource,
+            quality: String(options.quality || '128k'),
+            musicInfo: lxPlaybackSongPayload(candidate),
+            excludeResolvers: excluded.slice(),
+            maxResolvers: Math.max(3, Math.min(8, Number(options.maxResolvers) || 6))
+          }),
+          timeoutMs: Math.max(8000, Number(options.timeoutMs) || 30000)
+        });
+        if (lxUsableResolveResult(resolved)) {
+          // 上游 :32359 死URL去重同样覆盖跨平台命中：换源结果若就是刚播失败的地址，
+          // 排除该 resolver 继续下一候选，不再原样重播死链。
+          var crossFinalUrl = String(resolved.proxyUrl || resolved.url);
+          if (attemptedUrls.indexOf(crossFinalUrl) >= 0) {
+            var deadCrossResolver = String(resolved.resolver || '').trim().toLowerCase();
+            if (deadCrossResolver && excluded.indexOf(deadCrossResolver) < 0) excluded.push(deadCrossResolver);
+            continue;
+          }
+          if (typeof applyCrossPlatformSongMatch === 'function') applyCrossPlatformSongMatch(song, candidate, candidateSource);
+          song._lxResolver = String(resolved.resolver || '');
+          if (!options.silent) {
+            showSourceFallbackNotice('已自动换源', (lxSourcePlatformLabel(failedSource) || failedSource || '原平台') + ' 版本不可播放，已切换到 ' + (lxSourcePlatformLabel(candidateSource) || candidateSource) + '。');
+          }
+          return {
+            ok: true,
+            url: String(resolved.url || ''),
+            proxyUrl: crossFinalUrl,
+            actual: lxActualQualityWord(resolved),
+            probeWarning: !!(resolved && resolved.probeWarning),
+            resolver: song._lxResolver,
+            source: candidateSource,
+            quality: String(options.quality || ''),
+            crossMatched: true
+          };
+        }
+      } catch (_candidateError) { }
+    }
+  } catch (_searchError) { }
+  return null;
+}
+
+// 统一解析入口（brief Interfaces：resolveLxPlaybackSong(song, {quality, excludeResolvers})
+//   → {url(proxyUrl), actual, probeWarning, resolver}）。
+// async 声明不随 Annex B 泄漏——文件尾显式挂 window（同 00-api-quality-output.js 约定）。
+async function resolveLxPlaybackSong(song, options) {
+  song = song || {};
+  options = options || {};
+  var sourceName = lxNormalizeSourceName(song.source || song.provider || song.type);
+  var excluded = Array.isArray(options.excludeResolvers) ? options.excludeResolvers.slice(0, 8) : [];
+  var attempted = Array.isArray(options.attemptedUrls) ? options.attemptedUrls.map(String) : [];
+  var silent = !!options.silent;
+  var allowCross = options.allowCrossPlatformFallback !== false;
+  var attempts = Math.max(1, Number(options.attempts) || 3);
+  var maxResolvers = Math.max(3, Math.min(8, Number(options.maxResolvers) || 6));
+  var lxQuality = lxRequestQualityForPlaybackQuality(options.quality || 'hires');
+  song._lxRequestedQuality = lxQuality;
+  var lastCode = '';
+  var lastMessage = '';
+
+  function excludeResolver(id) {
+    id = String(id || '').trim().toLowerCase();
+    if (id && excluded.indexOf(id) < 0) excluded.push(id);
+  }
+
+  // needsCrossPlatformMatch / sp·qs·am 等非可解析平台：跳过一级，直接二级（上游 :31945-31949 语义）。
+  var resolvable = LX_SOURCE_RESOLVABLE.test(sourceName);
+  if (resolvable && song.needsCrossPlatformMatch !== true) {
+    var payload = lxPlaybackSongPayload(song);
+    for (var attempt = 0; attempt < attempts; attempt++) {
+      var result = null;
+      try {
+        result = await apiJson('/api/lx-source/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source: sourceName,
+            quality: lxQuality,
+            musicInfo: payload,
+            excludeResolvers: excluded.slice(),
+            maxResolvers: maxResolvers
+          }),
+          timeoutMs: Math.max(8000, Number(options.timeoutMs) || 45000)
+        });
+      } catch (resolveError) {
+        // 上游 :31984-31985：超时独立成文案；其它异常并入 resolver 级失败。
+        var aborted = resolveError && resolveError.name === 'AbortError';
+        lastCode = 'LX_SOURCE_RESOLVE_ALL_FAILED';
+        lastMessage = aborted ? '音源解析超时，请换音源或稍后重试' : String((resolveError && resolveError.message) || resolveError);
+        excludeResolver(song._lxResolver);
+        if (!silent && attempt < attempts - 1) showSourceFallbackNotice('当前音源不可用', '正在重试并切换备用音源…');
+        continue;
+      }
+      if (lxUsableResolveResult(result)) {
+        var finalUrl = String(result.proxyUrl || result.url);
+        if (attempted.indexOf(finalUrl) >= 0) {
+          // 死URL去重（上游 :32339）：备用音源返回已试过的失效地址 → resolver 级失败。
+          lastCode = 'LX_SOURCE_RESOLVE_ALL_FAILED';
+          lastMessage = '备用音源返回了相同的失效地址';
+          excludeResolver(result.resolver);
+          continue;
+        }
+        if (!silent && attempt > 0) {
+          showSourceFallbackNotice('已自动切换音源', '原音源无法播放，已改用：' + (result.resolver || '备用音源') + '。');
+        }
+        song._lxResolver = String(result.resolver || '');
+        return {
+          ok: true,
+          url: String(result.url || ''),
+          proxyUrl: finalUrl,
+          actual: lxActualQualityWord(result),
+          probeWarning: !!(result && result.probeWarning),
+          resolver: song._lxResolver,
+          source: String(result.source || sourceName),
+          quality: lxQuality
+        };
+      }
+      var code = String((result && (result.code || lxCodeFromMessage(result.error || result.message))) || 'LX_SOURCE_RESOLVE_ALL_FAILED');
+      lastCode = code;
+      lastMessage = String((result && (result.error || result.message)) || '音源解析失败');
+      if (code === 'LX_NO_SOURCES' || code === 'LX_SOURCE_NOT_CONFIGURED') {
+        // 裁决3：没有启用音源/未配置时，重匹配候选同样无解析器可用——不空转，直接终态。
+        allowCross = false;
+        break;
+      }
+      excludeResolver(song._lxResolver);
+      if (!silent && attempt < attempts - 1) showSourceFallbackNotice('当前音源不可用', '正在重试并切换备用音源…');
+    }
+  }
+
+  if (allowCross) {
+    if (!silent) showSourceFallbackNotice('正在跨平台换源', '当前平台的音源均不可用，正在匹配其他平台版本…');
+    var cross = await resolveCrossPlatformPlaybackFallback(song, sourceName, excluded, {
+      quality: lxQuality,
+      timeoutMs: options.timeoutMs,
+      maxResolvers: maxResolvers,
+      attemptedUrls: attempted,
+      silent: silent
+    });
+    if (cross) return cross;
+  }
+
+  var terminalCode = lastCode || (resolvable ? 'LX_SOURCE_RESOLVE_ALL_FAILED' : 'LX_SOURCE_NO_RESOLVER');
+  var guidance = lxSourceGuidanceText(terminalCode);
+  if (!silent) showSourceFallbackNotice('音源解析失败', guidance);
+  var terminalError = new Error(guidance);
+  terminalError.code = terminalCode;
+  terminalError.lxTerminal = true;
+  throw terminalError;
+}
+
+// 运行时断点重解析挂钩（上游 :32376-32396 audio.onerror 移植）。
+// async playQueueAt 不泄漏 → 经 window.playQueueAt（12-expose-inline-globals.js 已挂）。
+function armLxRuntimeErrorFallback(ctx) {
+  ctx = ctx || {};
+  var retryDepth = Math.max(0, Number(ctx.retryDepth) || 0);
+  if (!ctx.media || retryDepth >= 3) return false;
+  ctx.media.onerror = function () {
+    if (ctx.token !== trackSwitchToken) return;
+    var resumeSeconds = Math.max(0, Number(ctx.media.currentTime) || 0);
+    var nextExcluded = Array.isArray(ctx.excluded) ? ctx.excluded.slice() : [];
+    var playingResolver = String(ctx.resolver || (ctx.song && ctx.song._lxResolver) || '').trim().toLowerCase();
+    if (playingResolver && nextExcluded.indexOf(playingResolver) < 0) nextExcluded.push(playingResolver);
+    var nextAttempted = Array.isArray(ctx.attempted) ? ctx.attempted.slice() : [];
+    if (ctx.proxyAudioUrl && nextAttempted.indexOf(String(ctx.proxyAudioUrl)) < 0) nextAttempted.push(String(ctx.proxyAudioUrl));
+    ctx.media.onerror = null;
+    showSourceFallbackNotice('播放中断，正在自动换源', '当前音源连接失败，正在从断点附近重新匹配备用音源…');
+    var retryOpts = Object.assign({}, ctx.opts || {}, {
+      lxRuntimeRetry: retryDepth + 1,
+      resumeAt: resumeSeconds,
+      lxExcludeResolvers: nextExcluded,
+      lxAttemptedUrls: nextAttempted,
+      albumGaplessHandoff: false,
+      albumGaplessMixed: false,
+      preloadedAudio: null,
+      preloadedData: null,
+      preloadedProxyAudioUrl: '',
+      suppressPlayFailureNotice: true
+    });
+    delete retryOpts.preResolvedPlaybackData;
+    if (typeof window !== 'undefined' && typeof window.playQueueAt === 'function') {
+      Promise.resolve(window.playQueueAt(ctx.idx, retryOpts)).catch(function (fallbackError) {
+        console.warn('[LxRuntimeFallback]', fallbackError);
+        showSourceFallbackNotice('自动换源失败', '已尝试可用备用音源，请稍后重试或切换歌曲。');
+      });
+    }
+  };
+  return true;
+}
+
+if (typeof window !== 'undefined') { window.resolveLxPlaybackSong = resolveLxPlaybackSong; }
+// —— T9 播放链统一：音源解析三级失败链（止）——
+// ============================================================
 
 async function playQueueAt(idx, opts) {
   opts = opts || {};
@@ -1151,117 +1511,37 @@ async function playQueueAt(idx, opts) {
         requestedQuality = runtimeQualityCap;
       }
       var qualityParam = '&quality=' + encodeURIComponent(requestedQuality);
-      // ====== 第三方音源：解析优先级重排（custom-first / aggregate 先跑解析，跳过或延后官方请求） ======
-      var hasCustomSource = typeof window.CustomSourceIntegration !== 'undefined' && typeof window.CustomSourceIntegration.resolveOnlinePlaybackData === 'function';
-      var skipOfficialRequest = false;
-      var forceOfficialUnusable = false;
-      var preCustomResolved = null;
-      if (hasCustomSource) {
-        try {
-          if (typeof window.CustomSourceIntegration.shouldSkipOfficialRequest === 'function') {
-            skipOfficialRequest = !!window.CustomSourceIntegration.shouldSkipOfficialRequest();
-          }
-          if (typeof window.CustomSourceIntegration.shouldTreatOfficialAsUnusable === 'function') {
-            forceOfficialUnusable = !!window.CustomSourceIntegration.shouldTreatOfficialAsUnusable();
-          }
-          if (skipOfficialRequest) {
-            // custom-first / aggregate：先跑第三方解析；拿到 URL 就跳过官方请求
-            preCustomResolved = await window.CustomSourceIntegration.resolveOnlinePlaybackData(song, {
-              officialResult: opts.preResolvedPlaybackData || {},
-              requestedQuality: requestedQuality,
-              playbackProvider: playbackProvider,
-              token: token,
-              preResolve: true,
-            });
-            if (preCustomResolved && preCustomResolved.override === true && preCustomResolved.data && typeof preCustomResolved.data === 'object' && preCustomResolved.data.url) {
-              // 第三方解析已命中：完全跳过官方请求
-              skipOfficialRequest = true;
-            } else {
-              // custom-first / aggregate 预解析未命中时，不再强制跳过官方请求，允许官方兜底
-              skipOfficialRequest = false;
-            }
-          }
-        } catch (customSourcePreErr) {
-          console.warn('[CustomSource] pre-resolve error', customSourcePreErr && customSourcePreErr.message || customSourcePreErr);
-          preCustomResolved = null;
-          skipOfficialRequest = false;
-        }
-      }
+      // T9 阶段2切换：播放解析统一走 /api/lx-source/resolve 三级失败链；预解析直通，播客豁免暂时保留旧网易路由（T16 退役）。
+      var lxExcludedResolvers = Array.isArray(opts.lxExcludeResolvers) ? opts.lxExcludeResolvers.slice() : [];
+      var lxAttemptedUrls = Array.isArray(opts.lxAttemptedUrls) ? opts.lxAttemptedUrls.slice() : [];
       var data;
-      if (skipOfficialRequest && preCustomResolved && preCustomResolved.override === true && preCustomResolved.data && preCustomResolved.data.url) {
-        // 直接使用第三方命中结果，不再发起官方请求
-        data = Object.assign({}, opts.preResolvedPlaybackData || {}, preCustomResolved.data);
-      } else if (albumGaplessHandoff) {
+      if (albumGaplessHandoff) {
         data = opts.preloadedData;
       } else if (opts.preResolvedPlaybackData && opts.preResolvedPlaybackData.url) {
         data = opts.preResolvedPlaybackData;
-        } else if (skipOfficialRequest) {
-        // 第三方音源模式（custom-first / aggregate）官方请求被跳过，留空让后面的 resolveOnlinePlaybackData 再统一尝试
-        data = { skipped: true };
-      } else if (isQQPlayback) {
-        data = await apiJson('/api/qq/song/url?mid=' + encodeURIComponent(song.mid || song.songmid || song.id || '') + '&mediaMid=' + encodeURIComponent(song.mediaMid || song.media_mid || '') + qqPlaybackEvidenceQuery(song) + qualityParam, { timeoutMs: 15000 });
-      } else if (isKugouPlayback) {
-        data = await apiJson('/api/kugou/song/url?hash=' + encodeURIComponent(song.hash || song.fileHash || song.audioHash || song.id || '') +
-          '&albumId=' + encodeURIComponent(song.albumId || song.album_id || '') +
-          '&albumAudioId=' + encodeURIComponent(song.albumAudioId || song.album_audio_id || song.mixSongId || '') +
-          '&mixSongId=' + encodeURIComponent(song.mixSongId || '') +
-          '&hqHash=' + encodeURIComponent(song.hqHash || song.hq_hash || '') +
-          '&sqHash=' + encodeURIComponent(song.sqHash || song.sq_hash || '') +
-          '&resHash=' + encodeURIComponent(song.resHash || song.res_hash || '') +
-          '&vipRequired=' + encodeURIComponent(song.vipRequired || song.needVip || song.onlyVipPlayable || song.only_vip_playable ? '1' : '') +
-          '&privilege=' + encodeURIComponent(song.privilege || song.Privilege || song.mediaPrivilege || song.media_privilege || '') +
-          '&fee=' + encodeURIComponent(song.fee || song.Fee || '') +
-          qualityParam, { timeoutMs: 9000 });
-      } else if (isQishuiPlayback) {
-        data = await apiJson('/api/qishui/song/url?id=' + encodeURIComponent(song.id || song.providerSongId || '') + qqPlaybackEvidenceQuery(song) + qualityParam, { timeoutMs: 9000 });
-      } else if (isSpotifyPlayback) {
-        data = await apiJson('/api/spotify/song/url?id=' + encodeURIComponent(song.id || song.providerSongId || song.spotifyId || '') +
-          '&spotifyId=' + encodeURIComponent(song.spotifyId || '') +
-          '&uri=' + encodeURIComponent(song.spotifyUri || song.uri || '') +
-          qualityParam, { timeoutMs: 9000 });
-      } else {
+      } else if (song.type === 'podcast' || song.source === 'podcast') {
+        // 播客豁免：仍走旧网易 song/url 路由（唯一残留官方播放解析调用，T15/T16 处理）。
         data = await apiJson('/api/song/url?id=' + encodeURIComponent(song.id || '') + neteasePlaybackMatchQuery(song) + qualityParam, { timeoutMs: 14000 });
-      }
-      var beforeOfficialData = data;
-      // custom-first：官方结果即使有 url 也不算可用，交给第三方解析
-      if (forceOfficialUnusable && beforeOfficialData && beforeOfficialData.url && beforeOfficialData.skipped !== true) {
-        var officialCopy = Object.assign({}, beforeOfficialData || {});
-        delete officialCopy.url;
-        beforeOfficialData = officialCopy;
-      }
-      var customResolvedFinal = preCustomResolved;
-      var needReResolve = true;
-      if (preCustomResolved && preCustomResolved.override === true && preCustomResolved.data && preCustomResolved.data.url) {
-        needReResolve = false;
-      }
-      // 第三方音源模式切换：custom-first / official-first / aggregate
-      if (typeof window.CustomSourceIntegration !== 'undefined' && typeof window.CustomSourceIntegration.resolveOnlinePlaybackData === 'function' && needReResolve) {
-        try {
-          customResolvedFinal = await window.CustomSourceIntegration.resolveOnlinePlaybackData(song, {
-            officialResult: beforeOfficialData || {},
-            requestedQuality: requestedQuality,
-            playbackProvider: playbackProvider,
-            token: token,
-          });
-        } catch (customSourceResolveErr) {
-          console.warn('[CustomSource] resolve-online error', customSourceResolveErr && customSourceResolveErr.message || customSourceResolveErr);
-        }
-      }
-      if (customResolvedFinal && typeof customResolvedFinal === 'object') {
-        if (customResolvedFinal.override === true && customResolvedFinal.data && typeof customResolvedFinal.data === 'object') {
-          var mergedData = customResolvedFinal.data;
-          if (mergedData.level) {
-            var officialLvl = data && data.level;
-            if (!officialLvl || officialLvl === 'standard' || officialLvl === 'trial') data = Object.assign({}, data || {}, mergedData);
-            else data = Object.assign({}, mergedData, { level: officialLvl });
-          } else {
-            data = Object.assign({}, data || {}, mergedData);
-          }
-          if (customResolvedFinal.resolvedPlaybackProvider) song.resolvedPlaybackProvider = customResolvedFinal.resolvedPlaybackProvider;
-          if (customResolvedFinal.sourceLabel) song.sourceLabel = customResolvedFinal.sourceLabel;
-          if (customResolvedFinal.resolvedSourceLabel) song.resolvedSourceLabel = customResolvedFinal.resolvedSourceLabel;
-        } else if (customResolvedFinal.reason === 'official-skip' && (!data || !data.url)) {
-          // 自定义优先要求跳过官方解析；保持现有状态，由兜底决定失败
+      } else {
+        var lxResolved = await resolveLxPlaybackSong(song, {
+          quality: requestedQuality,
+          excludeResolvers: lxExcludedResolvers,
+          attemptedUrls: lxAttemptedUrls
+        });
+        data = {
+          url: lxResolved.url || lxResolved.proxyUrl,
+          proxyUrl: lxResolved.proxyUrl,
+          level: lxPlaybackLevelFromLxQuality(lxResolved.actual),
+          source: lxResolved.source,
+          resolver: lxResolved.resolver,
+          lxSource: true,
+          lxActualQuality: lxResolved.actual,
+          lxProbeWarning: !!lxResolved.probeWarning
+        };
+        if (lxResolved.crossMatched && typeof lxSourcePlatformLabel === 'function') {
+          song.sourceLabel = lxSourcePlatformLabel(lxResolved.source);
+          song.resolvedSourceLabel = lxSourcePlatformLabel(lxResolved.source) + '（跨平台自动换源）';
+          song.resolvedPlaybackProvider = 'lx-custom-source';
         }
       }
       if (token !== trackSwitchToken) return;
@@ -1310,9 +1590,9 @@ async function playQueueAt(idx, opts) {
       }
       var resolvedQualityText = playbackResolvedQualityText(data, playbackProvider);
       var qualityDowngraded = !!(data && data.level && playbackQualityWasDowngraded(requestedQuality, data.level, playbackProvider));
-      if (qualityDowngraded) markPlaybackQualityRuntimeCap(song, playbackProvider, data.level, 'resolved-lower');
+      if (qualityDowngraded && !(data && data.lxSource)) markPlaybackQualityRuntimeCap(song, playbackProvider, data.level, 'resolved-lower');
       if (!opts.startupAutoplay && !isQQPlayback && qualityDowngraded) {
-        showSourceFallbackNotice((isKugouPlayback ? '酷狗' : (isQishuiPlayback ? '汽水' : '网易云')) + '音质自动降级', '请求 ' + playbackQualityLabel(requestedQuality, playbackProvider) + '，实际播放 ' + resolvedQualityText + '。');
+        showSourceFallbackNotice(data && data.lxSource ? '音源音质自动降级' : ((isKugouPlayback ? '酷狗' : (isQishuiPlayback ? '汽水' : '网易云')) + '音质自动降级'), '请求 ' + playbackQualityLabel(requestedQuality, playbackProvider) + '，实际播放 ' + resolvedQualityText + '。');
       } else if (!opts.startupAutoplay && opts.qualitySwitch) {
         showSourceFallbackNotice('音质已切换', '实际播放: ' + resolvedQualityText + '。');
       }
@@ -1331,7 +1611,7 @@ async function playQueueAt(idx, opts) {
         document.getElementById('trial-banner').classList.add('show');
       }
       markPlayPhase('audio-element');
-      var proxyAudioUrl = opts.preloadedProxyAudioUrl || '/api/audio?url=' + encodeURIComponent(data.url);
+      var proxyAudioUrl = opts.preloadedProxyAudioUrl || (data && data.proxyUrl ? String(data.proxyUrl) : '/api/audio?url=' + encodeURIComponent(data.url));
       if (albumGaplessHandoff) {
         audioFadeSerial++;
         clearAudioFadeTimers();
@@ -1399,6 +1679,22 @@ async function playQueueAt(idx, opts) {
         if (playMode === 'single') setTimeout(function () { playQueueAt(currentIdx, { autoRepeat: true, suppressPlayFailureNotice: true }); }, 0);
         else setTimeout(nextTrack, 0);
       };
+      // T9 第三级前置：运行时播放错误（onerror）→ 携带排除状态的整曲重解析（递归上限 3）。
+      if (data && data.lxSource && typeof armLxRuntimeErrorFallback === 'function') {
+        armLxRuntimeErrorFallback({
+          media: playbackMedia,
+          token: token,
+          idx: idx,
+          song: song,
+          opts: retryPlaybackOpts,
+          resolver: String(data.resolver || song._lxResolver || ''),
+          excluded: lxExcludedResolvers,
+          attempted: lxAttemptedUrls,
+          proxyAudioUrl: String(proxyAudioUrl),
+          retryDepth: Number(opts.lxRuntimeRetry) || 0,
+          quality: requestedQuality
+        });
+      }
       scheduleAudioResumePosition(audio, opts.resumeAt != null ? opts.resumeAt : restoreResumeAt, token);
       if (restoreResumeAt > 0) pendingPlaybackResumeAt = 0;
       if (!albumGaplessHandoff) audio.load();
@@ -1481,6 +1777,28 @@ async function playQueueAt(idx, opts) {
         return settleExpiredSourceFallbackPlayback(idx, token, opts);
       }
       if (!playbackStarted) {
+        // T9 第一级（播放启动失败重进）：lx 解析成功但媒体起播失败 → 排除当前 resolver 后重走三级链，上限 3 次。
+        if (data && data.lxSource && (Number(opts.lxStartRetryDepth) || 0) < 3) {
+          var lxStartExclude = lxExcludedResolvers.slice();
+          var lxStartAttempted = lxAttemptedUrls.slice();
+          if (data.resolver) lxStartExclude.push(String(data.resolver));
+          if (song._lxResolver) lxStartExclude.push(String(song._lxResolver));
+          if (proxyAudioUrl) lxStartAttempted.push(String(proxyAudioUrl));
+          if (!opts.suppressPlayFailureNotice) showSourceFallbackNotice('当前音源不可用', '正在自动切换其他音源重新解析。');
+          var lxStartRetry = await playQueueAt(idx, Object.assign({}, retryPlaybackOpts, {
+            albumGaplessHandoff: false,
+            albumGaplessMixed: false,
+            preloadedAudio: null,
+            preloadedData: null,
+            preloadedProxyAudioUrl: '',
+            lxExcludeResolvers: lxStartExclude,
+            lxAttemptedUrls: lxStartAttempted,
+            lxStartRetryDepth: (Number(opts.lxStartRetryDepth) || 0) + 1,
+            suppressPlayFailureNotice: true
+          }));
+          if (token !== trackSwitchToken) return lxStartRetry === true;
+          return lxStartRetry === true;
+        }
         if (playbackProvider === 'netease' && data && data.sourceMatch) {
           var sameSourceRetry = await retryNeteaseSourceMatchPlayback(song, data, idx, token, retryPlaybackOpts, requestedQuality);
           if (sameSourceRetry !== null) return sameSourceRetry === true;

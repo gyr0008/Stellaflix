@@ -24,6 +24,7 @@
  *
  * song 冻结形状（Task 6/8/9/10/11 消费）：
  *  { source, id, songmid?, name, singer, album, interval, pic }
+ *  扩展（批 T9 裁决1）：kg 条目带 hash（FileHash）；mg 条目带 copyrightId。
  */
 
 const crypto = require('node:crypto');
@@ -126,6 +127,8 @@ function createLxSearch({ fetchImpl = globalThis.fetch, now = () => Date.now() }
       source: 'kg',
       id: item.Audioid,
       songmid: item.Audioid,
+      // T9 裁决1（歌曲形态补全）：kg 解析器需要 hash/FileHash。
+      hash: String(item.FileHash || ''),
       name: item.SongName || '',
       singer: singers(item.Singers) || item.SingerName || '',
       album: item.AlbumName || '',
@@ -227,6 +230,8 @@ function createLxSearch({ fetchImpl = globalThis.fetch, now = () => Date.now() }
       source: 'mg',
       id: item.songId,
       songmid: item.songId,
+      // T9 裁决1（歌曲形态补全）：mg 解析器需要 copyrightId。
+      copyrightId: String(item.copyrightId || ''),
       name: item.name || '',
       singer: singers(item.singerList),
       album: item.album || '',
