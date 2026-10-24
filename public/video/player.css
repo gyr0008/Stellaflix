@@ -3280,11 +3280,15 @@ body.video-space-active .home-poster-media::after {
   .sfv-mfilter-more-popup {
     grid-template-columns: repeat(2, auto);
   }
+}
 
 /* ===== T135 回到顶部悬浮按钮（仅电影 / 动漫分页）=====
    单一共享圆钮挂 document.body，位置固定内容区右下角；电影/动漫两页
    位置/样式/交互完全一致。显示由 JS 控制（video-space-active + 浏览层
-   打开 + 当前页为 movie/anime + 滚动超阈值）。 */
+   打开 + 当前页为 movie/anime，满足即常驻，无滚动阈值）。
+   作用域约束：本块必须留在全局作用域。曾因整体落入
+   @media (max-width: 639px) 内，桌面宽度拿不到 position/opacity/
+   visibility，按钮退化成左上角灰色 UA 方块（tests/back-to-top-css-scope.test.js 钉住）。 */
 .sfv-backtotop {
   position: fixed;
   right: 24px;
@@ -3350,7 +3354,6 @@ body.video-space-active .home-poster-media::after {
 }
 /* 双态隔离：非影视态绝不显形，绝不污染音乐态 DOM 视觉 */
 body:not(.video-space-active) .sfv-backtotop { display: none !important; }
-} /* 关闭上方 @media (max-width: 639px)；Plex 详情页样式须为全局作用域，不可落入移动端媒体查询 */
 
 
 /* ===== Plex 风详情页（detail.js · 电影 / 动漫 / 纪录片 共享）=====
