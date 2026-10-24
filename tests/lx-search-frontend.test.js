@@ -20,6 +20,9 @@
  *        ① kg.hash / mg.copyrightId 经 normalizeLxSearchSong 透传进 playlist 交接钉桩；
  *        ② ok:false 错误体（LX_SEARCH_FAILED 等）必须上浮为失败分支（复用 catch 路径），
  *           不得渲染成「没有找到相关歌曲」；空结果 + failures 的行内条路径同批钉桩。
+ *  修复轮2（评审回归）：轮1 的无条件 throw 会吞掉真实「全源失败」体（server.js:8410
+ *        ok=false + 非空 failures，502）的逐源熔断/暂不可用行；钉桩改为真实服务端形态，
+ *        并区分「无 failures 才 throw」（轮1 测试 T11修复② 保留原意图）。
  */
 
 const test = require('node:test');
@@ -42,10 +45,11 @@ function escapeText(value) {
     .replace(/"/g, '&quot;');
 }
 
-function jsonResponse(payload) {
+function jsonResponse(payload, status) {
+  const code = Number(status) || 200;
   return {
-    ok: true,
-    status: 200,
+    ok: code < 400,
+    status: code,
     headers: { get: () => 'application/json' },
     json: async () => payload,
     text: async () => JSON.stringify(payload),
@@ -205,7 +209,9 @@ function makeSandbox(hooks) {
         const payload = hooks.search
           ? hooks.search(route, state.searchCalls.length)
           : { ok: true, songs: [], failures: [] };
-        return jsonResponse(payload || {});
+        // server.js:8410-8411：顶层 ok = songs.length>0 || failures.length===0，
+        // ok:false（含全源失败 502 体）一律随 502 下发——harness 按真实状态码交付。
+        return jsonResponse(payload || {}, payload && payload.ok === false ? 502 : 200);
       }
       state.unexpectedRoutes.push(route);
       return jsonResponse({ ok: false, code: 'TEST_UNEXPECTED_ROUTE' });
@@ -430,10 +436,16 @@ test('T11修复②：ok:false 错误体（LX_SEARCH_FAILED，无 failures）必�
   assert.deepEqual(h.state.unexpectedRoutes, [], '失败路径同样不得触发官方 fan-out');
 });
 
-test('T11修复③：空结果 + failures 数组按既有行为渲染熔断/暂不可用行内条', async () => {
+test('T11修复③轮2：全源失败真实体（ok:false + 非空 failures，502）不得 throw，逐源熔断/暂不可用行必须保留', async () => {
+  // server.js:8410 ok = songs.length>0 || failures.length===0：
+  // 全源失败的真实响应是 {ok:false, songs:[], failures:[非空], error, code} + HTTP 502，
+  // 修复轮1 的无条件 throw 会赶在 caller 赋值 lxSearchFailures（07-search.js:1179）之前，
+  // 熔断/暂不可用行被泛化提示吞掉。本钉桩锁死真实形态，回归即 RED。
   const h = makeHarness({
     search: () => ({
-      ok: true,
+      ok: false,
+      error: 'all sources failed',
+      code: 'LX_SEARCH_FAILED',
       songs: [],
       failures: [
         { source: 'kg', code: 'SOURCE_COOLDOWN' },
@@ -441,14 +453,21 @@ test('T11修复③：空结果 + failures 数组按既有行为渲染熔断/暂�
       ],
     }),
   });
+  // 单元层：带非空 failures 的失败体必须正常返回（failures 透传给 caller），不得上浮为异常
+  const unit = await h.exports.fetchLxSearchResults('查无此曲', { sources: 'tx,wy,kw,kg,mg' });
+  assert.deepEqual(unit.songs, [], 'songs 缺失/为空时必须归一为数组');
+  assert.equal(unit.failures.length, 2, 'failures 必须原样返回供逐源行渲染');
+  // 行为层：per-source 失败行仍在，泛化 catch 提示不得出现
   h.state.$input.value = '查无此曲';
   await h.exports.doSearch('查无此曲', { autoPlayFirst: false });
   const html = h.state.$results.innerHTML;
   const kgRow = /<div[^>]*data-lx-source-failure="kg"[^>]*>[^<]*<\/div>/.exec(html);
-  assert.ok(kgRow, '空结果时 kg 冷却失败条必须挂在空态提示后');
+  assert.ok(kgRow, '全源失败 502 时 kg 冷却失败条必须挂在空态提示后');
   assert.match(kgRow[0], /小狗[\s\S]*熔断/, '冷却条沿 T11 既有熔断文案');
   const mgRow = /<div[^>]*data-lx-source-failure="mg"[^>]*>[^<]*<\/div>/.exec(html);
-  assert.ok(mgRow, '空结果时 mg 普通失败条必须渲染');
+  assert.ok(mgRow, '全源失败 502 时 mg 普通失败条必须渲染');
   assert.match(mgRow[0], /小菇[\s\S]*暂不可用/);
+  assert.ok(!/音源搜索暂时失败，请稍后重试/.test(html),
+    '含非空 failures 的失败体不得走 catch 泛化提示（修复轮1 回归钉桩）');
   assert.equal(h.sandbox.playlist.length, 0, '失败不产出歌曲，playlist 保持空');
 });

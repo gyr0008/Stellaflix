@@ -1087,7 +1087,12 @@ async function fetchLxSearchResults(query, options) {
   // 安全闸 403 / LX_NO_SOURCES 等 {ok:false,error,code} JSON）原样返回。此前被折叠成
   // {songs:[],failures:[]} 渲染为「没有找到相关歌曲」——此处上浮为异常，复用下方
   // fetchMusicSearchResults 对网络错误的既有 catch 失败路径（searchProviderNotice 空态提示）。
-  if (result && (result.ok === false || result.error)) {
+  // T11 修复轮2（评审回归）：server.js:8410 ok = songs.length>0 || failures.length===0，
+  // 「全源失败」真实体是 ok:false + 非空 failures（502）。无条件 throw 赶在 caller 赋值
+  // lxSearchFailures 之前，逐源熔断/暂不可用行被泛化提示吞掉。故仅对无可用 failures 的
+  // 错误体 throw；带非空 failures 的正常返回，交 caller 渲染逐源失败行。
+  var lxHasFailures = !!(result && Array.isArray(result.failures) && result.failures.length);
+  if (result && (result.ok === false || result.error) && !lxHasFailures) {
     var err = new Error('LX_SEARCH_AGGREGATE_FAILED code=' + String(result.code || '') +
       ' error=' + String(result.error || 'ok=false'));
     err.code = String(result.code || 'LX_SEARCH_FAILED');
