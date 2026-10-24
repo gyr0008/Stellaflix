@@ -14,7 +14,9 @@
  *  ③穷尽后调 /api/lx-source/search 跨平台重匹配并 applyCrossPlatformSongMatch；
  *  ④重匹配再穷尽→按机器 code 分支的终态引导文案；
  *  扩展：audio.onerror 断点重解析封顶 3、proxyUrl 不透明消费（裁决4）、
- *        kg hash / mg copyrightId 透传（裁决1）、CustomSourceIntegration 退役边。
+ *        kg hash / mg copyrightId 透传（裁决1）、CustomSourceIntegration 退役边
+ *        （含 index.html 标题栏 #custom-source-btn 内联守卫）、
+ *        T9 修复轮1：同一失败 URL 的运行时链与起播失败链合计只重入 playQueueAt 一次。
  */
 
 const test = require('node:test');
@@ -204,7 +206,7 @@ function makeHarness(hooks) {
   const wrapped = 'try {\n' + source + '\n' +
     'window.__exports = { lxNormalizeSourceName, lxSourcePlatformLabel, lxPlaybackSongPayload, lxRequestQualityForPlaybackQuality, ' +
     'lxPlaybackLevelFromLxQuality, lxSourceGuidanceText, resolveLxPlaybackSong, resolveCrossPlatformPlaybackFallback, ' +
-    'armLxRuntimeErrorFallback, applyCrossPlatformSongMatch, searchAlternatePlatformSong };\n' +
+    'armLxRuntimeErrorFallback, claimLxPlaybackReentry, applyCrossPlatformSongMatch, searchAlternatePlatformSong };\n' +
     '} catch (e) { window.__loadError = e; }\n';
   vm.createContext(sandbox);
   vm.runInContext(wrapped, sandbox, { filename: 'lx-playback-chain.bundle-sim.js' });
@@ -495,6 +497,156 @@ test('T9扩展：audio.onerror 断点重解析封顶 3 次，携带增长的 exc
   assert.equal(played3.length, 0, 'token 已过期（用户切歌）时不得再重解析');
 });
 
+// ---------- T9 修复轮1：自动重试双触发收口（单链闸） ----------
+// 手法：不复制逻辑——按花括号配平从 13 的真实文本里切出 playQueueAt 的
+// `if (!playbackStarted) { … }` 整块，注入它当时的局部量后执行，
+// 于是回归锁的是生产分支本体；运行时链则直接调真 armLxRuntimeErrorFallback。
+function extractIfBlock(src, marker) {
+  const start = src.indexOf(marker);
+  if (start < 0) throw new Error('切片锚点缺失: ' + marker);
+  const open = src.indexOf('{', start);
+  let depth = 0;
+  let quote = null;
+  let lineComment = false;
+  let blockComment = false;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (lineComment) { if (c === '\n') lineComment = false; continue; }
+    if (blockComment) { if (c === '*' && n === '/') { blockComment = false; i++; } continue; }
+    if (quote) { if (c === '\\') { i++; continue; } if (c === quote) quote = null; continue; }
+    if (c === '/' && n === '/') { lineComment = true; i++; continue; }
+    if (c === '/' && n === '*') { blockComment = true; i++; continue; }
+    if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  throw new Error('切片花括号不配平: ' + marker);
+}
+
+const START_FAIL_PARAMS = [
+  'claimLxPlaybackReentry', 'data', 'forcePlaybackControlsInteractive', 'idx', 'isQQPlayback',
+  'lxAttemptedUrls', 'lxExcludedResolvers', 'opts', 'playbackMedia', 'playbackProvider',
+  'playQueueAt', 'proxyAudioUrl', 'requestedQuality', 'retryNeteaseSourceMatchPlayback',
+  'retryQQPlaybackWithCompatibleQuality', 'retryPlaybackOpts', 'settleExpiredSourceFallbackPlayback',
+  'showSourceFallbackNotice', 'showToast', 'skipFailedQueueItem', 'song',
+  'sourceFallbackRecoveryFailureOptions', 'sourceFallbackRecoveryFromOptions',
+  'token', 'trackSwitchToken', 'tryAutoPlaybackFallback',
+];
+
+function makeStartFailureBranch(h, override) {
+  const src = read(P_13);
+  const playQueueAtSrc = src.slice(src.indexOf('async function playQueueAt'));
+  const segment = extractIfBlock(playQueueAtSrc, 'if (!playbackStarted) {');
+  assert.ok(segment.includes('data.lxSource'), '切片必须覆盖 T9 起播失败重进子分支（真实文本，不用副本）');
+  const factory = new Function(
+    START_FAIL_PARAMS,
+    'return async function lxStartFailureBranch(){ var playbackStarted = false;\n' + segment +
+    '\nreturn "__fellThrough__"; }',
+  );
+  const ctx = Object.assign({
+    data: { url: 'https://dead.example/x.flac', lxSource: true, resolver: 'A', source: 'wy' },
+    idx: 4,
+    opts: {},
+    playbackMedia: { currentTime: 0, onerror: null },
+    playbackProvider: 'wy',
+    isQQPlayback: false,
+    proxyAudioUrl: '/api/audio?url=https%3A%2F%2Fdead.example%2Fx.flac',
+    requestedQuality: 'flac',
+    retryPlaybackOpts: {},
+    song: { source: 'wy', id: '777', name: 'x', singer: 'y', _lxResolver: 'A' },
+    token: 900,
+    trackSwitchToken: 900,
+    lxExcludedResolvers: [],
+    lxAttemptedUrls: [],
+    claimLxPlaybackReentry: h.exports.claimLxPlaybackReentry,
+    playQueueAt: h.sandbox.playQueueAt,
+    showSourceFallbackNotice: h.sandbox.showSourceFallbackNotice,
+    showToast: h.sandbox.showToast,
+    forcePlaybackControlsInteractive: () => {},
+    skipFailedQueueItem: async () => '__skipFailedQueueItem__',
+    settleExpiredSourceFallbackPlayback: () => '__settle__',
+    sourceFallbackRecoveryFromOptions: () => null,
+    sourceFallbackRecoveryFailureOptions: (o) => o || {},
+    tryAutoPlaybackFallback: async () => null,
+    retryNeteaseSourceMatchPlayback: async () => null,
+    retryQQPlaybackWithCompatibleQuality: async () => false,
+  }, override || {});
+  const branch = factory(...START_FAIL_PARAMS.map((k) => ctx[k]));
+  return branch();
+}
+
+function armRuntime(h, token, media) {
+  const PROXY = '/api/audio?url=https%3A%2F%2Fdead.example%2Fx.flac';
+  h.sandbox.trackSwitchToken = token;
+  const armed = h.exports.armLxRuntimeErrorFallback({
+    media,
+    token,
+    idx: 4,
+    song: { source: 'wy', id: '777', name: 'x', singer: 'y', _lxResolver: 'A' },
+    opts: {},
+    resolver: 'A',
+    excluded: [],
+    attempted: [],
+    proxyAudioUrl: PROXY,
+    retryDepth: 0,
+    quality: 'flac',
+  });
+  assert.equal(armed, true);
+  return armed;
+}
+
+test('T9修复R1：同一失败 URL 的两条 lx 自动重入链合计只重入一次（运行时 onerror ↔ 起播失败，防 3×3 并发链）', async () => {
+  const h = makeHarness({});
+  const dispatched = [];
+  h.sandbox.playQueueAt = (idx, opts) => {
+    dispatched.push({ idx, opts });
+    // 叶子桩：不执行真 playQueueAt，因此不模拟其 trackSwitchToken++ ——
+    // 不变量必须靠单链闸本身成立，不能指望 token 自增兜底
+    // （真代码里 playQueueAt 头两道 return——13:1317 beginSourceFallbackPlaybackInvocation、
+    //  13:1318 idx 越界——都在 13:1348 的 trackSwitchToken++ 之前，重入链可能在 bump token 前中止，
+    //  此时过期钩仍会被迟到的 error 事件触发）。
+    return Promise.resolve(true);
+  };
+
+  // 场景 A：运行时 onerror 先 fire 占坑并重入，随后同一 token 的 playAudio 返回 false。
+  const tokenA = 900;
+  const mediaA = { currentTime: 6.5, onerror: null };
+  armRuntime(h, tokenA, mediaA);
+  mediaA.onerror();
+  assert.equal(dispatched.length, 1, '运行时链先重入一次');
+  assert.equal(dispatched[0].opts.lxRuntimeRetry, 1);
+  const outcomeA = await makeStartFailureBranch(h, {
+    token: tokenA, trackSwitchToken: tokenA, playbackMedia: mediaA,
+  });
+  assert.equal(dispatched.length, 1, '同一 token 的起播失败链不得再发第二条 playQueueAt');
+  assert.equal(mediaA.onerror, null, '起播失败分支必须先摘掉运行时钩');
+  assert.equal(outcomeA, false, '运行时链在飞时起播失败分支直接收口，不得落到官方回退/跳过队列项链');
+
+  // 场景 B：反序——起播失败链先重入，之后仍挂在共享载体上的过期钩被迟到 error 触发。
+  const tokenB = 910;
+  const mediaB = { currentTime: 0, onerror: null };
+  armRuntime(h, tokenB, mediaB);
+  const staleHandler = mediaB.onerror;
+  const outcomeB = await makeStartFailureBranch(h, {
+    token: tokenB, trackSwitchToken: tokenB, playbackMedia: mediaB,
+  });
+  assert.equal(dispatched.length, 2, '本 token 尚无人在飞时起播失败链自身要正常重入（不过度收口）');
+  assert.equal(dispatched[1].opts.lxStartRetryDepth, 1);
+  assert.equal(outcomeB, true);
+  assert.equal(mediaB.onerror, null, '起播失败重入前必须摘掉运行时钩');
+  staleHandler();
+  assert.equal(dispatched.length, 2, '过期钩即便被迟到 fire，单链闸也必须拦下同 token 的第二条链');
+
+  // 场景 C：闸门只拦同一 token，下一首（新 token）不受影响。
+  assert.equal(h.exports.claimLxPlaybackReentry(950), true);
+  assert.equal(h.exports.claimLxPlaybackReentry(950), false, '同 token 第二次占坑必须失败');
+  assert.equal(h.exports.claimLxPlaybackReentry(951), true, '新 token（换曲/重入后的下一次载入）照常放行');
+});
+
 // ---------- 11-provider-fallback：新查询实现 ----------
 
 test('T9：searchAlternatePlatformSong 新查询实现指 /api/lx-source/search 并按 isSameTitleArtist 匹配', async () => {
@@ -533,4 +685,13 @@ test('T9：CustomSourceIntegration 退役边——modulePaths/agent/搜索/回�
     assert.ok(!read(p).includes('CustomSourceIntegration'), p + ' 不应再引用 CustomSourceIntegration');
   }
   assert.ok(fs.existsSync(path.join(ROOT, 'public/js/modules/05-playback/14-custom-source-integration.js')), '文件本体保留，T14 才删');
+
+  // index.html 侧的入口断边：14 不再被 import → openCustomSourceModal 在生产页面里是未定义全局，
+  // 标题栏那颗钮必须带守卫，否则 T9→T14 窗口内点击直接 ReferenceError（T14 删文件+删钮一并收）。
+  const indexHtml = read('public/index.html');
+  assert.match(
+    indexHtml,
+    /id="custom-source-btn"[^>]*onclick="window\.openCustomSourceModal && window\.openCustomSourceModal\(\)"/,
+    '#custom-source-btn 的内联 onclick 必须是 window.openCustomSourceModal && 守卫式（与弹窗内其余 CustomSourceIntegration 入口同一守卫形态）',
+  );
 });

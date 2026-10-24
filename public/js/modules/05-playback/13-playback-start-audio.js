@@ -1248,12 +1248,35 @@ async function resolveLxPlaybackSong(song, options) {
 
 // 运行时断点重解析挂钩（上游 :32376-32396 audio.onerror 移植）。
 // async playQueueAt 不泄漏 → 经 window.playQueueAt（12-expose-inline-globals.js 已挂）。
+//
+// 单链闸（T9 修复轮1）：运行时 onerror 链（opts.lxRuntimeRetry 计数）与起播失败链
+// （opts.lxStartRetryDepth 计数）挂在同一个共享 audio 载体上、两个深度计数器互不可见，
+// 一次失败若两条链都放行，首歌可长出 3×3 条并发重入链。不变量：一个 token
+// （= 一次 playQueueAt 载入）只允许一次自动重入，先占坑的机制说话，后到的直接放弃。
+// token 单调递增，只保留最近若干个占坑记录，防长期播放列表下无界增长。
+var lxReenteredTokens = [];
+function claimLxPlaybackReentry(token) {
+  var t = Number(token);
+  if (!isFinite(t)) return true;
+  for (var i = lxReenteredTokens.length - 1; i >= 0; i--) {
+    if (lxReenteredTokens[i] < t - 8) lxReenteredTokens.splice(i, 1);
+  }
+  if (lxReenteredTokens.indexOf(t) >= 0) return false;
+  lxReenteredTokens.push(t);
+  return true;
+}
+
 function armLxRuntimeErrorFallback(ctx) {
   ctx = ctx || {};
   var retryDepth = Math.max(0, Number(ctx.retryDepth) || 0);
   if (!ctx.media || retryDepth >= 3) return false;
   ctx.media.onerror = function () {
     if (ctx.token !== trackSwitchToken) return;
+    if (!claimLxPlaybackReentry(ctx.token)) {
+      // 本 token 已由起播失败链重入过，摘钩退出，不再叠加第二条链。
+      ctx.media.onerror = null;
+      return;
+    }
     var resumeSeconds = Math.max(0, Number(ctx.media.currentTime) || 0);
     var nextExcluded = Array.isArray(ctx.excluded) ? ctx.excluded.slice() : [];
     var playingResolver = String(ctx.resolver || (ctx.song && ctx.song._lxResolver) || '').trim().toLowerCase();
@@ -1777,8 +1800,14 @@ async function playQueueAt(idx, opts) {
         return settleExpiredSourceFallbackPlayback(idx, token, opts);
       }
       if (!playbackStarted) {
+        // T9 修复轮1：起播失败即摘掉运行时钩——本分支与 armLxRuntimeErrorFallback 共用
+        // 同一个共享 audio 载体，钩不摘则两条链可能同 token 并发重入（3×3）。
+        if (playbackMedia) playbackMedia.onerror = null;
         // T9 第一级（播放启动失败重进）：lx 解析成功但媒体起播失败 → 排除当前 resolver 后重走三级链，上限 3 次。
         if (data && data.lxSource && (Number(opts.lxStartRetryDepth) || 0) < 3) {
+          // 单链闸：本 token 若已被运行时 onerror 链占坑，则那条链正在重解析，这里既不再
+          // 发第二条，也不落到下面的官方回退/跳过队列项分支（否则同曲多重失败提示+多重链）。
+          if (!claimLxPlaybackReentry(token)) return false;
           var lxStartExclude = lxExcludedResolvers.slice();
           var lxStartAttempted = lxAttemptedUrls.slice();
           if (data.resolver) lxStartExclude.push(String(data.resolver));
