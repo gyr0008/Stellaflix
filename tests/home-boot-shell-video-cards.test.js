@@ -41,10 +41,10 @@ function makeTextNode(v) { return { textContent: v }; }
 // 与 index.html 静态 6 卡一一对应（顺序即 DOM 顺序）
 const STATIC_CARDS = [
   { label: 'CONTINUE', title: '继续播放', sub: '从当前队列或最近播放继续' },
-  { label: 'LIBRARY', title: '音乐库', sub: '歌单、本地音乐和已登录平台' },
+  { label: 'PLAYLISTS', title: '歌单', sub: '导入的歌单与本地歌单' },
   { label: 'IMPORT', title: '歌单导入', sub: '平台链接 / LX 文件 / 落雪曲库' },
-  { label: 'DAILY MIX', title: '每日推荐', sub: '使用当前 Stellaflix 推荐数据' },
-  { label: 'RECENT', title: '最近播放', sub: '播放过的歌曲会出现在这里' },
+  { label: 'ALBUMS', title: '专辑', sub: '资料库 · 建设中' },
+  { label: 'ARTISTS', title: '艺人', sub: '资料库 · 建设中' },
   { label: 'Video', title: '影视空间', sub: '搜索 / 播放影片' },
 ];
 

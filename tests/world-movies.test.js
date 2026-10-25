@@ -6,7 +6,8 @@
  *   ② world-movies 装配：主链 = tmdb.discover(with_origin_country=本国 +
  *      sort_by=popularity.desc + 近3年窗) → 无未占用结果则宽窗 discover →
  *      仍无则 popular(region)；跨国串行去重（claimed 电影 id），16 塔不同片
- *   ③ 缓存：localStorage 快照键升 world-movies-v2（旧 v1「全蜘蛛侠」快照作废）
+ *   ③ 缓存：localStorage 快照键 world-movies-v2 = {ts, lastCheck, stations}
+ *      （轮㉘：打开即套用缓存 + 后台检查更新，30min lastCheck 节流取代 6h 数据 TTL）
  *   ④ world-data 基座替换：live 站顶掉十演示塔；无 live 回退 DEMO_ROOMS（铁律不删）
  *   ⑤ world-flags 扩 8 国（DE/IT/ES/KR/MX/CA/TR/NL）
  * 根因备忘：TMDB /movie/popular?region 只按"该国上映过"过滤、排序仍是全球流行度
@@ -204,38 +205,67 @@ test('全失败且无缓存 → stations() 空数组（由 world-data 回落演�
   assert.equal(changed, false);
 });
 
-// ---------------------------------------------------------------- ③ 缓存与 TTL
+// ---------------------------------------------------------------- ③ 缓存与 lastCheck 节流（轮㉘：打开即后台检查，30min 节流）
 function makeLS(initial) {
   const m = Object.assign({}, initial || {});
   return { getItem: k => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, _dump: m };
 }
 
-test('refresh 成功后写 v2 快照；新实例无网络秒 hydrate', async () => {
+test('refresh 成功后写 v2 快照（含 lastCheck）；新实例无网络秒 hydrate', async () => {
   const ls = makeLS();
   const a = loadMovies({ sandbox: { localStorage: ls } });
   await a.movies.refresh();
   assert.ok(ls.getItem('world-movies-v2'), '快照键 world-movies-v2 已写');
+  const snap = JSON.parse(ls.getItem('world-movies-v2'));
+  assert.ok(Number.isFinite(snap.lastCheck) && Date.now() - snap.lastCheck < 60000, '检查完成后回写 lastCheck');
   const b = loadMovies({ sandbox: { localStorage: ls } });
   assert.equal(b.movies.stations().length, 16, '冷启动直接读到缓存');
   const before = b.discoverCalls.length;
   const changed = await b.movies.refresh();
   assert.equal(changed, false);
-  assert.equal(b.discoverCalls.length, before, '6h 内不重拉');
+  assert.equal(b.discoverCalls.length, before, '30min 节流窗内不重拉');
 });
 
-test('快照超 6h → refresh 重拉并覆盖', async () => {
+test('超节流窗（lastCheck>30min）→ 即拉，不受数据 ts 新度影响', async () => {
   const ls = makeLS();
   const a = loadMovies({ sandbox: { localStorage: ls } });
   await a.movies.refresh();
   const snap = JSON.parse(ls.getItem('world-movies-v2'));
-  snap.ts = snap.ts - (6 * 3600 * 1000 + 1000);
+  snap.lastCheck = snap.lastCheck - (30 * 60 * 1000 + 1000);
+  ls.setItem('world-movies-v2', JSON.stringify(snap));
+  const b = loadMovies({ sandbox: { localStorage: ls } });
+  const changed = await b.movies.refresh();
+  assert.equal(b.discoverCalls.length, 16, '超窗即全量检查（ts 仍新不挡路）');
+  const after = JSON.parse(ls.getItem('world-movies-v2'));
+  assert.equal(changed, false, '内容一致（同 fixture）不算变化');
+  assert.equal(after.ts, snap.ts, '无变化不动 ts');
+  assert.ok(after.lastCheck > snap.lastCheck, '无变化也回写 lastCheck（修「连日不变每启动全量重拉」缺陷）');
+});
+
+test('旧快照无 lastCheck 字段 → 视为过期直接拉（向后兼容）', async () => {
+  const ls = makeLS({ 'world-movies-v2': JSON.stringify({ ts: Date.now(), stations: [movieFixture('US', { id: 4401 })] }) });
+  const b = loadMovies({ sandbox: { localStorage: ls } });
+  assert.equal(b.movies.stations().length, 1, '先秒出旧快照');
+  await b.movies.refresh();
+  assert.equal(b.discoverCalls.length, 16, '缺 lastCheck 不节流');
+});
+
+test('超窗且有变化 → ts+lastCheck 同刷、快照覆盖旧片名', async () => {
+  const ls = makeLS();
+  const a = loadMovies({ sandbox: { localStorage: ls } });
+  await a.movies.refresh();
+  const snap = JSON.parse(ls.getItem('world-movies-v2'));
+  snap.ts = snap.ts - 1000;
+  snap.lastCheck = snap.lastCheck - (30 * 60 * 1000 + 1000);
   snap.stations[0].title = '《过期片》';
   ls.setItem('world-movies-v2', JSON.stringify(snap));
   const b = loadMovies({ sandbox: { localStorage: ls } });
-  assert.equal(b.movies.stations()[b.movies.stations().findIndex(s => s.cc === snap.stations[0].cc)].title, '《过期片》', '先秒出旧快照');
+  assert.equal(b.movies.stations().find(s => s.cc === snap.stations[0].cc).title, '《过期片》', '检查前缓存塔已在场');
   const changed = await b.movies.refresh();
   assert.equal(changed, true);
-  assert.notEqual(JSON.parse(ls.getItem('world-movies-v2')).stations.find(s => s.cc === snap.stations[0].cc).title, '《过期片》', '重拉后覆盖');
+  const after = JSON.parse(ls.getItem('world-movies-v2'));
+  assert.notEqual(after.stations.find(s => s.cc === snap.stations[0].cc).title, '《过期片》', '重拉后覆盖');
+  assert.ok(after.ts > snap.ts && after.lastCheck > snap.lastCheck, 'changed 时 ts+lastCheck 同刷');
 });
 
 test('旧 v1「全蜘蛛侠」快照作废：不读、不写 v1', async () => {

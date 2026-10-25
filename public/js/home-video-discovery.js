@@ -169,6 +169,16 @@
         writeDayCache(global.localStorage, pools, Date.now());
         if (typeof onReady === 'function') onReady();
       }
+      // 补取仍空 = 上游还在挂：自排一发冷却重试，用户停在首页不动也能自愈
+      var stillMissing = (needTrending && !poolFilled(pools, 'trending')) ||
+        (needHigh && !poolFilled(pools, 'highscore')) ||
+        (needCalendar && !poolFilled(pools, 'calendar'));
+      if (stillMissing && typeof setTimeout === 'function') {
+        setTimeout(function () {
+          _backfillAt = 0;
+          ensureLoaded(onReady);
+        }, BACKFILL_COOLDOWN_MS);
+      }
     }).catch(function () { }).then(function () {
       _loading = false;
     });

@@ -39,6 +39,8 @@ function makeSandbox(opts) {
     setItem: (k, v) => { store[k] = String(v); },
   };
   const calls = { calendar: 0, trending: 0, discover: 0, rerender: 0 };
+  const timers = [];
+  const fakeSetTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
   const bangumi = {
     getCalendar: () => {
       calls.calendar++;
@@ -51,14 +53,15 @@ function makeSandbox(opts) {
     discover: () => { calls.discover++; return (opts.discoverImpl || (() => Promise.resolve([])))(); },
   };
   const context = {
-    console, Date, Math, JSON, String, Number, Array, Object, Boolean, Promise, setTimeout, encodeURIComponent,
+    console, Date, Math, JSON, String, Number, Array, Object, Boolean, Promise, encodeURIComponent,
+    setTimeout: opts.captureTimers ? fakeSetTimeout : setTimeout,
     localStorage: ls,
     StellaflixVideo: { tmdb, bangumi },
     renderHomeDashboardDiscovery: () => { calls.rerender++; },
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(MODULE_PATH, 'utf8'), context);
-  return { api: context.StellaflixHomeVideoDiscovery, store, calls, ls };
+  return { api: context.StellaflixHomeVideoDiscovery, store, calls, ls, timers };
 }
 
 const settle = () => new Promise(r => setTimeout(r, 5));
@@ -89,7 +92,7 @@ test('补取失败不覆盖已成功池；日历仍空时保持两卡', async ()
     }),
   };
   const { api, store } = makeSandbox({
-    seed,
+    seed, captureTimers: true,
     calendarImpl: () => Promise.resolve({ calendar: [], error: 'boom' }),
   });
   api.getCards();
@@ -122,7 +125,7 @@ test('空池补取一次失败后进入冷却，连续 getCards 不反复打上�
     }),
   };
   const { api, calls } = makeSandbox({
-    seed,
+    seed, captureTimers: true,
     calendarImpl: () => Promise.reject(new Error('502')),
   });
   api.getCards();
@@ -146,4 +149,44 @@ test('TMDB 无 key 时不空转重试 trending/highscore，只补日历', async 
   assert.equal(calls.calendar, 1);
   assert.equal(calls.trending, 0);
   assert.equal(calls.discover, 0);
+});
+
+test('补取失败 → 自排冷却重试，用户停在首页也能自愈', async () => {
+  const seed = {
+    'stellaflix-home-video-discovery-v1': JSON.stringify({
+      date: todayKey(),
+      pools: { trending: [tmdbItem(1, '甲')], highscore: [], calendar: [] },
+    }),
+  };
+  let first = true;
+  const { api, calls, timers } = makeSandbox({
+    seed, captureTimers: true,
+    calendarImpl: () => {
+      if (first) { first = false; return Promise.resolve({ calendar: [], error: '502' }); }
+      return Promise.resolve({ calendar: calendarWith(0, [bgmItem(9, '迟到番')]) });
+    },
+  });
+  api.getCards();
+  await settle();
+  assert.equal(calls.calendar, 1);
+  const retry = timers.find(t => t.ms >= 30000);
+  assert.ok(retry, '失败后必须排一个冷却重试定时器，实际 timers=' + JSON.stringify(timers.map(t => t.ms)));
+  retry.fn();
+  await settle();
+  assert.equal(calls.calendar, 2, '定时器触发后应再补一次');
+  assert.equal(api.getCards().length, 2, '救回后番剧卡补上（trending+bangumi）');
+});
+
+test('补取成功 → 不再排重试定时器', async () => {
+  const seed = {
+    'stellaflix-home-video-discovery-v1': JSON.stringify({
+      date: todayKey(),
+      pools: { trending: [tmdbItem(1, '甲')], highscore: [], calendar: [] },
+    }),
+  };
+  const { api, calls, timers } = makeSandbox({ seed, captureTimers: true });
+  api.getCards();
+  await settle();
+  assert.equal(calls.calendar, 1);
+  assert.equal(timers.filter(t => t.ms >= 30000).length, 0, '成功路径不应留冷却定时器');
 });

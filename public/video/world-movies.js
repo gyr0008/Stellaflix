@@ -9,8 +9,10 @@
  * 跨国去重：按 COUNTRIES 序串行装配，claimed 集合存电影 id，撞车取下一部。
  * 单国全链失败保留旧条目；全败且无缓存 → stations() 空数组，
  * 由 world-data 回落 DEMO_ROOMS（铁律不删）。
- * 缓存：localStorage world-movies-v2 = {ts, stations}，冷启动秒出 + 6h TTL 重拉；
- * v2 换键使旧 v1「全蜘蛛侠」快照在 TTL 内自动作废。
+ * 缓存：localStorage world-movies-v2 = {ts, lastCheck, stations}，冷启动秒出；
+ * 轮㉘：每次打开都后台检查更新（stale-while-revalidate），30min lastCheck
+ * 节流防连启刷配额；无变化只回写 lastCheck，有变化才刷 ts/stations。
+ * v2 换键使旧 v1「全蜘蛛侠」快照自动作废。
  * 已知代价（验收报告点名）：TMDB key 在用户 localStorage，无 key 恒走演示回落；
  * coverUrl 用 image.tmdb.org w780 直链（posterUrl 的代理链会丢提色 CORS 判别）。
  */
@@ -19,7 +21,7 @@
   var SFV = (global.StellaflixVideo = global.StellaflixVideo || {});
 
   var LS_KEY = 'world-movies-v2';
-  var TTL_MS = 6 * 3600 * 1000;
+  var CHECK_THROTTLE_MS = 30 * 60 * 1000; // 轮㉘：后台检查的最小间隔（原 6h 数据 TTL 废止）
   var WINDOW_DAYS = 1095; // 近 3 年
 
   // 16 国（TMDB 有地区热门数据的较大国家集；无 CN——已按裁决换成更大集）
@@ -44,6 +46,7 @@
 
   var stations = [];
   var ts = 0;
+  var lastCheck = 0; // 轮㉘：上次后台检查完成时刻（数据 ts 只在有变化时回写）
 
   function ls() {
     try { return global.localStorage || null; } catch (e) { return null; }
@@ -59,6 +62,7 @@
       if (snap && Array.isArray(snap.stations)) {
         stations = snap.stations;
         ts = Number(snap.ts) || 0;
+        lastCheck = Number(snap.lastCheck) || 0; // 旧快照缺字段=0，视为过期即拉
       }
     } catch (e) { /* 坏快照静默忽略，等重拉覆盖 */ }
   }
@@ -66,7 +70,7 @@
   function writeSnapshot() {
     var store = ls();
     if (!store) return;
-    try { store.setItem(LS_KEY, JSON.stringify({ ts: ts, stations: stations })); } catch (e) {}
+    try { store.setItem(LS_KEY, JSON.stringify({ ts: ts, lastCheck: lastCheck, stations: stations })); } catch (e) {}
   }
 
   // hearthere 收听数语义的本地等价：popularity 对数折算，1..9 收敛
@@ -134,7 +138,7 @@
   }
 
   function refresh() {
-    if (ts && Date.now() - ts < TTL_MS) return Promise.resolve(false);
+    if (lastCheck && Date.now() - lastCheck < CHECK_THROTTLE_MS) return Promise.resolve(false);
     var tmdb = SFV.tmdb;
     if (!tmdb || !tmdb.discover) return Promise.resolve(false);
     var old = {};
@@ -157,8 +161,10 @@
       if (changed) {
         stations = next;
         ts = Date.now();
-        writeSnapshot();
       }
+      // 轮㉘：无论有无变化都记检查完成时刻并落盘，防连日不变时每次冷启动全量重拉
+      lastCheck = Date.now();
+      writeSnapshot();
       return changed;
     });
   }
