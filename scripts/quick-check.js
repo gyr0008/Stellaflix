@@ -1412,10 +1412,13 @@ function checkLyricTranslationCompletenessGuard() {
   if (!/isLyricCreditLineText/.test(lyricText) || !/orderedPrimaryIndexes/.test(lyricText)) {
     fail('frontend lyric parser must skip singer/credit lines when attaching translated lyrics');
   }
-  if (!/function scheduleNeteaseLyricTranslationFallback/.test(lyricText) || !/function findNeteaseLyricFallbackCandidate/.test(lyricText) || !/songProviderKey\(song\) === 'netease'/.test(lyricText) || !/requestIdleCallback/.test(lyricText) || !/mergeInlineLyricResponseForSong/.test(lyricText)) {
-    fail('non-Netease providers must asynchronously reuse the Netease translation merge path without blocking primary lyric paint');
+  if (!/function lxLyricSourceForSong/.test(lyricText) || !/\/api\/lx-source\/lyric/.test(lyricText) || !/function mergeInlineLyricResponseForSong/.test(lyricText)) {
+    fail('T15.5b: lyrics must resolve through the lx-source lyric route (POST /api/lx-source/lyric)');
   }
-  console.log('[OK] Netease tlyric/ytlrc translation merge is guarded.');
+  if (/function scheduleNeteaseLyricTranslationFallback|function findNeteaseLyricFallbackCandidate|sourceCandidateRejectReason\(song, candidate, 'netease'\)/.test(lyricText)) {
+    fail('T15.5b: the cross-provider Netease translation-fallback family must stay retired (lx is the only lyric supplier)');
+  }
+  console.log('[OK] Lyric pipeline is guarded: lx-source lyric route live, Netease fallback family retired.');
 }
 
 function checkLyricVerticalFloatToggleGuard() {
@@ -1548,14 +1551,14 @@ function checkQishuiProviderGuard() {
   if (!/qishuiPlaylists/.test(coreStoreText) || !/if \(provider === 'qishui'\) return '\/api\/qishui\/user\/playlists'/.test(playlistShellText) || !/neteasePlaylists\.concat\(qqPlaylists, kugouPlaylists, qishuiPlaylists, spotifyPlaylists\)/.test(playlistShellText)) {
     fail('playlist panel refresh must merge Qishui playlists with the other providers');
   }
-  if (!/normalizePlaylistProvider/.test(playlistDetailText) || !/\/api\/qishui\/playlist\/tracks/.test(playlistDetailText) || !/qishui:' \+ id/.test(playlistDetailText) || !/汽水音乐歌单/.test(playlistDetailText)) {
-    fail('playlist panel detail must open and play Qishui playlists via the Qishui endpoint');
+  if (!/normalizePlaylistProvider/.test(playlistDetailText) || !/function playlistTracksPage/.test(playlistDetailText) || /\/api\/qishui\/playlist\/tracks/.test(playlistDetailText) || !/qishui:' \+ id/.test(playlistDetailText) || !/汽水音乐歌单/.test(playlistDetailText)) {
+    fail('T15.5b: playlist panel detail must open Qishui playlists through playlistTracksPage (lx import family), not the retired Qishui tracks endpoint');
   }
   if (!/function playlistQueueSource/.test(playlistLoadText) || !/raw\.indexOf\('qishui:'\)/.test(playlistLoadText) || !/playlistTracksEndpoint\(source\.provider/.test(playlistLoadText)) {
     fail('whole-playlist queue loading must support qishui: playlist ids');
   }
-  if (!/provider === 'qishui'/.test(shelfCoreText) || !/qishui:'/.test(shelfCoreText) || !/\/api\/qishui\/playlist\/tracks/.test(shelfContentText)) {
-    fail('3D shelf must display and drill into Qishui playlists through the Qishui endpoint');
+  if (!/provider === 'qishui'/.test(shelfCoreText) || !/qishui:'/.test(shelfCoreText) || !/function contentPageFetch/.test(shelfContentText) || /\/api\/qishui\/playlist\/tracks/.test(shelfContentText)) {
+    fail('T15.5b: 3D shelf must drill into Qishui playlists via contentPageFetch/playlistTracksPage, not the retired Qishui tracks endpoint');
   }
   if (!/网易云 \/ QQ \/ 酷狗 \/ 汽水/.test(homeText) || !/hasAnyPlatformLogin\(\)/.test(homeText) || /网易云 \/ QQ 音乐/.test(homeText)) {
     fail('Home discover must acknowledge Qishui/Kugou login playlists instead of only Netease/QQ');
@@ -1600,26 +1603,26 @@ async function checkSpotifyProviderGuard() {
   if (!/playbackMode:\s*'recommend-match'/.test(spotifyText) || !/provider_limited/.test(spotifyText) || !/handleSpotifySongUrl/.test(spotifyText) || !/handleSpotifyLyric/.test(spotifyText)) {
     fail('Spotify must stay a metadata/search match source, not a fake direct audio provider');
   }
-  if (!/require\('\.\/spotify-api'\)/.test(serverText) || !/\/api\/spotify\/status/.test(serverText) || !/\/api\/spotify\/config/.test(serverText) || !/\/api\/spotify\/search/.test(serverText) || !/\/api\/spotify\/song\/url/.test(serverText) || !/\/api\/spotify\/lyric/.test(serverText)) {
-    fail('server.js must route Spotify status/search/song-url/lyric through the backend bridge');
+  if (!/require\('\.\/spotify-api'\)/.test(serverText) || !/\/api\/spotify\/status/.test(serverText) || !/\/api\/spotify\/config/.test(serverText) || !/\/api\/spotify\/search/.test(serverText) || /\/api\/spotify\/song\/url/.test(serverText) || !/\/api\/spotify\/lyric/.test(serverText)) {
+    fail('server.js must route Spotify status/search/lyric through the backend bridge; T15 retired /api/spotify/song/url (lx-source is the only online URL supplier)');
   }
-  if (!/search-mode-spotify/.test(indexText) || !/tag-source\.spotify/.test(cssText) || !/spotify-source/.test(cssText)) {
-    fail('Spotify search tab and source badges must be visible in the UI');
+  if (/search-mode-spotify/.test(indexText) || !/tag-source\.spotify/.test(cssText) || !/spotify-source/.test(cssText)) {
+    fail('T11/T15.5b: the Spotify search tab must stay retired from the tab strip while legacy source badges remain styleable');
   }
-  if (!/PLAYBACK_QUALITY_DEFAULTS[\s\S]*spotify:\s*'standard'/.test(coreStoreText) || !/spotify:\s*\[[\s\S]*Spotify/.test(coreStoreText)) {
-    fail('Spotify must be represented as a standard match-source quality option');
+  if (!/PLAYBACK_QUALITY_DEFAULTS[\s\S]*spotify:\s*'128k'/.test(coreStoreText) || !/\['netease', 'qq', 'kugou', 'qishui', 'spotify', 'lx-custom-source'\]/.test(coreStoreText)) {
+    fail('Spotify must stay a match-source option on the lx-vocabulary quality table (T12: default 128k, never above the script ladder)');
   }
   if (!/provider === 'spotify'/.test(qualityText) || !/Spotify/.test(qualityText) || !/return 'SP'/.test(qualityText)) {
     fail('playback quality UI must label Spotify as a match source');
   }
-  if (!/search-mode-spotify/.test(searchText) || !/songProviderKey\(song\)[\s\S]*spotify/.test(searchText) || !/\/api\/spotify\/search/.test(searchText) || !/mergeSongSearchResults\(neteaseSongs, qqSongs, kugouSongs, qishuiSongs, spotifySongs/.test(searchText)) {
-    fail('frontend search must include Spotify in tabs, source tags, provider search, and All merge');
+  if (/\/api\/spotify\/search|search-mode-spotify/.test(searchText) || !/songProviderKey\(song\)[\s\S]*spotify/.test(searchText) || /mergeSongSearchResults\(neteaseSongs, qqSongs, kugouSongs, qishuiSongs, spotifySongs/.test(searchText)) {
+    fail('T11: frontend search must aggregate through lx-source (no official Spotify tab/endpoint, no legacy five-way merge)');
   }
-  if (!/\/api\/spotify\/song\/url/.test(playbackText) || !/isSpotifyPlayback/.test(playbackText) || !/provider_limited/.test(fallbackText)) {
-    fail('Spotify playback must flow through provider_limited auto source fallback');
+  if (/\/api\/spotify\/song\/url/.test(playbackText) || !/isSpotifyPlayback/.test(playbackText) || !/provider_limited/.test(fallbackText)) {
+    fail('T15: Spotify playback must resolve through lx-source only while provider_limited auto source fallback stays wired');
   }
-  if (!/\/api\/spotify\/lyric/.test(lyricText)) {
-    fail('Spotify lyric endpoint must return a safe empty lyric response for the shared lyric pipeline');
+  if (/\/api\/spotify\/lyric/.test(lyricText)) {
+    fail('T15.5b: lyrics must come from the lx lyric route; the per-provider lyric endpoint must stay retired on the frontend');
   }
   if (!/spotifyId/.test(queueText) || !/spotifyUri/.test(queueText) || !/spotifyUrl/.test(queueText)) {
     fail('Spotify queue snapshots must preserve provider ids and uri fields');
@@ -1716,8 +1719,8 @@ async function checkSpotifyProviderGuard() {
   if (!/loginRefreshRequestSeq/.test(loginFlowText) || !/isLoginRefreshCurrent/.test(loginFlowText)) {
     fail('login modal provider switching must guard stale async status and QR writes');
   }
-  if (!/\/api\/spotify\/user\/playlists/.test(playlistShellText) || !/spotifyPlaylists/.test(playlistShellText) || !/\/api\/spotify\/playlist\/tracks/.test(playlistDetailText) || !/spotify:' \+ id/.test(playlistDetailText) || !/Spotify 歌单/.test(playlistDetailText)) {
-    fail('playlist panel must merge and open Spotify playlists');
+  if (!/\/api\/spotify\/user\/playlists/.test(playlistShellText) || !/spotifyPlaylists/.test(playlistShellText) || /\/api\/spotify\/playlist\/tracks/.test(playlistDetailText) || !/function playlistTracksPage/.test(playlistDetailText) || !/spotify:' \+ id/.test(playlistDetailText) || !/Spotify 歌单/.test(playlistDetailText)) {
+    fail('T15.5b: playlist panel must merge Spotify playlists and open their tracks via playlistTracksPage (lx import family), not the retired tracks endpoint');
   }
   if (!/spotifyErrorDetails/.test(spotifyText) || !/playlistPanelNoticeHtml/.test(playlistDetailText) || !/playlistCardPriority/.test(playlistDetailText) || !/spotify-liked/.test(playlistDetailText) || !/prioritizePlaylistGroupItems/.test(playlistDetailText) || !/showToast\(r && \(r\.message \|\| r\.error\) \|\| '歌单为空'\)/.test(playlistLoadText)) {
     fail('Spotify playlists must keep liked songs visible and surface API errors instead of pretending details are empty');
@@ -1725,8 +1728,8 @@ async function checkSpotifyProviderGuard() {
   if (!/function playlistQueueSource/.test(playlistLoadText) || !/raw\.indexOf\('spotify:'\)/.test(playlistLoadText) || !/playlistTracksEndpoint\(source\.provider/.test(playlistLoadText)) {
     fail('whole-playlist queue loading must support spotify: playlist ids');
   }
-  if (!/provider === 'spotify'/.test(shelfCoreText) || !/spotify:/.test(shelfCoreText) || !/\/api\/spotify\/playlist\/tracks/.test(shelfContentText)) {
-    fail('3D shelf must display and drill into Spotify playlists through the Spotify endpoint');
+  if (!/provider === 'spotify'/.test(shelfCoreText) || !/spotify:/.test(shelfCoreText) || /\/api\/spotify\/playlist\/tracks/.test(shelfContentText) || !/function contentPageFetch/.test(shelfContentText)) {
+    fail('T15.5b: 3D shelf must drill into Spotify playlists via contentPageFetch/playlistTracksPage, not the retired Spotify tracks endpoint');
   }
   if (!/"\*-api\.js"/.test(packageText) || !/"\*-api\.js"/.test(internalBuilderText)) {
     fail('official and internal-beta package file lists must include root provider API modules');
@@ -1765,8 +1768,10 @@ function checkPlaybackControlBadgesGuard() {
     /function sourceCandidateRejectReason/.test(searchText) &&
     /function findControlSourceMatchResult/.test(searchText) &&
     /function controlSourceIssueLabel/.test(searchText) &&
-    /sourceCandidateRejectReason\(song, list\[i\], target\)/.test(fallbackText) &&
-    /sourceCandidateRejectReason\(song, candidate, 'netease'\)/.test(lyricFetchText);
+    /sourceCandidateRejectReason\(reference, view, target\)/.test(fallbackText) &&
+    // T15.5b：歌词跨源兜底链（含其黑名单判定）随 lx 歌词改道退役——歌词侧不再自行换源，
+    // 负向钉桩防「把官方换源链又接回歌词」。
+    !/sourceCandidateRejectReason\(song, candidate, 'netease'\)/.test(lyricFetchText);
   if (!/control-title-text/.test(indexText) || !/control-title-badges/.test(indexText)) {
     fail('bottom player title must reserve inline spans for source and VIP badges');
   }
@@ -1852,8 +1857,8 @@ async function checkProviderFallbackTerminalStateGuard() {
   if (!/function sourceFallbackProviderReady/.test(fallbackText) || !/status\.playbackKeyReady === true/.test(fallbackText) || !/function alternatePlaybackProviders/.test(fallbackText) || /if \(provider === 'netease'\) return 'qq'/.test(fallbackText)) {
     fail('automatic fallback must only select logged-in direct providers with complete playback authorization');
   }
-  if (!/SOURCE_FALLBACK_SEARCH_TIMEOUT_MS\s*=\s*6500/.test(fallbackText) || !/apiJson\(url, \{ timeoutMs: SOURCE_FALLBACK_SEARCH_TIMEOUT_MS \}\)/.test(fallbackText) || !/SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS\s*=\s*20000/.test(fallbackText) || !/function awaitSourceFallbackBudget/.test(fallbackText) || (playbackText.match(/timeoutMs:\s*9000/g) || []).length < 6 || (playbackText.match(/timeoutMs:\s*14000/g) || []).length < 2 || (playbackText.match(/timeoutMs:\s*15000/g) || []).length < 2) {
-    fail('fallback search, normal source resolution, and gapless source resolution must all be time-bounded');
+  if (!/LX_SOURCE_SEARCH_TIMEOUT_MS\s*=\s*22000/.test(fallbackText) || !/apiJson\(url, \{ timeoutMs: LX_SOURCE_SEARCH_TIMEOUT_MS \}\)/.test(fallbackText) || !/SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS\s*=\s*20000/.test(fallbackText) || !/function awaitSourceFallbackBudget/.test(fallbackText) || (playbackText.match(/timeoutMs:\s*\d{4,}/g) || []).length < 6 || (playbackText.match(/timeoutMs:\s*15000/g) || []).length < 1) {
+    fail('fallback search, normal source resolution, and gapless source resolution must all be time-bounded (T15.5b: lx 预算取代官方 6500ms 档)');
   }
   if (!/alternateData[\s\S]{0,220}!alternateData\.url[\s\S]{0,320}playQueue\[idx\] = committedCandidate/.test(fallbackText) || !/fallbackStarted === true[\s\S]{0,180}已自动切换音源/.test(fallbackText) || !/function restoreSourceFallbackQueueItem/.test(fallbackText)) {
     fail('fallback candidates must be URL-probed before provisional commit and only announce success after audible playback');
@@ -1867,7 +1872,7 @@ async function checkProviderFallbackTerminalStateGuard() {
   if (!/AUDIO_PLAY_REQUEST_TIMEOUT_MS\s*=\s*9000/.test(controlsText) || !/function awaitMediaPlayWithTimeout/.test(controlsText) || (controlsText.match(/awaitMediaPlayWithTimeout\(/g) || []).length < 5 || !/function playbackMediaMatchesCurrentQueueItem/.test(controlsText)) {
     fail('media.play promises must be time-bounded and manual resume must reject stale audio ownership');
   }
-  if (!/function probePlaybackAudioUrl/.test(serverText) || !/AUDIO_URL_PROBE_BYTES\s*=\s*8192/.test(serverText) || !/function audioProbeMagic/.test(serverText) || !/audioProxyHeadersFor\(audioUrl, 'bytes=0-'/.test(serverText) || !/&& !!magic/.test(serverText) || !/function probeQQAudioUrl/.test(serverText) || !/probe\.ok/.test(serverText) || !/function readStreamChunkWithTimeout/.test(serverText) || !/fetchWithTimeout\(audioUrl, \{ headers: hdr \}, 9000\)/.test(serverText)) {
+  if (!/function probePlaybackAudioUrl/.test(serverText) || !/AUDIO_URL_PROBE_BYTES\s*=\s*8192/.test(serverText) || !/function audioProbeMagic/.test(serverText) || !/audioProxyHeadersFor\(audioUrl, 'bytes=0-'/.test(serverText) || !/&& !!magic/.test(serverText) || !/function probeQQAudioUrl/.test(serverText) || !/probe\.ok/.test(serverText) || !/function readStreamChunkWithTimeout/.test(serverText) || !/headers: hdr,[\s\S]{0,160}\}, 9000\)/.test(serverText) || !/fetchWithTimeout\(audioUrl,[\s\S]{0,200}\}, probeBudgetMs\)/.test(serverText)) {
     fail('provider URL resolution and the audio proxy must verify real upstream bytes with bounded connection and stream waits');
   }
   const magicStart = serverText.indexOf('function audioProbeMagic');
@@ -1883,7 +1888,7 @@ async function checkProviderFallbackTerminalStateGuard() {
   const playbackBudget = 14000;
   if (
     !/function neteasePlaybackMatchQuery/.test(playbackText)
-    || (playbackText.match(/neteasePlaybackMatchQuery\(song\)/g) || []).length < 2
+    || (playbackText.match(/neteasePlaybackMatchQuery\(song\)/g) || []).length < 1
     || !/song\.resolvedNeteaseId\s*=/.test(playbackText)
     || !/data && data\.sourceMatch/.test(playbackText)
     || neteaseMatchNoticePos < 0
@@ -1891,8 +1896,8 @@ async function checkProviderFallbackTerminalStateGuard() {
     || !/async function retryNeteaseSourceMatchPlayback/.test(playbackText)
     || !/excludeIds: triedIds, skipDirect: true/.test(playbackText)
     || !/matchedPlaybackFallback = await tryAutoPlaybackFallback/.test(playbackText)
-    || !/neteasePlaybackMatchQuery\(song\)/.test(beatPrefetchText)
-    || !/timeoutMs:\s*14000/.test(beatPrefetchText)
+    || /neteasePlaybackMatchQuery\(song\)/.test(beatPrefetchText)
+    || !/fetchBeatPrefetchAudioUrl\(song\)/.test(beatPrefetchText)
     || !/async function findNeteaseSameTrackCandidates/.test(serverText)
     || !/cloudsearch\(\{ keywords: query, type: 1, limit: 16, cookie: userCookie \}\)/.test(serverText)
     || !/song_detail\(\{ ids: \[\.\.\.new Set\(detailIds\)\]\.join\(','\), cookie: userCookie \}\)/.test(serverText)
