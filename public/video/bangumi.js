@@ -34,10 +34,10 @@
   var BANGUMI_CALENDAR_NEXT = 'https://next.bgm.tv/p1/calendar';
   var BANGUMI_CALENDAR_V0 = 'https://api.bgm.tv/calendar';
   // Kazumi 镜像（api.kazumi.fyi 缓存/代理 Bangumi 元数据，国内可直连，作为 GFW 回退）。
-  // 路径结构与官方一致：next -> /p1/calendar，v0 -> /calendar。
+  // 镜像只代理 next 形态：/p1/calendar（对齐 Kazumi ApiEndpoints.bangumiCalendar）；
+  // 曾配的镜像 /calendar 恒 404，是臆造路径，已删。
   var BANGUMI_MIRROR = 'https://api.kazumi.fyi';
   var BANGUMI_CALENDAR_MIRROR_NEXT = BANGUMI_MIRROR + '/p1/calendar';
-  var BANGUMI_CALENDAR_MIRROR_V0 = BANGUMI_MIRROR + '/calendar';
   // 往季主路径：镜像季度时间表（Kazumi ApiEndpoints.bangumiMirrorSeasonCalendar）
   var BANGUMI_SEASON_MIRROR = BANGUMI_MIRROR + '/kazumi/v1/calendar/season';
 
@@ -213,21 +213,34 @@
    */
   async function getCalendar() {
     var lastErr = null;
-    // 镜像优先（国内可直连，12s 足够）；官方域需代理，置于最后并缩短超时，避免无代理时长时间空等。
+    // 2026-10-18 本机实测：镜像 api.kazumi.fyi 全量 JSON 要 16–22s 才回 200（Kazumi 自身
+    // 预算是 12s connect + 12s receive 分段，network_config.dart:11-12），旧 12s 整请求
+    // 预算必先掐死上游 → 主源升 25s。官方域无代理时本机恒不可达，降为 4s 末位单发。
     var sources = [
-      { url: BANGUMI_CALENDAR_MIRROR_NEXT, name: 'mirror-next', timeout: 12000 },
-      { url: BANGUMI_CALENDAR_MIRROR_V0, name: 'mirror-v0', timeout: 12000 },
-      { url: BANGUMI_CALENDAR_NEXT, name: 'next', timeout: 8000 },
-      { url: BANGUMI_CALENDAR_V0, name: 'v0', timeout: 8000 }
+      { url: BANGUMI_CALENDAR_MIRROR_NEXT, name: 'mirror-next', timeout: 25000 },
+      { url: BANGUMI_CALENDAR_NEXT, name: 'next', timeout: 4000 },
+      { url: BANGUMI_CALENDAR_V0, name: 'v0', timeout: 4000 }
     ];
+    // 第四源=镜像季度端点当季窗口（对应 Kazumi getBangumiMirrorSeasonCalendar 的同域缓存），
+    // 全周空表视为失败（needTotal），不把空数据当成功写进缓存。
+    var seasonMod = global.StellaflixVideo && global.StellaflixVideo.bangumiSeason;
+    if (seasonMod && typeof seasonMod.toSeasonStartAndEnd === 'function') {
+      var seasonRng = seasonMod.toSeasonStartAndEnd(new Date());
+      sources.push({
+        url: BANGUMI_SEASON_MIRROR + '?start=' + encodeURIComponent(seasonRng[0]) +
+          '&end=' + encodeURIComponent(seasonRng[1]),
+        name: 'mirror-season', timeout: 25000, needTotal: true
+      });
+    }
     for (var i = 0; i < sources.length; i++) {
       try {
         var json = await fetchCalendarJSON(sources[i].url, sources[i].timeout);
         var cal = parseCalendarJSON(json);
-        if (cal.length === 7) {
+        var total = cal.reduce(function (n, a) { return n + a.length; }, 0);
+        if (cal.length === 7 && !(sources[i].needTotal && !total)) {
           return { calendar: cal, error: null, source: sources[i].name };
         }
-        lastErr = '解析结果不是 7 天';
+        lastErr = sources[i].needTotal && !total ? 'season 表为空' : '解析结果不是 7 天';
       } catch (e) {
         lastErr = (e && e.message) || String(e);
         console.warn('[Bangumi] ' + sources[i].name + ' 取数失败:', lastErr);
@@ -346,7 +359,6 @@
     BANGUMI_CALENDAR_V0: BANGUMI_CALENDAR_V0,
     BANGUMI_MIRROR: BANGUMI_MIRROR,
     BANGUMI_CALENDAR_MIRROR_NEXT: BANGUMI_CALENDAR_MIRROR_NEXT,
-    BANGUMI_CALENDAR_MIRROR_V0: BANGUMI_CALENDAR_MIRROR_V0,
     rewriteImage: rewriteImage,
     normSubject: normSubject,
     dateStringToWeekday: dateStringToWeekday,
