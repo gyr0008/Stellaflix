@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stellaflix Compact Mini Player</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      color: #f4f7f8;
+      user-select: none;
+    }
+    body { padding: 4px; }
+    .mini-shell {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px;
+      border: 1px solid var(--th-mini-border, var(--th-popover-border, rgba(255, 255, 255, 0.13)));
+      border-radius: 7px;
+      background: var(--th-mini-bg, var(--th-popover-bg, rgba(9, 12, 15, 0.97)));
+      box-shadow: var(--th-mini-shadow, 0 10px 28px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08));
+      /* 右键必须留在 renderer 客户区；窗口拖动由指针事件和独立 moveWindowBy IPC 处理。 */
+      -webkit-app-region: no-drag;
+    }
+    .meta {
+      min-width: 0;
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+      overflow: hidden;
+    }
+    .title, .artist {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      letter-spacing: 0;
+    }
+    .title {
+      color: var(--th-mini-title, var(--th-text-strong, #f7fafb));
+      font-size: 11.5px;
+      font-weight: 650;
+      line-height: 1.2;
+    }
+    .artist {
+      color: var(--th-mini-artist, var(--th-text-dim, rgba(226, 234, 237, 0.52)));
+      font-size: 8.5px;
+      line-height: 1.15;
+    }
+    .transport {
+      flex: 0 0 76px;
+      display: grid;
+      grid-template-columns: 22px 28px 22px;
+      align-items: center;
+      gap: 2px;
+      -webkit-app-region: no-drag;
+    }
+    button {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: 1px solid var(--th-mini-btn-border, var(--th-chip-border, rgba(255, 255, 255, 0.1)));
+      border-radius: 5px;
+      background: var(--th-mini-btn-bg, var(--th-chip-bg, #151a1f));
+      color: var(--th-mini-btn-text, var(--th-text-dim, rgba(244, 248, 249, 0.76)));
+      cursor: pointer;
+      outline: none;
+      transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+      -webkit-app-region: no-drag;
+    }
+    button:hover:not(:disabled) {
+      border-color: var(--th-mini-btn-hover-border, var(--th-chip-hover-border, rgba(110, 231, 216, 0.42)));
+      background: var(--th-mini-btn-hover-bg, var(--th-chip-hover-bg, #1b2428));
+      color: var(--th-mini-btn-hover-text, #ffffff);
+    }
+    button:active:not(:disabled) { transform: scale(0.93); }
+    button:focus-visible { box-shadow: 0 0 0 2px rgba(110, 231, 216, 0.34); }
+    button:disabled { opacity: 0.32; cursor: default; }
+    button svg { width: 12px; height: 12px; pointer-events: none; }
+    .play-toggle {
+      width: 28px;
+      height: 28px;
+      border-color: var(--th-mini-play-border, rgba(110, 231, 216, 0.3));
+      background: var(--th-mini-play-bg, #172326);
+      color: var(--th-mini-play-text, #a9fff2);
+    }
+    .play-toggle svg { width: 14px; height: 14px; }
+    .desktop-lyrics-toggle {
+      position: absolute;
+      right: 4px;
+      bottom: 3px;
+      width: 15px;
+      height: 15px;
+      border-color: transparent;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--th-mini-ghost-text, var(--th-text-dim, rgba(225, 232, 235, 0.52)));
+      font-size: 8px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 0;
+      z-index: 2;
+    }
+    .desktop-lyrics-toggle:hover:not(:disabled) {
+      border-color: transparent;
+      background: transparent;
+      color: var(--th-mini-btn-hover-text, #dffffa);
+    }
+    .desktop-lyrics-toggle.active {
+      border-color: transparent;
+      background: transparent;
+      color: var(--th-mini-play-text, #a9fff2);
+      text-shadow: 0 0 5px rgba(110, 231, 216, 0.34);
+    }
+    .desktop-lyrics-toggle::before,
+    .restore::before {
+      content: "";
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      bottom: -4px;
+      left: -4px;
+      border-radius: inherit;
+      pointer-events: auto;
+      -webkit-app-region: no-drag;
+    }
+    .desktop-lyrics-glyph { pointer-events: none; }
+    .pause-icon { display: none; }
+    body[data-playing="true"] .play-icon { display: none; }
+    body[data-playing="true"] .pause-icon { display: block; }
+    .restore {
+      position: relative;
+      flex: 0 0 18px;
+      width: 18px;
+      height: 18px;
+      align-self: flex-start;
+      margin: -2px -2px 0 0;
+      border-color: transparent;
+      background: transparent;
+      color: var(--th-mini-ghost-text, var(--th-text-dim, rgba(225, 232, 235, 0.46)));
+    }
+    .restore svg { width: 11px; height: 11px; }
+    /* 主界面收缩落地前窗口是隐藏的预热窗口，外壳先留白，等窗口显示且首帧状态到位再淡入，
+       这样迷你播放器不会闪一下「Stellaflix / 等待播放」占位文案。 */
+    body[data-enter="pending"] .mini-shell { opacity: 0; }
+    body[data-enter="run"] .mini-shell { animation: mini-shell-enter 260ms cubic-bezier(.16, 1, .3, 1) both; }
+    @keyframes mini-shell-enter {
+      from { opacity: 0; transform: translateY(6px) scale(0.92); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      body[data-enter="run"] .mini-shell { animation: none; }
+      button { transition: none; }
+    }
+  </style>
+</head>
+<body data-playing="false" data-enter="pending">
+  <main class="mini-shell" id="mini-shell" aria-label="Stellaflix 极简迷你播放器">
+    <div class="meta">
+      <div class="title" id="title">Stellaflix</div>
+      <div class="artist" id="artist">等待播放</div>
+    </div>
+    <div class="transport">
+      <button id="previous" type="button" title="上一首" aria-label="上一首">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+      </button>
+      <button id="play" class="play-toggle" type="button" title="播放" aria-label="播放">
+        <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
+      </button>
+      <button id="next" type="button" title="下一首" aria-label="下一首">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m6 18 8.5-6L6 6v12zM16 6v12h2V6z"/></svg>
+      </button>
+      <button id="desktop-lyrics" class="desktop-lyrics-toggle" type="button" title="开启桌面歌词" aria-label="开启桌面歌词" aria-pressed="false">
+        <span class="desktop-lyrics-glyph" aria-hidden="true">词</span>
+      </button>
+    </div>
+    <button id="restore" class="restore" type="button" title="返回主界面" aria-label="返回主界面">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+    </button>
+    <button id="close" class="restore" type="button" title="关闭" aria-label="关闭">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </main>
+  <script>
+    'use strict';
+    var miniShell = document.getElementById('mini-shell');
+    var title = document.getElementById('title');
+    var artist = document.getElementById('artist');
+    var playButton = document.getElementById('play');
+    var desktopLyricsButton = document.getElementById('desktop-lyrics');
+    var controls = [document.getElementById('previous'), playButton, document.getElementById('next')];
+    var miniState = { title:'Stellaflix', artist:'', playing:false, hasTrack:false, desktopLyrics:false, uiLanguage:'zh-CN' };
+    function miniUiText(value) {
+      return value;
+    }
+
+    /** 把当前语言应用到极简迷你播放器的悬停提示与无障碍标签。 */
+    function applyMiniLanguage() {
+      document.documentElement.lang = 'zh-CN';
+      var previousButton = document.getElementById('previous');
+      var nextButton = document.getElementById('next');
+      var restoreButton = document.getElementById('restore');
+      previousButton.title = miniUiText('上一首');
+      previousButton.setAttribute('aria-label', previousButton.title);
+      nextButton.title = miniUiText('下一首');
+      nextButton.setAttribute('aria-label', nextButton.title);
+      restoreButton.title = miniUiText('返回主界面');
+      restoreButton.setAttribute('aria-label', restoreButton.title);
+      miniShell.setAttribute('aria-label', miniUiText('Stellaflix 极简迷你播放器'));
+      playButton.title = miniUiText(miniState.hasTrack === true && miniState.playing === true ? '暂停' : '播放');
+      playButton.setAttribute('aria-label', playButton.title);
+      desktopLyricsButton.title = miniUiText(miniState.desktopLyrics === true ? '关闭桌面歌词' : '开启桌面歌词');
+      desktopLyricsButton.setAttribute('aria-label', desktopLyricsButton.title);
+    }
+    var renderedPlaying = null;
+    var renderedHasTrack = null;
+    var shellDrag = null;
+    var shellMoveQueue = [];
+    var shellMoveActive = false;
+    var lastShellPointerEvent = null;
+    var lastWindowDragEndAt = 0;
+
+    function sendCommand(action) {
+      if (!window.miniPlayer || typeof window.miniPlayer.command !== 'function') return;
+      window.miniPlayer.command(action).catch(function(){});
+    }
+
+    /**
+     * 依次发送极简外壳拖动 IPC，保证结束提交排在最后一项增量之后。
+     * @returns {void}
+     */
+    function pumpShellMoveQueue() {
+      if (shellMoveActive || !shellMoveQueue.length) return;
+      var request = shellMoveQueue.shift();
+      shellMoveActive = true;
+      var result;
+      try {
+        result = window.miniPlayer.moveWindowBy(request.dx, request.dy, request.commit, 'expanded');
+      } catch (_error) {
+        result = Promise.reject(_error);
+      }
+      Promise.resolve(result).then(function(value){
+        request.resolve(value);
+      }, function(){
+        request.resolve(undefined);
+      }).then(function(){
+        shellMoveActive = false;
+        pumpShellMoveQueue();
+      });
+    }
+
+    /**
+     * 把极简外壳拖动请求加入队列。
+     * @param {number} dx 水平位移。
+     * @param {number} dy 垂直位移。
+     * @param {boolean} commit 是否为拖动结束并保存最终坐标。
+     * @returns {Promise<unknown>} 已排入队列的主进程请求。
+     */
+    function moveMiniPlayerShellBy(dx, dy, commit) {
+      if (!window.miniPlayer || typeof window.miniPlayer.moveWindowBy !== 'function') return Promise.resolve();
+      var result = new Promise(function(resolve){
+        shellMoveQueue.push({ dx: dx, dy: dy, commit: commit === true, resolve: resolve });
+        pumpShellMoveQueue();
+      });
+      return result.catch(function(){});
+    }
+
+    /**
+     * 判断同一指针事件是否已经由目标节点处理过，避免 document/window 兜底监听重复发送增量。
+     * @param {object} event 指针事件。
+     * @returns {boolean} 已处理时返回 true。
+     */
+    function isRepeatedShellPointerEvent(event) {
+      if (!event || typeof event !== 'object') return false;
+      if (lastShellPointerEvent === event) return true;
+      lastShellPointerEvent = event;
+      return false;
+    }
+
+    /**
+     * 开始拖动极简播放器窗口；按钮区域保留点击功能。
+     * @param {object} event 指针按下事件。
+     * @returns {void}
+     */
+    function beginShellDrag(event) {
+      if (shellDrag || !event || event.button !== 0) return;
+      var target = event.target;
+      if (target && typeof target.closest === 'function' && target.closest('button')) return;
+      var screenX = Number(event.screenX);
+      var screenY = Number(event.screenY);
+      if (!isFinite(screenX) || !isFinite(screenY)) return;
+      shellDrag = {
+        pointerId: event.pointerId,
+        startX: screenX,
+        startY: screenY,
+        lastX: screenX,
+        lastY: screenY,
+        moved: false,
+      };
+      if (typeof miniShell.setPointerCapture === 'function' && event.pointerId !== undefined) {
+        try { miniShell.setPointerCapture(event.pointerId); } catch (_error) {}
+      }
+    }
+
+    /**
+     * 发送极简外壳拖动增量。
+     * @param {object} event 指针移动事件。
+     * @returns {void}
+     */
+    function updateShellDrag(event) {
+      if (!shellDrag || !event || event.pointerId !== shellDrag.pointerId) return;
+      if (isRepeatedShellPointerEvent(event)) return;
+      var screenX = Number(event.screenX);
+      var screenY = Number(event.screenY);
+      if (!isFinite(screenX) || !isFinite(screenY)) return;
+      var totalDx = screenX - shellDrag.startX;
+      var totalDy = screenY - shellDrag.startY;
+      if (!shellDrag.moved && Math.max(Math.abs(totalDx), Math.abs(totalDy)) < 5) return;
+      var dx = Math.round(screenX - shellDrag.lastX);
+      var dy = Math.round(screenY - shellDrag.lastY);
+      shellDrag.lastX = screenX;
+      shellDrag.lastY = screenY;
+      shellDrag.moved = true;
+      if (dx || dy) moveMiniPlayerShellBy(dx, dy, false);
+      if (event.preventDefault) event.preventDefault();
+    }
+
+    /**
+     * 结束极简外壳拖动，并提交最终坐标。
+     * @param {object} event 指针结束事件。
+     * @returns {void}
+     */
+    function finishShellDrag(event) {
+      if (!shellDrag || (event && event.pointerId !== undefined && event.pointerId !== shellDrag.pointerId)) return;
+      if (isRepeatedShellPointerEvent(event)) return;
+      var moved = shellDrag.moved;
+      var pointerId = shellDrag.pointerId;
+      shellDrag = null;
+      if (typeof miniShell.releasePointerCapture === 'function' && pointerId !== undefined) {
+        try { miniShell.releasePointerCapture(pointerId); } catch (_error) {}
+      }
+      if (moved) {
+        moveMiniPlayerShellBy(0, 0, true);
+        lastWindowDragEndAt = Date.now();
+      }
+    }
+
+    /**
+     * 判断双击是否只是刚结束的窗口拖动合成出来的。
+     * @returns {boolean} 需要忽略这次双击时返回 true。
+     */
+    function windowDragJustEnded() {
+      return Date.now() - lastWindowDragEndAt < 400;
+    }
+
+    // 已经写到 documentElement 上的主题变量名，换主题时要擦掉不再出现的那些。
+    var appliedThemeVars = [];
+
+    /**
+     * 把主进程转发过来的 --th-* 变量写到根元素上。
+     * @param {Object<string,string>} vars 变量名到值。
+     * @returns {void}
+     */
+    function applyMiniThemeVars(vars) {
+      var root = document.documentElement;
+      var next = vars && typeof vars === 'object' ? vars : {};
+      var names = [];
+      for (var i = 0; i < appliedThemeVars.length; i++) {
+        if (!Object.prototype.hasOwnProperty.call(next, appliedThemeVars[i])) root.style.removeProperty(appliedThemeVars[i]);
+      }
+      var keys = Object.keys(next);
+      for (var j = 0; j < keys.length; j++) {
+        if (keys[j].indexOf('--th-') !== 0) continue;
+        root.style.setProperty(keys[j], String(next[keys[j]] == null ? '' : next[keys[j]]));
+        names.push(keys[j]);
+      }
+      appliedThemeVars = names;
+    }
+
+    function applyState(patch) {
+      patch = patch || {};
+      miniState = Object.assign({}, miniState, patch);
+      var next = miniState;
+      var hasTrack = next.hasTrack === true;
+      var playing = hasTrack && next.playing === true;
+      var nextTitle = hasTrack ? String(next.title || miniUiText('未知歌曲')) : 'Stellaflix';
+      var nextArtist = hasTrack ? String(next.artist || miniUiText('本地音乐')) : miniUiText('等待播放');
+      if (title.textContent !== nextTitle) title.textContent = nextTitle;
+      if (artist.textContent !== nextArtist) artist.textContent = nextArtist;
+      title.title = nextTitle;
+      artist.title = nextArtist;
+      if (renderedPlaying !== playing) {
+        renderedPlaying = playing;
+        document.body.setAttribute('data-playing', playing ? 'true' : 'false');
+        playButton.title = miniUiText(playing ? '暂停' : '播放');
+        playButton.setAttribute('aria-label', playButton.title);
+      }
+      if (renderedHasTrack !== hasTrack) {
+        renderedHasTrack = hasTrack;
+        for (var i = 0; i < controls.length; i++) controls[i].disabled = !hasTrack;
+      }
+      var desktopLyricsEnabled = next.desktopLyrics === true;
+      desktopLyricsButton.classList.toggle('active', desktopLyricsEnabled);
+      desktopLyricsButton.setAttribute('aria-pressed', desktopLyricsEnabled ? 'true' : 'false');
+      desktopLyricsButton.title = miniUiText(desktopLyricsEnabled ? '关闭桌面歌词' : '开启桌面歌词');
+      desktopLyricsButton.setAttribute('aria-label', desktopLyricsButton.title);
+      if (Object.prototype.hasOwnProperty.call(patch, 'themeVars')) applyMiniThemeVars(patch.themeVars);
+      if (patch.uiLanguage) applyMiniLanguage();
+    }
+
+    // 入场动画只跑一次，条件是窗口已经显示且首帧状态到位。
+    // 预热窗口在主界面收缩期间是隐藏的，document.visibilityState 会在窗口显示时转为 visible。
+    var miniEnterDone = false;
+    var miniEnterStateReady = false;
+    var miniEnterGraceTimer = 0;
+
+    /**
+     * 在窗口可见且状态就绪时播放一次外壳淡入。降低动效偏好只做即时显示。
+     * @returns {void}
+     */
+    function runMiniEnterAnimation() {
+      if (miniEnterDone) return;
+      if (document.visibilityState === 'hidden') return;
+      if (!miniEnterStateReady) {
+        if (!miniEnterGraceTimer) {
+          miniEnterGraceTimer = setTimeout(function(){
+            miniEnterGraceTimer = 0;
+            miniEnterStateReady = true;
+            runMiniEnterAnimation();
+          }, 160);
+        }
+        return;
+      }
+      miniEnterDone = true;
+      if (miniEnterGraceTimer) {
+        clearTimeout(miniEnterGraceTimer);
+        miniEnterGraceTimer = 0;
+      }
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.body.removeAttribute('data-enter');
+        return;
+      }
+      document.body.setAttribute('data-enter', 'run');
+      setTimeout(function(){ document.body.removeAttribute('data-enter'); }, 300);
+    }
+
+    /**
+     * 接收主进程状态补丁，并把首帧状态作为入场动画的就绪信号。
+     * @param {object} patch 增量状态补丁。
+     * @returns {void}
+     */
+    function receiveState(patch) {
+      applyState(patch);
+      miniEnterStateReady = true;
+      runMiniEnterAnimation();
+    }
+
+    document.addEventListener('visibilitychange', runMiniEnterAnimation);
+    // 兜底：任何情况下都不允许外壳因为等待入场条件而长期不可见。
+    setTimeout(function(){
+      if (miniEnterDone) return;
+      miniEnterDone = true;
+      document.body.removeAttribute('data-enter');
+    }, 1500);
+
+    miniShell.addEventListener('pointerdown', beginShellDrag);
+    miniShell.addEventListener('pointermove', updateShellDrag);
+    miniShell.addEventListener('pointerup', finishShellDrag);
+    miniShell.addEventListener('pointercancel', finishShellDrag);
+    miniShell.addEventListener('lostpointercapture', finishShellDrag);
+    document.addEventListener('pointermove', updateShellDrag, true);
+    document.addEventListener('pointerup', finishShellDrag, true);
+    document.addEventListener('pointercancel', finishShellDrag, true);
+    document.addEventListener('lostpointercapture', finishShellDrag, true);
+    if (window && typeof window.addEventListener === 'function') {
+      window.addEventListener('pointermove', updateShellDrag, true);
+      window.addEventListener('pointerup', finishShellDrag, true);
+      window.addEventListener('pointercancel', finishShellDrag, true);
+      window.addEventListener('lostpointercapture', finishShellDrag, true);
+    }
+    document.getElementById('previous').addEventListener('click', function(){ sendCommand('previous'); });
+    playButton.addEventListener('click', function(){ sendCommand('toggle-play'); });
+    document.getElementById('next').addEventListener('click', function(){ sendCommand('next'); });
+    desktopLyricsButton.addEventListener('click', function(){ sendCommand('toggle-desktop-lyrics'); });
+    document.getElementById('restore').addEventListener('click', function(){ sendCommand('restore'); });
+    document.getElementById('close').addEventListener('click', function(){ sendCommand('close'); });
+    miniShell.addEventListener('dblclick', function(event){
+      if (windowDragJustEnded()) return;
+      if (!event.target.closest('button')) sendCommand('restore');
+    });
+    if (window.miniPlayer && typeof window.miniPlayer.onState === 'function') window.miniPlayer.onState(receiveState);
+    applyState({});
+    runMiniEnterAnimation();
+  </script>
+</body>
+</html>

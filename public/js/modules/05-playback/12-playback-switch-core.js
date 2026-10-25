@@ -23,6 +23,9 @@ function syncPlaybackStateFromAudioEvent(reason) {
     if (typeof markStageLyricsPlaybackResume === 'function') markStageLyricsPlaybackResume(reason);
   }
   forcePlaybackControlsInteractive();
+  // 参照 app.js:28409-28418/32738：播放态广播点同时驱动迷你窗口律动计时与状态推送。
+  if (typeof syncMiniPlayerPulseTimer === 'function') syncMiniPlayerPulseTimer();
+  if (typeof pushMiniPlayerState === 'function') pushMiniPlayerState(false, true);
 }
 
 function isPlaybackRecursionError(err) {

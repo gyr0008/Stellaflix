@@ -434,6 +434,7 @@ function updateDesktopRuntimeState(state) {
     flushLyricLayoutSave();
   }
   if (fx && (fx.desktopLyrics || fx.wallpaperMode)) setTimeout(syncDesktopOverlayState, 0);
+  if (typeof syncMiniPlayerPulseTimer === 'function') syncMiniPlayerPulseTimer();
   if (wasDeep && !isDeepBackgroundMode()) recoverVisualsAfterBackground('desktop-runtime-state');
   if (desktopRuntimeState.fullscreen !== wasFullscreen) scheduleMainRendererViewportRefresh('desktop-runtime-state');
 }
@@ -450,6 +451,7 @@ function installRenderPowerHooks() {
   document.addEventListener('visibilitychange', function () {
     updateRenderPowerClasses();
     applyRendererPowerMode();
+    if (typeof syncMiniPlayerPulseTimer === 'function') syncMiniPlayerPulseTimer();
     if (!isDeepBackgroundMode()) recoverVisualsAfterBackground('visibilitychange');
   });
   window.addEventListener('focus', function () {

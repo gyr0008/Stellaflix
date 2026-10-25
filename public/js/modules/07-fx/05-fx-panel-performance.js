@@ -415,6 +415,7 @@ function updateFxInputs() {
   applyControlGlassChromaticOffset();
   syncFxUniforms();
   if (typeof updateCoverWallpaperSurfaceControls === 'function') updateCoverWallpaperSurfaceControls();
+  if (typeof applyMiniPlayerVisualControls === 'function') applyMiniPlayerVisualControls();
 }
 function animateFxResetButton(btn) {
   if (!btn || !window.gsap) return;
@@ -815,7 +816,7 @@ function relabelFxPanelControls() {
   setFxSliderLabel('fx-desktoplyricsopacity', '桌面歌词透明度');
   setFxSliderLabel('fx-desktoplyricsy', '桌面歌词高度');
   setFxSliderLabel('fx-wallpaperopacity', '壁纸透明度');
-  setFxSliderLabel('fx-coverwallpaperopacity', '封面壁纸透明');
+  setFxSliderLabel('fx-coverwallpaperopacity', '壁纸模式透明');
   setFxSliderLabel('fx-shelfsize', '歌单架大小');
   setFxSliderLabel('fx-shelfx', '左右位置');
   setFxSliderLabel('fx-shelfy', '上下位置');

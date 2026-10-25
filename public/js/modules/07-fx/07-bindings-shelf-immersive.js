@@ -21,6 +21,7 @@ function bindFxPanel() {
     ['fx-bgopacity', 'backgroundOpacity'], ['fx-bgcropx', 'backgroundMediaCropX'], ['fx-bgcropy', 'backgroundMediaCropY'], ['fx-bgzoom', 'backgroundMediaZoom'], ['fx-windowbgopacity', 'windowBackgroundOpacity'], ['fx-bgglassopacity', 'backgroundGlassOpacity'], ['fx-glassaberration', 'controlGlassChromaticOffset'],
     ['fx-playlistblur', 'playlistPanelGlassBlur'], ['fx-playlistdensity', 'playlistPanelGlassDensity'], ['fx-playlistopen', 'playlistPanelOpenDuration'], ['fx-playlistclose', 'playlistPanelCloseDuration'],
     ['fx-desktoplyricssize', 'desktopLyricsSize'], ['fx-desktoplyricsopacity', 'desktopLyricsOpacity'], ['fx-desktoplyricsy', 'desktopLyricsY'], ['fx-wallpaperopacity', 'wallpaperOpacity'], ['fx-coverwallpaperopacity', 'coverWallpaperOpacity'],
+    ['fx-miniplayerpulse', 'miniPlayerPulseStrength'], ['fx-miniplayerglow', 'miniPlayerGlowStrength'], ['fx-miniplayerradius', 'miniPlayerRadius'],
     ['fx-shelfsize', 'shelfSize'], ['fx-shelfx', 'shelfOffsetX'], ['fx-shelfy', 'shelfOffsetY'], ['fx-shelfz', 'shelfOffsetZ'], ['fx-shelfangle', 'shelfAngleY'], ['fx-shelfopacity', 'shelfOpacity'], ['fx-shelfbgalpha', 'shelfBgOpacity'],
     ['fx-shelfdetailx', 'shelfDetailOffsetX'], ['fx-shelfdetaily', 'shelfDetailOffsetY'], ['fx-shelfdetailz', 'shelfDetailOffsetZ'], ['fx-shelfdetailscale', 'shelfDetailScale'], ['fx-shelfdetailanglex', 'shelfDetailAngleX'], ['fx-shelfdetailangley', 'shelfDetailAngleY'], ['fx-shelfdetailrowgap', 'shelfDetailRowGap'],
     ['fx-shelfdetailopen', 'shelfDetailOpenDuration'], ['fx-shelfdetailclose', 'shelfDetailCloseDuration'], ['fx-shelfdetailrowtime', 'shelfDetailRowDuration'], ['fx-shelfdetailintro', 'shelfDetailIntroStrength'], ['fx-shelfdetailparallax', 'shelfDetailParallax'],
@@ -101,6 +102,10 @@ function bindFxPanel() {
       if (pair[1] === 'desktopLyricsOpacity') fx.desktopLyricsOpacity = clampRange(fx.desktopLyricsOpacity, 0.28, 1);
       if (pair[1] === 'desktopLyricsY') fx.desktopLyricsY = clampRange(fx.desktopLyricsY, 0.08, 0.92);
       if (pair[1] === 'wallpaperOpacity') fx.wallpaperOpacity = clampRange(fx.wallpaperOpacity, 0.35, 1);
+      if (pair[1] === 'miniPlayerPulseStrength') fx.miniPlayerPulseStrength = clampRange(fx.miniPlayerPulseStrength, 0, 3);
+      if (pair[1] === 'miniPlayerGlowStrength') fx.miniPlayerGlowStrength = clampRange(fx.miniPlayerGlowStrength, 0, 3);
+      if (pair[1] === 'miniPlayerRadius') fx.miniPlayerRadius = clampRange(fx.miniPlayerRadius, 4, 22);
+      if (/^miniPlayer/.test(pair[1]) && typeof applyMiniPlayerVisualControls === 'function') applyMiniPlayerVisualControls();
       if (pair[1] === 'shelfSize') fx.shelfSize = clampRange(fx.shelfSize, 0.65, 1.45);
       if (pair[1] === 'shelfOffsetX') fx.shelfOffsetX = clampRange(fx.shelfOffsetX, -1.2, 1.2);
       if (pair[1] === 'shelfOffsetY') fx.shelfOffsetY = clampRange(fx.shelfOffsetY, -0.9, 0.9);
@@ -143,7 +148,9 @@ function bindFxPanel() {
       if (pair[1] === 'lyricGlitchJitter') fx.lyricGlitchJitter = clampRange(fx.lyricGlitchJitter, 0, 1.8);
       if (out) out.textContent = pair[1] === 'coverResolution'
         ? coverParticleCountLabel(fx.coverResolution)
-        : (pair[1] === 'lyricWeight' || /^sonicGround/.test(pair[1]) || /^sonicAudio/.test(pair[1]) || pair[1] === 'sonicWorkshopInputGain' || pair[1] === 'controlGlassChromaticOffset' || pair[1] === 'playlistPanelGlassBlur' || pair[1] === 'backgroundMediaCropX' || pair[1] === 'backgroundMediaCropY' || pair[1] === 'lyricTiltX' || pair[1] === 'lyricTiltY' || pair[1] === 'shelfAngleY' || pair[1] === 'shelfDetailAngleX' || pair[1] === 'shelfDetailAngleY' ? String(Math.round(fx[pair[1]])) : Number(el.value).toFixed(pair[1] === 'lyricLetterSpacing' ? 3 : 2));
+        : (pair[1] === 'miniPlayerRadius'
+          ? String(Math.round(fx.miniPlayerRadius)) + 'px'
+          : (pair[1] === 'lyricWeight' || /^sonicGround/.test(pair[1]) || /^sonicAudio/.test(pair[1]) || pair[1] === 'sonicWorkshopInputGain' || pair[1] === 'controlGlassChromaticOffset' || pair[1] === 'playlistPanelGlassBlur' || pair[1] === 'backgroundMediaCropX' || pair[1] === 'backgroundMediaCropY' || pair[1] === 'lyricTiltX' || pair[1] === 'lyricTiltY' || pair[1] === 'shelfAngleY' || pair[1] === 'shelfDetailAngleX' || pair[1] === 'shelfDetailAngleY' ? String(Math.round(fx[pair[1]])) : Number(el.value).toFixed(pair[1] === 'lyricLetterSpacing' ? 3 : 2)));
       if (typeof refreshSonicAudioMonitorUi === 'function' && /^sonicAudio/.test(pair[1])) refreshSonicAudioMonitorUi();
       if (/^sonicWorkshop/.test(pair[1]) && window.StellaflixSonicWorkshop && typeof StellaflixSonicWorkshop.pushProperties === 'function') StellaflixSonicWorkshop.pushProperties(true);
       syncFxUniforms();
@@ -152,6 +159,7 @@ function bindFxPanel() {
       syncLyricRealtimeFxChange(pair[1], { deferred: true });
       if (/^(desktopLyricsSize|desktopLyricsOpacity|desktopLyricsY)$/.test(pair[1])) pushDesktopLyricsState(true);
       if (pair[1] === 'wallpaperOpacity') pushWallpaperState(true);
+      if ((pair[1] === 'miniPlayerPulseStrength' || pair[1] === 'miniPlayerGlowStrength' || pair[1] === 'miniPlayerRadius') && typeof pushMiniPlayerState === 'function') pushMiniPlayerState(true);
       var saveOpts = { user: true, reason: /^backgroundMedia(CropX|CropY|Zoom)$/.test(pair[1]) ? 'backgroundMediaCrop' : pair[1] };
       if (pair[1] === 'controlGlassChromaticOffset') saveOpts.syncDisk = true;
       if (isStageLyricRealtimeFxKey(pair[1]) || isDesktopLyricRealtimeFxKey(pair[1])) scheduleLyricLayoutSave(360, saveOpts);
@@ -435,7 +443,7 @@ function toggleFx(key) {
       }
     });
   }
-  if (key === 'coverWallpaper') showToast(fx.coverWallpaper ? '封面壁纸已开启' : '封面壁纸已关闭');
+  if (key === 'coverWallpaper') showToast(fx.coverWallpaper ? '壁纸模式已开启' : '壁纸模式已关闭');
   if (key === 'shelfShowPodcasts' || key === 'shelfMergeCollections') {
     if (shelfManager && shelfManager.rebuild) shelfManager.rebuild(true);
     if (shelfManager && shelfManager.refreshTheme) shelfManager.refreshTheme();

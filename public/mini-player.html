@@ -1,0 +1,1310 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stellaflix Mini Player</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      color: #f4f7f8;
+      user-select: none;
+    }
+    body { padding: 6px; }
+    .mini-shell {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px;
+      border: 1px solid var(--th-mini-border, var(--th-popover-border, rgba(255, 255, 255, 0.13)));
+      border-radius: 8px;
+      background: var(--th-mini-bg, var(--th-popover-bg, rgba(9, 12, 15, 0.96)));
+      box-shadow: var(--th-mini-shadow, 0 14px 38px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08));
+      /* 右键必须留在 renderer 客户区；窗口拖动由指针事件和独立 moveWindowBy IPC 处理。 */
+      -webkit-app-region: no-drag;
+      --mini-pulse: 0;
+      --mini-glow: 0;
+      --mini-radius: 12px;
+      transition: background-color 220ms ease, border-color 220ms ease, box-shadow 220ms ease, padding 240ms cubic-bezier(.22,.8,.24,1);
+    }
+    .mini-shell[data-expand-direction="left"] { flex-direction: row-reverse; }
+    .mini-shell[data-collapsed="true"] {
+      gap: 0;
+      padding: 0;
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+      -webkit-app-region: no-drag;
+      pointer-events: none;
+    }
+    .mini-shell[data-collapsed="true"] .meta,
+    .mini-shell[data-collapsed="true"] .transport,
+    .mini-shell[data-collapsed="true"] .restore {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(10px) scale(0.94);
+      flex-basis: 0;
+      width: 0;
+      min-width: 0;
+    }
+    .mini-shell[data-expand-direction="left"][data-collapsed="true"] .meta,
+    .mini-shell[data-expand-direction="left"][data-collapsed="true"] .transport,
+    .mini-shell[data-expand-direction="left"][data-collapsed="true"] .restore {
+      transform: translateX(-10px) scale(0.94);
+    }
+    .mini-shell[data-collapsed="true"] .desktop-lyrics-toggle {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .mini-shell[data-collapsed="true"] .transport {
+      flex-basis: 0;
+      width: 0;
+      overflow: hidden;
+      gap: 0;
+    }
+    .mini-shell[data-collapsed="true"] .restore {
+      flex-basis: 0;
+      width: 0;
+      overflow: hidden;
+      margin: 0;
+    }
+    .mini-shell[data-has-track="false"] .cover {
+      opacity: 0.56;
+      transform: scale(0.92);
+    }
+    .mini-shell[data-collapsed="true"] .cover {
+      flex-basis: 54px;
+      width: 54px;
+      height: 54px;
+      margin: 0;
+      border-radius: var(--mini-radius);
+      pointer-events: auto;
+      -webkit-app-region: no-drag;
+      /* 收回态封面右侧只剩 6px 透明余量，54px 封面最多外扩 5.27px，所以放大上限锁在 0.195。 */
+      transform: scale(calc(1 + var(--mini-pulse) * 0.195));
+    }
+    .cover {
+      position: relative;
+      flex: 0 0 54px;
+      width: 54px;
+      height: 54px;
+      overflow: hidden;
+      border: 1px solid var(--th-mini-cover-border, var(--th-row-border, rgba(255, 255, 255, 0.12)));
+      border-radius: var(--mini-radius);
+      background: var(--th-mini-cover-bg, var(--th-row-bg, #151b20));
+      box-shadow:
+        inset 0 0 0 1px rgba(110, 231, 216, 0.06),
+        0 0 calc(6px + var(--mini-glow) * 14px) rgba(110, 231, 216, calc(0.08 + var(--mini-glow) * 0.42)),
+        0 0 calc(12px + var(--mini-glow) * 18px) rgba(86, 153, 255, calc(0.025 + var(--mini-glow) * 0.2));
+      cursor: grab;
+      -webkit-app-region: no-drag;
+      touch-action: none;
+      transform-origin: center;
+      transform: scale(calc(1 + var(--mini-pulse) * 0.125));
+      transition: flex-basis 240ms cubic-bezier(.22,.8,.24,1), width 240ms cubic-bezier(.22,.8,.24,1), height 240ms cubic-bezier(.22,.8,.24,1), margin 240ms cubic-bezier(.22,.8,.24,1), border-radius 240ms ease, opacity 180ms ease, transform 90ms cubic-bezier(.2,.72,.28,1), box-shadow 110ms ease;
+    }
+    .cover.dragging { cursor: grabbing; }
+    .cover::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border: 1px solid rgba(180, 255, 239, calc(0.12 + var(--mini-glow) * 0.6));
+      border-radius: inherit;
+      box-shadow: inset 0 0 calc(4px + var(--mini-glow) * 12px) rgba(110, 231, 216, calc(0.06 + var(--mini-glow) * 0.34));
+      opacity: var(--mini-glow-opacity, 1);
+      transition: border-color 90ms ease, box-shadow 110ms ease, opacity 180ms ease;
+      pointer-events: none;
+    }
+    .mini-shell[data-glow="false"] .cover { box-shadow: inset 0 0 0 1px rgba(110, 231, 216, 0.04); }
+    .mini-shell[data-glow="false"] .cover::after { opacity: 0; }
+    .cover img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      opacity: 0;
+      -webkit-user-drag: none;
+      transition: opacity 160ms ease;
+    }
+    .cover.ready img { opacity: 1; }
+    .cover-fallback {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: var(--th-mini-cover-text, #e5c98a);
+      font-family: Georgia, serif;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .meta {
+      min-width: 0;
+      flex: 1 1 auto;
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 4px;
+      overflow: hidden;
+      transition: opacity 190ms ease, transform 240ms cubic-bezier(.22,.8,.24,1), flex-basis 240ms cubic-bezier(.22,.8,.24,1), width 240ms cubic-bezier(.22,.8,.24,1), min-width 240ms cubic-bezier(.22,.8,.24,1);
+    }
+    .title, .artist {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      letter-spacing: 0;
+    }
+    .title {
+      color: var(--th-mini-title, var(--th-text-strong, #f7fafb));
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+    .artist {
+      color: var(--th-mini-artist, var(--th-text-dim, rgba(226, 234, 237, 0.54)));
+      font-size: 9.5px;
+      line-height: 1.2;
+    }
+    .transport {
+      flex: 0 0 auto;
+      display: grid;
+      grid-template-columns: 28px 34px 28px;
+      align-items: center;
+      gap: 4px;
+      -webkit-app-region: no-drag;
+      transition: opacity 190ms ease, transform 240ms cubic-bezier(.22,.8,.24,1), flex-basis 240ms cubic-bezier(.22,.8,.24,1), width 240ms cubic-bezier(.22,.8,.24,1);
+    }
+    button {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 1px solid var(--th-mini-btn-border, var(--th-chip-border, rgba(255, 255, 255, 0.1)));
+      border-radius: 6px;
+      background: var(--th-mini-btn-bg, var(--th-chip-bg, #151a1f));
+      color: var(--th-mini-btn-text, var(--th-text-dim, rgba(244, 248, 249, 0.78)));
+      cursor: pointer;
+      outline: none;
+      transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+      -webkit-app-region: no-drag;
+    }
+    button:hover:not(:disabled) {
+      border-color: var(--th-mini-btn-hover-border, var(--th-chip-hover-border, rgba(110, 231, 216, 0.42)));
+      background: var(--th-mini-btn-hover-bg, var(--th-chip-hover-bg, #1b2428));
+      color: var(--th-mini-btn-hover-text, #ffffff);
+    }
+    button:active:not(:disabled) { transform: scale(0.94); }
+    button:focus-visible { box-shadow: 0 0 0 2px rgba(110, 231, 216, 0.34); }
+    button:disabled { opacity: 0.32; cursor: default; }
+    button svg { width: 15px; height: 15px; pointer-events: none; }
+    .play-toggle {
+      width: 34px;
+      height: 34px;
+      border-color: var(--th-mini-play-border, rgba(110, 231, 216, 0.3));
+      background: var(--th-mini-play-bg, #172326);
+      color: var(--th-mini-play-text, #a9fff2);
+    }
+    .play-toggle svg { width: 17px; height: 17px; }
+    .desktop-lyrics-toggle {
+      position: absolute;
+      right: 5px;
+      bottom: 4px;
+      width: 18px;
+      height: 18px;
+      border-color: transparent;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--th-mini-ghost-text, var(--th-text-dim, rgba(225, 232, 235, 0.54)));
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 0;
+      z-index: 2;
+      transition: opacity 190ms ease, color 140ms ease;
+    }
+    .mini-shell[data-expand-direction="left"] .desktop-lyrics-toggle {
+      left: 5px;
+      right: auto;
+    }
+    .desktop-lyrics-toggle:hover:not(:disabled) {
+      border-color: transparent;
+      background: transparent;
+      color: var(--th-mini-btn-hover-text, #dffffa);
+    }
+    .desktop-lyrics-toggle.active {
+      border-color: transparent;
+      background: transparent;
+      color: var(--th-mini-play-text, #a9fff2);
+      text-shadow: 0 0 6px rgba(110, 231, 216, 0.38);
+    }
+    .desktop-lyrics-toggle::before,
+    .restore::before {
+      content: "";
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      bottom: -4px;
+      left: -4px;
+      border-radius: inherit;
+      pointer-events: auto;
+      -webkit-app-region: no-drag;
+    }
+    .desktop-lyrics-glyph { pointer-events: none; }
+    .pause-icon { display: none; }
+    body[data-playing="true"] .play-icon { display: none; }
+    body[data-playing="true"] .pause-icon { display: block; }
+    .restore {
+      position: relative;
+      flex: 0 0 24px;
+      width: 24px;
+      height: 24px;
+      align-self: flex-start;
+      margin: -1px -1px 0 0;
+      border-color: transparent;
+      background: transparent;
+      color: var(--th-mini-ghost-text, var(--th-text-dim, rgba(225, 232, 235, 0.48)));
+      -webkit-app-region: no-drag;
+      transition: opacity 190ms ease, transform 240ms cubic-bezier(.22,.8,.24,1), flex-basis 240ms cubic-bezier(.22,.8,.24,1), width 240ms cubic-bezier(.22,.8,.24,1), background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+    }
+    .mini-shell[data-expand-direction="left"] .restore { margin: -1px 0 0 -1px; }
+    .mini-shell[data-expand-direction="left"][data-collapsed="true"] .restore { margin: 0; }
+    .restore svg { width: 13px; height: 13px; }
+    .mini-shell[data-instant="true"],
+    .mini-shell[data-instant="true"] .cover,
+    .mini-shell[data-instant="true"] .cover::after,
+    .mini-shell[data-instant="true"] .cover img,
+    .mini-shell[data-instant="true"] .meta,
+    .mini-shell[data-instant="true"] .transport,
+    .mini-shell[data-instant="true"] .restore,
+    .mini-shell[data-instant="true"] button { transition: none !important; }
+    /* 主界面收缩落地前窗口是隐藏的预热窗口，外壳先留白，等窗口显示且首帧状态到位再淡入，
+       这样迷你播放器不会闪一下「Stellaflix / 等待播放」占位文案。 */
+    body[data-enter="pending"] .mini-shell { opacity: 0; }
+    body[data-enter="run"] .mini-shell { animation: mini-shell-enter 280ms cubic-bezier(.16, 1, .3, 1) both; }
+    @keyframes mini-shell-enter {
+      from { opacity: 0; transform: translateY(7px) scale(0.9); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      body[data-enter="run"] .mini-shell { animation: none; }
+      .mini-shell, .cover, .cover::after, .cover img, .meta, .transport, .restore, button { transition: none; }
+    }
+  </style>
+</head>
+<body data-playing="false" data-enter="pending">
+  <main class="mini-shell" id="mini-shell" data-collapsed="true" data-expand-direction="right" data-has-track="false" data-glow="true" aria-label="Stellaflix 迷你播放器">
+    <div class="cover" id="cover-wrap" role="button" tabindex="0" aria-label="展开迷你播放器" aria-expanded="false">
+      <span class="cover-fallback">S</span>
+      <img id="cover" alt="" draggable="false">
+    </div>
+    <div class="meta">
+      <div class="title" id="title">Stellaflix</div>
+      <div class="artist" id="artist">等待播放</div>
+    </div>
+    <div class="transport">
+      <button id="previous" type="button" title="上一首" aria-label="上一首">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+      </button>
+      <button id="play" class="play-toggle" type="button" title="播放" aria-label="播放">
+        <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
+      </button>
+      <button id="next" type="button" title="下一首" aria-label="下一首">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m6 18 8.5-6L6 6v12zM16 6v12h2V6z"/></svg>
+      </button>
+    </div>
+    <!-- 桌面歌词按钮必须挂在 .mini-shell 直属层：.transport 收回时带 transform 会变成绝对定位包含块，把它拽到面板中间并被 overflow 裁切。 -->
+    <button id="desktop-lyrics" class="desktop-lyrics-toggle" type="button" title="开启桌面歌词" aria-label="开启桌面歌词" aria-pressed="false">
+      <span class="desktop-lyrics-glyph" aria-hidden="true">词</span>
+    </button>
+    <button id="restore" class="restore" type="button" title="返回主界面" aria-label="返回主界面">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+    </button>
+    <button id="close" class="restore" type="button" title="关闭" aria-label="关闭">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </main>
+  <script>
+    'use strict';
+    var miniShell = document.getElementById('mini-shell');
+    var coverWrap = document.getElementById('cover-wrap');
+    var cover = document.getElementById('cover');
+    var title = document.getElementById('title');
+    var artist = document.getElementById('artist');
+    var playButton = document.getElementById('play');
+    var desktopLyricsButton = document.getElementById('desktop-lyrics');
+    var controls = [document.getElementById('previous'), playButton, document.getElementById('next')];
+    var lastCover = '';
+    var failedCover = '';
+    var miniState = { title:'Stellaflix', artist:'', cover:'', playing:false, hasTrack:false, desktopLyrics:false, pulse:0, expandDirection:'right', uiLanguage:'zh-CN', visual:{ pulseEnabled:true, pulseStrength:1, glowEnabled:true, glowStrength:1, hoverExpand:true, radius:12 } };
+    function miniUiText(value) {
+      return value;
+    }
+    var MINI_EFFECT_STRENGTH_MAX = 3;
+    var renderedPlaying = null;
+    var renderedHasTrack = null;
+    var renderedHoverExpand = null;
+    var renderedExpandDirection = null;
+    var hoverTimer = 0;
+    var coverDrag = null;
+    var shellDrag = null;
+    var coverDragGeneration = 0;
+    var coverMoveQueue = [];
+    var coverMoveActive = false;
+    var shellMoveQueue = [];
+    var shellMoveActive = false;
+    var lastCoverPointerEvent = null;
+    var lastShellPointerEvent = null;
+    var lastWindowDragEndAt = 0;
+    var suppressCoverClick = false;
+    var suppressCoverClickTimer = 0;
+    var receivedExternalState = false;
+    var COVER_HOT_REGION_PADDING = 6;
+    var pointerInCoverHotRegion = false;
+    var pointerPassthrough = null;
+    var pointerPassthroughPending = null;
+    var pointerPassthroughRequestToken = 0;
+
+    /**
+     * 读取封面律动/光晕强度档位，缺失或非法时回落到标准力度 1.00。
+     * @param {unknown} value 主进程下发的强度值。
+     * @returns {number} 0 ~ MINI_EFFECT_STRENGTH_MAX 之间的强度。
+     */
+    function readMiniEffectStrength(value) {
+      var strength = Number(value);
+      if (!isFinite(strength)) strength = 1;
+      return Math.max(0, Math.min(MINI_EFFECT_STRENGTH_MAX, strength));
+    }
+
+    /**
+     * 把 0 ~ 3 的强度档位压成 0 ~ 1 的驱动值。饱和曲线保证 1.00 已经明显，
+     * 3.00 逼近但不超过收回态窗口留给封面的几何余量。
+     * @param {number} level 信号乘强度后的原始档位。
+     * @returns {number} 0 ~ 1 的 CSS 驱动值。
+     */
+    function saturateMiniEffect(level) {
+      if (!(level > 0)) return 0;
+      return 1 - Math.exp(-1.15 * level);
+    }
+
+    /**
+     * 忽略窗口移动 IPC 失败，避免拖动结束后留下未处理的 rejected promise。
+     * @returns {void}
+     */
+    function ignoreMiniPlayerMoveFailure() {}
+
+    /**
+     * 规范化主进程传来的展开方向。
+     * @param {unknown} value 原始方向值。
+     * @returns {'left'|'right'} 仅允许的展开方向。
+     */
+    function normalizeExpandDirection(value) {
+      return value === 'left' ? 'left' : 'right';
+    }
+
+    /**
+     * 把展开方向写入稳定的 DOM 状态，只有方向变化时才触发布局切换。
+     * @param {unknown} value 主进程传来的方向值。
+     * @returns {void}
+     */
+    function syncExpandDirection(value) {
+      var direction = normalizeExpandDirection(value);
+      if (renderedExpandDirection === direction) return;
+      renderedExpandDirection = direction;
+      miniShell.setAttribute('data-expand-direction', direction);
+    }
+
+    /**
+     * 读取指针的屏幕坐标，拖动窗口时不能使用随窗口变化的本地坐标。
+     * @param {object} event 指针事件。
+     * @param {'screenX'|'screenY'} key 坐标字段名。
+     * @returns {number|null} 有效屏幕坐标，无效时返回 null。
+     */
+    function pointerScreenCoordinate(event, key) {
+      var value = Number(event && event[key]);
+      return isFinite(value) ? value : null;
+    }
+
+    /**
+     * 取得封面未受律动 scale 影响的视口矩形；主进程需要稳定布局锚点，不能把视觉外扩当成窗口位移。
+     * @returns {{left:number,top:number,width:number,height:number}|null} 未变形封面矩形。
+     */
+    function untransformedCoverRect() {
+      if (!coverWrap || typeof coverWrap.getBoundingClientRect !== 'function') return null;
+      var rect = coverWrap.getBoundingClientRect();
+      if (!rect) return null;
+      var visualWidth = Number(rect.width);
+      var visualHeight = Number(rect.height);
+      if (!(visualWidth > 0)) visualWidth = Number(rect.right) - Number(rect.left);
+      if (!(visualHeight > 0)) visualHeight = Number(rect.bottom) - Number(rect.top);
+      if (!(visualWidth > 0) || !(visualHeight > 0)) return null;
+      var layoutWidth = Number(coverWrap.offsetWidth);
+      var layoutHeight = Number(coverWrap.offsetHeight);
+      if (!(layoutWidth > 0)) layoutWidth = visualWidth;
+      if (!(layoutHeight > 0)) layoutHeight = visualHeight;
+      return {
+        left: Number(rect.left) + (visualWidth - layoutWidth) / 2,
+        top: Number(rect.top) + (visualHeight - layoutHeight) / 2,
+        width: layoutWidth,
+        height: layoutHeight,
+      };
+    }
+
+    /**
+     * 将封面视口矩形换算成屏幕坐标；screenX/clientX 同属 CSS 像素，不按 devicePixelRatio 再缩放。
+     * @param {object} event pointerdown 事件。
+     * @returns {{x:number,y:number}|null} 未变形封面屏幕左上角。
+     */
+    function coverScreenAnchor(event) {
+      var rect = untransformedCoverRect();
+      if (!rect) return null;
+      var screenX = pointerScreenCoordinate(event, 'screenX');
+      var screenY = pointerScreenCoordinate(event, 'screenY');
+      if (screenX === null || screenY === null) return null;
+      var clientX = pointerScreenCoordinate(event, 'clientX');
+      var clientY = pointerScreenCoordinate(event, 'clientY');
+      if (clientX !== null && clientY !== null) {
+        return { x: screenX + rect.left - clientX, y: screenY + rect.top - clientY };
+      }
+      var windowX = pointerScreenCoordinate(window, 'screenX');
+      var windowY = pointerScreenCoordinate(window, 'screenY');
+      if (windowX === null || windowY === null) return null;
+      return { x: windowX + rect.left, y: windowY + rect.top };
+    }
+
+    /**
+     * 生成带代际的拖动元数据；首个请求携带实测锚点，后续请求复用同一锚点以抵抗窗口布局变化。
+     * @param {{generation:number,anchor?:{x:number,y:number},layout?:'collapsed'|'expanded'}} drag 当前拖动状态。
+     * @returns {{generation:number,anchor?:{x:number,y:number},layout:'collapsed'|'expanded'} } IPC 元数据。
+     */
+    function coverDragMeta(drag) {
+      var meta = {
+        generation: drag.generation,
+        layout: drag.layout,
+      };
+      if (drag.anchor) meta.anchor = { x: drag.anchor.x, y: drag.anchor.y };
+      return meta;
+    }
+
+    /**
+     * 接收主进程为当前文档分配的拖动代际，确保 renderer 重载后新拖动不会落在旧代际之前。
+     * @param {unknown} value 主进程下发的代际种子。
+     * @returns {void}
+     */
+    function syncCoverDragGeneration(value) {
+      var generation = Number(value);
+      if (!isFinite(generation) || generation < 0) return;
+      generation = Math.floor(generation);
+      if (generation > coverDragGeneration) coverDragGeneration = generation;
+    }
+
+    /**
+     * 请求主进程按增量移动迷你播放器窗口，并按提交顺序串行化 IPC。
+     * @param {number} dx 水平位移。
+     * @param {number} dy 垂直位移。
+     * @param {boolean} commit 是否为拖动结束并保存最终坐标。
+     * @param {{generation:number,anchor?:{x:number,y:number},layout?:'collapsed'|'expanded'}=} dragMeta
+     *   当前封面拖动的代际、首帧锚点和布局状态。
+     * @returns {Promise<unknown>} 已排入队列的主进程请求。
+     */
+    /**
+     * 依次发送封面拖动 IPC；前一项未回执时不发送后一项，确保 commit 读取到最后一次成功移动。
+     * @returns {void}
+     */
+    function pumpCoverMoveQueue() {
+      if (coverMoveActive || !coverMoveQueue.length) return;
+      var request = coverMoveQueue.shift();
+      coverMoveActive = true;
+      var result;
+      try {
+        result = window.miniPlayer.moveBy(
+          request.dx,
+          request.dy,
+          request.commit,
+          request.dragMeta,
+        );
+      } catch (_error) {
+        result = Promise.reject(_error);
+      }
+      Promise.resolve(result).then(function(value){
+        request.resolve(value);
+      }, function(){
+        ignoreMiniPlayerMoveFailure();
+        request.resolve(undefined);
+      }).then(function(){
+        coverMoveActive = false;
+        pumpCoverMoveQueue();
+      });
+    }
+
+    /**
+     * 把窗口移动请求加入单消费者队列，避免 pointerup 的 commit 越过尚未完成的增量。
+     * @param {number} dx 水平位移。
+     * @param {number} dy 垂直位移。
+     * @param {boolean} commit 是否为拖动结束并保存最终坐标。
+     * @param {{generation:number,anchor?:{x:number,y:number},layout?:'collapsed'|'expanded'}=} dragMeta
+     *   当前封面拖动的代际、首帧锚点和布局状态。
+     * @returns {Promise<unknown>} 已排入队列的主进程请求。
+     */
+    function moveMiniPlayerCoverBy(dx, dy, commit, dragMeta) {
+      if (!window.miniPlayer || typeof window.miniPlayer.moveBy !== 'function') return Promise.resolve();
+      var result = new Promise(function(resolve){
+        coverMoveQueue.push({
+          dx: dx,
+          dy: dy,
+          commit: commit === true,
+          dragMeta: dragMeta,
+          resolve: resolve,
+        });
+        pumpCoverMoveQueue();
+      });
+      return result.catch(ignoreMiniPlayerMoveFailure);
+    }
+
+    /**
+     * 依次发送外壳空白区拖动 IPC；它与封面拖动队列和代际会话完全分开。
+     * @returns {void}
+     */
+    function pumpShellMoveQueue() {
+      if (shellMoveActive || !shellMoveQueue.length) return;
+      var request = shellMoveQueue.shift();
+      shellMoveActive = true;
+      var result;
+      try {
+        result = window.miniPlayer.moveWindowBy(
+          request.dx,
+          request.dy,
+          request.commit,
+          request.layout,
+        );
+      } catch (_error) {
+        result = Promise.reject(_error);
+      }
+      Promise.resolve(result).then(function(value){
+        request.resolve(value);
+      }, function(){
+        ignoreMiniPlayerMoveFailure();
+        request.resolve(undefined);
+      }).then(function(){
+        shellMoveActive = false;
+        pumpShellMoveQueue();
+      });
+    }
+
+    /**
+     * 把外壳拖动请求加入单消费者队列，保证结束提交排在最后一项增量之后。
+     * @param {number} dx 水平位移。
+     * @param {number} dy 垂直位移。
+     * @param {boolean} commit 是否为拖动结束并保存最终坐标。
+     * @param {'collapsed'|'expanded'} layout 当前页面布局状态。
+     * @returns {Promise<unknown>} 已排入队列的主进程请求。
+     */
+    function moveMiniPlayerShellBy(dx, dy, commit, layout) {
+      if (!window.miniPlayer || typeof window.miniPlayer.moveWindowBy !== 'function') {
+        return Promise.resolve();
+      }
+      var result = new Promise(function(resolve){
+        shellMoveQueue.push({
+          dx: dx,
+          dy: dy,
+          commit: commit === true,
+          layout: layout === 'collapsed' ? 'collapsed' : 'expanded',
+          resolve: resolve,
+        });
+        pumpShellMoveQueue();
+      });
+      return result.catch(ignoreMiniPlayerMoveFailure);
+    }
+
+    function sendCommand(action) {
+      if (!window.miniPlayer || typeof window.miniPlayer.command !== 'function') return;
+      window.miniPlayer.command(action).catch(function(){});
+    }
+
+    function hoverExpandEnabled() {
+      return !miniState.visual || miniState.visual.hoverExpand !== false;
+    }
+
+    function clearCollapseTimer() {
+      if (hoverTimer) clearTimeout(hoverTimer);
+      hoverTimer = 0;
+    }
+
+    /**
+     * 判断当前是否仍有悬停、聚焦或封面拖动交互，避免交互中自动收回。
+     * @returns {boolean} 仍在交互中时返回 true。
+     */
+    function expansionInteractionActive() {
+      return !!coverDrag || !!shellDrag || coverWrap.matches(':hover') || miniShell.matches(':focus-within');
+    }
+
+    /**
+     * 判断收回态是否应该让出窗口鼠标事件。收回后只有封面热区参与命中，封面以外那截
+     * 看不见的透明窗体必须交还桌面——那里既不该吞掉桌面点击，也不该弹播放器右键菜单。
+     * 代价是收回态的右键菜单只在封面上可用，展开态才整窗可用，这是刻意的取舍，不要
+     * 再换成「指针在窗口内就整窗命中」。
+     * @returns {boolean} 需要鼠标穿透时返回 true。
+     */
+    function shouldPassPointerThrough() {
+      if (!hoverExpandEnabled()) return false;
+      if (miniShell.getAttribute('data-collapsed') !== 'true') return false;
+      if (coverDrag || shellDrag) return false;
+      return !pointerInCoverHotRegion;
+    }
+
+    /**
+     * 结算一次窗口穿透 IPC；只有主进程明确成功时才提交已确认状态。
+     * @param {{next:boolean,token:number,resolve:Function}} request 本次请求与令牌。
+     * @param {unknown} result 主进程返回的结果；明确 ok:false 视为失败。
+     * @returns {void}
+     */
+    function settlePointerPassthrough(request, result) {
+      var succeeded = !(result && result.ok === false);
+      if (request.token !== pointerPassthroughRequestToken) {
+        request.resolve({ ok: false, ignored: true });
+        return;
+      }
+      pointerPassthroughPending = null;
+      if (succeeded) pointerPassthrough = request.next;
+      request.resolve(result || { ok: succeeded });
+      if (succeeded && shouldPassPointerThrough() !== pointerPassthrough) syncPointerPassthrough();
+    }
+
+    /**
+     * 把窗口鼠标穿透状态同步给主进程，缓存只记录已确认值，失败后下一次同步可再次尝试。
+     * 优先使用同步通道，让收回态封面刚命中时的右键不会在异步回执前落到桌面；旧 preload
+     * 没有同步通道时仍回退到原有 invoke，并保留失败重试语义。
+     * @returns {Promise<unknown>} 主进程确认窗口命中状态后的结果。
+     */
+    function syncPointerPassthrough() {
+      var next = shouldPassPointerThrough();
+      if (!window.miniPlayer
+        || (typeof window.miniPlayer.setPointerPassthroughSync !== 'function'
+          && typeof window.miniPlayer.setPointerPassthrough !== 'function')) {
+        return Promise.resolve({ ok: false, error: 'MINI_PLAYER_PASSTHROUGH_UNAVAILABLE' });
+      }
+      if (pointerPassthroughPending && pointerPassthroughPending.next === next) {
+        return pointerPassthroughPending.promise;
+      }
+      if (!pointerPassthroughPending && next === pointerPassthrough) {
+        return Promise.resolve({ ok: true, ignored: true });
+      }
+      if (pointerPassthroughPending) {
+        pointerPassthroughPending.resolve({ ok: false, ignored: true });
+        pointerPassthroughPending = null;
+      }
+      var resolveRequest;
+      var request = {
+        next: next,
+        token: ++pointerPassthroughRequestToken,
+      };
+      request.promise = new Promise(function(resolve){
+        resolveRequest = resolve;
+      });
+      request.resolve = resolveRequest;
+      pointerPassthroughPending = request;
+      var result;
+      try {
+        result = typeof window.miniPlayer.setPointerPassthroughSync === 'function'
+          ? window.miniPlayer.setPointerPassthroughSync(next)
+          : window.miniPlayer.setPointerPassthrough(next);
+      } catch (_error) {
+        settlePointerPassthrough(request, { ok: false });
+        return request.promise;
+      }
+      if (result && typeof result.then === 'function') {
+        Promise.resolve(result)
+          .then(function(value){ settlePointerPassthrough(request, value); })
+          .catch(function(){ settlePointerPassthrough(request, { ok: false }); });
+      } else {
+        settlePointerPassthrough(request, result);
+      }
+      return request.promise;
+    }
+
+    /**
+     * 判断转发坐标是否落在封面热区内。穿透期间只有转发的 mousemove 坐标可用，
+     * 不能依赖封面自身的命中测试。
+     * @param {object} event 鼠标或指针事件。
+     * @returns {boolean} 命中封面热区时返回 true。
+     */
+    function pointerInCoverHotRegionAt(event) {
+      if (!event || typeof coverWrap.getBoundingClientRect !== 'function') return false;
+      var x = Number(event.clientX);
+      var y = Number(event.clientY);
+      if (!isFinite(x) || !isFinite(y)) return false;
+      var rect = coverWrap.getBoundingClientRect();
+      if (!rect || rect.right <= rect.left || rect.bottom <= rect.top) return false;
+      return x >= rect.left - COVER_HOT_REGION_PADDING
+        && x <= rect.right + COVER_HOT_REGION_PADDING
+        && y >= rect.top - COVER_HOT_REGION_PADDING
+        && y <= rect.bottom + COVER_HOT_REGION_PADDING;
+    }
+
+    /**
+     * 穿透切回成功后展开面板；同步通道会在 Promise 微任务之前完成原生命中切换。
+     * @param {Promise<unknown>|unknown} pointerReady 穿透状态请求结果。
+     * @returns {void}
+     */
+    function expandAfterPointerReady(pointerReady) {
+      Promise.resolve(pointerReady).then(function(result){
+        if (result && result.ok === false) return;
+        if (pointerInCoverHotRegion && !shouldPassPointerThrough()) expandFromInteraction();
+      });
+    }
+
+    /**
+     * 用转发坐标维护封面热区命中状态：进入热区先恢复窗口交互再展开（展开后整窗都能点、
+     * 能右键），离开热区排定收回并把封面以外的窗体交还桌面。
+     * @param {object} event 鼠标或指针事件。
+     * @returns {void}
+     */
+    function trackCoverHotRegion(event) {
+      var inside = pointerInCoverHotRegionAt(event);
+      if (inside === pointerInCoverHotRegion) {
+        // 上一次恢复请求失败时，指针可能仍停在封面上；后续转发坐标继续提供重试机会。
+        if (inside && !pointerPassthroughPending && shouldPassPointerThrough() !== pointerPassthrough) {
+          expandAfterPointerReady(syncPointerPassthrough());
+        }
+        return;
+      }
+      pointerInCoverHotRegion = inside;
+      var pointerReady = syncPointerPassthrough();
+      if (inside) {
+        expandAfterPointerReady(pointerReady);
+      } else if (!coverDrag && !shellDrag && !miniShell.matches(':hover')) scheduleCollapse();
+    }
+
+    /**
+     * 指针离开窗口后清除热区标记，收回态立即恢复鼠标穿透。
+     * @returns {void}
+     */
+    function clearCoverHotRegion() {
+      pointerInCoverHotRegion = false;
+      syncPointerPassthrough();
+    }
+
+    /**
+     * 切换迷你播放器的完整面板与封面收回态。
+     * @param {boolean} next 是否显示完整面板。
+     * @param {boolean} immediate 是否跳过本次过渡动画。
+     * @returns {void}
+     */
+    function setExpanded(next, immediate) {
+      if (!hoverExpandEnabled()) next = true;
+      next = !!next;
+      if (immediate) miniShell.setAttribute('data-instant', 'true');
+      miniShell.setAttribute('data-collapsed', next ? 'false' : 'true');
+      syncCoverAria();
+      syncPointerPassthrough();
+      if (immediate) {
+        window.requestAnimationFrame(function(){ miniShell.removeAttribute('data-instant'); });
+      }
+    }
+
+    /** 封面按钮的展开态文案跟随界面语言。 */
+    function syncCoverAria() {
+      var expanded = miniShell.getAttribute('data-collapsed') !== 'true';
+      coverWrap.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      coverWrap.setAttribute('aria-label', hoverExpandEnabled()
+        ? miniUiText(expanded ? '迷你播放器已展开' : '展开迷你播放器')
+        : miniUiText('完整迷你播放器'));
+    }
+
+    /** 把当前语言应用到迷你播放器的悬停提示与无障碍标签。 */
+    function applyMiniLanguage() {
+      document.documentElement.lang = 'zh-CN';
+      var previousButton = document.getElementById('previous');
+      var nextButton = document.getElementById('next');
+      var restoreButton = document.getElementById('restore');
+      previousButton.title = miniUiText('上一首');
+      previousButton.setAttribute('aria-label', previousButton.title);
+      nextButton.title = miniUiText('下一首');
+      nextButton.setAttribute('aria-label', nextButton.title);
+      restoreButton.title = miniUiText('返回主界面');
+      restoreButton.setAttribute('aria-label', restoreButton.title);
+      miniShell.setAttribute('aria-label', miniUiText('Stellaflix 迷你播放器'));
+      playButton.title = miniUiText(miniState.hasTrack === true && miniState.playing === true ? '暂停' : '播放');
+      playButton.setAttribute('aria-label', playButton.title);
+      desktopLyricsButton.title = miniUiText(miniState.desktopLyrics === true ? '关闭桌面歌词' : '开启桌面歌词');
+      desktopLyricsButton.setAttribute('aria-label', desktopLyricsButton.title);
+      syncCoverAria();
+    }
+
+    function syncHoverExpandMode(immediate) {
+      clearCollapseTimer();
+      miniShell.setAttribute('data-hover-expand', hoverExpandEnabled() ? 'true' : 'false');
+      setExpanded(hoverExpandEnabled() ? expansionInteractionActive() : true, immediate);
+    }
+
+    function expandFromInteraction() {
+      clearCollapseTimer();
+      if (hoverExpandEnabled()) setExpanded(true);
+    }
+
+    function scheduleCollapse() {
+      clearCollapseTimer();
+      if (!hoverExpandEnabled()) return;
+      hoverTimer = setTimeout(function(){
+        hoverTimer = 0;
+        if (!expansionInteractionActive()) setExpanded(false);
+      }, 420);
+    }
+
+    /**
+     * 按封面地址更新图片；失败地址在真正变化前保留哨兵，避免高频状态补丁反复触发网络加载。
+     * @param {unknown} src 主进程下发的封面地址。
+     * @returns {void}
+     */
+    function setCover(src) {
+      src = String(src || '');
+      if (src === failedCover) return;
+      if (src === lastCover) return;
+      lastCover = src;
+      failedCover = '';
+      coverWrap.classList.remove('ready');
+      if (!src) {
+        cover.removeAttribute('src');
+        return;
+      }
+      cover.src = src;
+    }
+
+    /**
+     * 清除拖动后的单次点击抑制标记，避免浏览器不派发 click 时吞掉下一次正常点击。
+     * @returns {void}
+     */
+    function clearCoverClickSuppression() {
+      suppressCoverClick = false;
+      suppressCoverClickTimer = 0;
+    }
+
+    /**
+     * 在封面发生实际拖动后抑制紧随其后的合成 click 事件。
+     * @returns {void}
+     */
+    function suppressCoverClickOnce() {
+      suppressCoverClick = true;
+      if (suppressCoverClickTimer) clearTimeout(suppressCoverClickTimer);
+      suppressCoverClickTimer = setTimeout(clearCoverClickSuppression, 0);
+    }
+
+    /**
+     * 判断同一指针事件是否已经由目标节点处理过，避免 document/window 兜底监听重复发送增量。
+     * @param {object} event 指针事件。
+     * @param {'cover'|'shell'} owner 当前拖动类型。
+     * @returns {boolean} 已处理时返回 true。
+     */
+    function isRepeatedPointerEvent(event, owner) {
+      if (!event || typeof event !== 'object') return false;
+      if (owner === 'cover') {
+        if (lastCoverPointerEvent === event) return true;
+        lastCoverPointerEvent = event;
+      } else {
+        if (lastShellPointerEvent === event) return true;
+        lastShellPointerEvent = event;
+      }
+      return false;
+    }
+
+    /**
+     * 开始记录封面指针拖动，屏幕坐标用于抵消窗口移动后的本地坐标变化。
+     * @param {object} event 指针按下事件。
+     * @returns {void}
+     */
+    function beginCoverDrag(event) {
+      if (coverDrag || shellDrag || !event || event.button !== 0) return;
+      var screenX = pointerScreenCoordinate(event, 'screenX');
+      var screenY = pointerScreenCoordinate(event, 'screenY');
+      if (screenX === null || screenY === null) return;
+      coverDragGeneration += 1;
+      coverDrag = {
+        pointerId: event.pointerId,
+        generation: coverDragGeneration,
+        anchor: coverScreenAnchor(event),
+        layout: miniShell.getAttribute('data-collapsed') === 'true' ? 'collapsed' : 'expanded',
+        startX: screenX,
+        startY: screenY,
+        lastX: screenX,
+        lastY: screenY,
+        moved: false,
+      };
+      syncPointerPassthrough();
+      if (typeof coverWrap.setPointerCapture === 'function' && event.pointerId !== undefined) {
+        try { coverWrap.setPointerCapture(event.pointerId); } catch (_error) {}
+      }
+    }
+
+    /**
+     * 展开态或极简外壳的空白区拖动窗口；该会话不使用封面锚点和封面代际。
+     * @param {object} event 指针按下事件。
+     * @returns {void}
+     */
+    function beginShellDrag(event) {
+      if (coverDrag || shellDrag || !event || event.button !== 0) return;
+      var target = event.target;
+      if (target && typeof target.closest === 'function' && target.closest('button')) return;
+      var screenX = pointerScreenCoordinate(event, 'screenX');
+      var screenY = pointerScreenCoordinate(event, 'screenY');
+      if (screenX === null || screenY === null) return;
+      shellDrag = {
+        pointerId: event.pointerId,
+        startX: screenX,
+        startY: screenY,
+        lastX: screenX,
+        lastY: screenY,
+        moved: false,
+        layout: miniShell.getAttribute('data-collapsed') === 'true' ? 'collapsed' : 'expanded',
+      };
+      syncPointerPassthrough();
+      if (typeof miniShell.setPointerCapture === 'function' && event.pointerId !== undefined) {
+        try { miniShell.setPointerCapture(event.pointerId); } catch (_error) {}
+      }
+    }
+
+    /**
+     * 把超过点击阈值的封面位移按增量发送给主进程。
+     * @param {object} event 指针移动事件。
+     * @returns {void}
+     */
+    function updateCoverDrag(event) {
+      if (!coverDrag || !event || event.pointerId !== coverDrag.pointerId) return;
+      if (isRepeatedPointerEvent(event, 'cover')) return;
+      var screenX = pointerScreenCoordinate(event, 'screenX');
+      var screenY = pointerScreenCoordinate(event, 'screenY');
+      if (screenX === null || screenY === null) return;
+      var totalDx = screenX - coverDrag.startX;
+      var totalDy = screenY - coverDrag.startY;
+      if (!coverDrag.moved && Math.max(Math.abs(totalDx), Math.abs(totalDy)) < 5) return;
+      var dx = Math.round(screenX - coverDrag.lastX);
+      var dy = Math.round(screenY - coverDrag.lastY);
+      coverDrag.lastX = screenX;
+      coverDrag.lastY = screenY;
+      coverDrag.moved = true;
+      coverWrap.classList.add('dragging');
+      if (dx || dy) moveMiniPlayerCoverBy(dx, dy, false, coverDragMeta(coverDrag));
+      if (event.preventDefault) event.preventDefault();
+    }
+
+    /**
+     * 把空白区拖动位移发送给独立的窗口移动通道。
+     * @param {object} event 指针移动事件。
+     * @returns {void}
+     */
+    function updateShellDrag(event) {
+      if (!shellDrag || !event || event.pointerId !== shellDrag.pointerId) return;
+      if (isRepeatedPointerEvent(event, 'shell')) return;
+      var screenX = pointerScreenCoordinate(event, 'screenX');
+      var screenY = pointerScreenCoordinate(event, 'screenY');
+      if (screenX === null || screenY === null) return;
+      var totalDx = screenX - shellDrag.startX;
+      var totalDy = screenY - shellDrag.startY;
+      if (!shellDrag.moved && Math.max(Math.abs(totalDx), Math.abs(totalDy)) < 5) return;
+      var dx = Math.round(screenX - shellDrag.lastX);
+      var dy = Math.round(screenY - shellDrag.lastY);
+      shellDrag.lastX = screenX;
+      shellDrag.lastY = screenY;
+      shellDrag.moved = true;
+      if (dx || dy) moveMiniPlayerShellBy(dx, dy, false, shellDrag.layout);
+      if (event.preventDefault) event.preventDefault();
+    }
+
+    /**
+     * 结束封面拖动并在必要时阻止浏览器把拖动误判为点击。
+     * @param {object} event 指针结束事件。
+     * @returns {void}
+     */
+    function finishCoverDrag(event) {
+      if (!coverDrag || (event && event.pointerId !== undefined && event.pointerId !== coverDrag.pointerId)) return;
+      if (isRepeatedPointerEvent(event, 'cover')) return;
+      var moved = coverDrag.moved;
+      var pointerId = coverDrag.pointerId;
+      var dragMeta = coverDragMeta(coverDrag);
+      coverDrag = null;
+      coverWrap.classList.remove('dragging');
+      if (typeof coverWrap.releasePointerCapture === 'function' && pointerId !== undefined) {
+        try { coverWrap.releasePointerCapture(pointerId); } catch (_error) {}
+      }
+      if (moved) {
+        moveMiniPlayerCoverBy(0, 0, true, dragMeta);
+        suppressCoverClickOnce();
+      }
+      syncPointerPassthrough();
+      if (!miniShell.matches(':hover')) scheduleCollapse();
+    }
+
+    /**
+     * 结束空白区窗口拖动，并把最后一项请求标记为提交。
+     * @param {object} event 指针结束事件。
+     * @returns {void}
+     */
+    function finishShellDrag(event) {
+      if (!shellDrag || (event && event.pointerId !== undefined && event.pointerId !== shellDrag.pointerId)) return;
+      if (isRepeatedPointerEvent(event, 'shell')) return;
+      var moved = shellDrag.moved;
+      var pointerId = shellDrag.pointerId;
+      var layout = shellDrag.layout;
+      shellDrag = null;
+      if (typeof miniShell.releasePointerCapture === 'function' && pointerId !== undefined) {
+        try { miniShell.releasePointerCapture(pointerId); } catch (_error) {}
+      }
+      if (moved) {
+        moveMiniPlayerShellBy(0, 0, true, layout);
+        lastWindowDragEndAt = Date.now();
+      }
+      syncPointerPassthrough();
+      if (!miniShell.matches(':hover')) scheduleCollapse();
+    }
+
+    /**
+     * 判断双击是否只是刚结束的窗口拖动合成出来的。
+     * @returns {boolean} 需要忽略这次双击时返回 true。
+     */
+    function windowDragJustEnded() {
+      return Date.now() - lastWindowDragEndAt < 400;
+    }
+
+    /**
+     * 区分封面短按与拖动后的合成点击，短按仍触发展开。
+     * @param {object} event 点击事件。
+     * @returns {void}
+     */
+    function handleCoverClick(event) {
+      if (suppressCoverClick) {
+        clearCoverClickSuppression();
+        if (event && event.preventDefault) event.preventDefault();
+        return;
+      }
+      expandFromInteraction();
+    }
+
+    // 已经写到 documentElement 上的主题变量名。换主题时要把不再出现的那些擦掉，
+    // 不然旧主题的颜色会残留在没被新主题覆盖的那几个变量上。
+    var appliedThemeVars = [];
+
+    /**
+     * 把主进程转发过来的 --th-* 变量写到根元素上。主窗口那边已经清洗过两轮，
+     * 这里只做名字前缀校验，值直接交给 CSSOM——setProperty 本身会拒收非法声明。
+     * @param {Object<string,string>} vars 变量名到值。
+     * @returns {void}
+     */
+    function applyMiniThemeVars(vars) {
+      var root = document.documentElement;
+      var next = vars && typeof vars === 'object' ? vars : {};
+      var names = [];
+      for (var i = 0; i < appliedThemeVars.length; i++) {
+        if (!Object.prototype.hasOwnProperty.call(next, appliedThemeVars[i])) root.style.removeProperty(appliedThemeVars[i]);
+      }
+      var keys = Object.keys(next);
+      for (var j = 0; j < keys.length; j++) {
+        if (keys[j].indexOf('--th-') !== 0) continue;
+        root.style.setProperty(keys[j], String(next[keys[j]] == null ? '' : next[keys[j]]));
+        names.push(keys[j]);
+      }
+      appliedThemeVars = names;
+    }
+
+    /**
+     * 应用主进程发送的歌曲、播放、视觉和展开方向状态。
+     * @param {object} patch 增量状态补丁。
+     * @param {boolean} immediate 是否跳过首次渲染过渡。
+     * @returns {void}
+     */
+    function applyState(patch, immediate) {
+       patch = patch || {};
+       miniState = Object.assign({}, miniState, patch);
+       if (Object.prototype.hasOwnProperty.call(patch, 'dragGeneration')) {
+         syncCoverDragGeneration(patch.dragGeneration);
+       }
+       var next = miniState;
+      var hasTrack = next.hasTrack === true;
+      var playing = hasTrack && next.playing === true;
+      miniShell.setAttribute('data-has-track', hasTrack ? 'true' : 'false');
+      var nextTitle = hasTrack ? String(next.title || miniUiText('未知歌曲')) : 'Stellaflix';
+      var nextArtist = hasTrack ? String(next.artist || miniUiText('本地音乐')) : miniUiText('等待播放');
+      if (title.textContent !== nextTitle) title.textContent = nextTitle;
+      if (artist.textContent !== nextArtist) artist.textContent = nextArtist;
+      title.title = nextTitle;
+      artist.title = nextArtist;
+      if (renderedPlaying !== playing) {
+        renderedPlaying = playing;
+        document.body.setAttribute('data-playing', playing ? 'true' : 'false');
+        playButton.title = miniUiText(playing ? '暂停' : '播放');
+        playButton.setAttribute('aria-label', playButton.title);
+      }
+      if (renderedHasTrack !== hasTrack) {
+        renderedHasTrack = hasTrack;
+        for (var i = 0; i < controls.length; i++) controls[i].disabled = !hasTrack;
+      }
+      var desktopLyricsEnabled = next.desktopLyrics === true;
+      desktopLyricsButton.classList.toggle('active', desktopLyricsEnabled);
+      desktopLyricsButton.setAttribute('aria-pressed', desktopLyricsEnabled ? 'true' : 'false');
+      desktopLyricsButton.title = miniUiText(desktopLyricsEnabled ? '关闭桌面歌词' : '开启桌面歌词');
+      desktopLyricsButton.setAttribute('aria-label', desktopLyricsButton.title);
+      syncExpandDirection(next.expandDirection);
+      if (Object.prototype.hasOwnProperty.call(patch, 'themeVars')) applyMiniThemeVars(patch.themeVars);
+      var visual = next.visual || {};
+      var pulseSignal = Math.max(0, Math.min(1, Number(next.pulse) || 0));
+      var signal = Math.pow(pulseSignal, 0.72);
+      // 强度是 0~3 的用户档位：1.00 已经明显，3.00 通过饱和曲线逼近窗口几何上限，
+      // 再往上也不会把封面和光晕顶出 360 × 84 的透明窗口。0 或关掉开关都等于停用。
+      var pulse = visual.pulseEnabled === false ? 0 : saturateMiniEffect(signal * readMiniEffectStrength(visual.pulseStrength));
+      var glow = visual.glowEnabled === false ? 0 : saturateMiniEffect(signal * readMiniEffectStrength(visual.glowStrength));
+      miniShell.style.setProperty('--mini-pulse', pulse.toFixed(3));
+      miniShell.style.setProperty('--mini-glow', glow.toFixed(3));
+      miniShell.style.setProperty('--mini-radius', Math.max(4, Math.min(22, Number(visual.radius) || 12)) + 'px');
+      miniShell.setAttribute('data-glow', visual.glowEnabled === false ? 'false' : 'true');
+      var hoverExpand = visual.hoverExpand !== false;
+      if (renderedHoverExpand !== hoverExpand) {
+        renderedHoverExpand = hoverExpand;
+        syncHoverExpandMode(immediate === true);
+      }
+      setCover(hasTrack ? next.cover : '');
+      if (patch.uiLanguage) applyMiniLanguage();
+    }
+
+    function receiveState(patch) {
+      applyState(patch, !receivedExternalState);
+      receivedExternalState = true;
+      miniEnterStateReady = true;
+      runMiniEnterAnimation();
+    }
+
+    // 入场动画只跑一次，条件是窗口已经显示且首帧状态到位。
+    // 预热窗口在主界面收缩期间是隐藏的，document.visibilityState 会在窗口显示时转为 visible。
+    var miniEnterDone = false;
+    var miniEnterStateReady = false;
+    var miniEnterGraceTimer = 0;
+
+    /**
+     * 在窗口可见且状态就绪时播放一次外壳淡入。降低动效偏好只做即时显示。
+     * @returns {void}
+     */
+    function runMiniEnterAnimation() {
+      if (miniEnterDone) return;
+      if (document.visibilityState === 'hidden') return;
+      if (!miniEnterStateReady) {
+        if (!miniEnterGraceTimer) {
+          miniEnterGraceTimer = setTimeout(function(){
+            miniEnterGraceTimer = 0;
+            miniEnterStateReady = true;
+            runMiniEnterAnimation();
+          }, 160);
+        }
+        return;
+      }
+      miniEnterDone = true;
+      if (miniEnterGraceTimer) {
+        clearTimeout(miniEnterGraceTimer);
+        miniEnterGraceTimer = 0;
+      }
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.body.removeAttribute('data-enter');
+        return;
+      }
+      document.body.setAttribute('data-enter', 'run');
+      setTimeout(function(){ document.body.removeAttribute('data-enter'); }, 320);
+    }
+
+    document.addEventListener('visibilitychange', runMiniEnterAnimation);
+    // 兜底：任何情况下都不允许外壳因为等待入场条件而长期不可见。
+    setTimeout(function(){
+      if (miniEnterDone) return;
+      miniEnterDone = true;
+      document.body.removeAttribute('data-enter');
+    }, 1500);
+
+    cover.addEventListener('load', function(){
+      if (cover.getAttribute('src')) coverWrap.classList.add('ready');
+    });
+    cover.addEventListener('error', function(){
+      coverWrap.classList.remove('ready');
+      // 保留失败地址哨兵，避免每 80ms 的 pulse 补丁把同一坏地址重新赋给 img。
+      if (cover.getAttribute('src') === lastCover) {
+        failedCover = lastCover;
+        cover.removeAttribute('src');
+      }
+    });
+    coverWrap.addEventListener('mouseenter', function(){
+      expandFromInteraction();
+    });
+    coverWrap.addEventListener('mouseleave', function(){
+      if (!miniShell.matches(':hover')) scheduleCollapse();
+    });
+    coverWrap.addEventListener('focus', expandFromInteraction);
+    coverWrap.addEventListener('pointerdown', beginCoverDrag);
+    coverWrap.addEventListener('pointermove', updateCoverDrag);
+    coverWrap.addEventListener('pointerup', finishCoverDrag);
+    coverWrap.addEventListener('pointercancel', finishCoverDrag);
+    coverWrap.addEventListener('lostpointercapture', finishCoverDrag);
+    coverWrap.addEventListener('click', handleCoverClick);
+    coverWrap.addEventListener('keydown', function(event){
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        expandFromInteraction();
+      }
+    });
+    miniShell.addEventListener('mouseleave', scheduleCollapse);
+    miniShell.addEventListener('mouseenter', function(){
+      clearCollapseTimer();
+    });
+    miniShell.addEventListener('focusin', expandFromInteraction);
+    miniShell.addEventListener('focusout', scheduleCollapse);
+    // 整窗 no-drag 后，展开态和极简外壳的空白区由 renderer 自己拖动；封面继续走独立锚点会话。
+    miniShell.addEventListener('pointerdown', beginShellDrag);
+    miniShell.addEventListener('pointermove', updateShellDrag);
+    miniShell.addEventListener('pointerup', finishShellDrag);
+    miniShell.addEventListener('pointercancel', finishShellDrag);
+    miniShell.addEventListener('lostpointercapture', finishShellDrag);
+    // 指针捕获在透明窗口移动、穿透切换或跨屏时可能丢失，document/window 监听作为兜底。
+    document.addEventListener('pointermove', updateCoverDrag, true);
+    document.addEventListener('pointerup', finishCoverDrag, true);
+    document.addEventListener('pointercancel', finishCoverDrag, true);
+    document.addEventListener('lostpointercapture', finishCoverDrag, true);
+    document.addEventListener('pointermove', updateShellDrag, true);
+    document.addEventListener('pointerup', finishShellDrag, true);
+    document.addEventListener('pointercancel', finishShellDrag, true);
+    document.addEventListener('lostpointercapture', finishShellDrag, true);
+    if (window && typeof window.addEventListener === 'function') {
+      window.addEventListener('pointermove', updateCoverDrag, true);
+      window.addEventListener('pointerup', finishCoverDrag, true);
+      window.addEventListener('pointercancel', finishCoverDrag, true);
+      window.addEventListener('lostpointercapture', finishCoverDrag, true);
+      window.addEventListener('pointermove', updateShellDrag, true);
+      window.addEventListener('pointerup', finishShellDrag, true);
+      window.addEventListener('pointercancel', finishShellDrag, true);
+      window.addEventListener('lostpointercapture', finishShellDrag, true);
+    }
+    document.addEventListener('mousemove', trackCoverHotRegion);
+    document.addEventListener('mouseleave', clearCoverHotRegion);
+    document.getElementById('previous').addEventListener('click', function(){ sendCommand('previous'); });
+    playButton.addEventListener('click', function(){ sendCommand('toggle-play'); });
+    document.getElementById('next').addEventListener('click', function(){ sendCommand('next'); });
+    desktopLyricsButton.addEventListener('click', function(){ sendCommand('toggle-desktop-lyrics'); });
+    document.getElementById('restore').addEventListener('click', function(){ sendCommand('restore'); });
+    document.getElementById('close').addEventListener('click', function(){ sendCommand('close'); });
+    document.getElementById('mini-shell').addEventListener('dblclick', function(event){
+      if (windowDragJustEnded()) return;
+      if (!event.target.closest('button')) sendCommand('restore');
+    });
+    if (window.miniPlayer && typeof window.miniPlayer.onState === 'function') window.miniPlayer.onState(receiveState);
+    applyState({}, true);
+    runMiniEnterAnimation();
+  </script>
+</body>
+</html>

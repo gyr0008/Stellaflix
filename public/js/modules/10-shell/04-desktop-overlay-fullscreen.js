@@ -1589,7 +1589,11 @@ function toggleFullscreen() {
       e.preventDefault();
       e.stopPropagation();
       var action = btn.getAttribute('data-window-action');
-      if (action === 'minimize') animateDesktopWindowMinimize(api);
+      if (action === 'minimize') {
+        // 迷你播放器可用时优先收起为悬浮 pill；不可用（未启用/全屏/前置条件不满足）回退原生最小化。
+        var miniCollapsed = typeof collapseToMiniPlayer === 'function' && collapseToMiniPlayer() === true;
+        if (!miniCollapsed) animateDesktopWindowMinimize(api);
+      }
       if (action === 'maximize') toggleFullscreen();
       if (action === 'close') {
         saveLastPlaybackSnapshot(true, 'window-close');
