@@ -500,7 +500,7 @@ async function loadMorePlaylistPanelDetailTracks(reason) {
       st.hasMore = false;
       if (externallyCancelled) return false;
       st.error = 'PLAYLIST_DETAIL_PAGE_TIMEOUT';
-      st.message = st.tracks.length ? '后续歌曲载入超时，可继续滚动重试' : '歌单详情加载超时，请稍后重试';
+      st.message = st.tracks.length ? '后续歌曲载入超时，重新打开歌单可继续加载' : '歌单详情加载超时，请稍后重试';
       if (reason === 'initial') renderPlaylistPanelDetailState();
       else renderPlaylistPanelDetailRows();
       return false;
@@ -510,7 +510,7 @@ async function loadMorePlaylistPanelDetailTracks(reason) {
     st.loadingMore = false;
     st.hasMore = false;
     st.error = 'PLAYLIST_DETAIL_PAGE_FAILED';
-    st.message = st.tracks.length ? '后续歌曲载入失败，可继续滚动重试' : '歌单详情加载失败，请稍后重试';
+    st.message = st.tracks.length ? '后续歌曲载入失败，重新打开歌单可继续加载' : '歌单详情加载失败，请稍后重试';
     if (reason === 'initial') renderPlaylistPanelDetailState();
     else renderPlaylistPanelDetailRows();
     return false;

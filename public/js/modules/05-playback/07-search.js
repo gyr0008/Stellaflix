@@ -1067,7 +1067,12 @@ async function fetchLxSearchResults(query, options) {
     throw err;
   }
   return {
-    songs: result && Array.isArray(result.songs) ? result.songs : [],
+    // scoped 复审 Minor#1：lx 冻结形状（歌手字段 singer）此前原样出边界，而 .artist 单侧读法的
+    // 消费面不止评审点名的两处（06-track-detail-lyrics-actions.js:717 歌手主页、
+    // 02-listen-stats.js:177 统计行键、09-queue-snapshot-autoplay.js:10 快照键、03a:671/935）。
+    // 统一在本模块既有归一器处收口：04a radioModeQueueSong 直接 clone 本返回值，
+    // 电台队列曲因此一次拿到 artist+singer 双口径。搜索 tab 侧原就 map 同一函数，幂等。
+    songs: (result && Array.isArray(result.songs) ? result.songs : []).map(normalizeLxSearchSong),
     failures: result && Array.isArray(result.failures) ? result.failures : []
   };
 }

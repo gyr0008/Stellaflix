@@ -115,10 +115,28 @@ function loadSearch(apiJsonStub) {
     platformMeta: (provider) => ({ label: provider }), cloneSong: (song) => Object.assign({}, song), showToast() {},
   });
   runInSandbox(sandbox, read(P_07),
-    'window.__exports = { findControlSourceMatchResult, controlSourceIssueLabel, sourceCandidateRejectReason, controlSourceSearchUrl };',
+    'window.__exports = { findControlSourceMatchResult, controlSourceIssueLabel, sourceCandidateRejectReason, controlSourceSearchUrl, fetchLxSearchResults };',
     'lx-source-align-fix1.07-search.js');
   return sandbox.__exports;
 }
+
+// ── Minor#1（scoped 复审）：共享边界归一，杜绝下一个 singer-only 消费点再踩同一坑 ────
+
+test('Minor#1：fetchLxSearchResults 在共享边界即回视图形状（电台队列曲不再缺 artist）', async () => {
+  // 复审点名的同类漏网消费面都只读 .artist：06-track-detail-lyrics-actions.js:717（歌手主页）、
+  // 02-listen-stats.js:177（统计行键）、09-queue-snapshot-autoplay.js:10（快照键）。
+  // 电台队列曲 04a:242 radioModeQueueSong 原样 clone fetchLxSearchResults 的结果，
+  // 边界不归一则这四个消费面对电台歌曲恒缺歌手。逐调用点桥接是治标，本钉桩锁死治本。
+  const LX = { source: 'tx', id: 'T9', songmid: 'SM9', name: '晴天', singer: '周杰伦', album: '叶惠美', interval: '04:29', pic: 'http://p/9.jpg' };
+  const exports = loadSearch(async () => ({ ok: true, songs: [LX], failures: [] }));
+  const result = await exports.fetchLxSearchResults('晴天', { sources: 'tx', limit: 12 });
+  assert.equal(result.songs.length, 1);
+  assert.equal(result.songs[0].artist, '周杰伦',
+    '边界必须桥出 artist（修复前回传原始冻结形状，artist 为 undefined）: ' + JSON.stringify(result.songs[0]));
+  assert.equal(result.songs[0].singer, '周杰伦', 'singer 不得丢');
+  assert.equal(result.songs[0].picUrl, 'http://p/9.jpg', '边界须一并补 picUrl 视图口径');
+  assert.equal(result.songs[0].id, 'T9', '归一不得改写字段身份');
+});
 
 // ── Critical-1：切源匹配消费 lx 冻结形状（singer）必须命中 ──────────────────────
 
@@ -224,7 +242,7 @@ function makePanelSandbox() {
   sandbox.window.window = sandbox.window;
   sandbox.window.AbortController = AbortController;
   runInSandbox(sandbox, read(P_PANEL),
-    'window.__exports = { openPlaylistPanelDetail, getState: function () { return playlistPanelDetailState; } };',
+    'window.__exports = { openPlaylistPanelDetail, loadMorePlaylistPanelDetailTracks, getState: function () { return playlistPanelDetailState; } };',
     'lx-source-align-fix1.02-playlist-detail.js');
   return { sandbox, timers, exports: sandbox.__exports };
 }
@@ -293,6 +311,27 @@ test('Important-1②c：外部取消（controller 已被置空）的中止不得
   await exports.openPlaylistPanelDetail('qq', '7788', 'QQ 歌单');
   const st = exports.getState();
   assert.equal(st.error, '', '外部取消的中止应保持静默（沿用修复前语义）: ' + JSON.stringify(st.error));
+});
+
+// scoped 复审 Minor#4：失败分支把 hasMore 置 false 后，:429 的入口闸与滚动页脚都不再放行续载，
+// 此时文案承诺「可继续滚动重试」是假话（滚动只会什么都不发生）。
+test('Important-1②d：续载失败后 hasMore=false，文案不得再承诺「继续滚动重试」', async () => {
+  const { sandbox, exports } = makePanelSandbox();
+  sandbox.userPlaylists = [{ id: '123', provider: 'netease', name: 'NE 歌单', trackCount: 300 }];
+  let first = true;
+  sandbox.apiJson = async () => {
+    if (first) { first = false; return { tracks: [{ id: 'n1', name: 'NE' }], nextOffset: 1, total: 300, hasMore: true }; }
+    const err = new Error('aborted'); err.name = 'AbortError'; throw err;
+  };
+  await exports.openPlaylistPanelDetail('netease', '123', 'NE 歌单');
+  assert.equal(exports.getState().hasMore, true, '前置条件：首轮成功后续载闸必须是开的');
+  await exports.loadMorePlaylistPanelDetailTracks('scroll');
+  const st = exports.getState();
+  assert.equal(st.hasMore, false, '续载失败后 hasMore 关闭（入口闸 :429 由此拒再续载）');
+  assert.ok(!/继续滚动/.test(String(st.message)),
+    'hasMore 已关却承诺继续滚动重试 = 假话: ' + JSON.stringify(st.message));
+  assert.ok(/重试|失败|超时|重新打开|稍后/.test(String(st.message)),
+    '仍须给出可执行的失败文案: ' + JSON.stringify(st.message));
 });
 
 // ── Important-2 ②：电台全源失败区分于零命中 ───────────────────────────────────
