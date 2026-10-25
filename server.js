@@ -53,14 +53,8 @@ const playlist_track_all = neteaseApiFn('playlist_track_all');
 const personalized = neteaseApiFn('personalized');
 const recommend_resource = neteaseApiFn('recommend_resource');
 const recommend_songs = neteaseApiFn('recommend_songs');
-const dj_detail = neteaseApiFn('dj_detail');
-const dj_program = neteaseApiFn('dj_program');
-const dj_hot = neteaseApiFn('dj_hot');
-const dj_sublist = neteaseApiFn('dj_sublist');
-const user_audio = neteaseApiFn('user_audio');
-const dj_paygift = neteaseApiFn('dj_paygift');
-const record_recent_voice = neteaseApiFn('record_recent_voice');
-const sati_resource_sub_list = neteaseApiFn('sati_resource_sub_list');
+// 批 T16c：播客整条下线——网易云官方播客族接口常量（dj 前缀 8 枚）随路由一并退役
+// （grep 自证：此前唯一消费方是 /api/podcast/*）。
 const lyric = neteaseApiFn('lyric');
 const lyric_new = neteaseApiFn('lyric_new');
 const http = require('http');
@@ -341,7 +335,7 @@ function readLxPlaylists() {
 const tls = require('tls');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
-const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer');
+// 批 T16c：dj-analyzer（播客 DJ 长音频离线锁拍）整文件退役，此处 require 一并摘除。
 // B2 惰性加载：qishui-audio-decryptor/ 是 gitignore 的本机专有运行时（.gitignore:70-76），
 // fresh clone / CI 缺件属正常态。顶层 require 会让整个 server 崩在启动（0.1.4 安装包
 // SF-BOOT-SERVER-START 的根因）。改为首次用到汽水解密时才加载，缺件降级走普通代理。
@@ -1943,17 +1937,6 @@ function mapDiscoverPlaylist(pl, tag) {
   };
 }
 
-function lowSignalText(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function isLowSignalPodcastItem(item) {
-  const name = lowSignalText(item && (item.name || item.title || item.radioName));
-  const sub = lowSignalText(item && (item.djName || item.category || item.desc || item.sub));
-  const text = name + ' ' + sub;
-  return /购买播客|付费精品|qzone|空间背景音乐|背景音乐|四只烤翅|试纸烤翅/i.test(text);
-}
-
 const QQ_LIKED_PLAYLIST_ID = 'liked';
 const QQ_LIKED_DIRID = 201;
 const QQ_LIKED_PLAYLIST_NAME = 'QQ 音乐·我的喜欢';
@@ -2434,7 +2417,6 @@ async function handleDiscoverHome() {
       dailySongTotal: 0,
       dailySongsComplete: true,
       playlists: [],
-      podcasts: [],
       mode: 'starter',
       updatedAt: Date.now(),
     };
@@ -2476,7 +2458,6 @@ async function handleDiscoverHome() {
     dailySongTotal: dailySongs.length,
     dailySongsComplete: true,
     playlists: privatePlaylists.concat(publicPlaylists).slice(0, 10),
-    podcasts: [],
     updatedAt: Date.now(),
   };
   discoverHomeCache = { key: cacheKey, at: Date.now(), payload };
@@ -4751,158 +4732,6 @@ async function handleQQLyric(mid, id) {
   };
 }
 
-function mapPodcastRadio(r) {
-  r = r || {};
-  const dj = r.dj || r.djSimple || r.djUser || r.creator || {};
-  const id = r.id || r.rid || r.radioId;
-  return {
-    id,
-    rid: id,
-    name: r.name || r.radioName || '',
-    cover: r.picUrl || r.picURL || r.coverUrl || r.coverImgUrl || r.avatarUrl || '',
-    desc: r.desc || r.description || r.rcmdText || '',
-    djName: dj.nickname || r.djName || r.nickname || '',
-    category: r.category || r.categoryName || '',
-    programCount: r.programCount || r.programNum || r.programCnt || 0,
-    subCount: r.subCount || r.subedCount || r.subscriberCount || 0,
-  };
-}
-
-function mapPodcastProgram(p, fallbackRadio) {
-  p = p || {};
-  const mainSong = p.mainSong || p.song || p.mainTrack || {};
-  const radio = p.radio || fallbackRadio || {};
-  const mappedRadio = mapPodcastRadio(radio);
-  const artists = mapArtists(mainSong.ar || mainSong.artists || []);
-  const album = mainSong.al || mainSong.album || {};
-  const dj = p.dj || radio.dj || {};
-  const playableId = mainSong.id || p.mainSongId || p.songId;
-  return {
-    type: 'podcast',
-    source: 'podcast',
-    id: playableId,
-    programId: p.id || p.programId,
-    radioId: mappedRadio.id,
-    name: p.name || mainSong.name || '',
-    artist: mappedRadio.name || dj.nickname || artists.map(a => a.name).join(' / ') || mappedRadio.djName || '',
-    artists,
-    artistId: artists[0] && artists[0].id,
-    album: mappedRadio.name || album.name || 'Podcast',
-    cover: p.coverUrl || p.cover || p.blurCoverUrl || mappedRadio.cover || album.picUrl || '',
-    duration: p.duration || mainSong.dt || mainSong.duration || 0,
-    fee: mainSong.fee,
-    djName: mappedRadio.djName || dj.nickname || '',
-    radioName: mappedRadio.name || '',
-    desc: p.description || p.desc || '',
-    createTime: p.createTime || 0,
-    serialNum: p.serialNum || p.serial || 0,
-  };
-}
-
-function firstArrayFrom(obj, keys) {
-  obj = obj || {};
-  for (const key of keys) {
-    const value = obj[key];
-    if (Array.isArray(value)) return value;
-    if (value && Array.isArray(value.list)) return value.list;
-    if (value && Array.isArray(value.data)) return value.data;
-    if (value && Array.isArray(value.resources)) return value.resources;
-  }
-  return [];
-}
-
-function mapPodcastVoice(v) {
-  v = v || {};
-  const raw = v.resource || v.voice || v.data || v.program || v;
-  const mainSong = raw.mainSong || raw.song || raw.track || {};
-  const radio = raw.radio || raw.djRadio || raw.voiceList || raw.podcast || {};
-  const playableId = raw.trackId || raw.songId || raw.mainSongId || mainSong.id || raw.id;
-  return {
-    type: 'podcast',
-    source: 'podcast',
-    sourceType: 'podcast-voice',
-    id: playableId,
-    programId: raw.programId || raw.voiceId || raw.id,
-    radioId: radio.id || radio.radioId || radio.voiceListId || raw.radioId || raw.voiceListId,
-    name: raw.name || raw.songName || raw.title || mainSong.name || '',
-    artist: (radio.name || radio.radioName || radio.voiceListName || raw.podcastName || raw.djName || 'Voice'),
-    album: radio.name || radio.radioName || raw.podcastName || 'Podcast',
-    cover: raw.coverUrl || raw.cover || raw.picUrl || raw.coverImgUrl || radio.picUrl || radio.coverUrl || '',
-    duration: raw.duration || raw.durationMs || mainSong.dt || mainSong.duration || 0,
-    djName: raw.djName || (radio.dj && radio.dj.nickname) || '',
-    radioName: radio.name || radio.radioName || raw.podcastName || '',
-    desc: raw.desc || raw.description || '',
-  };
-}
-
-function mapPodcastCollectionRadio(r, key) {
-  const radio = mapPodcastRadio(r);
-  return {
-    ...radio,
-    type: 'podcast-radio',
-    sourceType: 'podcast-radio',
-    collectionKey: key || '',
-    radioId: radio.id,
-    name: radio.name,
-    artist: radio.djName || radio.category || 'Podcast',
-    album: radio.category || 'Podcast',
-  };
-}
-
-function podcastCollectionMeta(key, items) {
-  const meta = {
-    collect: { key: 'collect', title: '收藏播客', sub: '你收藏的播客', itemType: 'radio' },
-    created: { key: 'created', title: '创建播客', sub: '你创建的播客', itemType: 'radio' },
-    liked: { key: 'liked', title: '喜欢的声音', sub: '收藏或最近喜欢的声音', itemType: 'voice' },
-  }[key] || { key, title: key, sub: '', itemType: 'radio' };
-  const first = (items || [])[0] || {};
-  return {
-    ...meta,
-    count: (items || []).length,
-    cover: first.cover || first.picUrl || first.coverUrl || '',
-  };
-}
-
-async function fetchMyPodcastItems(key, info, limit, offset) {
-  limit = Math.max(8, Math.min(60, Number(limit) || 30));
-  offset = Math.max(0, Number(offset) || 0);
-  if (key === 'collect') {
-    const r = await dj_sublist({ limit, offset, cookie: userCookie, timestamp: Date.now() });
-    const raw = firstArrayFrom(r.body, ['djRadios', 'djradios', 'radios', 'data']);
-    return { itemType: 'radio', items: raw.map(x => mapPodcastCollectionRadio(x, key)).filter(x => x.id) };
-  }
-  if (key === 'created') {
-    const r = await user_audio({ uid: info.userId, cookie: userCookie, timestamp: Date.now() });
-    const raw = firstArrayFrom(r.body, ['data', 'djRadios', 'djradios', 'radios']);
-    return { itemType: 'radio', items: raw.map(x => mapPodcastCollectionRadio(x, key)).filter(x => x.id) };
-  }
-  if (key === 'paid') {
-    const r = await dj_paygift({ limit, offset, cookie: userCookie, timestamp: Date.now() });
-    const raw = firstArrayFrom(r.body, ['data', 'djRadios', 'djradios', 'radios']);
-    return { itemType: 'radio', items: raw.map(x => mapPodcastCollectionRadio(x, key)).filter(x => x.id) };
-  }
-  if (key === 'liked') {
-    let raw = [];
-    try {
-      const sati = await sati_resource_sub_list({ cookie: userCookie, timestamp: Date.now() });
-      raw = firstArrayFrom(sati.body, ['data', 'resources', 'list']);
-    } catch (e) {
-      console.warn('[MyPodcastLiked] sati sub list failed:', e.message);
-    }
-    if (!raw.length) {
-      try {
-        const recent = await record_recent_voice({ limit, cookie: userCookie, timestamp: Date.now() });
-        raw = firstArrayFrom(recent.body, ['data', 'list', 'resources']);
-      } catch (e) {
-        console.warn('[MyPodcastLiked] recent voice fallback failed:', e.message);
-      }
-    }
-    return { itemType: 'voice', items: raw.map(mapPodcastVoice).filter(x => x.id && x.name) };
-  }
-  return { itemType: 'radio', items: [] };
-}
-
-// ---------- 业务: 取歌曲URL (探测试听) ----------
 //   返回 { url, trial, level, br }
 //   trial=true 表示这是试听片段 (freeTrialInfo 非空)
 async function resolveNeteaseDirectSongUrl(id, loginInfo, qualityPreference) {
@@ -5386,8 +5215,6 @@ function validateListenReport(body) {
     sessionId.length >= 8 &&
     cappedListenMs >= Math.max(5000, requiredMs) &&
     song.type !== 'local' &&
-    song.type !== 'podcast' &&
-    song.source !== 'podcast' &&
     !song.trial
   );
   return {
@@ -5813,7 +5640,7 @@ const server = http.createServer(async (req, res) => {
       sendJSON(res, await handleDiscoverHome());
     } catch (err) {
       console.error('[DiscoverHome]', err);
-      sendJSON(res, { error: err.message, loggedIn: false, dailySongs: [], playlists: [], podcasts: [] }, 500);
+      sendJSON(res, { error: err.message, loggedIn: false, dailySongs: [], playlists: [] }, 500);
     }
     return;
   }
@@ -6719,114 +6546,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pn === '/api/podcast/search') {
-    try {
-      const kw = String(url.searchParams.get('keywords') || '').trim();
-      const limit = Math.max(6, Math.min(30, parseInt(url.searchParams.get('limit') || '18', 10) || 18));
-      if (!kw) { sendJSON(res, { podcasts: [] }); return; }
-      const r = await cloudsearch({ keywords: kw, type: 1009, limit, cookie: userCookie, timestamp: Date.now() });
-      const result = (r.body && r.body.result) || {};
-      const raw = result.djRadios || result.djradios || result.radios || [];
-      const podcasts = raw.map(mapPodcastRadio).filter(p => p.id);
-      sendJSON(res, { podcasts, total: result.djRadiosCount || result.djradiosCount || podcasts.length });
-    } catch (err) {
-      console.error('[PodcastSearch]', err);
-      sendJSON(res, { error: err.message, podcasts: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/podcast/hot') {
-    try {
-      const limit = Math.max(6, Math.min(30, parseInt(url.searchParams.get('limit') || '18', 10) || 18));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      const r = await dj_hot({ limit, offset, cookie: userCookie, timestamp: Date.now() });
-      const body = r.body || {};
-      const raw = body.djRadios || body.djradios || body.radios || body.data || [];
-      const podcasts = (Array.isArray(raw) ? raw : []).map(mapPodcastRadio).filter(p => p.id);
-      sendJSON(res, { podcasts, more: !!body.hasMore });
-    } catch (err) {
-      console.error('[PodcastHot]', err);
-      sendJSON(res, { error: err.message, podcasts: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/podcast/detail') {
-    try {
-      const rid = url.searchParams.get('id') || url.searchParams.get('rid');
-      if (!rid) { sendJSON(res, { error: 'Missing podcast id' }, 400); return; }
-      const r = await dj_detail({ rid, cookie: userCookie, timestamp: Date.now() });
-      const body = r.body || {};
-      const radio = mapPodcastRadio(body.data || body.djRadio || body.radio || body);
-      sendJSON(res, { podcast: radio });
-    } catch (err) {
-      console.error('[PodcastDetail]', err);
-      sendJSON(res, { error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/podcast/programs') {
-    try {
-      const rid = url.searchParams.get('id') || url.searchParams.get('rid');
-      if (!rid) { sendJSON(res, { error: 'Missing podcast id', programs: [] }, 400); return; }
-      const limit = Math.max(10, Math.min(60, parseInt(url.searchParams.get('limit') || '30', 10) || 30));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      const r = await dj_program({ rid, limit, offset, asc: false, cookie: userCookie, timestamp: Date.now() });
-      const body = r.body || {};
-      const raw = body.programs || (body.data && (body.data.list || body.data.programs)) || [];
-      const radio = raw[0] && raw[0].radio ? mapPodcastRadio(raw[0].radio) : { id: rid, rid };
-      const programs = (Array.isArray(raw) ? raw : [])
-        .map(p => mapPodcastProgram(p, radio))
-        .filter(p => p.id && p.name);
-      sendJSON(res, { radio, programs, more: !!body.more, total: body.count || programs.length });
-    } catch (err) {
-      console.error('[PodcastPrograms]', err);
-      sendJSON(res, { error: err.message, programs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/podcast/my') {
-    try {
-      const info = await getLoginInfo();
-      if (!info.loggedIn || !info.userId) {
-        const empty = ['collect', 'created', 'liked'].map(k => podcastCollectionMeta(k, []));
-        sendJSON(res, { loggedIn: false, collections: empty });
-        return;
-      }
-      const keys = ['collect', 'created', 'liked'];
-      const collections = await Promise.all(keys.map(async key => {
-        try {
-          const data = await fetchMyPodcastItems(key, info, 12, 0);
-          return podcastCollectionMeta(key, data.items || []);
-        } catch (e) {
-          console.warn('[MyPodcast]', key, e.message);
-          return podcastCollectionMeta(key, []);
-        }
-      }));
-      sendJSON(res, { loggedIn: true, collections });
-    } catch (err) {
-      console.error('[MyPodcast]', err);
-      sendJSON(res, { error: err.message, collections: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/podcast/my/items') {
-    try {
-      const info = await getLoginInfo();
-      if (!info.loggedIn || !info.userId) { sendJSON(res, { loggedIn: false, items: [] }); return; }
-      const key = String(url.searchParams.get('key') || 'collect');
-      const limit = parseInt(url.searchParams.get('limit') || '48', 10) || 48;
-      const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
-      const data = await fetchMyPodcastItems(key, info, limit, offset);
-      sendJSON(res, { loggedIn: true, key, ...podcastCollectionMeta(key, data.items || []), itemType: data.itemType, items: data.items || [] });
-    } catch (err) {
-      console.error('[MyPodcastItems]', err);
-      sendJSON(res, { error: err.message, items: [] }, 500);
-    }
+  // ---------- 播客（podcast）整条下线（批 T16c） ----------
+  // 主人裁定：在线音乐对齐 LX 世界观后，播客不再由官方平台 cookie 供给，整套退役
+  // （不是隐藏、不是加开关）。原 /api/podcast/{search,hot,detail,programs,my,my/items,
+  // dj-beatmap} 的实现体（mapPodcast 系列 / fetchMyPodcast 系列 / 官方 dj 前缀接口常量 /
+  // dj-analyzer 依赖）随批删除；此处保留显式 REMOVED 收口，形态沿用 /api/world/* 同款
+  // { ok:false, error:'REMOVED' }，不借 LX_ROUTE_NOT_FOUND、不依赖路由兜底造成「假 404」。
+  if (pn === '/api/podcast' || pn.startsWith('/api/podcast/')) {
+    sendJSON(res, { ok: false, error: 'REMOVED', message: '播客功能已整条下线' }, 404);
     return;
   }
 
@@ -6977,30 +6704,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---------- 登录: QR Key ----------
-  // ---------- 播客 DJ 长音频后端离线锁拍 ----------
-  if (pn === '/api/podcast/dj-beatmap') {
-    try {
-      const audioUrl = url.searchParams.get('url');
-      const durationSec = Math.max(0, Number(url.searchParams.get('duration') || 0) || 0);
-      if (!audioUrl || !/^https?:\/\//i.test(audioUrl)) {
-        sendJSON(res, { error: 'Invalid audio url' }, 400);
-        return;
-      }
-      console.log('[PodcastDjBeatmap] start', Math.round(durationSec || 0) + 's');
-      const started = Date.now();
-      const introSec = Math.max(0, Number(url.searchParams.get('intro') || 0) || 0);
-      const map = introSec
-        ? await analyzePodcastDjIntro(audioUrl, { durationSec, introSec, userAgent: UA })
-        : await analyzePodcastDjStream(audioUrl, { durationSec, userAgent: UA });
-      console.log('[PodcastDjBeatmap] done beats:', map.visualBeatCount || 0, 'ms:', Date.now() - started, 'decode:', map.decode || {});
-      sendJSON(res, { ok: true, map });
-    } catch (err) {
-      console.error('[PodcastDjBeatmap]', err);
-      sendJSON(res, { ok: false, error: err.message || String(err) }, 500);
-    }
-    return;
-  }
-
   if (pn === '/api/login/qr/key') {
     try {
       const r = await login_qr_key({ timestamp: Date.now() });

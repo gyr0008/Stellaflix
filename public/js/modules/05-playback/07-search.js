@@ -6,7 +6,8 @@ var searchProviderNotice = '';
 var SEARCH_HISTORY_STORE_KEY = 'stellaflix-search-history';
 var SEARCH_HISTORY_STORE_VERSION = 3;
 // 历史迁移兼容：新 tab 键集在前，旧官方平台键仅保留读取迁移（T15 退役）。
-var SEARCH_HISTORY_MODES = ['all', 'kw', 'kg', 'tx', 'wy', 'mg', 'local', 'song', 'netease', 'qq', 'kugou', 'qishui', 'spotify', 'podcast'];
+// 批 T16c：播客 tab 与播客搜索分支整簇退役——在线音乐只认 LX 音源供给，播客不再有供方。
+var SEARCH_HISTORY_MODES = ['all', 'kw', 'kg', 'tx', 'wy', 'mg', 'local', 'song', 'netease', 'qq', 'kugou', 'qishui', 'spotify'];
 var MUSIC_SEARCH_INITIAL_VISIBLE = 18;
 var MUSIC_SEARCH_APPEND_BATCH = 14;
 var MUSIC_SEARCH_MAX_RESULTS = 180;
@@ -39,14 +40,11 @@ function syncSearchAreaResultState() {
   var searchArea = document.getElementById('search-area');
   if (!searchArea || !$results) return;
   var hasVisibleResults = $results.classList.contains('show') && $results.children.length > 0;
-  var hasIntent = !!($input && String($input.value || '').trim()) || searchMode === 'podcast';
+  var hasIntent = !!($input && String($input.value || '').trim());
   searchArea.classList.toggle('has-results', hasVisibleResults && hasIntent);
 }
 if (window.MutationObserver && $results) {
   new MutationObserver(syncSearchAreaResultState).observe($results, { childList: true, attributes: true, attributeFilter: ['class'] });
-}
-function isMusicSearchMode(mode) {
-  return mode !== 'podcast';
 }
 function searchResultKey(q, mode) {
   return (mode || searchMode || 'all') + '|' + String(q || '').trim();
@@ -73,9 +71,6 @@ function clearSearchResults() {
   searchLastResultQuery = '';
   resetSearchMusicRenderState();
   playlist = [];
-  podcastResults = [];
-  podcastPrograms = [];
-  podcastCurrentRadio = null;
   $results.innerHTML = '';
   $results.classList.remove('show', 'search-history-surface');
 }
@@ -157,7 +152,7 @@ function renderSearchHistory() {
 }
 function clearSearchHistory() {
   writeSearchHistory([]);
-  if (!renderSearchHistory() && searchMode === 'podcast') loadPodcastHot();
+  renderSearchHistory();
 }
 function runSearchHistory(q) {
   q = String(q || '').trim();
@@ -167,9 +162,9 @@ function runSearchHistory(q) {
   doSearch(q);
   $input.focus();
 }
-// 批 T11：tab 键集移植上游 :5684-5694——综合(all)/kw/kg/tx/wy/mg/本地(local)；
-// 官方平台 tab 退役（provider 死代码留 T15），播客 tab 本轮保留（T16 退役）。
-var SEARCH_MODE_TAB_KEYS = ['all', 'kw', 'kg', 'tx', 'wy', 'mg', 'local', 'podcast'];
+// 批 T11：tab 键集移植上游 :5684-5694——综合(all)/kw/kg/tx/wy/mg/本地(local)。
+// 批 T16c：播客 tab 整条退役（在线音乐只认 LX 音源供给，播客不再有供方）。
+var SEARCH_MODE_TAB_KEYS = ['all', 'kw', 'kg', 'tx', 'wy', 'mg', 'local'];
 var SEARCH_MODE_PLACEHOLDERS = {
   all: '搜索歌曲、歌手...',
   kw: '搜索酷我音乐...',
@@ -177,8 +172,7 @@ var SEARCH_MODE_PLACEHOLDERS = {
   tx: '搜索 QQ 音乐...',
   wy: '搜索网易云音乐...',
   mg: '搜索咪咕音乐...',
-  local: '搜索本地歌单...',
-  podcast: '搜索播客、电台...'
+  local: '搜索本地歌单...'
 };
 function updateSearchModeTabs() {
   SEARCH_MODE_TAB_KEYS.forEach(function (key) {
@@ -194,7 +188,7 @@ function setSearchMode(mode) {
   mode = String(mode || '');
   // 兼容旧调用方（04-home-empty-wallpaper 等）：'song' 是旧「综合」键。
   if (mode === 'song') mode = 'all';
-  mode = (mode === 'podcast' || mode === 'all' || /^(?:kw|kg|tx|wy|mg|local)$/.test(mode)) ? mode : 'all';
+  mode = (mode === 'all' || /^(?:kw|kg|tx|wy|mg|local)$/.test(mode)) ? mode : 'all';
   if (searchMode === mode) return;
   searchMode = mode;
   updateSearchModeTabs();
@@ -202,22 +196,11 @@ function setSearchMode(mode) {
   var searchArea = document.getElementById('search-area');
   if (searchArea) setPeek(searchArea, true, 'search');
   var q = $input ? $input.value.trim() : '';
-  if (searchMode === 'podcast') {
-    if (q) doSearch(q);
-    else if (!renderSearchHistory()) loadPodcastHot();
-  } else if (q) {
+  if (q) {
     doSearch(q);
   } else {
     renderSearchHistory();
   }
-}
-function podcastMetaText(item) {
-  item = item || {};
-  var bits = [];
-  if (item.djName) bits.push(item.djName);
-  if (item.programCount) bits.push(item.programCount + ' episodes');
-  if (item.subCount) bits.push(Math.round(item.subCount / 1000) + 'k follows');
-  return bits.join('  ·  ');
 }
 function formatProgramTime(sec) {
   sec = Math.max(0, Number(sec) || 0);
@@ -225,127 +208,6 @@ function formatProgramTime(sec) {
   var m = Math.floor((sec % 3600) / 60);
   var s = Math.floor(sec % 60);
   return h ? (h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')) : (m + ':' + String(s).padStart(2, '0'));
-}
-function programMetaText(item) {
-  item = item || {};
-  var bits = [];
-  if (item.radioName || item.artist) bits.push(item.radioName || item.artist);
-  if (item.djName && item.djName !== item.artist) bits.push(item.djName);
-  if (item.duration) bits.push(formatProgramTime(Math.round(item.duration / 1000)));
-  return bits.join('  ·  ');
-}
-function searchThumbHtml(src) {
-  return src
-    ? '<img src="' + coverUrlWithSize(src, 80) + '" alt="" loading="lazy" onerror="this.style.opacity=0.2">'
-    : '<div style="width:40px;height:40px;border-radius:6px;background:rgba(255,255,255,0.06);flex-shrink:0"></div>';
-}
-function renderPodcastRadios(items, label) {
-  setSearchHistorySurface(false);
-  podcastResults = items || [];
-  podcastPrograms = [];
-  playlist = [];
-  if (!podcastResults.length) {
-    $results.innerHTML = '<div class="search-empty">No podcast found</div>';
-    $results.classList.add('show');
-    return;
-  }
-  $results.innerHTML = podcastResults.map(function (p, i) {
-    return '<div class="search-result">' +
-      '<div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0" onclick="openPodcastPrograms(' + i + ')">' +
-      searchThumbHtml(p.cover) +
-      '<div class="search-result-info">' +
-      '<div class="search-result-title">' + escHtml(p.name || '') + '<span class="tag-podcast">Podcast</span></div>' +
-      '<div class="search-result-meta">' + escHtml(podcastMetaText(p) || label || 'NetEase Radio') + '</div>' +
-      '</div>' +
-      '</div>' +
-      '<button class="add-btn" title="Open" onclick="event.stopPropagation();openPodcastPrograms(' + i + ')">›</button>' +
-      '</div>';
-  }).join('');
-  $results.classList.add('show');
-  if (window.gsap) animateListItems($results, '.search-result', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 18 });
-}
-async function loadPodcastHot() {
-  var requestSeq = ++searchRequestSeq;
-  setSearchHistorySurface(false);
-  $results.innerHTML = '<div class="search-empty">Loading podcasts...</div>';
-  $results.classList.add('show');
-  try {
-    var data = await apiJson('/api/podcast/hot?limit=18');
-    if (requestSeq !== searchRequestSeq || searchMode !== 'podcast') return;
-    renderPodcastRadios(data.podcasts || [], 'Hot podcasts');
-  } catch (err) {
-    console.error('Podcast hot:', err);
-    if (requestSeq === searchRequestSeq) $results.innerHTML = '<div class="search-empty">Podcast load failed</div>';
-  }
-}
-async function doPodcastSearch(q) {
-  var requestSeq = ++searchRequestSeq;
-  try {
-    var data = await apiJson('/api/podcast/search?keywords=' + encodeURIComponent(q) + '&limit=18');
-    if (requestSeq !== searchRequestSeq || searchMode !== 'podcast' || $input.value.trim() !== q) return;
-    var podcasts = data.podcasts || [];
-    if (podcasts.length) rememberSearchQuery(q);
-    renderPodcastRadios(podcasts, 'Search results');
-  } catch (err) {
-    console.error('Podcast search:', err);
-  }
-}
-async function openPodcastPrograms(i) {
-  var radio = podcastResults[i]; if (!radio) return;
-  var requestSeq = ++searchRequestSeq;
-  setSearchHistorySurface(false);
-  podcastCurrentRadio = radio;
-  $results.innerHTML = '<div class="search-empty">Loading episodes...</div>';
-  $results.classList.add('show');
-  try {
-    var data = await apiJson('/api/podcast/programs?id=' + encodeURIComponent(radio.id) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE);
-    if (requestSeq !== searchRequestSeq || searchMode !== 'podcast') return;
-    podcastCurrentRadio = Object.assign({}, radio, data.radio || {});
-    podcastPrograms = data.programs || [];
-    playlist = podcastPrograms;
-    renderPodcastPrograms();
-  } catch (err) {
-    console.error('Podcast programs:', err);
-    if (requestSeq === searchRequestSeq) $results.innerHTML = '<div class="search-empty">Episodes load failed</div>';
-  }
-}
-function renderPodcastPrograms() {
-  setSearchHistorySurface(false);
-  var radio = podcastCurrentRadio || {};
-  if (!podcastPrograms.length) {
-    $results.innerHTML = '<div class="podcast-result-head"><button class="podcast-back-btn" onclick="event.stopPropagation();renderPodcastRadios(podcastResults)">‹</button><div class="search-result-info"><div class="search-result-title">' + escHtml(radio.name || 'Podcast') + '</div><div class="search-result-meta">No playable episodes</div></div></div>';
-    $results.classList.add('show');
-    return;
-  }
-  $results.innerHTML =
-    '<div class="podcast-result-head">' +
-    '<button class="podcast-back-btn" onclick="event.stopPropagation();renderPodcastRadios(podcastResults)">‹</button>' +
-    searchThumbHtml(radio.cover) +
-    '<div class="search-result-info"><div class="search-result-title">' + escHtml(radio.name || 'Podcast') + '<span class="tag-podcast">Podcast</span></div><div class="search-result-meta">' + escHtml(radio.djName || (podcastPrograms.length + ' episodes')) + '</div></div>' +
-    '</div>' +
-    podcastPrograms.map(function (p, i) {
-      return '<div class="search-result">' +
-        '<div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0" onclick="playPodcastProgram(' + i + ')">' +
-        searchThumbHtml(p.cover) +
-        '<div class="search-result-info">' +
-        '<div class="search-result-title">' + escHtml(p.name || '') + '</div>' +
-        '<div class="search-result-meta">' + escHtml(programMetaText(p)) + '</div>' +
-        '</div>' +
-        '</div>' +
-        '<button class="add-btn" title="下一首播放" onclick="event.stopPropagation();queuePodcastProgram(' + i + ')">+</button>' +
-        '</div>';
-    }).join('');
-  $results.classList.add('show');
-  if (window.gsap) animateListItems($results, '.search-result', { x: 0, y: 6, stagger: 0.010, duration: 0.18, limit: 18 });
-}
-function queuePodcastProgram(i) {
-  var item = podcastPrograms[i]; if (!item) return;
-  queueSongNext(item);
-  showToast('已设为下一首: ' + item.name);
-}
-function playPodcastProgram(i) {
-  var item = podcastPrograms[i]; if (!item) return;
-  playSearchResult(i);
 }
 
 $input.addEventListener('input', function () {
@@ -356,21 +218,19 @@ $input.addEventListener('input', function () {
   resetSearchMusicRenderState();
   if (!q) {
     playlist = [];
-    if (!renderSearchHistory() && searchMode === 'podcast') loadPodcastHot();
+    renderSearchHistory();
     return;
   }
-  if (isMusicSearchMode(searchMode)) {
-    setSearchHistorySurface(false);
-    $results.innerHTML = '<div class="search-empty">正在搜索 “' + escHtml(q) + '”…</div>';
-    $results.classList.add('show');
-  }
+  setSearchHistorySurface(false);
+  $results.innerHTML = '<div class="search-empty">正在搜索 “' + escHtml(q) + '”…</div>';
+  $results.classList.add('show');
   searchTimer = setTimeout(function () { doSearch(q); }, 180);
 });
 $input.addEventListener('focus', function () {
   var searchArea = document.getElementById('search-area');
   if (searchArea) setPeek(searchArea, true, 'search');
   if (!$input.value.trim()) {
-    if (!renderSearchHistory() && searchMode === 'podcast') loadPodcastHot();
+    renderSearchHistory();
   } else if ($results.children.length > 0) {
     $results.classList.add('show');
   }
@@ -386,7 +246,7 @@ $input.addEventListener('keydown', function (e) {
     e.preventDefault();
     clearTimeout(searchTimer);
     var q = $input.value.trim();
-    if (isMusicSearchMode(searchMode) && q && playlist.length && searchLastResultQuery === searchResultKey(q)) $results.classList.add('show');
+    if (q && playlist.length && searchLastResultQuery === searchResultKey(q)) $results.classList.add('show');
     else doSearch(q, { autoPlayFirst: false });
   } else if (e.key === 'Escape') {
     clearTimeout(searchTimer);
@@ -639,7 +499,7 @@ function toggleControlSourceSwitcher(e) {
     e.stopPropagation();
   }
   var song = currentControlSong();
-  if (!song || song.type === 'local' || song.source === 'local' || song.localUrl || song.type === 'podcast') {
+  if (!song || song.type === 'local' || song.source === 'local' || song.localUrl) {
     showToast('当前歌曲不支持切换音源');
     return;
   }
@@ -1327,11 +1187,7 @@ async function doSearch(q, opts) {
   opts = opts || {};
   q = String(q || '').trim();
   if (!q) {
-    if (!renderSearchHistory() && searchMode === 'podcast') loadPodcastHot();
-    return;
-  }
-  if (searchMode === 'podcast') {
-    doPodcastSearch(q);
+    renderSearchHistory();
     return;
   }
   var requestSeq = ++searchRequestSeq;

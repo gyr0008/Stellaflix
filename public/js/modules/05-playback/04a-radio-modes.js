@@ -101,7 +101,6 @@ var RADIO_NON_MUSIC_ARTIST_PATTERN = /^(路乃嘉|子劲|疗愈音律|胖达|睡
 
 function isRadioMusicSong(song) {
   if (!song) return false;
-  if (song.type === 'podcast-radio' || song.radioId || song.programId) return false;
   if (!song.id && !song.songmid && !song.hash && !song.localPath) return false;
   var title = String(song.name || song.title || '').trim();
   var artist = String(song.singer || song.artist || '').trim();

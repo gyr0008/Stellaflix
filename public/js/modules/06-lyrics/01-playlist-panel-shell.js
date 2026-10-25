@@ -200,8 +200,6 @@ function animatePlaylistPanelCurrentTab(panel, opts) {
     animateVisiblePanelList(document.getElementById('queue-list'), '.queue-item', panel, '.queue-item.now', { scrollActive: opts.scrollActive !== false });
   } else if (queueViewTab === 'playlists') {
     animateVisiblePanelList(document.getElementById('pl-list'), '.pl-card', panel);
-  } else {
-    animateVisiblePanelList(document.getElementById('podcast-list'), '.pl-card', panel);
   }
 }
 function preparePlaylistPanelTabOnOpen(panel) {
@@ -212,7 +210,7 @@ function preparePlaylistPanelTabOnOpen(panel) {
     switchPlaylistTab('playlists', { save: false, animate: false, refresh: false });
   }
   if (queueViewTab === 'queue') scrollPlaylistPanelToCurrent();
-  else if (queueViewTab === 'playlists' || queueViewTab === 'podcasts') refreshUserPlaylists();
+  else if (queueViewTab === 'playlists') refreshUserPlaylists();
 }
 function switchPlaylistTab(tab, opts) {
   opts = opts || {};
@@ -223,15 +221,11 @@ function switchPlaylistTab(tab, opts) {
   var playlistTab = document.getElementById('tab-pl');
   if (queueTab) queueTab.classList.toggle('active', tab === 'queue');
   if (playlistTab) playlistTab.classList.toggle('active', tab === 'playlists');
-  var podcastTab = document.getElementById('tab-podcast');
-  if (podcastTab) podcastTab.classList.toggle('active', tab === 'podcasts');
   var queuePane = document.getElementById('queue-pane');
   var playlistPane = document.getElementById('pl-pane');
   if (queuePane) queuePane.style.display = tab === 'queue' ? '' : 'none';
   if (playlistPane) playlistPane.style.display = tab === 'playlists' ? '' : 'none';
-  var podcastPane = document.getElementById('podcast-pane');
-  if (podcastPane) podcastPane.style.display = tab === 'podcasts' ? '' : 'none';
-  if ((tab === 'playlists' || tab === 'podcasts') && opts.refresh !== false) refreshUserPlaylists();
+  if (tab === 'playlists' && opts.refresh !== false) refreshUserPlaylists();
   if (opts.animate !== false) animatePlaylistPanelCurrentTab(document.getElementById('playlist-panel'));
 }
 function setMiniQueueOpen(open) {
@@ -609,8 +603,6 @@ async function refreshUserPlaylists(force) {
   if (!loginStatus.loggedIn && !qqLoginStatus.loggedIn && !kugouLoginStatus.loggedIn && !qishuiLoginStatus.loggedIn && !spotifyLoginStatus.loggedIn) {
     resetPlaylistPanelRenderLimit();
     document.getElementById('pl-list').innerHTML = '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">登录后显示个人歌单</div>';
-    var podcastListLoggedOut = document.getElementById('podcast-list');
-    if (podcastListLoggedOut) podcastListLoggedOut.innerHTML = '<div style="text-align:center;padding:14px 0;color:rgba(255,255,255,.28);font-size:11.5px">登录后显示我的播客</div>';
     return;
   }
   var catalogNeedsNewProvider = playlistCatalogSyncState.loading && ['netease', 'qq', 'kugou', 'qishui', 'spotify'].some(function (provider) {
@@ -621,10 +613,9 @@ async function refreshUserPlaylists(force) {
     if (userPlaylists.length) renderUserPlaylistsList({ animate: isPlaylistPanelVisibleForRender(), preserveScroll: true });
     return;
   }
-  if (!force && (userPlaylists.length || myPodcastCollections.length)) {
+  if (!force && userPlaylists.length) {
     var cachedAnimate = isPlaylistPanelVisibleForRender();
     renderUserPlaylistsList({ animate: cachedAnimate, preserveScroll: true });
-    renderMyPodcastCollections({ animate: cachedAnimate });
     return;
   }
   var $pl = document.getElementById('pl-list');
@@ -632,8 +623,6 @@ async function refreshUserPlaylists(force) {
     $pl.innerHTML = miniQueueSkeleton();
     if (window.gsap) animateListItems($pl, '.mini-queue-skeleton', { x: 0, y: 6, stagger: 0.018, duration: 0.18, limit: 3 });
   }
-  var $pod = document.getElementById('podcast-list');
-  if ($pod) $pod.innerHTML = miniQueueSkeleton();
   if (playlistCatalogSyncState.timer) clearTimeout(playlistCatalogSyncState.timer);
   var token = playlistCatalogSyncState.token + 1;
   playlistCatalogSyncState = { token: token, loading: true, timer: 0, providers: {}, error: '', startedAt: Date.now() };
@@ -656,14 +645,7 @@ async function refreshUserPlaylists(force) {
   var firstPageTasks = Object.keys(playlistCatalogSyncState.providers).filter(playlistCatalogProviderLoggedIn).map(function (provider) {
     return loadPlaylistCatalogProviderPage(provider, 'first-page');
   });
-  var podcastTask = loginStatus.loggedIn
-    ? apiJson('/api/podcast/my', { timeoutMs: 12000 }).then(function (r) {
-      if (playlistCatalogSyncState.token !== token) return;
-      myPodcastCollections = r && r.collections || [];
-      renderMyPodcastCollections({ animate: isPlaylistPanelVisibleForRender() });
-    }).catch(function (e) { console.warn('[PodcastCatalog]', e); })
-    : Promise.resolve();
-  await Promise.allSettled(firstPageTasks.concat([podcastTask]));
+  await Promise.allSettled(firstPageTasks);
   if (playlistCatalogSyncState.token !== token) return;
   playlistCatalogSyncState.loading = playlistCatalogHasPendingPages();
   if (userPlaylists.length) renderUserPlaylistsList({ animate: isPlaylistPanelVisibleForRender(), preserveScroll: true });

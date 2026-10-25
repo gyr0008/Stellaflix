@@ -2289,11 +2289,6 @@ async function loadHomePlatformNeteaseRecommendations(force) {
     if (homeDiscoverState.loading && typeof waitForHomeDiscoverIdle === 'function') await waitForHomeDiscoverIdle(2600);
     if (force || !homeDiscoverState.loaded) await loadHomeDiscover(!!force);
     if (homeDiscoverState.loading && typeof waitForHomeDiscoverIdle === 'function') await waitForHomeDiscoverIdle(2600);
-    if (force || !Array.isArray(homeDiscoverState.podcasts) || !homeDiscoverState.podcasts.length) {
-      var podcastData = await apiJson('/api/podcast/hot?limit=8&t=' + Date.now(), { timeoutMs: 12000 });
-      var hotPodcasts = podcastData && Array.isArray(podcastData.podcasts) ? podcastData.podcasts : [];
-      if (hotPodcasts.length) homeDiscoverState.podcasts = hotPodcasts;
-    }
   } catch (error) {
     console.warn('[HomePlatformNetease]', error);
   } finally {

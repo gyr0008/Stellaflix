@@ -3,7 +3,6 @@ function fallbackHomeTiles() {
     { kind: 'login', title: '登录同步歌单', sub: '网易云 / QQ / 酷狗 / 汽水' },
     { kind: 'search', title: '搜索一首歌', sub: '原唱优先', query: '' },
     { kind: 'local', title: '导入本地音乐', sub: '本地文件也能可视化' },
-    { kind: 'podcastSearch', title: '搜索播客', sub: '长内容 / 电台' },
   ];
 }
 function homeTileCover(item) {
@@ -18,7 +17,6 @@ function homeToneForItem(item, index) {
   if (item.tone) return item.tone;
   if (item.kind === 'song') return index % 2 ? 'search' : 'daily';
   if (item.kind === 'playlist') return 'playlist';
-  if (item.kind === 'podcast' || item.kind === 'podcastSearch') return 'podcast';
   if (item.kind === 'local') return 'local';
   if (item.kind === 'login') return 'library';
   if (item.kind === 'search') return 'search';
@@ -60,11 +58,6 @@ function renderHomeTiles() {
     homeDiscoverState.playlists.slice(0, Math.max(0, 5 - tiles.length)).forEach(function (pl, i) {
       tiles.push({ kind: 'playlist', index: i, title: pl.name || '推荐歌单', sub: (pl.trackCount ? pl.trackCount + ' 首' : 'Playlist') + (pl.playCount ? ' · ' + compactHomeCount(pl.playCount) + ' 播放' : ''), cover: pl.cover });
     });
-    if (tiles.length < 5) {
-      homeDiscoverState.podcasts.slice(0, 5 - tiles.length).forEach(function (p, i) {
-        tiles.push({ kind: 'podcast', index: i, title: p.name || '热门播客', sub: p.djName || p.category || 'Podcast', cover: p.cover });
-      });
-    }
   }
   if (!tiles.length) tiles = fallbackHomeTiles();
   tiles = tiles.slice(0, 5);
@@ -109,7 +102,6 @@ function renderHomeDiscover() {
   var cardSongB = homeDiscoverState.songs[1] || null;
   var cardSongC = homeDiscoverState.songs[2] || null;
   var playlistItem = homeDiscoverState.playlists[0] || null;
-  var podcastItem = homeDiscoverState.podcasts[0] || null;
   var summary = homeListenSummary();
   var weatherCardTitle = document.getElementById('home-weather-card-title');
   var weatherCardSub = document.getElementById('home-weather-card-sub');
@@ -155,8 +147,8 @@ function renderHomeDiscover() {
     setHomeArt('home-daily-art', daily && daily.cover, 280);
     setHomeArt('home-private-art', cardSongB && cardSongB.cover || daily && daily.cover || summary.recent && summary.recent.cover || playlistItem && playlistItem.cover, 280);
     setHomeArt('home-continue-art', summary.recent && summary.recent.cover || playlistItem && playlistItem.cover, 280);
-    setHomeArt('home-profile-art', summary.topSong && summary.topSong.cover || podcastItem && podcastItem.cover, 280);
-    setHomeArt('home-library-art', cardSongC && cardSongC.cover || summary.topSong && summary.topSong.cover || summary.recent && summary.recent.cover || podcastItem && podcastItem.cover, 280);
+    setHomeArt('home-profile-art', summary.topSong && summary.topSong.cover || playlistItem && playlistItem.cover, 280);
+    setHomeArt('home-library-art', cardSongC && cardSongC.cover || summary.topSong && summary.topSong.cover || summary.recent && summary.recent.cover || playlistItem && playlistItem.cover, 280);
   }
   renderHomeTiles();
 }
@@ -174,7 +166,6 @@ async function loadHomeDiscover(force) {
     homeDiscoverState.mode = data && data.mode || (homeDiscoverState.loggedIn ? 'member' : 'starter');
     homeDiscoverState.songs = homeDiscoverState.loggedIn ? (data && data.dailySongs || []).map(cloneSong) : [];
     homeDiscoverState.playlists = homeDiscoverState.loggedIn ? ((data && data.playlists && data.playlists.length) ? data.playlists : userPlaylists.slice(0, 10)) : [];
-    homeDiscoverState.podcasts = homeDiscoverState.loggedIn ? (data && data.podcasts || []) : [];
     homeDiscoverState.updatedAt = Number(data && data.updatedAt) || Date.now();
     homeDiscoverState.loaded = true;
   } catch (e) {

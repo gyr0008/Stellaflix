@@ -115,13 +115,11 @@ function makeContentListManager() {
     ctx.fillText(ellipsize(ctx, playlistTitle || '歌单详情', W - 310), 72, 92);
     ctx.font = '500 18px Inter, "Microsoft YaHei", Arial';
     ctx.fillStyle = canvasAccent(0.62);
-    var playableCount = allTracks.filter(function (song) { return song && song.id && song.type !== 'podcast-radio'; }).length;
+    var playableCount = allTracks.filter(function (song) { return song && song.id; }).length;
     var contentCount = allTracks.filter(function (song) { return song && song.id; }).length;
     var isLoading = allTracks.length === 1 && isLoadingLabel(allTracks[0] && allTracks[0].name);
-    var countLabel = contentKind === 'podcast'
-      ? (contentCount ? (contentCount + ' 项播客内容') : (isLoading ? '正在载入' : '暂无播客内容'))
-      : (playableCount ? (playableCount + ' 首歌曲') : (isLoading ? '正在载入' : '暂无可播放歌曲'));
-    if (contentKind !== 'podcast' && contentTotalCount && contentTotalCount > playableCount) {
+    var countLabel = playableCount ? (playableCount + ' 首歌曲') : (isLoading ? '正在载入' : '暂无可播放歌曲');
+    if (contentTotalCount && contentTotalCount > playableCount) {
       countLabel = playableCount + '/' + contentTotalCount + (contentLoadingMore ? ' loading' : ' loaded');
     }
     ctx.fillText(countLabel, 74, 128);
@@ -246,7 +244,7 @@ function makeContentListManager() {
   // 批 T15.5b：qq/kugou/qishui/spotify 四个平台歌单的曲目读取改走 lx 导入族
   // （POST /api/platform-playlist/import：一次取全量、前端切片分页）。T15.5a §6 的衔接说明
   // 即此：卡片/前缀里的 source + id 就是导入参数。官方 */playlist/tracks 消费点在此退役
-  // （路由删除归 T16）。网易云 /api/playlist/tracks 与播客路由不属本批改道目标，原样保留待 T16。
+  // （路由删除归 T16）。网易云 /api/playlist/tracks 不属本批改道目标，原样保留。
   // 曲目取数与切片分页复用 06-lyrics 的 playlistTracksPage（同一套 lx 导入契约，避免两份实现）。
   var CONTENT_IMPORT_PROVIDERS = ['qq', 'kugou', 'qishui', 'spotify'];
 
@@ -311,9 +309,8 @@ function makeContentListManager() {
   function drawRow(row, song, isCenter) {
     var cv = row.canvas, ctx = cv.getContext('2d');
     var W = cv.width, H = cv.height;
-    var isPodcastRadio = !!(song && song.type === 'podcast-radio');
-    var playable = !!(song && song.id && !isPodcastRadio);
-    var actionReady = playable || isPodcastRadio;
+    var playable = !!(song && song.id);
+    var actionReady = playable;
     ctx.clearRect(0, 0, W, H);
     makeRoundRect(ctx, 14, 10, W - 28, H - 20, 22);
     var rowGrad = ctx.createLinearGradient(0, 0, W, H);
@@ -370,7 +367,7 @@ function makeContentListManager() {
     var textX = (actionReady || hasSongCover) ? 154 : 82;
     var btnW = 104, btnH = 48, btnX = W - 144, btnY = H / 2 - btnH / 2;
     var miniBtn = 44, likeX = btnX - 156, collectX = btnX - 104, nextX = btnX - 52;
-    var textMax = actionReady && isCenter ? (isPodcastRadio ? btnX - textX - 24 : likeX - textX - 24) : W - textX - 42;
+    var textMax = actionReady && isCenter ? likeX - textX - 24 : W - textX - 42;
     var loadingRow = !playable && isLoadingLabel(song && song.name);
     if (loadingRow) {
       ctx.font = '700 22px Inter, "Microsoft YaHei", Arial';
@@ -400,66 +397,64 @@ function makeContentListManager() {
     ctx.fillText(ellipsize(ctx, song.artist || '', textMax), textX, 72);
     // center 行右侧显示红心/收藏/播放按钮
     if (isCenter && actionReady) {
-      if (!isPodcastRadio) {
-        var liked = isSongLiked(song);
-        makeRoundRect(ctx, likeX, btnY + 2, miniBtn, btnH - 4, 15);
-        ctx.fillStyle = liked ? 'rgba(255,122,144,0.18)' : 'rgba(255,255,255,0.075)';
-        ctx.fill();
-        ctx.strokeStyle = liked ? 'rgba(255,122,144,0.52)' : 'rgba(255,255,255,0.14)';
-        ctx.lineWidth = 1.1;
-        ctx.stroke();
-        drawCanvasHeart(ctx, likeX + miniBtn / 2, btnY + 26, 20, liked ? '#ff7a90' : 'rgba(255,255,255,0.76)');
+      var liked = isSongLiked(song);
+      makeRoundRect(ctx, likeX, btnY + 2, miniBtn, btnH - 4, 15);
+      ctx.fillStyle = liked ? 'rgba(255,122,144,0.18)' : 'rgba(255,255,255,0.075)';
+      ctx.fill();
+      ctx.strokeStyle = liked ? 'rgba(255,122,144,0.52)' : 'rgba(255,255,255,0.14)';
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+      drawCanvasHeart(ctx, likeX + miniBtn / 2, btnY + 26, 20, liked ? '#ff7a90' : 'rgba(255,255,255,0.76)');
 
-        makeRoundRect(ctx, collectX, btnY + 2, miniBtn, btnH - 4, 15);
-        var collectGrad = ctx.createLinearGradient(collectX, btnY + 2, collectX + miniBtn, btnY + btnH);
-        collectGrad.addColorStop(0, 'rgba(255,255,255,0.080)');
-        collectGrad.addColorStop(1, canvasAccent(0.075));
-        ctx.fillStyle = collectGrad;
-        ctx.fill();
-        ctx.strokeStyle = canvasAccent(0.22);
-        ctx.lineWidth = 1.1;
-        ctx.stroke();
-        var collectCx = collectX + miniBtn / 2;
-        var collectCy = btnY + btnH / 2;
-        ctx.strokeStyle = canvasAccent(0.72);
-        ctx.lineWidth = 2.35;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(collectCx - 11, collectCy + 1);
-        ctx.lineTo(collectCx - 11, collectCy + 12);
-        ctx.lineTo(collectCx + 11, collectCy + 12);
-        ctx.lineTo(collectCx + 11, collectCy + 1);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(collectCx, collectCy - 9);
-        ctx.lineTo(collectCx, collectCy + 5);
-        ctx.moveTo(collectCx - 7, collectCy - 2);
-        ctx.lineTo(collectCx + 7, collectCy - 2);
-        ctx.stroke();
+      makeRoundRect(ctx, collectX, btnY + 2, miniBtn, btnH - 4, 15);
+      var collectGrad = ctx.createLinearGradient(collectX, btnY + 2, collectX + miniBtn, btnY + btnH);
+      collectGrad.addColorStop(0, 'rgba(255,255,255,0.080)');
+      collectGrad.addColorStop(1, canvasAccent(0.075));
+      ctx.fillStyle = collectGrad;
+      ctx.fill();
+      ctx.strokeStyle = canvasAccent(0.22);
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+      var collectCx = collectX + miniBtn / 2;
+      var collectCy = btnY + btnH / 2;
+      ctx.strokeStyle = canvasAccent(0.72);
+      ctx.lineWidth = 2.35;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(collectCx - 11, collectCy + 1);
+      ctx.lineTo(collectCx - 11, collectCy + 12);
+      ctx.lineTo(collectCx + 11, collectCy + 12);
+      ctx.lineTo(collectCx + 11, collectCy + 1);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(collectCx, collectCy - 9);
+      ctx.lineTo(collectCx, collectCy + 5);
+      ctx.moveTo(collectCx - 7, collectCy - 2);
+      ctx.lineTo(collectCx + 7, collectCy - 2);
+      ctx.stroke();
 
-        makeRoundRect(ctx, nextX, btnY + 2, miniBtn, btnH - 4, 15);
-        var nextGrad = ctx.createLinearGradient(nextX, btnY + 2, nextX + miniBtn, btnY + btnH);
-        nextGrad.addColorStop(0, 'rgba(255,255,255,0.082)');
-        nextGrad.addColorStop(0.62, 'rgba(255,255,255,0.045)');
-        nextGrad.addColorStop(1, canvasAccent(0.055));
-        ctx.fillStyle = nextGrad;
-        ctx.fill();
-        ctx.strokeStyle = canvasAccent(0.24);
-        ctx.lineWidth = 1.1;
-        ctx.stroke();
-        var nextCx = nextX + miniBtn / 2;
-        var nextCy = btnY + btnH / 2;
-        ctx.strokeStyle = 'rgba(255,255,255,0.90)';
-        ctx.lineWidth = 2.8;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(nextCx, nextCy - 8);
-        ctx.lineTo(nextCx, nextCy + 8);
-        ctx.moveTo(nextCx - 8, nextCy);
-        ctx.lineTo(nextCx + 8, nextCy);
-        ctx.stroke();
-      }
+      makeRoundRect(ctx, nextX, btnY + 2, miniBtn, btnH - 4, 15);
+      var nextGrad = ctx.createLinearGradient(nextX, btnY + 2, nextX + miniBtn, btnY + btnH);
+      nextGrad.addColorStop(0, 'rgba(255,255,255,0.082)');
+      nextGrad.addColorStop(0.62, 'rgba(255,255,255,0.045)');
+      nextGrad.addColorStop(1, canvasAccent(0.055));
+      ctx.fillStyle = nextGrad;
+      ctx.fill();
+      ctx.strokeStyle = canvasAccent(0.24);
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+      var nextCx = nextX + miniBtn / 2;
+      var nextCy = btnY + btnH / 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.90)';
+      ctx.lineWidth = 2.8;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(nextCx, nextCy - 8);
+      ctx.lineTo(nextCx, nextCy + 8);
+      ctx.moveTo(nextCx - 8, nextCy);
+      ctx.lineTo(nextCx + 8, nextCy);
+      ctx.stroke();
 
       makeRoundRect(ctx, btnX, btnY, btnW, btnH, 18);
       var btnGrad = ctx.createLinearGradient(btnX, btnY, btnX + btnW, btnY + btnH);
@@ -691,22 +686,19 @@ function makeContentListManager() {
       } catch (renderLoadingErr) {
         console.warn('[ShelfContentLoadingRender]', playlistId, renderLoadingErr);
       }
-      var podcastCollectionKey = String(playlistId || '').indexOf('podcast:') === 0 ? String(playlistId).slice(8) : '';
       var qqPlaylistId = String(playlistId || '').indexOf('qq:') === 0 ? String(playlistId).slice(3) : '';
       var kugouPlaylistId = String(playlistId || '').indexOf('kugou:') === 0 ? String(playlistId).slice(6) : '';
       var qishuiPlaylistId = String(playlistId || '').indexOf('qishui:') === 0 ? String(playlistId).slice(7) : '';
       var spotifyPlaylistId = String(playlistId || '').indexOf('spotify:') === 0 ? String(playlistId).slice(8) : '';
-      contentKind = podcastCollectionKey ? 'podcast' : 'playlist';
-      contentSource = podcastCollectionKey ? null : {
+      contentKind = 'playlist';
+      contentSource = {
         provider: qqPlaylistId ? 'qq' : (kugouPlaylistId ? 'kugou' : (qishuiPlaylistId ? 'qishui' : (spotifyPlaylistId ? 'spotify' : 'netease'))),
         id: qqPlaylistId || kugouPlaylistId || qishuiPlaylistId || spotifyPlaylistId || playlistId
       };
-      // 拉取歌单/播客集合
+      // 拉取歌单集合
       var r = null;
       try {
-        r = podcastCollectionKey
-          ? await apiJson('/api/podcast/my/items?key=' + encodeURIComponent(podcastCollectionKey) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE)
-          : await contentPageFetch(0);
+        r = await contentPageFetch(0);
       } catch (e) {
         if (!open || token !== requestToken) return;
         console.warn('[ShelfContentLoadApi]', playlistId, e);
@@ -726,9 +718,9 @@ function makeContentListManager() {
       try {
         // 清 loading
         disposeRows();
-        var tracks = podcastCollectionKey ? (r.items || []) : (r.tracks || []);
+        var tracks = r.tracks || [];
         if (!tracks.length) {
-          allTracks = [{ name: podcastCollectionKey ? '播客为空' : '歌单为空', artist: '' }];
+          allTracks = [{ name: '歌单为空', artist: '' }];
           panelDirty = true;
           rowsDirty = true;
           startRowsLoadedIntro();
@@ -736,11 +728,9 @@ function makeContentListManager() {
           return;
         }
         allTracks = tracks;
-        if (!podcastCollectionKey) {
-          contentNextOffset = Number(r && r.nextOffset) || allTracks.length;
-          contentTotalCount = Math.max(contentTotalCount || 0, Number(r && (r.total || (r.playlist && r.playlist.trackCount))) || 0);
-          contentHasMore = !!(r && r.hasMore);
-        }
+        contentNextOffset = Number(r && r.nextOffset) || allTracks.length;
+        contentTotalCount = Math.max(contentTotalCount || 0, Number(r && (r.total || (r.playlist && r.playlist.trackCount))) || 0);
+        contentHasMore = !!(r && r.hasMore);
         centerTarget = 0; centerSmooth = 0;
         panelDirty = true;
         rowsDirty = true;
@@ -979,7 +969,7 @@ function makeContentListManager() {
       if (!row || !row.mesh || !row.mesh.visible) return null;
       var song = row.song || {};
       var isCenter = Math.abs(row.index - Math.round(centerSmooth)) < 0.5;
-      if (!isCenter || !((song && song.id) || song.type === 'podcast-radio')) return null;
+      if (!isCenter || !(song && song.id)) return null;
       var params = row.mesh.geometry && row.mesh.geometry.parameters || {};
       var hw = (params.width || 2.50) / 2;
       var hh = (params.height || 0.36) / 2;
@@ -1013,12 +1003,6 @@ function makeContentListManager() {
       pulseObjectValue(row, 'fxPulse', 1.0, 0.34);
       var idx = row.index;
       if (idx < 0) return;
-      if (row.song && row.song.type === 'podcast-radio') {
-        loadPodcastRadioIntoQueue(row.song.id || row.song.radioId, true, row.song.name || playlistTitle);
-        var smRadio = shelfManager;
-        if (smRadio) safeShelfCloseContent('content-play-podcast-radio');
-        return;
-      }
       var playIndex = allTracks.slice(0, idx + 1).filter(function (song) { return song && song.id; }).length - 1;
       var allSongs = allTracks.filter(function (song) { return song && song.id; }).map(function (song) {
         return cloneSong(song);

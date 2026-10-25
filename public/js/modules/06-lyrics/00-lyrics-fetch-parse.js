@@ -15,7 +15,7 @@ function lyricTranslationTextFromAliases(source) {
 // → server.js:8118 → lxSourceHost.getLyric（上游 index.html:32107 同款消费形态）。
 // 官方五路歌词路由（网易云裸 id 路由 + qq/kugou/qishui/spotify 四路分派）的消费方在此
 // 整体退役，路由本体删除归 T16。
-// 无 lx 源映射（汽水/Spotify/本地/播客/lx 自定义源）不发网络，直接落「暂无歌词」标题兜底；
+// 无 lx 源映射（汽水/Spotify/本地/lx 自定义源）不发网络，直接落「暂无歌词」标题兜底；
 // 上游 platform-lyric 裸 HTTP 兜底链（index.html:32058-32135）按 YAGNI 未移植——无源即无线上歌词。
 var LX_LYRIC_SOURCES = { tx: 1, wy: 1, kw: 1, kg: 1, mg: 1 };
 var LX_LYRIC_PROVIDER_ALIAS = { qq: 'tx', netease: 'wy', kuwo: 'kw', kugou: 'kg', migu: 'mg' };
@@ -24,7 +24,7 @@ function lxLyricSourceForSong(songOrId) {
   var song = (songOrId && typeof songOrId === 'object') ? songOrId : null;
   // 裸 id 调用沿用旧网易云数字 id 语义。
   if (!song) return 'wy';
-  if (song.type === 'local' || song.type === 'podcast' ||
+  if (song.type === 'local' ||
     song.source === 'local' || song.localUrl || song.localKey) return '';
   var provider = typeof songProviderKey === 'function' ? songProviderKey(song) : String(song.source || song.provider || 'netease');
   var raw = String(song.source || song.provider || provider || '').toLowerCase();
@@ -97,7 +97,7 @@ function writePersistentLyricCache(song, payload) {
 }
 
 function lyricQueuePrefetchCandidate(song) {
-  if (!song || song.type === 'podcast' || song.type === 'local' || song.source === 'local' || song.localUrl) return false;
+  if (!song || song.type === 'local' || song.source === 'local' || song.localUrl) return false;
   return !!(song.id || song.mid || song.songmid || song.hash || song.name || song.title);
 }
 
@@ -235,7 +235,7 @@ function parseLyricResponseToOriginalState(song, response) {
 }
 function shouldRetryStartupLyricFetch(song, token, attempt) {
   if (!song || token !== trackSwitchToken || (attempt || 0) >= 3) return false;
-  if (song.type === 'local' || song.source === 'local' || song.localKey || song.type === 'podcast') return false;
+  if (song.type === 'local' || song.source === 'local' || song.localKey) return false;
   return !!(startupAutoplayPreference || restoredLastPlaybackSnapshot || pendingPlaybackResumeAt > 0);
 }
 function scheduleStartupLyricFetchRetry(song, token, attempt) {
@@ -288,7 +288,7 @@ async function fetchLyric(songOrId, token, attempt) {
         return;
       }
     }
-    // 无 lx 源映射（汽水/Spotify/本地/播客/lx 自定义源）：不发网络，直接落「暂无歌词」标题兜底。
+    // 无 lx 源映射（汽水/Spotify/本地/lx 自定义源）：不发网络，直接落「暂无歌词」标题兜底。
     var lxSourceName = lxLyricSourceForSong(song || songOrId);
     if (!lxSourceName) {
       if (token !== trackSwitchToken) return;

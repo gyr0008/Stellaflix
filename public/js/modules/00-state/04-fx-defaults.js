@@ -151,7 +151,6 @@ var fxDefaults = {
   shelfPinnedOpen: false,
   shelfCameraMode: 'dynamic',
   shelfPresence: 'auto',
-  shelfShowPodcasts: false,
   shelfMergeCollections: true,
   shelfSize: 0.92,
   shelfOffsetX: -0.34,

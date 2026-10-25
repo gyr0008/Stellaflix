@@ -36,7 +36,7 @@ function queueSearchResult(i) {
   showToast('已设为下一首: ' + song.name);
 }
 function queueDetailSongNext(song) {
-  if (!song || song.type === 'podcast-radio') return;
+  if (!song || !song.id) return;
   queueSongNext(song);
   showToast('已设为下一首: ' + (song.name || ''));
 }

@@ -271,7 +271,7 @@ test('T11①：搜索 tabs DOM 键集 = 综合(all)/kw/kg/tx/wy/mg/本地(local)
   }
   assert.ok(/setSearchMode\('all'\)/.test(block) && /setSearchMode\('kw'\)/.test(block),
     'tab 点击必须经 setSearchMode 归一入口');
-  assert.ok(html.includes('id="search-mode-podcast"'), '播客 tab 本轮保留（T16 退役）');
+  assert.ok(!html.includes('id="search-mode-podcast"'), '播客 tab 已整条退役（T16c，原「本轮保留」承诺兑现）');
 });
 
 // ---------- ② 聚合单次调用新路由 ----------

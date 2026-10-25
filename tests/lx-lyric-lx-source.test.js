@@ -134,12 +134,11 @@ test('T15.5b歌词②：酷狗→kg（hash 透传）、网易云→wy、lx 源�
   });
 });
 
-test('T15.5b歌词③：汽水/Spotify/本地/播客无 lx 映射——零网络、优雅降级标题兜底', async () => {
+test('T15.5b歌词③：汽水/Spotify/本地无 lx 映射——零网络、优雅降级标题兜底（T16c：播客态已整条下线，fixture 随批摘除）', async () => {
   const songs = [
     { source: 'qishui', provider: 'qishui', name: '汽水曲', artist: 'a', id: 'q1' },
     { source: 'spotify', provider: 'spotify', name: 'SP曲', artist: 'a', spotifyId: 's1' },
     { type: 'local', source: 'local', name: '本地曲', artist: 'a', localUrl: 'file:///x.mp3' },
-    { type: 'podcast', source: 'netease', name: '播客', artist: 'a', id: 5 },
   ];
   for (const song of songs) {
     const sb = makeSandbox();

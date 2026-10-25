@@ -130,10 +130,11 @@ function cinemaAnalysisProfileForSong(song) {
 }
 
 function resetCinemaTrackProfile(song) {
-  var isDj = isPodcastSong(song);
-  cinemaTrackProfile.scale = isDj ? 1.08 : 1.0;
-  cinemaTrackProfile.target = isDj ? 1.10 : 1.0;
-  cinemaTrackProfile.nameHint = isDj ? 1.12 : cinemaTrackNameHint(song);
+  // 批 T16c：原「播客长内容」镜头加强（scale/target/nameHint 1.08/1.10/1.12）随播客退役失去触发者，
+  // 本地歌 DJ 锁拍的镜头偏置由 applyLocalBeatMap→applyPodcastDjProfileFromMap 现算，不在此预设。
+  cinemaTrackProfile.scale = 1.0;
+  cinemaTrackProfile.target = 1.0;
+  cinemaTrackProfile.nameHint = cinemaTrackNameHint(song);
   cinemaTrackProfile.frames = 0;
   cinemaTrackProfile.energyAvg = 0;
   cinemaTrackProfile.lowAvg = 0;

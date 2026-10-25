@@ -145,7 +145,6 @@ function updateEmptyHomeVisibility(opts) {
       homeDiscoverState.mode = 'starter';
       homeDiscoverState.songs = [];
       homeDiscoverState.playlists = [];
-      homeDiscoverState.podcasts = [];
       renderHomeDiscover();
     } else {
       renderHomeDiscover();
@@ -160,7 +159,6 @@ function runHomeSearch(query, mode) {
   setHomeControlsLocked(false);
   updateEmptyHomeVisibility();
   if (mode) setSearchMode(mode);
-  else if (searchMode === 'podcast') setSearchMode('song');
   var q = String(query || '').trim();
   var area = document.getElementById('search-area');
   if (area) setPeek(area, true, 'search');
@@ -169,7 +167,6 @@ function runHomeSearch(query, mode) {
     $input.focus();
   }
   if (q) doSearch(q);
-  else if (searchMode === 'podcast') loadPodcastHot();
   else renderSearchHistory();
 }
 function skipLoginAndFocusSearch() {
@@ -273,26 +270,6 @@ function openHomePlaylist(index) {
     return;
   }
   loadPlaylistIntoQueueById(item.id, true, item.name || '');
-}
-function openHomePodcast(index) {
-  homeForcedOpen = false;
-  homeSuppressed = false;
-  setHomeControlsLocked(false);
-  openPlaylistPanelTab('podcasts', true);
-  var item = homeDiscoverState.podcasts[index];
-  if (!item || !item.id) {
-    setSearchMode('podcast');
-    loadPodcastHot();
-    return;
-  }
-  loadPodcastRadioIntoQueue(item.id, true, item.name || '');
-}
-function openHomeThirdCard() {
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    openHomeLocalImport();
-    return;
-  }
-  openHomePodcast(0);
 }
 function openHomeLibrary() {
   if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {

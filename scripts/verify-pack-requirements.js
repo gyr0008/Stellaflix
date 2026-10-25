@@ -15,7 +15,6 @@ const required = [
   'desktop/main.js',
   'desktop/hls-ad-filter.js',
   'agent-api.js',
-  'dj-analyzer.js',
   'kugou-api.js',
   'qishui-api.js',
   'qishui-auth-v6.js',

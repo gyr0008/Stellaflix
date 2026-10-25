@@ -140,7 +140,7 @@ var localOnlineMatchStore = {
   },
   matchLocalSong: async function (localSong, opts) {
     opts = opts || {};
-    if (!localSong || localSong.type === 'podcast') return null;
+    if (!localSong) return null;
     var localKey = normalizeLocalMatchKey(localSong.localKey || localSong.localFileId);
     if (!localKey) return null;
     var cached = this.get(localKey);

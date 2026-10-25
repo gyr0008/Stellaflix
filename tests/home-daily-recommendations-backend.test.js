@@ -72,5 +72,6 @@ test('discover home returns the complete mapped daily list without a fixed song 
 test('discover home does not request or return recommended podcasts', () => {
   const discoverSource = namedFunctionSource(source, 'handleDiscoverHome');
   assert.doesNotMatch(discoverSource, /\bdj_hot\s*\(/);
-  assert.match(discoverSource, /podcasts:\s*\[\]/);
+  // 批 T16c：播客整条下线——payload 连 podcasts 字段一并摘除（此前只钉「恒为空数组」）。
+  assert.doesNotMatch(discoverSource, /podcasts/);
 });

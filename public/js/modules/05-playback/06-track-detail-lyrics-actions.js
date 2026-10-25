@@ -15,7 +15,6 @@ function songSourceLabel(song) {
   if (song.provider === 'qishui' || song.source === 'qishui' || song.type === 'qishui') return '汽水音乐';
   if (song.provider === 'kugou' || song.source === 'kugou' || song.type === 'kugou' || song.hash || song.audioHash) return '酷狗音乐';
   if (song.type === 'local') return '本地上传';
-  if (song.type === 'podcast' || song.source === 'podcast') return '网易云播客';
   return '网易云音乐';
 }
 function detailRow(label, value) {
@@ -154,7 +153,7 @@ function albumDetailUrlForSong(song) {
   }
   // QQ / Spotify / 酷狗 / 汽水 / lx 源 / 本地曲：平台专辑详情接口退役后，
   // 用「专辑名 + 歌手」在 lx 五源派生同专辑曲目；缺专辑名即无派生入口（优雅空态）。
-  if (!song || song.type === 'podcast') return '';
+  if (!song) return '';
   var albumName = String(song.album || song.albumName || '').trim();
   if (!albumName || albumName === '未知专辑') return '';
   var artistName = String(song.artist || song.singer || '').trim();
@@ -481,7 +480,7 @@ function openTrackDetailModal(type, songOverride) {
   detailCommentSong = song;
   if (type === 'album') {
     var albumUrl = albumDetailUrlForSong(song);
-    var albumTitle = song.album || (song.type === 'podcast' ? (song.radioName || 'Podcast') : '未知专辑');
+    var albumTitle = song.album || '未知专辑';
     var albumKey = currentAlbumKey(song);
     detailAlbumGaplessUserTouched = false;
     detailAlbumGaplessEnabled = typeof albumGaplessDefaultEnabledForContext === 'function'
@@ -595,7 +594,7 @@ function openTrackDetailModal(type, songOverride) {
       '<div class="detail-grid">' +
       detailRow('当前歌曲', title) +
       detailRow('关联歌手', artistName) +
-      detailRow('所属专辑', song.album || (song.type === 'podcast' ? (song.radioName || 'Podcast') : '未知')) +
+      detailRow('所属专辑', song.album || '未知') +
       detailRow('来源', songSourceLabel(song)) +
       '</div>' +
       '<div class="detail-chip-row">' + (artists.length ? artists.map(function (name) { return '<span class="detail-chip">' + escHtml(name) + '</span>'; }).join('') : '<span class="detail-chip">未知歌手</span>') + '</div>' +
@@ -671,7 +670,7 @@ function openTrackDetailModal(type, songOverride) {
       '<div class="detail-grid">' +
       detailRow('歌曲名', title) +
       detailRow('歌手', song.artist || '未知歌手') +
-      detailRow('专辑', song.album || (song.type === 'podcast' ? (song.radioName || 'Podcast') : '未知')) +
+      detailRow('专辑', song.album || '未知') +
       detailRow('时长', songDurationLabel(song)) +
       detailRow('来源', songSourceLabel(song)) +
       detailRow('歌词源', lyricSourceMode === 'custom' ? '自定义歌词' : (lyricsTimingSource === 'fallback' ? '占位歌词' : '原词')) +
@@ -1133,7 +1132,7 @@ function openCustomLyricModal() {
   var sub = document.getElementById('custom-lyric-sub');
   var input = document.getElementById('custom-lyric-input');
   if (title) title.textContent = song.name || '当前歌曲';
-  if (sub) sub.textContent = (song.artist || (song.type === 'podcast' ? 'Podcast' : '')) + (entry ? ' · 已保存自定义歌词' : ' · 可粘贴 LRC 或逐行输入');
+  if (sub) sub.textContent = String(song.artist || '') + (entry ? ' · 已保存自定义歌词' : ' · 可粘贴 LRC 或逐行输入');
   if (input) input.value = entry ? (entry.text || '') : '';
   setCustomLyricStatus(entry ? '已读取本地自定义歌词' : '提示：带 [00:12.00] 时间轴会更精准；纯文本会自动铺开', entry ? 'good' : '');
   openGsapModal(document.getElementById('custom-lyric-modal'));
@@ -1270,7 +1269,7 @@ var SONG_ACCOUNT_ACTION_ADAPTERS = {
   }
 };
 function songAccountProvider(song) {
-  if (!song || song.type === 'local' || song.type === 'podcast' || song.source === 'podcast') return 'local';
+  if (!song || song.type === 'local') return 'local';
   if (typeof songProviderKey === 'function') return songProviderKey(song);
   if (song.provider === 'spotify' || song.source === 'spotify' || song.type === 'spotify' || song.spotifyId || song.spotifyUri) return 'spotify';
   if (song.provider === 'qq' || song.source === 'qq' || song.type === 'qq') return 'qq';

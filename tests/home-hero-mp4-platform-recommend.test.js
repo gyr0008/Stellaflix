@@ -139,7 +139,8 @@ test('platform recommendation entry uses real feeds and does not synthesize radi
   assert.doesNotMatch(openCharts, /runHomeSearch|今日热歌/);
   const neteaseLoader = namedFunctionSource(dashboardScript, 'loadHomePlatformNeteaseRecommendations');
   assert.match(neteaseLoader, /loadHomeDiscover\s*\(/);
-  assert.match(neteaseLoader, /\/api\/podcast\/hot/);
+  // 批 T16c：播客整条下线，网易云推荐卡不再拉 /api/podcast/hot。
+  assert.doesNotMatch(dashboardScript, /\/api\/podcast/);
   // 批 T15.5b（改道批2）：平台推荐卡内容源改指 lx cookie-less 榜单路由
   // （platform-charts 出目录 + daily-hot?platform=&chart= 出内容，T15.5a §6），
   // 官方 /api/qishui/feed、/api/kugou/recommendations、/api/spotify/recommendations 消费点退役。

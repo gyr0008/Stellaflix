@@ -47,10 +47,6 @@ function makeShelfManager() {
     return { mine: mine, fav: fav };
   }
 
-  function shelfShowsPodcasts() {
-    return !fx || fx.shelfShowPodcasts !== false;
-  }
-
   function shelfMergesCollections() {
     return !!(fx && fx.shelfMergeCollections === true);
   }
@@ -70,7 +66,7 @@ function makeShelfManager() {
     // update() 中 group.visible 自然为 false，不渲染任何内容；切回音乐态后自动恢复。
     var __sfv = (typeof window !== 'undefined' && window.StellaflixVideo);
     if (__sfv && __sfv.state && __sfv.state.isVideo && __sfv.state.isVideo()) return [];
-    if (hasAnyPlatformLogin() && (userPlaylists.length || myPodcastCollections.length)) {
+    if (hasAnyPlatformLogin() && userPlaylists.length) {
       var source = activePlaylists();
       var items = source.map(function (pl) {
         var provider = pl.provider === 'qq' ? 'qq' : (pl.provider === 'kugou' ? 'kugou' : (pl.provider === 'qishui' ? 'qishui' : (pl.provider === 'spotify' ? 'spotify' : 'netease')));
@@ -81,11 +77,6 @@ function makeShelfManager() {
           cover: pl.cover || '', tag: (pl.shelfPane || pl.shelf_pane) === 'fav' || (!(pl.shelfPane || pl.shelf_pane) && pl.subscribed) ? '收藏歌单' : (provider === 'qishui' ? '汽水歌单' : '我的歌单'), playlistId: (provider === 'qq' ? 'qq:' : (provider === 'kugou' ? 'kugou:' : (provider === 'qishui' ? 'qishui:' : ''))) + pl.id, provider: provider
         };
       });
-      if (shelfShowsPodcasts() && (shelfPane === 'mine' || shelfMergesCollections()) && myPodcastCollections.length) {
-        myPodcastCollections.forEach(function (pc) {
-          items.push({ type: 'podcastCollection', title: pc.title, sub: (pc.count || 0) + ' items', cover: pc.cover || '', tag: '我的播客', podcastKey: pc.key, itemType: pc.itemType });
-        });
-      }
       if (items.length) return items;
     }
     if (playQueue.length) {
@@ -124,7 +115,7 @@ function makeShelfManager() {
     var pulseBucket = card && card.isCenter ? Math.round((bass + beatPulse * 0.85) * 6) : 0;
     return [
       item.type || '', item.title || '', item.sub || '', item.tag || '',
-      item.playlistId || '', item.podcastKey || '', item.queueIndex == null ? '' : item.queueIndex,
+      item.playlistId || '', item.queueIndex == null ? '' : item.queueIndex,
       item.cover || '', coverState, card && card.isCenter ? 1 : 0, card && card.selected ? 1 : 0,
       card && card.dofBucket == null ? -1 : card.dofBucket, pulseBucket, shelfAccentHex(), shelfSettings().bgOpacity
     ].join('|');
@@ -259,9 +250,7 @@ function makeShelfManager() {
     mesh.renderOrder = 50 + i;
     mesh.userData.action = item.type === 'playlist'
       ? { kind: 'loadPlaylist', playlistId: item.playlistId, title: item.title }
-      : (item.type === 'podcastCollection'
-        ? { kind: 'loadPlaylist', playlistId: 'podcast:' + item.podcastKey, title: item.title }
-        : (item.type === 'queue' ? { kind: 'playQueue', index: item.queueIndex } : { kind: 'empty' }));
+      : (item.type === 'queue' ? { kind: 'playQueue', index: item.queueIndex } : { kind: 'empty' });
     group.add(mesh);
     var card = { canvas: cv, ctx: ctx, texture: tx, mesh: mesh, item: item, index: i, isCenter: false, selected: i === selectedIdx, floatMix: 0, fxPulse: 0, dofBlur: 0, dofBucket: -1, drawKey: '' };
     return card;
@@ -270,9 +259,7 @@ function makeShelfManager() {
   function shelfCardAction(item) {
     return item.type === 'playlist'
       ? { kind: 'loadPlaylist', playlistId: item.playlistId, title: item.title }
-      : (item.type === 'podcastCollection'
-        ? { kind: 'loadPlaylist', playlistId: 'podcast:' + item.podcastKey, title: item.title }
-        : (item.type === 'queue' ? { kind: 'playQueue', index: item.queueIndex } : { kind: 'empty' }));
+      : (item.type === 'queue' ? { kind: 'playQueue', index: item.queueIndex } : { kind: 'empty' });
   }
 
   function rebindShelfCard(card, item, index) {
@@ -551,7 +538,6 @@ function makeShelfManager() {
     if (!card || !card.mesh || !card.mesh.userData) return false;
     var action = card.mesh.userData.action;
     if (!action || action.kind !== 'loadPlaylist' || !action.playlistId) return false;
-    if (String(action.playlistId).indexOf('podcast:') === 0) return false;
     pulseCard(card, 1.05);
     if (contentList && contentList.isOpen && contentList.isOpen()) contentList.close();
     openCardIdx = -1;
@@ -610,16 +596,14 @@ void main(){ vec4 t = texture2D(uDotTex, gl_PointCoord); if (t.a < 0.02) discard
   }
 
   function sig(items) {
-    if (hasAnyPlatformLogin() && (userPlaylists.length || myPodcastCollections.length)) {
+    if (hasAnyPlatformLogin() && userPlaylists.length) {
       var source = activePlaylists();
       var sampleItems = source.slice(0, 3).concat(source.slice(Math.max(3, source.length - 3)));
       return [
         'platform',
         shelfPane,
         shelfMergesCollections() ? 1 : 0,
-        shelfShowsPodcasts() ? 1 : 0,
         source.length,
-        myPodcastCollections.length,
         sampleItems.map(function (pl) {
           return [pl.provider || '', pl.id || '', pl.name || '', pl.trackCount || 0, pl.subscribed ? 1 : 0].join('|');
         }).join('||')

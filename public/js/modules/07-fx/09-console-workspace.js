@@ -208,7 +208,6 @@ var FX_CONSOLE_LAYOUT = [
         fxConsoleItem('shelf-seg', '3D 歌单架', '关闭 侧栏 舞台'),
         fxConsoleItem('shelf-camera-seg', '歌单架镜头', '动态镜头 静态镜头'),
         fxConsoleItem('shelf-presence-seg', '歌单架显示', '自动隐藏 常驻'),
-        fxConsoleItem('t-shelfShowPodcasts', '显示播客歌单', '3D 播客'),
         fxConsoleItem('t-shelfMergeCollections', '合并收藏歌单', '我的歌单 收藏 连续滚动')
       ] },
       { key: 'look', title: '外观与位置', hint: '歌单架颜色、大小、位置和透明度', items: [

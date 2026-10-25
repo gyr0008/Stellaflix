@@ -49,7 +49,6 @@ function jsCheckFiles() {
   });
   addIfExists(path.join(appRoot, 'server.js'));
   addIfExists(path.join(appRoot, 'qq-vip-api.js'));
-  addIfExists(path.join(appRoot, 'dj-analyzer.js'));
   walk(path.join(appRoot, 'cuefield')).forEach(file => {
     if (file.endsWith('.js')) files.push(file);
   });
@@ -243,7 +242,6 @@ function scanForbiddenMarkers() {
     path.join(appRoot, 'public', 'js'),
     path.join(appRoot, 'desktop'),
     path.join(appRoot, 'server.js'),
-    path.join(appRoot, 'dj-analyzer.js'),
     path.join(appRoot, 'cuefield')
   ];
   const files = [];
@@ -2230,9 +2228,7 @@ function checkSearchGlassEntranceGuard() {
     /SEARCH_HISTORY_STORE_VERSION\s*=\s*3/.test(searchText) &&
     /return \{ version: SEARCH_HISTORY_STORE_VERSION, items: \[\] \}/.test(searchText) &&
     /function readSearchHistory\(\)\s*\{[\s\S]{0,120}\.items\.slice\(\)/.test(searchText) &&
-    /function runSearchHistory\(q\)/.test(searchText) &&
-    /function doPodcastSearch\(q\)[\s\S]{0,700}rememberSearchQuery\(q\)/.test(searchText) &&
-    /if \(!renderSearchHistory\(\) && searchMode === 'podcast'\) loadPodcastHot\(\)/.test(searchText) &&
+    searchText.includes('function runSearchHistory(q)') &&
     !/data-history-mode/.test(searchText);
   const searchBoxFilterText = (indexText.match(/<filter id="stellaflix-search-box-glass-filter"[\s\S]*?<\/filter>/) || [''])[0];
   const searchPillFilterText = (indexText.match(/<filter id="stellaflix-search-pill-glass-filter"[\s\S]*?<\/filter>/) || [''])[0];
@@ -2306,7 +2302,7 @@ function checkSearchGlassEntranceGuard() {
     /if \(!searchGlassReady\)\s*\{[\s\S]*?scheduleSearchPeekAfterGlassReady\(el\)[\s\S]*?return;[\s\S]*?\}/.test(peekText) &&
     /\(saOn \|\| isSearchPeekRevealPending\(\)\) && !emptyHomeActive/.test(peekText);
   if (!searchHistorySharedAcrossTabsOk) {
-    fail('search history must stay shared across All, provider, and Podcast tabs');
+    fail('search history must stay shared across the All and provider tabs');
   }
   if (!searchPillDirectSvg || !searchAreaKeepsGlassComposited || !searchBoxUsesSavedRgbGlassSurface || !searchTabsRailStaysTransparent || !searchHistoryFrostedSurfaceOk || !searchResultsFrostedSurfaceOk || !searchProviderCapabilityFilterOk || !searchFusionRankingOk || !searchBoxFilterMatchesSavedRgbGlass || !searchPillSvgOk || !searchGlassUsesSavedRgbMapOk || !searchGlassPrewarmOk || !setPeekPreparesBeforeShow) {
     fail('search glass must use the saved RGB SVG surface and reveal only by opacity/transform');

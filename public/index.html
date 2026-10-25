@@ -142,8 +142,6 @@
             onclick="setSearchMode('mg')" aria-selected="false">小菇</button>
           <button id="search-mode-local" type="button" data-search-source="local"
             onclick="setSearchMode('local')" aria-selected="false">本地</button>
-          <button id="search-mode-podcast" type="button" onclick="setSearchMode('podcast')"
-            aria-selected="false">Podcast</button>
         </div>
         <div id="search-results"></div>
       </div>
@@ -1013,8 +1011,6 @@
           </div>
           <div class="fx-section-label">歌单架内容</div>
           <div class="fx-toggle-grid">
-            <div class="fx-toggle" id="t-shelfShowPodcasts" onclick="toggleFx('shelfShowPodcasts')"
-              title="关闭后 3D 歌单架不显示播客收藏"><span>显示播客歌单</span><span class="dot"></span></div>
             <div class="fx-toggle" id="t-shelfMergeCollections" onclick="toggleFx('shelfMergeCollections')"
               title="开启后我的歌单与收藏歌单按一条线连续滚动"><span>合并收藏歌单</span><span class="dot"></span></div>
           </div>
@@ -1240,7 +1236,6 @@
         <div class="panel-tabs">
           <button id="tab-queue" class="panel-tab active" onclick="switchPlaylistTab('queue')">当前队列</button>
           <button id="tab-pl" class="panel-tab" onclick="switchPlaylistTab('playlists')">我的歌单</button>
-          <button id="tab-podcast" class="panel-tab" onclick="switchPlaylistTab('podcasts')">我的播客</button>
         </div>
       </div>
       <div id="queue-pane">
@@ -1262,14 +1257,6 @@
             style="height:26px;padding:0 10px;font-size:11px">刷新</button>
         </div>
         <div id="pl-list" style="margin-top:6px"></div>
-      </div>
-      <div id="podcast-pane" style="display:none">
-        <div class="queue-toolbar">
-          <div class="queue-chip">收藏 / 创建 / 喜欢</div>
-          <button class="fx-mini-btn ghost" onclick="refreshUserPlaylists(true)"
-            style="height:26px;padding:0 10px;font-size:11px">刷新</button>
-        </div>
-        <div id="podcast-list"></div>
       </div>
     </div>
 

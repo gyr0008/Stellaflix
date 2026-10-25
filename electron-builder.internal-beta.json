@@ -34,7 +34,6 @@
     "server.js",
     "*-api.js",
     "qishui-audio-decryptor/**/*",
-    "dj-analyzer.js",
     "LICENSE",
     "NOTICE.md",
     "docs/THIRD_PARTY_PORTS.md",

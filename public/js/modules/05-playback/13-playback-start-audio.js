@@ -553,7 +553,6 @@ async function retryNeteaseSourceMatchPlayback(song, data, idx, token, opts, req
 
 async function resolveAlbumGaplessPlaybackData(song) {
   if (!song || song.type === 'local' || song.source === 'local' || song.localUrl) return null;
-  if (song.type === 'podcast' || song.source === 'podcast') return null;
   var playbackProvider = normalizePlaybackProvider(songProviderKey(song));
   var requestedQuality = normalizePlaybackQualityForProvider(getProviderPlaybackQuality(playbackProvider), playbackProvider);
   // T12：jymaster×SVIP cookie 降级行退役——VIP 曲目由音源降级链 + probeWarning 兜底。
@@ -1550,7 +1549,7 @@ async function playQueueAt(idx, opts) {
     var earlyLyricFetchStarted = false;
     function startTrackLyricFetch() {
       if (earlyLyricFetchStarted) return false;
-      if (!song || song.type === 'podcast' || song.type === 'local' || song.source === 'local' || song.localUrl) return false;
+      if (!song || song.type === 'local' || song.source === 'local' || song.localUrl) return false;
       if (typeof fetchLyric !== 'function') return false;
       earlyLyricFetchStarted = true;
       setTimeout(function () {
@@ -1583,8 +1582,9 @@ async function playQueueAt(idx, opts) {
       forcePlaybackControlsInteractive();
     }
     var bmKey = safePlaybackStep('beatmap-key', function () { return beatMapSongKey(song); }) || '';
-    var podcastDjMode = !!safePlaybackStep('podcast-mode', function () { return isPodcastSong(song); });
-    safePlaybackStep('dj-mode', function () { setDjModeActive(podcastDjMode, song); });
+    // 批 T16c：播客独立锁拍系统退役——普通起播一律退出 DJ 模式（与退役前对非播客歌的行为一致）；
+    // 本地歌 DJ 锁拍仍只能由 03-local-beat-cache-modal.applyLocalBeatMap 显式进入。
+    safePlaybackStep('dj-mode', function () { setDjModeActive(false, song); });
     safePlaybackStep('visual-switch', switchPlaybackVisualToEmily);
     currentLocalSong = null;
     safePlaybackStep('cover-button', updateCustomCoverButton);
@@ -1706,7 +1706,7 @@ async function playQueueAt(idx, opts) {
         requestedQuality = runtimeQualityCap;
       }
       var qualityParam = '&quality=' + encodeURIComponent(requestedQuality);
-      // T9 阶段2切换：播放解析统一走 /api/lx-source/resolve 三级失败链；预解析直通，播客豁免暂时保留旧网易路由（T16 退役）。
+      // T9 阶段2切换：播放解析统一走 /api/lx-source/resolve 三级失败链；预解析直通。
       var lxExcludedResolvers = Array.isArray(opts.lxExcludeResolvers) ? opts.lxExcludeResolvers.slice() : [];
       var lxAttemptedUrls = Array.isArray(opts.lxAttemptedUrls) ? opts.lxAttemptedUrls.slice() : [];
       var data;
@@ -1714,9 +1714,6 @@ async function playQueueAt(idx, opts) {
         data = opts.preloadedData;
       } else if (opts.preResolvedPlaybackData && opts.preResolvedPlaybackData.url) {
         data = opts.preResolvedPlaybackData;
-      } else if (song.type === 'podcast' || song.source === 'podcast') {
-        // 播客豁免：仍走旧网易 song/url 路由（唯一残留官方播放解析调用，T15/T16 处理）。
-        data = await apiJson('/api/song/url?id=' + encodeURIComponent(song.id || '') + neteasePlaybackMatchQuery(song) + qualityParam, { timeoutMs: 14000 });
       } else {
         var lxResolved = await resolveLxPlaybackSong(song, {
           quality: requestedQuality,
@@ -1913,30 +1910,7 @@ async function playQueueAt(idx, opts) {
         cancelBeatAnalysisTimer();
         beatMapToken++;
         var bmTok = beatMapToken;
-        if (podcastDjMode) {
-          // 播客走独立 DJ 离线锁拍系统, 不写入普通歌曲 beatMap.
-          djBeatMapToken++;
-          cancelDjBeatAnalysisTimer();
-          resetDjBeatMapState();
-          currentBeatMap = null;
-          beatMapNextIdx = 0;
-          var djTok = djBeatMapToken;
-          var djKey = djSongKey(song);
-          if (djBeatMapCache[djKey]) {
-            currentDjBeatMap = djBeatMapCache[djKey];
-            applyPodcastDjProfileFromMap(currentDjBeatMap);
-            syncPodcastDjMapCursor(audio ? audio.currentTime : 0, true);
-            hideBeatChip();
-            notifyDesktopLyricsBeatMapReady();
-            console.log('podcast DJ beatmap 缓存命中:', currentDjBeatMap.cameraBeats.length, '个主拍');
-          } else {
-            showBeatChip('DJ 离线锁拍准备中…');
-            var djDurationSec = Math.max(0, Number(song.duration) || 0);
-            if (djDurationSec > 10000) djDurationSec /= 1000;
-            schedulePodcastDjAnalysis(djKey, data.url, djTok, djDurationSec);
-          }
-          maybeAnnounceDjMode();
-        } else if (bmKey && beatMapCache[bmKey]) {
+        if (bmKey && beatMapCache[bmKey]) {
           // 如果缓存有, 直接用
           currentBeatMap = beatMapCache[bmKey];
           applyCinemaProfileFromBeatMap(currentBeatMap);
@@ -2083,14 +2057,7 @@ async function playQueueAt(idx, opts) {
       markPlayPhase('session-begin');
       safePlaybackStep('listen-session-begin', function () { beginListenSession(song, playbackContext); });
       markPlayPhase('lyrics-fetch');
-      if (song.type === 'podcast') {
-        if (typeof cancelPendingTrackFallbackLyrics === 'function') cancelPendingTrackFallbackLyrics();
-        safePlaybackStep('podcast-lyrics', function () {
-          var podcastLyricLines = withLyricFallback([]);
-          setOriginalLyricsState(podcastLyricLines, false, 'fallback');
-          applyPreferredLyricsForCurrent(true);
-        });
-      } else if (!qualitySwitch) {
+      if (!qualitySwitch) {
         if (!earlyLyricFetchStarted) fetchLyric(song, token);
       } else {
         if (typeof cancelPendingTrackFallbackLyrics === 'function') cancelPendingTrackFallbackLyrics();
@@ -2108,7 +2075,7 @@ async function playQueueAt(idx, opts) {
         scheduleCuefieldAutoMixPrepare(token, idx, cuefieldPrepareDelay);
       }
       scheduleAlbumGaplessPreloadForCurrent(token, albumGaplessHandoff ? 'album-gapless-handoff-started' : 'track-started');
-      // T10：lx 起播成功后 700ms 预取队列下一首（上游 :32374 同位）；播客豁免路由不预取。
+      // T10：lx 起播成功后 700ms 预取队列下一首（上游 :32374 同位）。
       if (data && data.lxSource) scheduleLxAudioPrefetch(token, idx, requestedQuality);
       safePlaybackStep('shelf-preview-suppress-end', suppressShelfPreviewForPlaybackSwitch);
       if (typeof completeSourceFallbackRecovery === 'function') {

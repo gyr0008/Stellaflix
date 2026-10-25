@@ -39,7 +39,6 @@
       "platform-playlist-import.js",
       "qishui-auth-v6/**/*",
       "qishui-audio-decryptor/**/*",
-      "dj-analyzer.js",
       "LICENSE",
       "NOTICE.md",
       "docs/THIRD_PARTY_PORTS.md",

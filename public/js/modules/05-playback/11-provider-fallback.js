@@ -704,7 +704,7 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
     }
     return false;
   }
-  if (!song || song.type === 'local' || song.type === 'podcast' || song.source === 'podcast') return null;
+  if (!song || song.type === 'local') return null;
   var category = playbackRestrictionCategory(song, data);
   var fromLabel = playbackProviderLabel(song);
   var alternateProviders = alternatePlaybackProviders(song);

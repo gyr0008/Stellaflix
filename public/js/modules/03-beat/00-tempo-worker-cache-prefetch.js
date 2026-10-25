@@ -337,7 +337,7 @@ async function writeBeatDiskCache(key, map, song, mode) {
 }
 
 function isBeatPrefetchCandidate(song) {
-  if (!song || isPodcastSong(song) || song.type === 'local' || song.localUrl) return false;
+  if (!song || song.type === 'local' || song.localUrl) return false;
   return !!beatMapSongKey(song);
 }
 

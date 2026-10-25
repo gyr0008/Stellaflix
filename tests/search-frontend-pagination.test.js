@@ -108,7 +108,7 @@ test('legacy search histories migrate into one list shared by every tab', () => 
   ], `
     var SEARCH_HISTORY_STORE_KEY = 'stellaflix-search-history';
     var SEARCH_HISTORY_STORE_VERSION = 3;
-    var SEARCH_HISTORY_MODES = ['song', 'netease', 'qq', 'kugou', 'qishui', 'spotify', 'podcast'];
+    var SEARCH_HISTORY_MODES = ['song', 'netease', 'qq', 'kugou', 'qishui', 'spotify'];
   `, `
     this.readSearchHistory = readSearchHistory;
     this.writeSearchHistory = writeSearchHistory;
@@ -121,7 +121,7 @@ test('legacy search histories migrate into one list shared by every tab', () => 
   let stored = JSON.parse(values.get('stellaflix-search-history'));
   assert.equal(stored.version, 3);
   assert.deepEqual(stored.items, ['稻香', '晴天', '夜曲']);
-  assert.deepEqual(Array.from(sandbox.readSearchHistory('podcast')), stored.items);
+  assert.deepEqual(Array.from(sandbox.readSearchHistory('kugou')), stored.items);
 
   values.set('stellaflix-search-history', JSON.stringify({
     version: 2,
@@ -129,13 +129,12 @@ test('legacy search histories migrate into one list shared by every tab', () => 
       song: ['晴天', '夜曲'],
       netease: ['海阔天空'],
       qq: ['夜曲', '稻香'],
-      podcast: ['故事 FM'],
     },
   }));
-  assert.deepEqual(Array.from(sandbox.readSearchHistory('spotify')), ['晴天', '夜曲', '海阔天空', '稻香', '故事 FM']);
-  sandbox.rememberSearchQuery('一路向北', 'podcast');
+  assert.deepEqual(Array.from(sandbox.readSearchHistory('spotify')), ['晴天', '夜曲', '海阔天空', '稻香']);
+  sandbox.rememberSearchQuery('一路向北', 'qq');
   stored = JSON.parse(values.get('stellaflix-search-history'));
-  assert.deepEqual(stored.items, ['一路向北', '晴天', '夜曲', '海阔天空', '稻香', '故事 FM']);
+  assert.deepEqual(stored.items, ['一路向北', '晴天', '夜曲', '海阔天空', '稻香']);
 
   sandbox.writeSearchHistory([], 'qq');
   assert.deepEqual(JSON.parse(values.get('stellaflix-search-history')).items, []);
@@ -146,13 +145,14 @@ test('history rendering and replay keep the currently selected tab', () => {
   const renderSource = namedFunctionSource(searchSource, 'renderSearchHistory');
   const replaySource = namedFunctionSource(searchSource, 'runSearchHistory');
   const modeSource = namedFunctionSource(searchSource, 'setSearchMode');
-  const podcastSource = namedFunctionSource(searchSource, 'doPodcastSearch');
 
   assert.doesNotMatch(renderSource, /isMusicSearchMode/);
   assert.doesNotMatch(renderSource, /data-history-mode/);
   assert.doesNotMatch(replaySource, /searchMode\s*=/);
-  assert.match(modeSource, /else if \(!renderSearchHistory\(\)\) loadPodcastHot\(\)/);
-  assert.match(podcastSource, /rememberSearchQuery\(q\)/);
+  // 批 T16c：播客 tab 整条下线——setSearchMode 不再有 loadPodcastHot 分支，
+  // doPodcastSearch 符号从 07-search 整簇消失。
+  assert.doesNotMatch(modeSource, /loadPodcastHot/);
+  assert.doesNotMatch(searchSource, /doPodcastSearch|loadPodcastHot/);
 });
 
 test('T15: 官方五平台 fan-out 死代码簇必须已整删', () => {

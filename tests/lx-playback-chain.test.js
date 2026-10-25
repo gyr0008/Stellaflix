@@ -254,7 +254,7 @@ function makeHarness(hooks) {
 
 // ---------- ① 官方五分支不再出现在新解析函数 ----------
 
-test('T9①：新解析区只走 /api/lx-source/*；playQueueAt 官方五分支清零，仅留播客豁免一处', () => {
+test('T9①：新解析区只走 /api/lx-source/*；playQueueAt 官方路由清零（含 T16c 摘除的播客豁免）', () => {
   const src13 = read(P_13);
   const b = src13.indexOf(MARK_BEGIN);
   const e = src13.indexOf(MARK_END);
@@ -272,7 +272,8 @@ test('T9①：新解析区只走 /api/lx-source/*；playQueueAt 官方五分支�
     assert.ok(!play.includes(legacy), `playQueueAt 不应再包含 ${legacy}`);
   }
   const neteaseHits = (play.match(/\/api\/song\/url/g) || []).length;
-  assert.equal(neteaseHits, 1, 'playQueueAt 只允许保留播客豁免一处 /api/song/url（T16 播客下线时清除）');
+  // 批 T16c：播客豁免随播客整条下线，playQueueAt 不再有任何官方 song/url 解析调用。
+  assert.equal(neteaseHits, 0, 'playQueueAt 不得再包含任何 /api/song/url 官方解析调用');
   assert.ok(play.includes('resolveLxPlaybackSong('), 'playQueueAt 解析段必须调用 resolveLxPlaybackSong');
   assert.ok(read(P_11).includes('/api/lx-source/search'), '11-provider-fallback 新查询实现必须指 /api/lx-source/search');
 });
