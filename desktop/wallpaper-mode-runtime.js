@@ -1,5 +1,16 @@
 const path = require('path');
 
+// 壁纸窗的宿主模式。
+//
+// 'topmost'（默认，本项目需求）：壁纸是**顶层 topmost 全屏窗**，不 SetParent。
+//   实测 2026-10-25：桌面图标（SHELLDLL_DefView）和任务栏（Shell_TrayWnd，WS_EX_TOPMOST）
+//   都比「Progman / WorkerW 的子窗」高一个层级——子窗永远属于桌面，Z 序上永远排在
+//   任务栏和所有应用窗口之下。用户要的是「只留下我们自己的窗口和壁纸」，
+//   所以壁纸必须是顶层窗：topmost 能同时压住桌面图标、其它应用窗口和任务栏静息位。
+// 'desktop-attach'：旧的「挂 Progman/WorkerW」路径，保留用于回退与对照。
+const WALLPAPER_HOST_MODE_TOPMOST = 'topmost';
+const WALLPAPER_HOST_MODE_DESKTOP_ATTACH = 'desktop-attach';
+
 const DEFAULT_WALLPAPER_STATE = Object.freeze({
   enabled: false,
   title: 'Stellaflix',
@@ -138,17 +149,44 @@ if ($progman -eq [IntPtr]::Zero) { throw "WALLPAPER_PROGMAN_NOT_FOUND" }
 $sendResult = [IntPtr]::Zero
 [StellaflixDesktopWallpaperNative]::SendMessageTimeout($progman, 0x052C, [IntPtr]::Zero, [IntPtr]::Zero, 0, 1000, [ref]$sendResult) | Out-Null
 $script:workerw = [IntPtr]::Zero
+$script:strategy = ''
+# ① 经典路径（Win10 / 早期 Win11）：含 SHELLDLL_DefView 的顶层窗口「之后」的兄弟 WorkerW
 $callback = [StellaflixDesktopWallpaperNative+EnumWindowsProc]{
   param([IntPtr]$top, [IntPtr]$state)
   $shellView = [StellaflixDesktopWallpaperNative]::FindWindowExByClass($top, [IntPtr]::Zero, "SHELLDLL_DefView")
   if ($shellView -ne [IntPtr]::Zero) {
     $candidate = [StellaflixDesktopWallpaperNative]::FindWindowExByClass([IntPtr]::Zero, $top, "WorkerW")
-    if ($candidate -ne [IntPtr]::Zero) { $script:workerw = $candidate }
+    if ($candidate -ne [IntPtr]::Zero) { $script:workerw = $candidate; $script:strategy = 'workerw-sibling' }
   }
   return $true
 }
 [StellaflixDesktopWallpaperNative]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
-if ($script:workerw -eq [IntPtr]::Zero) { throw "WALLPAPER_WORKERW_NOT_FOUND" }
+$defViewHost = [StellaflixDesktopWallpaperNative]::FindWindowExByClass($progman, [IntPtr]::Zero, "SHELLDLL_DefView")
+# ⓪ 本项目需求（真机实测 2026-10-25）：壁纸要铺满整屏并**盖住桌面图标**。
+#    图标层 SHELLDLL_DefView(131474) 是 Progman(65972) 的直接子窗，WorkerW(66072) 是它的**兄弟**。
+#    Z 序只在同一个父窗的兄弟之间生效 —— 所以挂在任何 WorkerW 里的窗口，
+#    无论怎么 SetWindowPos 都盖不住图标（用户可见面：壁纸铺上了，图标还浮在上面）。
+#    唯一可行解：挂 Progman 本体并置最上层，同时盖住 DefView(图标) 与 WorkerW(Wallpaper Engine 壁纸)。
+#    仅当 DefView 确为 Progman 直接子窗时启用（Win11 26xxx 实测布局）；
+#    经典 Win10 布局不满足此条件，继续走 ① 之后的原候选链，不改老机器行为。
+if ($progman -ne [IntPtr]::Zero -and $defViewHost -ne [IntPtr]::Zero) {
+  $script:workerw = $progman
+  $script:strategy = 'progman-top'
+}
+# ② Windows 11 26xxx 实测（2026-10-25，NT 10.0.26300）：DefView 的宿主就是 Progman，且 Progman 排在
+#    Z 序最后一个顶层窗口，所以 ① 里「取它后面的 WorkerW」恒返回 0。此 build 上真正的壁纸层是
+#    **Progman 的子 WorkerW**，必须显式取它，否则会一路退到 Progman 本体。
+if ($script:workerw -eq [IntPtr]::Zero) {
+  $childWorker = [StellaflixDesktopWallpaperNative]::FindWindowExByClass($progman, [IntPtr]::Zero, "WorkerW")
+  if ($childWorker -ne [IntPtr]::Zero) { $script:workerw = $childWorker; $script:strategy = 'progman-child-workerw' }
+}
+# ③ 再退一步：直接挂进图标宿主层（SHELLDLL_DefView），插到 DefView 之下，图标仍在壁纸之上
+if ($script:workerw -eq [IntPtr]::Zero -and $defViewHost -ne [IntPtr]::Zero) {
+  $script:workerw = $defViewHost
+  $script:strategy = 'shelldll-defview'
+}
+# ④ 最后兜底：Progman 本体（已知在部分 build 上会被系统壁纸盖住，渲染层据此决定是否降级）
+if ($script:workerw -eq [IntPtr]::Zero) { $script:workerw = $progman; $script:strategy = 'progman' }
 $target = [IntPtr]::new([Int64]${hwnd})
 if (-not [StellaflixDesktopWallpaperNative]::IsWindow($target)) { throw "WALLPAPER_TARGET_NOT_FOUND" }
 $GWL_STYLE = -16
@@ -166,7 +204,18 @@ $origin = New-Object StellaflixDesktopWallpaperNative+POINT
 $origin.X = ${x}
 $origin.Y = ${y}
 if (-not [StellaflixDesktopWallpaperNative]::ScreenToClient($script:workerw, [ref]$origin)) { throw "WALLPAPER_WORKERW_BOUNDS_FAILED" }
-$positioned = [StellaflixDesktopWallpaperNative]::SetWindowPos($target, [IntPtr]::new([Int64]1), $origin.X, $origin.Y, ${width}, ${height}, 0x0030)
+# Z 序（实测 2026-10-25，2560x1440 / Win11 NT 10.0.26300，本机同时跑着 Wallpaper Engine）：
+#   宿主 WorkerW(66072) 里住着 WPE 的 WPEDesktopDX11Window(131632)，与本窗同父同尺寸。
+#   旧实现无条件插到父窗最底(HWND_BOTTOM=1) → 整块被 WPE 壁纸盖住，
+#   用户可见面就是「桌面壁纸层开了、桌面毫无反应，只剩窗口内那块」。
+#   规则：
+#     · 宿主是 WorkerW（workerw-sibling / progman-child-workerw）→ 插到该宿主最上层(HWND_TOP=0)；
+#     · 宿主是 Progman 本体 → 插到 SHELLDLL_DefView 之下，桌面图标仍在壁纸之上；
+#     · 宿主是 DefView 本体 → 保持最底，避免盖住图标列表。
+$insertAfter = [IntPtr]::Zero
+if ($script:strategy -eq 'progman' -and $defViewHost -ne [IntPtr]::Zero) { $insertAfter = $defViewHost }
+elseif ($script:strategy -eq 'shelldll-defview') { $insertAfter = [IntPtr]::new([Int64]1) }
+$positioned = [StellaflixDesktopWallpaperNative]::SetWindowPos($target, $insertAfter, $origin.X, $origin.Y, ${width}, ${height}, 0x0030)
 if (-not $positioned) { throw "WALLPAPER_WORKERW_POSITION_FAILED" }
 $className = New-Object System.Text.StringBuilder 128
 [StellaflixDesktopWallpaperNative]::GetClassName($script:workerw, $className, $className.Capacity) | Out-Null
@@ -175,6 +224,7 @@ $className = New-Object System.Text.StringBuilder 128
   targetWindowId = $target.ToInt64().ToString()
   parentWindowId = $parent.ToInt64().ToString()
   parentClassName = $className.ToString()
+  hostStrategy = $script:strategy
   x = ${x}
   y = ${y}
   width = ${width}
@@ -299,6 +349,14 @@ class DesktopWallpaperRuntime {
         timeoutMs: options.attachTimeoutMs,
       });
     this.window = null;
+    // 宿主模式默认 topmost；只有显式传 'desktop-attach' 才走 SetParent 老路径。
+    this.hostMode = options.hostMode === WALLPAPER_HOST_MODE_DESKTOP_ATTACH
+      ? WALLPAPER_HOST_MODE_DESKTOP_ATTACH
+      : WALLPAPER_HOST_MODE_TOPMOST;
+    // 任务栏显隐控制器。**默认不注入 = 完全不动系统任务栏**（单测与其它调用方保持惰性），
+    // 只有真正要跑沉浸态的入口（desktop/cover-wallpaper-runtime.js）才注入。
+    this.setTaskbarHidden = typeof options.setTaskbarHidden === 'function' ? options.setTaskbarHidden : null;
+    this.taskbarHidden = false;
     this.state = normalizeWallpaperState(DEFAULT_WALLPAPER_STATE, {}, false);
     this.attachment = null;
     this.lastError = '';
@@ -368,6 +426,9 @@ class DesktopWallpaperRuntime {
       nativeWindowId: this.attachment && this.attachment.targetWindowId || '',
       parentWindowId: this.attachment && this.attachment.parentWindowId || '',
       parentClassName: this.attachment && this.attachment.parentClassName || '',
+      hostStrategy: this.attachment && this.attachment.hostStrategy || '',
+      hostMode: this.hostMode,
+      taskbarHidden: this.taskbarHidden === true,
       displayId: this.attachment && this.attachment.displayId || '',
       bounds: this.attachment && this.attachment.bounds || null,
       physicalBounds: this.attachment && this.attachment.physicalBounds || null,
@@ -441,6 +502,10 @@ class DesktopWallpaperRuntime {
     const win = new this.BrowserWindow({
       ...snapshot.bounds,
       frame: false,
+      // thickFrame:false 是「严格铺满」的必要条件：Electron 在 Windows 上给无边框窗
+      // 默认保留一圈隐形 WS_THICKFRAME 命中边框（本机实测 8px），客户区因此比窗口矩形小，
+      // SetWindowPos 到整屏后四边仍会漏出一条桌面/图标的缝。
+      thickFrame: false,
       transparent: false,
       backgroundColor: '#050608',
       hasShadow: false,
@@ -455,10 +520,17 @@ class DesktopWallpaperRuntime {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        backgroundThrottling: false,
+        backgroundThrottling: true,
       },
     });
-    win.setIgnoreMouseEvents(true);
+    // forward: true 对齐 Mineradio 2.5.1（desktop/main.js:3258）：挂进 WorkerW 后若不转发，
+    // 壁纸窗会吃掉点击，桌面图标点不动。
+    win.setIgnoreMouseEvents(true, { forward: true });
+    // topmost 宿主：壁纸必须是顶层窗，才可能压住桌面图标、其它应用窗口与任务栏静息位。
+    // （子窗形态的 WS_EX_TOPMOST 会被 Windows 忽略，所以旧的 SetParent 路径做不到这件事。）
+    if (this.hostMode === WALLPAPER_HOST_MODE_TOPMOST && typeof win.setAlwaysOnTop === 'function') {
+      try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (_) { }
+    }
     if (win.webContents && typeof win.webContents.setWindowOpenHandler === 'function') {
       win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     }
@@ -515,12 +587,71 @@ class DesktopWallpaperRuntime {
       targetWindowId: String(result.targetWindowId || ''),
       parentWindowId: String(result.parentWindowId || ''),
       parentClassName: String(result.parentClassName || ''),
+      hostStrategy: String(result.hostStrategy || ''),
       displayId: snapshot.displayId,
       bounds: { ...snapshot.bounds },
       physicalBounds: { ...physicalBounds },
       attachedAt: Date.now(),
     };
     return this.attachment;
+  }
+
+  /**
+   * topmost 宿主的「挂载」：不碰 SetParent，只把窗口钉成全屏置顶层，并补一份 attachment 凭证。
+   * attachment 仍然要写——渲染层靠 status.active 判断桌面层是否真的在跑，
+   * 少了它就会被当成挂载失败而自行降级到播放器背景板。
+   * @param {object} win 壁纸窗口。
+   * @param {object} snapshot primaryDisplaySnapshot() 的结果。
+   * @param {number} operation 当前操作序号。
+   * @returns {Promise<object>} attachment。
+   */
+  async attachTopmostHost(win, snapshot, operation) {
+    if (operation !== this.operation || this.window !== win || !this.isWindowAlive(win)) {
+      throw new Error('WALLPAPER_START_SUPERSEDED');
+    }
+    if (typeof win.setAlwaysOnTop === 'function') {
+      try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (_) { }
+    }
+    if (typeof win.setBounds === 'function') {
+      // 再钉一次几何：topmost 窗在不同 DPI 屏之间搬运时会被系统改尺寸。
+      try { win.setBounds(snapshot.bounds, false); } catch (_) { }
+    }
+    const physicalBounds = snapshot.physicalBounds || snapshot.bounds;
+    this.attachment = {
+      targetWindowId: nativeWindowHandleDecimal(win),
+      parentWindowId: '',
+      parentClassName: '',
+      hostStrategy: WALLPAPER_HOST_MODE_TOPMOST,
+      displayId: snapshot.displayId,
+      bounds: { ...snapshot.bounds },
+      physicalBounds: { ...physicalBounds },
+      attachedAt: Date.now(),
+    };
+    return this.attachment;
+  }
+
+  /**
+   * 申请/释放任务栏隐藏。失败只记日志，绝不阻断壁纸模式本身。
+   * @param {boolean} hidden 是否隐藏。
+   * @returns {Promise<object|null>} 控制器返回值。
+   */
+  async applyTaskbarHidden(hidden) {
+    if (!this.setTaskbarHidden) return null;
+    let result = null;
+    try {
+      result = await this.setTaskbarHidden(hidden === true);
+    } catch (error) {
+      if (this.logger && typeof this.logger.warn === 'function') {
+        this.logger.warn('[CoverWallpaper] taskbar toggle failed:', error && error.message || error);
+      }
+      return null;
+    }
+    // taskbarHidden 记的是「任务栏此刻是否真的不可见」，不是「我们申请了什么」。
+    this.taskbarHidden = !!(result && result.ok === true && result.visible === false);
+    if (result && result.ok !== true && this.logger && typeof this.logger.warn === 'function') {
+      this.logger.warn('[CoverWallpaper] taskbar not in expected state:', result.reason || 'unknown');
+    }
+    return result;
   }
 
   async runStart(operation) {
@@ -538,13 +669,19 @@ class DesktopWallpaperRuntime {
         throw new Error('WALLPAPER_START_SUPERSEDED');
       }
       const snapshot = this.positionWindow(win);
-      await this.attachWindow(win, snapshot, operation);
+      if (this.hostMode === WALLPAPER_HOST_MODE_TOPMOST) {
+        await this.attachTopmostHost(win, snapshot, operation);
+      } else {
+        await this.attachWindow(win, snapshot, operation);
+      }
       if (operation !== this.operation || this.state.enabled !== true || this.window !== win) {
         throw new Error('WALLPAPER_START_SUPERSEDED');
       }
       this.lastError = '';
       this.sendState(win);
       if (typeof win.showInactive === 'function') win.showInactive();
+      // 顺序有意：先让壁纸窗上屏，再收任务栏。反过来的话中途会露出一次桌面。
+      await this.applyTaskbarHidden(true);
       this.generation += 1;
       const status = this.emitStatus(created ? 'started' : 'reconciled');
       return { ok: true, enabled: true, status };
@@ -565,6 +702,8 @@ class DesktopWallpaperRuntime {
       if (!superseded && operation === this.operation) {
         this.state = normalizeWallpaperState(this.state, {}, false);
         this.lastError = String(error && error.message || 'WALLPAPER_START_FAILED');
+        // 启动失败必须把任务栏放回来，否则用户会停在「桌面没有任务栏」的状态里。
+        await this.applyTaskbarHidden(false);
         this.emitStatus('start-failed');
       }
       return {
@@ -658,9 +797,15 @@ class DesktopWallpaperRuntime {
     const job = (async () => {
       try {
         const snapshot = this.positionWindow(win);
-        await this.attachWindow(win, snapshot, operation);
+        if (this.hostMode === WALLPAPER_HOST_MODE_TOPMOST) {
+          await this.attachTopmostHost(win, snapshot, operation);
+        } else {
+          await this.attachWindow(win, snapshot, operation);
+        }
         this.lastError = '';
         this.sendState(win);
+        // 显示器/DPI 变化时 Explorer 会重建 Shell_TrayWnd，这里重申一次隐藏。
+        await this.applyTaskbarHidden(true);
         return { ok: true, enabled: true, status: this.emitStatus(reason) };
       } catch (error) {
         if (operation !== this.operation) {
@@ -700,6 +845,8 @@ class DesktopWallpaperRuntime {
       if (this.isWindowAlive(win) && !this.window) this.window = win;
     }
     this.lastError = preservedError || closeError;
+    // 退出沉浸态无条件还原任务栏（不看本次会话有没有真隐藏过——多还原一次无害）。
+    await this.applyTaskbarHidden(false);
     this.generation += 1;
     return { ok: !closeError, enabled: false, error: closeError, status: this.emitStatus(reason) };
   }
@@ -731,6 +878,8 @@ class DesktopWallpaperRuntime {
 module.exports = {
   DEFAULT_WALLPAPER_STATE,
   DesktopWallpaperRuntime,
+  WALLPAPER_HOST_MODE_DESKTOP_ATTACH,
+  WALLPAPER_HOST_MODE_TOPMOST,
   attachWallpaperWindowToDesktop,
   nativeWindowHandleDecimal,
   normalizeWallpaperFrameRate,

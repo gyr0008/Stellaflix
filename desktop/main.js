@@ -4,7 +4,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { execFile, spawn } = require('child_process');
+const { execFile, execFileSync, spawn } = require('child_process');
 const systemMemory = require('./system-memory');
 const { parseListeningPid, parseTasklistName, buildPortLockDialog } = require('./port-lock');
 const secondInstanceNotice = require('./second-instance-notice');
@@ -22,6 +22,8 @@ const {
 } = require('./local-music-library');
 const { WallpaperEngineRuntime, noteWeDiagEvent } = require('./wallpaper-engine-runtime');
 const { FullDesktopModeRuntime } = require('./full-desktop-mode-runtime');
+const { createCoverWallpaperRuntime } = require('./cover-wallpaper-runtime');
+const { ensureTaskbarVisible, restoreTaskbarSync } = require('./desktop-taskbar-runtime');
 // Platform auth helpers are only needed on login/migration paths. Lazy-load so
 // cold start does not pull kugou/qishui/spotify modules before the window shows.
 function requireKugouApi() { return require('../kugou-api'); }
@@ -787,6 +789,40 @@ function isTrustedMainDocumentUrl(value) {
     return false;
   }
 }
+
+// 壁纸桌面层进出时把主窗顶到 topmost。壁纸窗现在是不 SetParent 的 topmost 全屏窗，
+// 主窗不跟上的话，一开壁纸模式我们自己的窗口就被壁纸盖住了。退出时还原进入前的置顶状态。
+let coverWallpaperHostTopmostApplied = false;
+let coverWallpaperHostPriorTopmost = false;
+function applyCoverWallpaperHostTopmost(active) {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  try {
+    if (active === true) {
+      if (coverWallpaperHostTopmostApplied) return;
+      coverWallpaperHostPriorTopmost = typeof win.isAlwaysOnTop === 'function' ? win.isAlwaysOnTop() === true : false;
+      coverWallpaperHostTopmostApplied = true;
+      win.setAlwaysOnTop(true, 'screen-saver');
+      // 壁纸窗刚被 raise 过，主窗不显式抬一次会落在它下面。
+      if (typeof win.moveTop === 'function') win.moveTop();
+      return;
+    }
+    if (!coverWallpaperHostTopmostApplied) return;
+    coverWallpaperHostTopmostApplied = false;
+    win.setAlwaysOnTop(coverWallpaperHostPriorTopmost);
+  } catch (_) {}
+}
+// 壁纸模式桌面层：复用覆盖页运行时，只走独立 cover-wallpaper IPC 通道。
+// overlayUrl 用闭包延迟读取，避免依赖其 3500+ 行处的定义顺序。
+const coverWallpaperRuntime = createCoverWallpaperRuntime({
+  BrowserWindow,
+  screen,
+  ipcMain,
+  overlayUrl: (page) => overlayUrl(page),
+  getMainWindow: () => mainWindow,
+  isTrustedEvent: (event) => isTrustedMainWindowIpc(event),
+  onHostActiveChange: (active) => applyCoverWallpaperHostTopmost(active),
+});
 
 function isTrustedMainWindowIpc(event) {
   try {
@@ -6909,6 +6945,9 @@ if (!_lock) {
   });
 
   app.whenReady().then(async () => {
+    // 启动自愈：上一次会话若没走到还原路径（崩溃、任务管理器强杀），任务栏可能还停在被隐藏的状态。
+    // 无条件还原一次，成本是一次 powershell 调用，换的是「永远不会把用户的桌面搞成没有任务栏」。
+    Promise.resolve(ensureTaskbarVisible({ execFileImpl: execFile })).catch(() => {});
     // 影视态初始化（对齐音乐态 localMusicLibrary.installProtocol 的位置）
     try {
       const appPaths = { appData: app.getPath('userData'), exeDir: path.dirname(app.getPath('exe')) };
@@ -7061,6 +7100,8 @@ if (!_lock) {
     appQuitCleanupPromise = Promise.race([runtimeCleanup, timeoutCleanup]).finally(() => {
       if (cleanupTimeout) clearTimeout(cleanupTimeout);
       appQuitCleanupComplete = true;
+      // 同步兜住任务栏：上面的异步链可能被 15000ms 超时截断，进程退出后没人能再还原它。
+      try { restoreTaskbarSync({ execFileSyncImpl: execFileSync }); } catch (_) {}
       app.quit();
     });
   });
