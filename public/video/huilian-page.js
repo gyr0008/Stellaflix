@@ -48,6 +48,7 @@
   var mountGen = 0;         // 挂载代次：mount 递增，在途响应代次不符则丢弃（防 unmount/重挂串扰）
   var expanded = null;      // 展开态跨轮询保持 { hash, files }；files 为缓存 payload，重绘复用
   var bar = null;           // 当前播控条实例（SFV.huilianPlayerBar.create 返回），至多一个 overlay
+  var handedOff = null;     // 播放侧转交来的磁力（T4 parse:0 特殊协议），等本页挂载后自动入队
 
   function showError(message) {
     if (nodes && nodes.error) nodes.error.textContent = message || '';
@@ -254,6 +255,23 @@
     submitParams(params);
   }
 
+  /*
+   * 播放侧转交入口：T4 规则解析出磁力/FTP 地址（parse:0）时，本机播放器放不了，
+   * 唯一出路是进 BT 队列、由本页下载后播。页面未挂载时先记账，挂载即自动入队。
+   * @returns {boolean} 桌面下载桥可用才返回 true
+   */
+  function handoff(magnet) {
+    var text = String(magnet || '');
+    if (!text || !bridge()) return false;
+    if (nodes && nodes.input) {
+      nodes.input.value = text;
+      onAdd();
+    } else {
+      handedOff = text;
+    }
+    return true;
+  }
+
   // 浏览…：#huilian-browse（input type=file accept=.torrent）→ FileReader → base64
   function onBrowseChange(ev) {
     var q = queue();
@@ -326,6 +344,13 @@
     wrap.appendChild(row); wrap.appendChild(error); wrap.appendChild(playWrap); wrap.appendChild(list);
     host.appendChild(wrap);
     nodes = { input: input, browse: browse, list: list, error: error, stage: stage };
+    // 播放侧转交来的磁力（T4 parse:0）：页面挂载即入队，不等用户再粘一次
+    if (handedOff && bridge()) {
+      var queued = handedOff;
+      handedOff = null;
+      nodes.input.value = queued;
+      onAdd();
+    }
   }
 
   function unmount() {
@@ -341,8 +366,10 @@
   var page = {
     mount: mount,
     unmount: unmount,
+    handoff: handoff,
     back: function () { page.unmount(); return false; },
   };
-  if (SFV.router && SFV.router.register) SFV.router.register({ id: 'discover', title: '汇联', mount: mount, unmount: unmount, back: page.back });
-  else SFV.huilianPage = page;
+  // 命名空间常驻：播放侧要靠 SFV.huilianPage.handoff 转交磁力，不能只在无路由时才挂
+  SFV.huilianPage = page;
+  if (SFV.router && SFV.router.register) SFV.router.register(Object.assign({ id: 'discover', title: '汇联' }, page));
 })(typeof window !== 'undefined' ? window : this);

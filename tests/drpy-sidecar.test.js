@@ -1,6 +1,6 @@
 /*
  * tests/drpy-sidecar.test.js — SidecarManager 单测（批 2）
- * 直接对真 drpy-lite（../drpy-lite-build，含 mock 规则）做拉起/握手/健康检查/重启验证。
+ * 直接对真 drpy-lite（仓库根 ./drpy-lite，可选组件）做拉起/握手/健康检查/重启验证。
  * 运行：node tests/drpy-sidecar.test.js
  */
 const assert = require('assert');
@@ -37,6 +37,11 @@ function get(url) {
     console.log('SKIP drpy-sidecar: drpy-lite 未安装（可选组件，解压 drpy-lite/ 到仓库根后此测试生效）');
     process.exit(0);
   }
+  // 出厂 drpy-lite 的 rules/js 为空（红线），mock 规则临时放入、结束删回
+  const fixtureRule = path.join(__dirname, 'fixtures', 'drpy-mock测试源.js');
+  const targetRule = path.join(LITE_DIR, 'rules', 'js', 'mock测试源.js');
+  const ruleCreatedHere = !fs.existsSync(targetRule);
+  if (ruleCreatedHere) fs.copyFileSync(fixtureRule, targetRule);
   const mock = startMock();
   await new Promise((r) => setTimeout(r, 1200)); // 等 mock 就绪
   const mgr = createDrpySidecar({liteDir: LITE_DIR, port: 5758, quiet: true});
@@ -92,6 +97,7 @@ function get(url) {
   } finally {
     mgr.stop();
     try { mock.kill('SIGKILL'); } catch (e) { /* ignore */ }
+    if (ruleCreatedHere) { try { fs.rmSync(targetRule, {force: true}); } catch (e) { /* ignore */ } }
   }
   console.log('ALL drpy-sidecar TESTS PASSED');
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1); });

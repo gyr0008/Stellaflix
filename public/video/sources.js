@@ -70,6 +70,18 @@
   }
 
   /**
+   * drpy(T4) 源的 api 里带 sidecar 随机端口，下次启动必然失效：
+   * 请求前按持久化的模块名现拼当前端点。解析失败（sidecar 未起）退回原 api。
+   */
+  function resolveSourceApi(src) {
+    var D = SFV.drpy;
+    if (!D || !src || src.type !== 'drpy' || !src.drpyModule) return Promise.resolve(src);
+    return D.resolveApi(src.drpyModule)
+      .then(function (api) { return api ? Object.assign({}, src, { api: api }) : src; })
+      .catch(function () { return src; });
+  }
+
+  /**
    * 依次尝试多个 URL，返回首个成功的 JSON。
    */
   function fetchFirstJson(urls, timeout) {
@@ -88,6 +100,26 @@
       }
       tryNext();
     });
+  }
+
+  /**
+   * 有限并发跑一批异步任务（worker 自行处理失败，mapPool 不中断整批）。
+   */
+  function mapPool(items, limit, worker) {
+    var i = 0;
+    var n = Math.max(1, Math.min(limit || 1, items.length));
+    var runners = [];
+    for (var k = 0; k < n; k++) {
+      (function () {
+        var step = function () {
+          if (i >= items.length) return Promise.resolve();
+          var idx = i++;
+          return Promise.resolve(worker(items[idx], idx)).then(step);
+        };
+        runners.push(step());
+      })();
+    }
+    return Promise.all(runners);
   }
 
   /**
@@ -125,7 +157,9 @@
     var t0 = Date.now();
     var n = S.normalizeSource(source);
     if (!n.ok) return Promise.resolve({ ok: false, count: 0, reason: n.reason, ms: 0 });
-    return fetchJson(S.buildListUrl(n.source, { ac: 'videolist', pg: 1 }), timeout).then(function (json) {
+    return resolveSourceApi(n.source).then(function (src) {
+      return fetchJson(S.buildListUrl(src, { ac: 'videolist', pg: 1 }), timeout);
+    }).then(function (json) {
       var list = S.extractList(json);
       return { ok: list.length > 0, count: list.length,
                reason: list.length ? null : 'empty-list', ms: Date.now() - t0 };
@@ -151,23 +185,25 @@
     var filters = opts.filters || {};
     var errors = [];
     var jobs = list.map(function (src) {
-      var url = S.buildListUrl(src, {
-        ac: 'videolist', wd: kw, pg: opts.pg || 1,
-        h: filters.year != null ? filters.year : null
-      });
-      console.log('[SFV-DEBUG] sources.search fetching: ' + src.name + ' -> ' + url);
-      return fetchJson(url, opts.timeout)
-        .then(function (json) {
-          var extracted = S.extractList(json);
-          console.log('[SFV-DEBUG] sources.search response: ' + src.name + ' count=' + extracted.length);
-          return extracted.map(function (raw) { return S.normalizeVod(raw, src); })
-            .filter(Boolean);
-        })
-        .catch(function (e) {
-          console.log('[SFV-DEBUG] sources.search error: ' + src.name + ' reason=' + ((e && e.message) || 'error'));
-          errors.push({ sourceId: src.id, name: src.name, reason: (e && e.message) || 'error' });
-          return [];
+      return resolveSourceApi(src).then(function (r) {
+        var url = S.buildListUrl(r, {
+          ac: 'videolist', wd: kw, pg: opts.pg || 1,
+          h: filters.year != null ? filters.year : null
         });
+        console.log('[SFV-DEBUG] sources.search fetching: ' + src.name + ' -> ' + url);
+        return fetchJson(url, opts.timeout)
+          .then(function (json) {
+            var extracted = S.extractList(json);
+            console.log('[SFV-DEBUG] sources.search response: ' + src.name + ' count=' + extracted.length);
+            return extracted.map(function (raw) { return S.normalizeVod(raw, r); })
+              .filter(Boolean);
+          })
+          .catch(function (e) {
+            console.log('[SFV-DEBUG] sources.search error: ' + src.name + ' reason=' + ((e && e.message) || 'error'));
+            errors.push({ sourceId: src.id, name: src.name, reason: (e && e.message) || 'error' });
+            return [];
+          });
+      });
     });
 
     return Promise.all(jobs).then(function (chunks) {
@@ -199,36 +235,47 @@
     var cacheKey = n.source.id + ':' + vodId;
     var cache = S.readDetailCache(cacheKey);
 
-    var urls = [S.buildDetailUrl(n.source, vodId)];
-    (n.source.mirrors || []).forEach(function (m) { urls.push(S.buildDetailUrlWithApi(m, vodId)); });
+    return resolveSourceApi(n.source).then(function (src) {
+      var urls = [S.buildDetailUrl(src, vodId)];
+      (src.mirrors || []).forEach(function (m) { urls.push(S.buildDetailUrlWithApi(m, vodId)); });
 
-    return fetchFirstJson(urls, timeout).then(function (json) {
-      var list = S.extractList(json);
-      if (!list.length) return { ok: false, vod: null, plays: [], reason: 'not-found' };
-      var vod = S.normalizeVod(list[0], n.source);
-      if (!vod) return { ok: false, vod: null, plays: [], reason: 'invalid-record' };
-      var plays = S.parsePlayUrl(vod.playFrom, vod.playUrl, n.source.type === 'drpy');
-      // drpy(T4) 源：集地址是不透明 id，需经 ?play= 二次解析成直链。
-      // 单集解析失败保留原始 id（播放器可能仍可处理），不阻断整体。
-      if (n.source.type === 'drpy' && global.StellaflixVideo.drpy) {
-        var groups = plays.map(function (g) {
-          var eps = g.episodes.map(function (ep) {
-            return global.StellaflixVideo.drpy.resolvePlay(n.source.api, g.from, ep.url, timeout)
-              .then(function (r) { return Object.assign({}, ep, { url: r.url, rawId: ep.url }); })
-              .catch(function () { return ep; });
+      return fetchFirstJson(urls, timeout).then(function (json) {
+        var list = S.extractList(json);
+        if (!list.length) return { ok: false, vod: null, plays: [], reason: 'not-found' };
+        var vod = S.normalizeVod(list[0], src);
+        if (!vod) return { ok: false, vod: null, plays: [], reason: 'invalid-record' };
+        var plays = S.parsePlayUrl(vod.playFrom, vod.playUrl, src.type === 'drpy');
+        // drpy(T4) 源：集地址是不透明 id，需经 ?play= 二次解析成直链。
+        // 单集解析失败保留原始 id（播放器可能仍可处理），不阻断整体。
+        if (src.type === 'drpy' && global.StellaflixVideo.drpy) {
+          var out = plays.map(function (g) {
+            return Object.assign({}, g, { episodes: g.episodes.slice() });
           });
-          return Promise.all(eps).then(function (done) {
-            return Object.assign({}, g, { episodes: done });
+          var jobs = [];
+          plays.forEach(function (g, gi) {
+            g.episodes.forEach(function (ep, ei) { jobs.push({ gi: gi, ei: ei, g: g, ep: ep }); });
           });
-        });
-        return Promise.all(groups).then(function (resolved) {
-          plays = resolved;
-          S.writeDetailCache(cacheKey, { plays: plays, sourceId: n.source.id, vodId: vodId, ts: Date.now() });
-          return { ok: true, vod: vod, plays: plays, reason: null };
-        });
-      }
-      S.writeDetailCache(cacheKey, { plays: plays, sourceId: n.source.id, vodId: vodId, ts: Date.now() });
-      return { ok: true, vod: vod, plays: plays, reason: null };
+          // 并发上限：一部百集剧 × 多线路若一次性全发，sidecar 的规则 vm 会被打爆
+          // （lazy 逐集跑 js，超时+内存+日志堆积），实测拖垮整次详情。4 路排队足够。
+          return mapPool(jobs, 4, function (job) {
+            return global.StellaflixVideo.drpy.resolvePlay(src.api, job.g.from, job.ep.url, timeout)
+              .then(function (r) {
+                // parse/jx/header 一并带上：jx=1 说明给的是需嗅探的播放页而非直链，
+                // 播不起来时这字段就是原因，不能像以前那样只留 url 假装成功。
+                out[job.gi].episodes[job.ei] = Object.assign({}, job.ep, {
+                  url: r.url, rawId: job.ep.url, parse: r.parse, jx: r.jx, needsSniff: r.jx === 1,
+                });
+                if (r.header) out[job.gi].episodes[job.ei].header = r.header;
+              })
+              .catch(function () { /* 单集失败保留原始 id，不阻断整体 */ });
+          }).then(function () {
+            S.writeDetailCache(cacheKey, { plays: out, sourceId: src.id, vodId: vodId, ts: Date.now() });
+            return { ok: true, vod: vod, plays: out, reason: null };
+          });
+        }
+        S.writeDetailCache(cacheKey, { plays: plays, sourceId: src.id, vodId: vodId, ts: Date.now() });
+        return { ok: true, vod: vod, plays: plays, reason: null };
+      });
     }).catch(function (e) {
       if (cache && S.cacheValid(cache.ts)) {
         return { ok: true, vod: null, plays: cache.plays || [], reason: null, fromCache: true };

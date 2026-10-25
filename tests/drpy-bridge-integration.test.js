@@ -130,6 +130,61 @@ function get(url, timeout) {
     assert(det2.ok && det2.plays[0].episodes[0].url.includes('.m3u8'), '二次 detail 应仍 ok');
     console.log('PASS detail 二次调用（playCache 生效）');
 
+    // 7) 重启换端口：sidecar 每次随机端口，持久化 api 必然失效。
+    //    把源里的 api 写成死端口，搜索/详情仍应成功 —— 端点按 drpyModule 现拼。
+    const dead = SFV.sources.updateSource(en.source.id, { api: 'http://127.0.0.1:1/api/mock测试源' });
+    assert(dead.ok && /127\.0\.0\.1:1\//.test(dead.source.api), '应已写入死端口 api');
+    const res3 = await SFV.sources.search('测试', { sources: [dead.source], timeout: 15000 });
+    assert.ok((res3.items || []).length > 0, '端口失效后搜索应仍命中（现拼端点）: ' + JSON.stringify(res3.errors || []));
+    const det3 = await SFV.sources.detail(dead.source, rawVod.vodId, 20000);
+    assert(det3.ok && det3.plays[0].episodes[0].url.includes('.m3u8'), '端口失效后详情二次解析应仍成功: ' + (det3.reason || ''));
+    console.log('PASS 端口漂移自愈（死 api 仍可搜索+二次解析）');
+
+    // 8) 重复导入去重：api 已变、模块名相同 → 不得再新增一套源
+    const before = SFV.sources.getSources().length;
+    const imp2 = await SFV.drpy.importModules();
+    assert.strictEqual(imp2.added, 0, '同模块再导入应 0 新增，实际: ' + JSON.stringify(imp2));
+    assert.strictEqual(SFV.sources.getSources().length, before, '存储条数不得增长');
+    console.log('PASS 重复导入按模块名去重');
+
+    // 9) 外置规则仓库页面单行「添加」：importModules(['名']) 只提交该模块，
+    //    不在清单里的名字不得顺带导入其他模块。
+    SFV.sources.removeSource(SFV.sources.getSources()[0].id);
+    const only = await SFV.drpy.importModules(['不存在的模块']);
+    assert.strictEqual(only.added, 0, '不存在的模块应 0 新增');
+    assert.strictEqual(only.skipped, 0, '不存在的模块不该算跳过（根本没进循环）');
+    const one = await SFV.drpy.importModules(['mock测试源']);
+    assert.strictEqual(one.added, 1, '定向导入应恰好 1 条: ' + JSON.stringify(one));
+    assert.strictEqual(one.sources[0].drpyModule, 'mock测试源', '添加的应是点中的模块');
+    console.log('PASS importModules 按模块名定向添加');
+
+    // 10) 预览仓库：走真 server.js 路由（POST /api/drpy/rules/preview）+ 真 drpy-rules-repo，
+    //     只读：rules/js 清单不得变化。
+    const previewRepo = require('http').createServer((req, res) => {
+      const p = decodeURIComponent(req.url.split('?')[0]);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      if (p === '/manifest.json') {
+        return res.end(JSON.stringify({
+          manifest_version: 1, version: 'preview-断言', description: '预览链路断言仓库',
+          rules: [{ name: '预览源', file: '预览源.js', sha256: '0'.repeat(64), size: 1, desc: '预览文案：这条不必真下载' }],
+        }));
+      }
+      res.statusCode = 404; res.end('no');
+    });
+    await new Promise((r) => previewRepo.listen(5961, '127.0.0.1', r));
+    const realRulesJs = path.join(LITE_DIR, 'rules', 'js');
+    const lsBeforePreview = require('fs').readdirSync(realRulesJs).sort();
+    try {
+      const pv = await SFV.drpy.previewRepo('http://127.0.0.1:5961');
+      assert.ok(pv && pv.ok, '预览应 ok: ' + (pv && pv.reason));
+      assert.strictEqual(pv.version, 'preview-断言', '应带回仓库版本');
+      assert.strictEqual(pv.rules[0].desc, '预览文案：这条不必真下载', '每条规则的文案须穿链路到渲染层');
+      assert.deepStrictEqual(require('fs').readdirSync(realRulesJs).sort(), lsBeforePreview, '预览须零写入');
+      console.log('PASS 预览仓库（路由 → previewRules → 渲染层）零写入');
+    } finally {
+      previewRepo.close();
+    }
+
     console.log('ALL drpy-bridge INTEGRATION TESTS PASSED');
   } finally {
     try { srv.kill('SIGKILL'); } catch (e) {}

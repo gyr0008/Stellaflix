@@ -8,6 +8,9 @@
  *   - CMS10 片源：原「片源」分区（表单 + 已添加列表）
  *   - 规则：原「规则」分区（导入按钮 + 已导入列表）
  *
+ * 2026-10-25：drpy(T4) 规则引擎不占独立折叠，按主人要求做成「规则」分区里
+ *   「内置规则仓库」右侧的「外置规则仓库」按钮，点击打开 glass 页面做规则下载 + 添加。
+ *
  * 实现要点：
  *   1. 等待 `#fx-console-page-system` 出现后，向其末尾追加两个 fx-fold fx-console-group；
  *      DOM 结构与 console-workspace 中的 fxConsoleMakeGroup 完全一致，确保视觉对齐。
@@ -35,6 +38,7 @@
   var repoPanelEl = null;   // 内置规则仓库 glass 面板
   var repoPanelLoading = false;
   var repoPanelLoaded = false;
+  var drpyPanelEl = null;   // 外置规则仓库（drpy/T4）glass 面板
 
   function d() { return global.document; }
   function byId(id) { var doc = d(); return doc && doc.getElementById ? doc.getElementById(id) : null; }
@@ -128,7 +132,7 @@
       '<div class="sfv-src-list"></div>';
   }
 
-  function buildRulesBodyHtml() {
+  function buildRulesBodyHtml(drpyAvailable) {
     return '' +
       '<div class="sfv-section-label">规则</div>' +
       '<div class="sfv-rules-notice">' +
@@ -139,12 +143,103 @@
         '<div class="sfv-form-actions">' +
           '<button type="button" class="sfv-btn-secondary sfv-rule-import">导入规则文件</button>' +
           '<button type="button" class="sfv-btn-secondary sfv-rule-repo-btn">内置规则仓库</button>' +
+          (drpyAvailable ? '<button type="button" class="sfv-btn-secondary sfv-rule-repo-external">外置规则仓库</button>' : '') +
           '<input type="file" id="sfv-rule-file" accept=".json,application/json" multiple hidden>' +
           '<span class="sfv-src-hint sfv-rule-hint"></span>' +
         '</div>' +
       '</div>' +
       '<div class="sfv-section-label">已导入规则</div>' +
       '<div class="sfv-rules-list"></div>';
+  }
+
+  // ---------------------------------------------------------------- 外置规则仓库（drpy/T4）面板
+  // 【合规红线 · 不可协商】出厂零规则、不内置不推荐任何规则仓库：
+  //   仓库地址输入框永远为空，占位符不含真实站点；规则由用户自放到本机 sidecar。
+
+  function buildDrpyPanel() {
+    var doc = d();
+    if (!doc) return null;
+    var panel = doc.createElement('div');
+    panel.id = 'sfv-drpy-panel';
+    panel.className = 'sfv-glass-overlay';
+    panel.setAttribute('aria-hidden', 'true');
+    panel.innerHTML =
+      '<div class="sfv-glass-backdrop"></div>' +
+      '<div class="sfv-glass-panel" role="dialog" aria-modal="true" aria-label="外置规则仓库">' +
+        '<div class="sfv-glass-head">' +
+          '<div class="sfv-glass-title">' +
+            '<strong>外置规则仓库</strong>' +
+            '<small class="sfv-glass-title-hint">drpy/T4 规则引擎 · 实时抓取外部仓库</small>' +
+          '</div>' +
+          '<button type="button" class="sfv-glass-close" aria-label="关闭">&times;</button>' +
+        '</div>' +
+        '<div class="sfv-glass-search">' +
+          '<input type="text" class="sfv-glass-search-input sfv-drpy-repo" placeholder="粘贴外部规则仓库地址（manifest.json 所在目录）" autocomplete="off">' +
+          '<div class="sfv-glass-toolbar">' +
+            '<button type="button" class="sfv-glass-btn sfv-drpy-preview">预览仓库</button>' +
+            '<button type="button" class="sfv-glass-btn sfv-drpy-sync">下载规则</button>' +
+            '<button type="button" class="sfv-glass-btn sfv-drpy-import">全部添加</button>' +
+            '<button type="button" class="sfv-glass-btn sfv-drpy-refresh">刷新</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="sfv-glass-body">' +
+          '<div class="sfv-glass-status sfv-drpy-status">检测规则引擎侧挂进程…</div>' +
+          '<div class="sfv-glass-list sfv-drpy-list"></div>' +
+        '</div>' +
+        '<div class="sfv-glass-foot">' +
+          '<small class="sfv-drpy-note">支持任何静态托管：GitHub raw（形如 raw.githubusercontent.com/用户名/仓库名/分支/规则目录）、jsDelivr、自建 NAS 都可以。先点「预览仓库」= 只读拉取清单，看清有哪些规则及每条的文案（文案由仓库自己写）；再点「下载规则」= 现场抓取该仓库并逐条校验 sha256，无需重启。本程序不内置、不推荐任何仓库。</small>' +
+          '<span class="sfv-drpy-hint"></span>' +
+        '</div>' +
+      '</div>';
+    return panel;
+  }
+
+  function openDrpyRepoPanel() {
+    var doc = d();
+    if (!doc || !SFV.drpy) return false;
+    if (!drpyPanelEl) {
+      drpyPanelEl = buildDrpyPanel();
+      if (!drpyPanelEl) return false;
+      doc.body.appendChild(drpyPanelEl);
+      bindDrpyPanelEvents(drpyPanelEl);
+    }
+    drpyPanelEl.setAttribute('aria-hidden', 'false');
+    drpyPanelEl.classList.add('open');
+    refreshDrpyStatus();
+    return true;
+  }
+
+  function closeDrpyRepoPanel() {
+    if (!drpyPanelEl) return;
+    drpyPanelEl.setAttribute('aria-hidden', 'true');
+    drpyPanelEl.classList.remove('open');
+  }
+
+  function bindDrpyPanelEvents(panel) {
+    // 面板正文是 innerHTML 拼装的，这里统一用根节点事件委托，避免逐个 querySelector 绑定时机问题
+    panel.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.classList) return;
+      if (t.classList.contains('sfv-glass-close') || t.classList.contains('sfv-glass-backdrop')) {
+        closeDrpyRepoPanel();
+        return;
+      }
+      if (t.classList.contains('sfv-drpy-preview')) { doDrpyPreview(t); return; }
+      if (t.classList.contains('sfv-drpy-sync')) { doDrpySync(t); return; }
+      if (t.classList.contains('sfv-drpy-import')) { doDrpyImport(t); return; }
+      if (t.classList.contains('sfv-drpy-refresh')) { refreshDrpyStatus(); return; }
+      if (t.classList.contains('sfv-drpy-add')) { addDrpyModule(t.getAttribute('data-mod'), t); }
+    });
+    panel.addEventListener('keydown', function (ev) {
+      if (!ev) return;
+      if (ev.key === 'Escape' || ev.keyCode === 27) { closeDrpyRepoPanel(); return; }
+      var t = ev.target;
+      if ((ev.key === 'Enter' || ev.keyCode === 13) && t && t.classList && t.classList.contains('sfv-drpy-repo')) {
+        // 回车走只读预览（看不见就下错仓库了），下载仍须显式点按钮
+        var previewBtn = panel.querySelector('.sfv-drpy-preview');
+        if (previewBtn && previewBtn.click) previewBtn.click();
+      }
+    });
   }
 
   // ---------------------------------------------------------------- 注入
@@ -164,9 +259,9 @@
     );
 
     cms10.body.innerHTML = buildCms10BodyHtml();
-    rules.body.innerHTML = buildRulesBodyHtml();
+    rules.body.innerHTML = buildRulesBodyHtml(!!SFV.drpy);
 
-    // 容器包裹两个面板，便于事件冒泡与对外引用
+    // 容器包裹折叠面板，便于事件冒泡与对外引用
     rootEl = document.createElement('div');
     rootEl.className = 'sfv-source-folds';
     rootEl.setAttribute('data-sfv-source-folds', '1');
@@ -212,11 +307,16 @@
     for (var i = 0; i < list.length; i++) {
       var s = list[i];
       var dotCls = '';
+      // drpy 源存的 api 带 sidecar 随机端口（每次启动都变，请求时按模块名现拼），
+      // 展示端口只会误导，故这里显示模块名。
+      var apiLine = s.type === 'drpy'
+        ? ('T4 规则模块 · ' + (s.drpyModule || s.name))
+        : s.api;
       html += '<div class="sfv-src-item' + (s.enabled ? ' enabled' : '') + '" data-sid="' + esc(s.id) + '" data-enabled="' + (s.enabled ? '1' : '0') + '">' +
         '<span class="sfv-src-dot' + dotCls + '"></span>' +
         '<div class="sfv-src-item-main">' +
           '<div class="sfv-src-item-name">' + esc(s.name) + '</div>' +
-          '<div class="sfv-src-item-api">' + esc(s.api) + '</div>' +
+          '<div class="sfv-src-item-api">' + esc(apiLine) + '</div>' +
           '<div class="sfv-src-item-state"></div>' +
         '</div>' +
         '<div class="sfv-src-item-ops">' +
@@ -275,6 +375,7 @@
     'empty-api': '接口地址不能为空',
     'invalid-api-url': '接口地址格式不正确',
     'duplicate-api': '该接口已存在',
+    'duplicate-module': '该规则模块已导入',
     'empty-list': '接口可达，但没有返回数据',
     'invalid-json': '返回内容不是合法 JSON',
     'fetch-unavailable': '当前环境不支持网络请求',
@@ -414,6 +515,12 @@
         return;
       }
 
+      // 外置规则仓库按钮（drpy/T4）→ 进规则页面下载与添加
+      if (t.classList.contains('sfv-rule-repo-external')) {
+        openDrpyRepoPanel();
+        return;
+      }
+
       // 规则项操作（在 .sfv-rule-item 内）
       var ruleItem = t.closest ? t.closest('.sfv-rule-item') : null;
       if (ruleItem) {
@@ -485,9 +592,11 @@
     rootEl.addEventListener('keydown', function (ev) {
       if (ev && (ev.key === 'Enter' || ev.keyCode === 13)) {
         var t = ev.target;
-        if (t && t.classList && (t.classList.contains('sfv-src-api') || t.classList.contains('sfv-src-name'))) {
-          var btn = rootEl.querySelector('.sfv-src-add');
-          if (btn) btn.click();
+        if (t && t.classList) {
+          if (t.classList.contains('sfv-src-api') || t.classList.contains('sfv-src-name')) {
+            var btn = rootEl.querySelector('.sfv-src-add');
+            if (btn) btn.click();
+          }
         }
       }
     });
@@ -1000,9 +1109,184 @@
 
   function openSources() { return openGroup(CMS10_GROUP); }
   function openRules()   { return openGroup(RULES_GROUP); }
+  /** 外置规则仓库：先展开「规则」折叠（入口所在处），再打开页面。 */
+  function openDrpy() {
+    openGroup(RULES_GROUP);
+    return openDrpyRepoPanel();
+  }
   function refresh() {
     renderList();
     renderRulesList();
+    if (drpyPanelEl) refreshDrpyStatus();
+  }
+
+  // ---------------------------------------------------------------- T4 状态与动作
+
+  function drpyHint(msg, bad) {
+    var el = drpyPanelEl ? drpyPanelEl.querySelector('.sfv-drpy-hint') : null;
+    if (!el) return;
+    el.textContent = msg || '';
+    el.className = 'sfv-drpy-hint' + (bad ? ' bad' : '');
+  }
+
+  /** 状态行统一写法（失败也走这里，让用户看得见原因而不是只进 console）。 */
+  function drpyStatus(text, isError) {
+    var el = drpyPanelEl ? drpyPanelEl.querySelector('.sfv-drpy-status') : null;
+    if (!el) return null;
+    el.className = 'sfv-glass-status sfv-drpy-status' + (isError ? ' error' : '');
+    el.textContent = text;
+    return el;
+  }
+
+  /** 只读预览仓库：下载前先在页面看清「有哪些规则 + 每条文案」，文案来自仓库自己的 manifest。 */
+  function doDrpyPreview(btn) {
+    var repoEl = drpyPanelEl ? drpyPanelEl.querySelector('.sfv-drpy-repo') : null;
+    var repoUrl = repoEl ? String(repoEl.value || '').trim() : '';
+    if (!/^https?:\/\//i.test(repoUrl)) { drpyHint('请先填写仓库地址（http/https）', true); return; }
+    if (btn) btn.disabled = true;
+    drpyStatus('正在读取仓库清单（只读，不下载）…');
+    SFV.drpy.previewRepo(repoUrl).then(function (r) {
+      if (btn) btn.disabled = false;
+      if (r && r.ok) {
+        var rules = r.rules || [];
+        drpyStatus('仓库清单 · 版本 ' + (r.version || '未标注') + ' · ' + rules.length + ' 条'
+          + (r.description ? ' · ' + r.description : '') + '（本机尚未下载这些规则）');
+        renderDrpyRepoList(rules);
+      } else {
+        renderDrpyRepoList([]);
+        drpyStatus('预览失败：' + reasonText(r && r.reason), true);
+      }
+    }).catch(function (e) {
+      if (btn) btn.disabled = false;
+      renderDrpyRepoList([]);
+      drpyStatus('预览失败：' + ((e && e.message) || e), true);
+    });
+  }
+
+  /** 仓库清单行：名称 + 该条规则的文案 + 文件名/大小；无文案的规则照样出行。 */
+  function renderDrpyRepoList(rules) {
+    var listEl = drpyPanelEl ? drpyPanelEl.querySelector('.sfv-drpy-list') : null;
+    if (!listEl) return;
+    var html = '';
+    for (var i = 0; i < (rules || []).length; i++) {
+      var r = rules[i] || {};
+      var name = String(r.name || r.file || '');
+      if (!name) continue;
+      html += '<div class="sfv-glass-item sfv-drpy-repo-rule">' +
+        '<div class="sfv-glass-item-main">' +
+          '<div class="sfv-glass-item-name">' + esc(name) + '</div>' +
+          (r.desc ? '<div class="sfv-glass-item-desc">' + esc(r.desc) + '</div>' : '') +
+          '<div class="sfv-glass-item-meta"><span>' + esc(String(r.file || '')) + '</span>'
+            + '<span>' + (Number(r.size) || 0) + ' B</span></div>' +
+        '</div>' +
+      '</div>';
+    }
+    listEl.innerHTML = html;
+  }
+
+  /** 侧挂状态 + 模块列表一起刷新（面板打开、同步/添加之后都走这里）。 */
+  function refreshDrpyStatus() {
+    if (!drpyPanelEl || !SFV.drpy) return;
+    var el = drpyStatus('检测中…');
+    if (!el) return;
+    renderDrpyModuleList([]);
+    SFV.drpy.getStatus(true).then(function (st) {
+      if (!drpyPanelEl) return;
+      if (!st || !st.running) {
+        el.textContent = '规则引擎侧挂进程未运行' + (st && st.state ? '（' + st.state + '）' : '')
+          + '：把 drpy-lite 放到本机后再重启应用。';
+        return null;
+      }
+      return SFV.drpy.listModules().then(function (mods) {
+        var list = mods || [];
+        el.textContent = '运行中 · ' + (st.baseUrl || '') + ' · 规则模块 ' + list.length + ' 个'
+          + (list.length ? '' : '（本机还没有规则：先在上方填仓库地址，点「预览仓库」看清单，再「下载规则」）');
+        renderDrpyModuleList(list);
+      });
+    }).catch(function (e) {
+      el.className = 'sfv-glass-status sfv-drpy-status error';
+      el.textContent = '状态查询失败：' + ((e && e.message) || e);
+    });
+  }
+
+  /** 模块列表：名称来自用户自己 sidecar 的 /config，本程序不预置任何站点。 */
+  function renderDrpyModuleList(mods) {
+    var listEl = drpyPanelEl ? drpyPanelEl.querySelector('.sfv-drpy-list') : null;
+    if (!listEl) return;
+    var statusEl = drpyPanelEl.querySelector('.sfv-drpy-status');
+    var added = {};
+    var all = (SFV.sources && SFV.sources.getSources()) || [];
+    for (var i = 0; i < all.length; i++) {
+      if (all[i] && all[i].type === 'drpy' && all[i].drpyModule) added[String(all[i].drpyModule)] = true;
+    }
+    var html = '';
+    for (var j = 0; j < mods.length; j++) {
+      var m = mods[j] || {};
+      var mod = String(m.module == null ? '' : m.module);
+      if (!mod) continue;
+      var isAdded = !!added[mod];
+      html += '<div class="sfv-glass-item sfv-drpy-item' + (isAdded ? ' is-added' : '') + '" data-mod="' + esc(mod) + '">' +
+        '<div class="sfv-glass-item-main">' +
+          '<div class="sfv-glass-item-name">' + esc(m.name || mod) + '</div>' +
+          '<div class="sfv-glass-item-meta"><span>' + esc(mod) + '</span></div>' +
+        '</div>' +
+        '<button type="button" class="sfv-glass-btn sfv-drpy-add"' + (isAdded ? ' disabled' : '')
+          + ' data-mod="' + esc(mod) + '">' + (isAdded ? '已添加' : '添加') + '</button>' +
+      '</div>';
+    }
+    listEl.innerHTML = html;
+    if (statusEl && mods.length) statusEl.classList.add('hidden');
+  }
+
+  function doDrpySync(btn) {
+    var repoEl = drpyPanelEl ? drpyPanelEl.querySelector('.sfv-drpy-repo') : null;
+    var repoUrl = repoEl ? String(repoEl.value || '').trim() : '';
+    if (!/^https?:\/\//i.test(repoUrl)) { drpyHint('请先填写仓库地址（http/https）', true); return; }
+    if (btn) btn.disabled = true;
+    drpyHint('下载中…');
+    SFV.drpy.syncRules(repoUrl).then(function (r) {
+      if (btn) btn.disabled = false;
+      if (r && r.ok) {
+        drpyHint('已下载：新增 ' + (r.added || 0) + ' · 更新 ' + (r.updated || 0) + ' · 移除 ' + (r.removed || 0));
+      } else {
+        drpyHint('下载失败：' + reasonText(r && r.reason), true);
+      }
+      refreshDrpyStatus();
+    }).catch(function (e) {
+      if (btn) btn.disabled = false;
+      drpyHint('下载失败：' + ((e && e.message) || e), true);
+    });
+  }
+
+  function doDrpyImport(btn) {
+    if (btn) btn.disabled = true;
+    drpyHint('添加中…');
+    SFV.drpy.importModules().then(function (r) {
+      if (btn) btn.disabled = false;
+      drpyHint('已添加 ' + (r && r.added || 0) + ' 个（跳过 ' + (r && r.skipped || 0) + ' 个），默认停用');
+      renderList();
+      refreshDrpyStatus();
+    }).catch(function (e) {
+      if (btn) btn.disabled = false;
+      drpyHint('添加失败：' + ((e && e.message) || e), true);
+    });
+  }
+
+  /** 只添加点中的那个模块（整仓导入用工具栏「全部添加」）。 */
+  function addDrpyModule(modName, btn) {
+    var mod = String(modName == null ? '' : modName).trim();
+    if (!mod || !SFV.drpy || !SFV.drpy.importModules) return;
+    if (btn) btn.disabled = true;
+    drpyHint('添加中：' + mod + '…');
+    SFV.drpy.importModules([mod]).then(function (r) {
+      if (r && r.added) drpyHint('已添加：' + mod + '（默认停用，去上方「已添加片源」启用）');
+      else drpyHint('未新增：' + mod + '（已存在或 sidecar 上找不到该模块）', true);
+      renderList();
+      refreshDrpyStatus();
+    }).catch(function (e) {
+      if (btn) btn.disabled = false;
+      drpyHint('添加失败：' + ((e && e.message) || e), true);
+    });
   }
 
   // ---------------------------------------------------------------- 启动
@@ -1010,6 +1294,7 @@
   SFV.fxSources = {
     openSources: openSources,
     openRules: openRules,
+    openDrpy: openDrpy,
     openGroup: openGroup,
     refresh: refresh,
     isInjected: function () { return injected; },

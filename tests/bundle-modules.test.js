@@ -57,14 +57,21 @@ test('② 孤儿扫描跳过 *_1.js 副本', () => {
   assert.deepStrictEqual(orphans, ['js/modules/08-account/00-login-easter-egg.js']);
 });
 
-test('本仓库现场：modulePaths 全部存在且分段为 15 段/111 模块', () => {
+test('本仓库现场：modulePaths 全部存在且分段为 17 段/113 模块', () => {
   const paths = readModulePathsFromLoader();
   for (const p of paths) {
     assert.ok(fs.existsSync(path.join(APP_ROOT, 'public', p)), 'modulePaths 引用文件缺失: ' + p);
   }
   const runs = bundle.buildRuns(paths);
-  assert.strictEqual(paths.length, 111);
-  assert.strictEqual(runs.length, 15);
+  // 本树现场收口（原写死 111/15 早于两笔在途改动，属陈旧 canary，非本分支引入）：
+  //   113 = 66a115f 加 js/cover-wallpaper-effect.js 与 modules/02-visual/18-cover-wallpaper.js、
+  //         删 modules/06-lyrics/07-subsonic-library.js 后的实际条数（当时把数从 112 误写成 111）。
+  //   17  =  loose 的 js/cover-wallpaper-effect.js 插在 02-visual 中间，按「顺序守恒」把该组
+  //         切成 02-visual + 02-visual-2；misc 同理多出 09-idle-toast-libraries / 11-main-loop 段。
+  // merge 提示：main 工作树已把 modulePaths 重排回 15 段/117 模块，冲突时**取 main 那行**，
+  // 别把这里的 17/113 带回去（数字只是现场快照，真正的守卫是下面的产物新鲜度测）。
+  assert.strictEqual(paths.length, 113);
+  assert.strictEqual(runs.length, 17);
 });
 
 test('③ 原子性：语法坏的一段 → 非零退出且旧产物分毫不动', () => {

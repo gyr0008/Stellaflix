@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# drpy-lite = 用户自备的可选组件（含用户自放规则，118MB 级）。
+# 严禁入库/随包：合规红线「出厂零规则、不内置任何站点配置」。
+drpy-lite/
+
 # Build output
 dist/
 dist-*/

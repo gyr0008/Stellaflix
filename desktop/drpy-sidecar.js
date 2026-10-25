@@ -28,6 +28,10 @@ function createDrpySidecar(options) {
     || path.join(__dirname, '..', 'drpy-lite');
   const host = opts.host || process.env.DRPY_HOST || '127.0.0.1';
   const port = (opts.port != null ? opts.port : (process.env.DRPY_PORT != null ? parseInt(process.env.DRPY_PORT, 10) : 5757));
+  // lite 的接口口令（utils/api_validate.js validatePwd）：非空时每个 /api、/config 请求都要 ?pwd=，
+  // 挡住「任意本机进程 / 任意网页猜端口直接指挥规则引擎」。由宿主注入 spawn env，
+  // dotenv.config() 不覆盖已有 process.env，故 .env 里的值不会反过来赢过这里。
+  const apiPwd = String(opts.apiPwd != null ? opts.apiPwd : (process.env.STELLAFLIX_DRPY_API_PWD || '')).trim();
 
   let child = null;
   let state = 'stopped'; // stopped | starting | running | error
@@ -44,6 +48,17 @@ function createDrpySidecar(options) {
 
   function computeBackoff() {
     return Math.min(RESTART_BASE_MS * Math.pow(2, restarts), RESTART_MAX_MS);
+  }
+
+  // 宿主进程退出时回收子进程（否则 lite 会留在后台占端口）；只注册一次
+  let exitHookInstalled = false;
+  function ensureExitHook() {
+    if (exitHookInstalled) return;
+    exitHookInstalled = true;
+    process.once('exit', () => {
+      if (!child) return;
+      try { child.kill('SIGTERM'); } catch (e) { /* ignore */ }
+    });
   }
 
   function scheduleRestart() {
@@ -63,6 +78,8 @@ function createDrpySidecar(options) {
       if (stopped) return;
       start();
     }, delay);
+    // 退避计时器不得决定宿主生死（require(server.js) 的测试/工具脚本会白等最长 30s）
+    if (restartTimer.unref) restartTimer.unref();
   }
 
   function waitForReady(c) {
@@ -70,6 +87,7 @@ function createDrpySidecar(options) {
       let buf = '';
       let done = false;
       const timer = setTimeout(() => finish(null, 'READY 超时 (' + READY_TIMEOUT_MS + 'ms)'), READY_TIMEOUT_MS);
+      if (timer.unref) timer.unref();
       const onData = (chunk) => {
         buf += chunk.toString('utf8');
         const m = buf.match(/DRPY_READY\s+([0-9.]+):(\d+)/);
@@ -102,7 +120,13 @@ function createDrpySidecar(options) {
     try {
       child = spawn(process.execPath, [path.join(liteDir, 'index.js')], {
         cwd: liteDir,
-        env: Object.assign({}, process.env, {DRPY_HOST: host, DRPY_PORT: String(port)}),
+        // 口令一律由宿主钉死：未配置时显式传空串，堵住 lite 自行 dotenv 读 .env 里
+        // 一个宿主不知道的 API_PWD（那会让所有请求 403，而渲染层无从补 pwd）。
+        env: Object.assign({}, process.env, {
+          DRPY_HOST: host,
+          DRPY_PORT: String(port),
+          API_PWD: apiPwd,
+        }),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (e) {
@@ -112,7 +136,18 @@ function createDrpySidecar(options) {
     }
     const c = child;
     log('启动 drpy-lite pid=' + c.pid, 'dir=' + liteDir, 'port=' + port);
-    c.stderr && c.stderr.on('data', () => {}); // 丢弃 stderr，避免管道堵死
+    // stdout/stderr 必须一直排空：lite 每个请求都打日志，父侧一停消费、管道写满后子进程就阻塞
+    // （实测：握手成功但 /config 健康检查 timeout）。这里只丢弃不缓冲。
+    c.stdout.on('data', () => {});
+    c.stderr.on('data', () => {});
+    c.stdout.on('error', () => {});
+    c.stderr.on('error', () => {});
+    // 子进程及其管道都不该决定宿主生死：unref 让 require(server.js) 的测试/工具脚本能正常退出，
+    // 宿主退出时由 ensureExitHook 回收子进程，避免 lite 变孤儿占端口。
+    c.unref();
+    c.stdout.unref();
+    c.stderr.unref();
+    ensureExitHook();
     // spawn 失败（如 cwd 消失、ENOENT）走 error 事件：必须挂 handler，否则进程崩溃
     c.on('error', (e) => {
       if (child !== c) return;
@@ -172,13 +207,18 @@ function createDrpySidecar(options) {
       consecutiveFailures,
       lastError,
       liteDir,
+      // 口令随状态一起下发：/api/drpy/status 不再 ACAO:*（见 server.js），
+      // 只有本应用同源页面读得到，第三方网页发得出请求但读不到响应。
+      pwdProtected: !!apiPwd,
+      pwd: apiPwd,
     };
   }
 
   function healthCheck(timeoutMs) {
     if (!baseUrl) return Promise.resolve({ok: false, reason: 'not-running'});
+    const qs = apiPwd ? '&pwd=' + encodeURIComponent(apiPwd) : '';
     return new Promise((resolve) => {
-      const req = http.get(baseUrl + '/config?healthy=1', {timeout: timeoutMs || 5000}, (res) => {
+      const req = http.get(baseUrl + '/config?healthy=1' + qs, {timeout: timeoutMs || 5000}, (res) => {
         res.resume();
         resolve({ok: res.statusCode === 200, reason: res.statusCode === 200 ? null : 'HTTP_' + res.statusCode});
       });
