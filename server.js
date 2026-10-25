@@ -69,7 +69,7 @@ const fs   = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 // ffmpeg-static：懒加载（postinstall 在某些受限网络下可能下载失败二进制）；
 // 缺失时 /api/agent/speech/transcribe 返回明确错误而不崩溃。
@@ -453,6 +453,16 @@ platformPlaylistImport.setSearchImplementation(async function (query, options) {
 const { setupGlobalProxy } = require('./desktop/global-proxy');
 const hlsAdFilter = require('./desktop/hls-ad-filter');
 
+// 排行榜「各平台热榜」（自 Mineradio-LX-Music-1.7.0 server.js:2047-2466 逐字移植，见 daily-hot-api.js）。
+// 偏离: LX 的抓取走 electronNet.fetch（Chromium 栈、跟随 Windows 系统代理）；SF 是纯 Node，
+//       只能 globalThis.fetch，出站代理由上面 setupGlobalProxy 的 env 转发兜住，无系统代理自动跟随。
+//       默认 UA / referer / redirect / 超时全部留在模块的 dailyHotFetch*Default 里，此处零注入。
+// 实例必须建在模块作用域一次：6 小时缓存挂在实例闭包上，每请求新建等于没有缓存。
+const dailyHotApi = require('./daily-hot-api');
+const { PLATFORM_CHART_CATALOG } = dailyHotApi;
+const dailyHot = dailyHotApi.createDailyHotApi();
+const getDailyHotSongs = dailyHot.getDailyHotSongs;
+
 // 全局出口代理：若本机运行着 Clash / V2Ray 等代理并在环境变量中暴露
 // HTTP_PROXY / HTTPS_PROXY，则 server 侧所有出站 fetch 自动经其转发（详见 desktop/global-proxy.js）。
 (function initGlobalProxy() {
@@ -605,6 +615,180 @@ const MIME = {
   '.m4s':  'video/iso-segment',
 };
 
+// ---------------------------------------------------------------------------
+//  本地文件代理（移植自参照库 server.js L22/L29/L54/L164-271/L3294-3373）
+//  浏览器要播本地文件，得从"本机小网站"取：token 校验 + 授权门（缺省全拒）+ Range。
+//  APE / DSD 浏览器不认识，实时转码成 WAV 再交给 <audio>。
+// ---------------------------------------------------------------------------
+const LOCAL_FILE_TOKEN = process.env.STELLAFLIX_LOCAL_FILE_TOKEN || '';
+let localFileAuthorizer = null;
+
+/**
+ * 注入本地文件授权函数。未注入时代理一律拒绝（Fail-Closed），绝不退化成开放代理。
+ * @param {Function} authorizer 授权函数，越权时抛错。
+ * @returns {void}
+ */
+function setLocalFileAuthorizer(authorizer) {
+  if (typeof authorizer !== 'function') return;
+  localFileAuthorizer = authorizer;
+}
+
+const LOCAL_FILE_MIME = {
+  '.mp3': 'audio/mpeg',
+  '.mp2': 'audio/mpeg',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
+  '.m4b': 'audio/mp4',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.aac': 'audio/aac',
+  '.opus': 'audio/ogg',
+  '.webm': 'audio/webm',
+  '.weba': 'audio/webm',
+  '.aif': 'audio/x-aiff',
+  '.aiff': 'audio/x-aiff',
+  '.aifc': 'audio/x-aiff',
+  '.ape': 'audio/x-ape',
+  '.dsf': 'audio/x-dsf',
+  '.lrc': 'text/plain',
+  '.txt': 'text/plain',
+  '.srt': 'application/x-subrip',
+  '.vtt': 'text/vtt',
+  '.ass': 'text/x-ssa',
+  '.ssa': 'text/x-ssa',
+  '.yrc': 'text/plain',
+  // KRC / QRC 的明文与加密二进制共用一个后缀，统一按二进制送，解码放在渲染层。
+  '.krc': 'application/octet-stream',
+  '.qrc': 'application/octet-stream',
+  '.ttml': 'application/ttml+xml',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.jpe': 'image/jpeg',
+  '.jfif': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+};
+
+function localContentTypeForPath(filePath) {
+  return LOCAL_FILE_MIME[path.extname(String(filePath || '')).toLowerCase()] || 'application/octet-stream';
+}
+
+/**
+ * 解析 HTTP Range 头。越界、反向区间与非法写法都判 invalid，交由调用方回 416。
+ * @param {string} rangeHeader 原始 Range 头。
+ * @param {number} total 文件总字节数。
+ * @returns {{start:number,end:number}|{invalid:true}|null} 解析结果。
+ */
+function parseLocalFileRange(rangeHeader, total) {
+  if (!rangeHeader) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(String(rangeHeader).trim());
+  if (!match || total <= 0 || (!match[1] && !match[2])) return { invalid: true };
+  let start;
+  let end;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return { invalid: true };
+    start = Math.max(0, total - suffixLength);
+    end = total - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : total - 1;
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end || start >= total) {
+    return { invalid: true };
+  }
+  return { start, end: Math.min(end, total - 1) };
+}
+
+/**
+ * 懒加载 APE / DSF 转码模块（三个文件随包分发，缺了也只是不转码，退回原始字节）。
+ * @returns {Object|null} 模块，或不可用时 null。
+ */
+let audioTranscodeModule;
+function loadAudioTranscode() {
+  if (audioTranscodeModule !== undefined) return audioTranscodeModule;
+  audioTranscodeModule = null;
+  try {
+    audioTranscodeModule = require(path.join(__dirname, 'desktop', 'audio', 'wav-stream.js'));
+  } catch (err) {
+    console.warn('[LocalFile] 转码模块不可用:', err.message);
+  }
+  return audioTranscodeModule;
+}
+
+/**
+ * 为浏览器不认识的无损格式（APE / DSD）打开"虚拟 WAV 文件"。
+ * @param {string} filePath 已授权的绝对路径。
+ * @returns {Object|null} 不需要或无法转码时返回 null（退回原始字节）。
+ */
+function openTranscodeSource(filePath) {
+  const mod = loadAudioTranscode();
+  if (!mod || !mod.transcodeKind(filePath)) return null;
+  try {
+    return mod.openTranscodeSource(filePath);
+  } catch (err) {
+    console.warn('[LocalFile] 无法转码，改发原始字节:', err.message);
+    return null;
+  }
+}
+
+/**
+ * 发送虚拟 WAV（含 Range 支持，<audio> 拖动进度条依赖它）。
+ * @param {Object} req 请求。
+ * @param {Object} res 响应。
+ * @param {Object} src openTranscodeSource() 的结果。
+ * @returns {void}
+ */
+function sendTranscodedAudio(req, res, src) {
+  const total = src.size;
+  const parsedRange = parseLocalFileRange(req.headers.range, total);
+  if (parsedRange && parsedRange.invalid) {
+    src.close();
+    res.writeHead(416, {
+      'Access-Control-Allow-Origin': '*',
+      'Content-Range': `bytes */${total}`,
+    });
+    res.end();
+    return;
+  }
+  const start = parsedRange ? parsedRange.start : 0;
+  const end = parsedRange ? parsedRange.end : Math.max(0, total - 1);
+  const headers = {
+    'Content-Type': src.contentType,
+    'Content-Length': String(end - start + 1),
+    'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*',
+    'Cross-Origin-Resource-Policy': 'cross-origin',
+    'Cache-Control': 'no-store',
+    'X-Stellaflix-Transcode': `${src.kind};${src.sampleRate}Hz;${src.channels}ch;${src.bps}bit`,
+  };
+  if (parsedRange) headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+  res.writeHead(parsedRange ? 206 : 200, headers);
+  const body = src.createStream(start, end);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    src.close();
+  };
+  body.on('error', (err) => {
+    console.error('[LocalFile]', err);
+    release();
+    res.end();
+  });
+  body.on('close', release);
+  res.on('close', () => {
+    body.destroy();
+    release();
+  });
+  body.pipe(res);
+}
+
 // ---------- TMDB API 只读缓存（内存，TTL 30min，模块级单例） ----------
 // api.tmdb.org /3/ 的 GET JSON 200 响应服务端复用：详情页 bundle / 海报墙品类
 // 每次打开都重新远程往返（单程 0.3~0.8s），而元数据变化以小时计。
@@ -752,6 +936,66 @@ function isPrivateHost(hostname) {
   if (h === '::1' || h.startsWith('[::1]') || h.startsWith('fe80') || h.startsWith('fc') || h.startsWith('fd')) return true;
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return isPrivateIPv4(h);
   return false; // 域名放行（影视源为公网自定义域名）
+}
+
+// ---------- Bangumi 出站策略（2026-10-18 对照 Kazumi-2.3.9 + 本机实测） ----------
+// ① 预算：镜像 api.kazumi.fyi 全量日历 JSON 实测 16–22s 才回 200，通用 12s 出站超时会
+//    先掐死上游（Kazumi 为 12s connect + 12s receive 分段，总容许 ≈24s）。仅这几个
+//    JSON API 域升到 25s，图片/m3u8 等大流量目标维持 12s 快失败。
+// ② 系统代理：官方域 next/api.bgm.tv 无代理时本机恒不可达；Kazumi 在 Windows 上连
+//    "直连"模式也跟随系统代理（network_config.dart SystemProxyService）。这里等价实现：
+//    env HTTPS_PROXY 优先，否则读注册表 ProxyEnable/ProxyServer（5 分钟缓存）。
+//    镜像域 api.kazumi.fyi 保持直连——国内可直连是它存在的前提，不能被半残代理拖累。
+const BANGUMI_SLOW_JSON_HOSTS = new Set(['api.kazumi.fyi', 'next.bgm.tv', 'api.bgm.tv']);
+const BANGUMI_OFFICIAL_HOSTS = new Set(['next.bgm.tv', 'api.bgm.tv']);
+const BANGUMI_PROXY_TIMEOUT_MS = 25000;
+// 通用出站上限仍为 12s（hls-proxy-timeout-alignment 契约：客户端 hls 超时须严格大于它）
+const PROXY_TIMEOUT_MS = 12000;
+function proxyTimeoutMsForHost(hostname) {
+  return BANGUMI_SLOW_JSON_HOSTS.has(String(hostname || '').toLowerCase())
+    ? BANGUMI_PROXY_TIMEOUT_MS : PROXY_TIMEOUT_MS;
+}
+function parseWindowsProxyQuery(text) {
+  const t = String(text || '');
+  const en = /ProxyEnable\s+REG_DWORD\s+0x([0-9a-fA-F]+)/.exec(t);
+  const sv = /ProxyServer\s+REG_SZ\s+(\S+)/.exec(t);
+  return { enabled: !!(en && parseInt(en[1], 16) !== 0), server: sv ? sv[1] : '' };
+}
+let windowsProxyCache = { at: 0, result: null };
+function readWindowsSystemProxy() {
+  if (windowsProxyCache.result && Date.now() - windowsProxyCache.at < 300000) {
+    return Promise.resolve(windowsProxyCache.result);
+  }
+  if (process.platform !== 'win32') {
+    windowsProxyCache = { at: Date.now(), result: { enabled: false, server: '' } };
+    return Promise.resolve(windowsProxyCache.result);
+  }
+  return new Promise((resolve) => {
+    execFile('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
+      { windowsHide: true }, (err, stdout) => {
+        const parsed = err ? { enabled: false, server: '' } : parseWindowsProxyQuery(stdout);
+        windowsProxyCache = { at: Date.now(), result: parsed };
+        resolve(parsed);
+      });
+  });
+}
+async function resolveSystemProxyForHost(hostname) {
+  if (!BANGUMI_OFFICIAL_HOSTS.has(String(hostname || '').toLowerCase())) return null;
+  const env = process.env.HTTPS_PROXY || process.env.https_proxy;
+  if (env) return env;
+  const sp = await readWindowsSystemProxy();
+  return sp.enabled && sp.server ? 'http://' + sp.server : null;
+}
+// undici 在本仓库只是 dev 传递依赖：打包产物里没有时惰性失败，退回直连（现状行为）。
+const bangumiProxyAgents = new Map();
+function systemProxyDispatcher(proxyUrl) {
+  if (!bangumiProxyAgents.has(proxyUrl)) {
+    let agent = null;
+    try { agent = new (require('undici').ProxyAgent)(proxyUrl); }
+    catch (e) { console.warn('[Proxy] 系统代理 dispatcher 不可用，保持直连:', e.message); }
+    bangumiProxyAgents.set(proxyUrl, agent);
+  }
+  return bangumiProxyAgents.get(proxyUrl);
 }
 
 // Bangumi 镜像等上游的错误体形态不统一：可能是 {"message":"..."}，
@@ -5540,6 +5784,114 @@ const server = http.createServer(async (req, res) => {
   }
 
 
+  // ---------- 本地文件代理（支持 Range，用于持久化本地库；授权缺省全拒） ----------
+  if (pn === '/api/local-file') {
+    try {
+      if (!LOCAL_FILE_TOKEN || url.searchParams.get('token') !== LOCAL_FILE_TOKEN) {
+        res.writeHead(403, { 'Access-Control-Allow-Origin': '*' });
+        res.end('Forbidden');
+        return;
+      }
+      const requestedPath = path.resolve(String(url.searchParams.get('path') || ''));
+      // 授权门：仅放行已授权曲库根目录内的文件，缺省拒绝，堵住 HTTP 代理越权读取任意文件。
+      if (!localFileAuthorizer) {
+        res.writeHead(403, { 'Access-Control-Allow-Origin': '*' });
+        res.end('Forbidden');
+        return;
+      }
+      let target;
+      try {
+        // 授权函数按契约在越权时抛错，这里将其明确转换为 403（已知异常路径，非兜底吞异常）。
+        target = localFileAuthorizer(requestedPath);
+      } catch (authErr) {
+        res.writeHead(403, { 'Access-Control-Allow-Origin': '*' });
+        res.end('Forbidden');
+        return;
+      }
+      const stat = fs.statSync(target);
+      if (!stat.isFile()) {
+        res.writeHead(404, { 'Access-Control-Allow-Origin': '*' });
+        res.end('Not found');
+        return;
+      }
+      /* APE / DSD 浏览器不认识，实时转码成 WAV 再交给 <audio>；raw=1 时仍发原始字节。 */
+      if (url.searchParams.get('raw') !== '1') {
+        const transcoded = openTranscodeSource(target);
+        if (transcoded) {
+          sendTranscodedAudio(req, res, transcoded);
+          return;
+        }
+      }
+      const total = stat.size;
+      let start = 0;
+      let end = Math.max(0, total - 1);
+      let status = 200;
+      const parsedRange = parseLocalFileRange(req.headers.range, total);
+      if (parsedRange && parsedRange.invalid) {
+        res.writeHead(416, {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Range': `bytes */${total}`,
+        });
+        res.end();
+        return;
+      }
+      if (parsedRange) {
+        start = parsedRange.start;
+        end = parsedRange.end;
+        status = 206;
+      }
+      const headers = {
+        'Content-Type': localContentTypeForPath(target),
+        'Content-Length': String(end - start + 1),
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+        'Cache-Control': 'no-store',
+      };
+      if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+      res.writeHead(status, headers);
+      fs.createReadStream(target, { start, end })
+        .on('error', (err) => {
+          console.error('[LocalFile]', err);
+          if (!res.headersSent) res.writeHead(500);
+          res.end();
+        })
+        .pipe(res);
+    } catch (err) {
+      console.error('[LocalFile]', err);
+      res.writeHead(500, { 'Access-Control-Allow-Origin': '*' });
+      res.end();
+    }
+    return;
+  }
+
+  // ---------- 各平台排行榜（LX server.js:3060-3083 逐字） ----------
+  if (pn === '/api/daily-hot') {
+    try {
+      const result = await getDailyHotSongs(
+        url.searchParams.get('limit'),
+        url.searchParams.get('source'),
+        url.searchParams.get('refresh') === '1',
+        url.searchParams.get('chart')
+      );
+      sendJSON(res, result, result.ok ? 200 : 502);
+    } catch (err) {
+      sendJSON(res, { ok: false, songs: [], error: err.message || 'DAILY_HOT_FAILED' }, 502);
+    }
+    return;
+  }
+
+  if (pn === '/api/platform-charts') {
+    const source = String(url.searchParams.get('source') || '').toLowerCase();
+    if (!PLATFORM_CHART_CATALOG[source]) {
+      sendJSON(res, { ok:false, charts:[], error:'UNSUPPORTED_CHART_SOURCE' }, 400);
+    } else {
+      sendJSON(res, { ok:true, source, charts:PLATFORM_CHART_CATALOG[source] });
+    }
+    return;
+  }
+
+
   // ---------- 世界页数据源（M4 内容已移除，保留接口说明） ----------
   if (pn === '/api/world/beacons' || pn === '/api/world/quakes' || pn === '/api/world/satellites') {
     sendJSON(res, { ok: false, error: 'REMOVED', message: '内容数据源已移除；放映房间见 /api/rooms' }, 404);
@@ -7902,13 +8254,20 @@ const server = http.createServer(async (req, res) => {
       ['x-auth', 'x-appid', 'x-signature', 'x-timestamp', 'x-appsecret', 'cookie'].forEach(function (k) {
         if (req.headers[k]) headers[k] = req.headers[k];
       });
-      // 出站 fetch：m3u8 分片/列表统一设 connect 超时为 12s，避免 CDN 节点不可达时无限挂起
-      const PROXY_TIMEOUT_MS = 12000;
+      // 出站 fetch：m3u8 分片/列表统一设 connect 超时为 12s，避免 CDN 节点不可达时无限挂起；
+      // Bangumi 日历/镜像域按 proxyTimeoutMsForHost 升 25s（实测上游 16–22s 才回 200）
+      const timeoutMs = proxyTimeoutMsForHost(parsed.hostname);
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), PROXY_TIMEOUT_MS);
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       let up;
+      const fetchOpts = { headers, signal: ctrl.signal };
+      const sysProxy = await resolveSystemProxyForHost(parsed.hostname);
+      if (sysProxy) {
+        const disp = systemProxyDispatcher(sysProxy);
+        if (disp) fetchOpts.dispatcher = disp;
+      }
       try {
-        up = await fetch(target, { headers, signal: ctrl.signal });
+        up = await fetch(target, fetchOpts);
       } catch (fetchErr) {
         clearTimeout(timer);
         console.error('[Proxy] fetch failed:', fetchErr.message, target);
@@ -8421,4 +8780,13 @@ server.getCustomSourceBridge = function getCustomSourceBridge() {
   return customSourceBridge;
 };
 
+// Bangumi 出站策略的测试观察面（tests/proxy-bangumi-host-policy.test.js）
+server.bangumiProxyPolicy = {
+  proxyTimeoutMsFor: proxyTimeoutMsForHost,
+  parseWindowsProxyQuery: parseWindowsProxyQuery,
+  resolveSystemProxyForHost: resolveSystemProxyForHost,
+};
+
 module.exports = server;
+// 本地文件代理的授权门：主进程在 server 启动后注入 resolveAuthorizedLocalFile。
+module.exports.setLocalFileAuthorizer = setLocalFileAuthorizer;

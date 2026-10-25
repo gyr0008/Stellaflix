@@ -24,7 +24,7 @@
   <script src="vendor/music-tempo.min.js"></script>
   <script src="vendor/gsap.min.js"></script>
   <script src="js/preload-mode.js"></script>
-  <link rel="stylesheet" href="css/index.css?v=20260822-t158-space-isolation">
+  <link rel="stylesheet" href="css/index.css?v=20261025-board-crossfade-fix">
 <link rel="stylesheet" href="video/player.css">
 <link rel="stylesheet" href="video/watch-history.css">
 <link rel="stylesheet" href="video/poster-wall/poster-wall.css">
@@ -32,6 +32,7 @@
 <link rel="stylesheet" href="video/bangumi-calendar.css">
 <link rel="stylesheet" href="video/bangumi-timeline.css">
 <link rel="stylesheet" href="video/wallpaper-engine.css">
+<link rel="stylesheet" href="css/music-library.css">
 <link rel="stylesheet" href="video/lighthouse/lighthouse.css">
 <link rel="stylesheet" href="video/world-ht-panel.css">
 <link rel="stylesheet" href="css/music-agent-command.css">
@@ -173,7 +174,7 @@
               <circle cx="6" cy="18" r="3" />
               <circle cx="18" cy="16" r="3" />
             </svg><span><strong>单曲文件</strong><small>导入并立即播放</small></span></button>
-          <button class="upload-choice" type="button" onclick="triggerUploadInput('folder')"><svg viewBox="0 0 24 24"
+          <button class="upload-choice" type="button" onclick="triggerLocalFolderImport()"><svg viewBox="0 0 24 24"
               fill="none" stroke-width="2">
               <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
               <path d="M8 13h8" />
@@ -214,11 +215,10 @@
             <div class="home-card-sub">从当前队列或最近播放继续</div>
             <div class="home-card-art"></div>
           </button>
-          <button class="home-card home-card-quick" data-home-tone="library" type="button"
-            onclick="openHomeDashboardLibrary()">
-            <div class="home-card-label">LIBRARY</div>
-            <div class="home-card-title">音乐库</div>
-            <div class="home-card-sub">歌单、本地音乐和已登录平台</div>
+          <button class="home-card home-card-quick" data-home-tone="library" data-mlib-axis="playlists" type="button">
+            <div class="home-card-label">PLAYLISTS</div>
+            <div class="home-card-title">歌单</div>
+            <div class="home-card-sub">导入的歌单与本地歌单</div>
             <div class="home-card-art"></div>
           </button>
           <button class="home-card home-card-quick" data-home-tone="mix" type="button"
@@ -228,18 +228,16 @@
             <div class="home-card-sub">平台链接 / LX 文件 / 落雪曲库</div>
             <div class="home-card-art"></div>
           </button>
-          <button class="home-card home-card-quick" data-home-tone="mix" type="button"
-            onclick="playHomeDaily()">
-            <div class="home-card-label">DAILY MIX</div>
-            <div class="home-card-title">每日推荐</div>
-            <div class="home-card-sub">使用当前 Stellaflix 推荐数据</div>
+          <button class="home-card home-card-quick" data-home-tone="mix" data-mlib-axis="albums" type="button">
+            <div class="home-card-label">ALBUMS</div>
+            <div class="home-card-title">专辑</div>
+            <div class="home-card-sub">资料库 · 建设中</div>
             <div class="home-card-art"></div>
           </button>
-          <button class="home-card home-card-quick" data-home-tone="playlist" type="button"
-            onclick="playHomeRecent()">
-            <div class="home-card-label">RECENT</div>
-            <div class="home-card-title">最近播放</div>
-            <div class="home-card-sub">播放过的歌曲会出现在这里</div>
+          <button class="home-card home-card-quick" data-home-tone="playlist" data-mlib-axis="artists" type="button">
+            <div class="home-card-label">ARTISTS</div>
+            <div class="home-card-title">艺人</div>
+            <div class="home-card-sub">资料库 · 建设中</div>
             <div class="home-card-art"></div>
           </button>
           <button class="home-card home-card-quick" data-home-tone="local" type="button" onclick="if(window.StellaflixVideo&&StellaflixVideo.state)StellaflixVideo.state.setSpace('video')">
@@ -328,7 +326,32 @@
       </div>
     </section>
 
-    <div id="home-platform-recommend-mask" class="modal-mask" role="dialog" aria-modal="true" aria-hidden="true"
+    <!-- 本地音乐资料库页面壳：网格视图 + 详情视图，内容由 mlib JS 模块填充。 -->
+    <section id="music-library" aria-hidden="true" aria-label="音乐资料库">
+      <div id="music-library-scroll">
+        <header class="stella-mlib-page-head">
+          <div class="stella-mlib-eyebrow">MUSIC LIBRARY</div>
+          <h1 class="stella-mlib-title">音乐资料库</h1>
+        </header>
+        <!-- 壳层页头常驻（参照库同一位置）：进二级详情也不摘，只随整层一起进出。 -->
+        <div id="mlib-view-grid">
+          <div id="mlib-grid-wrap"><div id="mlib-grid"></div><div id="mlib-state-box"></div></div>
+        </div>
+        <div id="mlib-view-detail">
+          <button id="mlib-detail-back" type="button">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4l-4 4 4 4" /></svg>
+            <span>返回</span>
+          </button>
+          <div id="mlib-detail-head"></div>
+          <div id="mlib-detail-tracks"></div>
+        </div>
+        <!-- 收尾占位（参照库同一位置，滚动容器最后一个子节点）：最后一行不被底部淡出带压住、不被播放器条挡住。 -->
+        <div class="stella-mlib-end-cap" aria-hidden="true"></div>
+      </div>
+    </section>
+
+    <div id="home-platform-recommend-mask" class="modal-mask sfv-glass-modal" role="dialog" aria-modal="true" aria-hidden="true"
       aria-labelledby="home-platform-recommend-title">
       <div class="modal home-platform-recommend-modal">
         <div class="home-platform-recommend-head">
@@ -351,8 +374,43 @@
           aria-live="polite"></div>
         <div id="home-platform-recommend-list" class="home-platform-recommend-list"></div>
         <div class="home-platform-recommend-actions">
+          <button id="home-daily-hot-open" type="button" onclick="openDailyHotRanking('all')">平台热榜</button>
           <button id="home-platform-recommend-refresh" type="button">刷新当前平台</button>
           <button id="home-platform-recommend-done" type="button">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 各平台排行榜：骨架 1:1 移植自 Mineradio-LX-Music-1.7.0 index.html:5921-5940（secondary-page → SF 弹窗载体，
+         壳层类 ranking-platform-tabs / ranking-chart-tabs / ranking-summary / ranking-list 保持 LX 原名） -->
+    <div id="daily-hot-ranking-mask" class="modal-mask sfv-glass-modal" role="dialog" aria-modal="true" aria-hidden="true"
+      aria-labelledby="daily-hot-ranking-title">
+      <div class="modal daily-hot-ranking-modal">
+        <div class="daily-hot-ranking-head">
+          <div>
+            <span class="daily-hot-ranking-kicker">Platform Charts</span>
+            <h2 id="daily-hot-ranking-title">各平台排行榜</h2>
+            <p>读取各平台真实榜单并保留原始名次，支持播放、下一首和收藏</p>
+          </div>
+          <button id="daily-hot-ranking-close" class="daily-hot-ranking-close" type="button" aria-label="关闭排行榜">×</button>
+        </div>
+        <div class="secondary-toolbar ranking-platform-tabs" role="tablist" aria-label="排行榜平台">
+          <button class="ranking-platform-btn active" type="button" role="tab" data-ranking-source="all" onclick="selectPlatformRanking('all')">综合</button>
+          <button class="ranking-platform-btn" type="button" role="tab" data-ranking-source="tx" onclick="selectPlatformRanking('tx')">小秋</button>
+          <button class="ranking-platform-btn" type="button" role="tab" data-ranking-source="wy" onclick="selectPlatformRanking('wy')">小芸</button>
+          <button class="ranking-platform-btn" type="button" role="tab" data-ranking-source="kw" onclick="selectPlatformRanking('kw')">小蜗</button>
+          <button class="ranking-platform-btn" type="button" role="tab" data-ranking-source="kg" onclick="selectPlatformRanking('kg')">小狗</button>
+          <button class="ranking-platform-btn" type="button" role="tab" data-ranking-source="mg" onclick="selectPlatformRanking('mg')">小菇</button>
+          <span class="ranking-toolbar-spacer"></span>
+          <button class="secondary-action" type="button" onclick="refreshPlatformRanking()">刷新榜单</button>
+        </div>
+        <div id="ranking-chart-tabs" class="secondary-toolbar playlist-square-tabs" role="tablist" aria-label="榜单分类"></div>
+        <div class="secondary-content ranking-content">
+          <section class="ranking-summary" aria-label="排行榜说明">
+            <div class="ranking-summary-copy"><div id="ranking-summary-title" class="ranking-summary-title">综合热榜</div><div id="ranking-summary-note" class="ranking-summary-note">只展示各平台真实原榜，不使用搜索歌曲补足名次</div></div>
+            <div class="ranking-summary-actions"><button class="secondary-action primary" type="button" onclick="playAllPlatformRanking()">播放全部</button><button class="secondary-action" type="button" onclick="openDailyHotMusicLibrary()">打开音乐库</button></div>
+          </section>
+          <div id="platform-ranking-list" class="ranking-list" aria-live="polite"><div class="ranking-state"><strong>正在准备排行榜</strong>点击平台后会加载对应榜单</div></div>
         </div>
       </div>
     </div>
@@ -373,13 +431,12 @@
       </div>
     </div>
 
-    <div id="home-radio-modes-mask" class="modal-mask" role="dialog" aria-modal="true" aria-hidden="true"
+    <div id="home-radio-modes-mask" class="modal-mask sfv-glass-modal" role="dialog" aria-modal="true" aria-hidden="true"
       aria-labelledby="home-radio-modes-title">
       <div class="modal home-radio-modes-modal">
         <div class="home-radio-modes-head">
           <div>
             <h2 id="home-radio-modes-title">音乐电台</h2>
-            <p>选一个状态，让音乐自己往下走；优先从本地与常听偏好挑选，再由多平台搜索补足。</p>
           </div>
           <button id="home-radio-modes-close" class="home-radio-modes-close" type="button" aria-label="关闭音乐电台">×</button>
         </div>
@@ -393,6 +450,11 @@
           </div>
           <button class="radio-refresh-btn" type="button" onclick="refreshRadioModes()">换一批顺序</button>
         </div>
+        <!-- 电台说明条 1:1 移植参照库 index.html:5952-5955（文案逐字；载体由整页二级视图改为弹窗，故紧随工具栏） -->
+        <section class="radio-intro" aria-label="电台说明">
+          <div><strong>选一个状态，让音乐自己往下走</strong><span>优先从你的本地音乐与常听偏好中挑选，再由多平台搜索补足，每次生成 60 首。</span></div>
+          <div class="radio-intro-mark">点击卡片立即播放</div>
+        </section>
         <div id="radio-mode-grid" class="radio-mode-grid" aria-live="polite"></div>
       </div>
     </div>
@@ -955,7 +1017,7 @@
               title="把当前完整 Stellaflix 放到 Windows 桌面；右上控制器可显示、隐藏桌面图标，Esc 退出">
               <span>完整桌面模式<em class="fx-dev-badge">试验</em></span><span class="dot"></span></div>
             <div class="fx-toggle" id="t-coverWallpaper" onclick="toggleFx('coverWallpaper')"
-              title="封面光晕粒子壁纸，可画到桌面壁纸层或播放器背景板"><span>封面壁纸<em class="fx-dev-badge">试验</em></span><span class="dot"></span></div>
+              title="封面光晕粒子壁纸，可画到桌面壁纸层或播放器背景板"><span>壁纸模式<em class="fx-dev-badge">试验</em></span><span class="dot"></span></div>
             <div class="fx-toggle" id="t-startSpace" onclick="toggleStartSpace()" title="点击切换：决定软件启动时默认进入的空间">
               <span class="start-space-label"><em class="ss-text ss-current" data-mode="music">音乐空间</em><em class="ss-text ss-other" data-mode="video">影视空间</em></span><span class="dot"></span></div>
           </div>
@@ -987,8 +1049,33 @@
             <button data-cover-wallpaper-surface="desktop" title="全屏挂到桌面壁纸层，在桌面图标和其它窗口后面显示">桌面壁纸层</button>
             <button data-cover-wallpaper-surface="board" title="画在播放器窗口内，作为界面最底层背景板">播放器背景板</button>
           </div>
-          <div class="fx-slider"><label>封面壁纸透明</label><input id="fx-coverwallpaperopacity" type="range" min="0.35"
+          <div class="fx-slider"><label>壁纸模式透明</label><input id="fx-coverwallpaperopacity" type="range" min="0.35"
               max="1" step="0.01"><output></output></div>
+          <div class="fx-mini-player-settings" id="fx-mini-player-settings">
+            <div class="fx-mini-player-settings-head">
+              <span><strong>迷你播放器</strong><small>开关、样式与悬停展开</small></span>
+              <em>MINI</em>
+            </div>
+            <div class="fx-toggle mini-player-enable-setting" id="t-miniPlayer" onclick="toggleMiniPlayerSetting('miniPlayer')" title="主窗口最小化或关闭到托盘时显示歌曲信息和播放控制"><span>最小化迷你播放器</span><span class="dot"></span></div>
+            <div class="fx-section-label">迷你播放器样式</div>
+            <div class="fx-seg" id="mini-player-mode-seg">
+              <button type="button" data-mini-player-mode="standard" title="使用带封面的标准迷你播放器">标准</button>
+              <button type="button" data-mini-player-mode="compact" title="使用无封面的极简迷你播放器">极简</button>
+            </div>
+            <button type="button" class="fx-toggle mini-player-collapse-setting" id="t-miniPlayerHover" onclick="toggleMiniPlayerVisual('hoverExpand')" title="自动收回已开启：离开完整面板后回到封面；点击可保持完整迷你播放器" aria-pressed="true">
+              <span class="mini-player-collapse-copy"><em class="mini-player-collapse-glyph" aria-hidden="true">×</em><strong>自动收回</strong><small id="mini-player-collapse-state">开启</small></span><span class="dot"></span>
+            </button>
+            <div class="mini-player-collapse-hint">开启后移开鼠标会回到封面；关闭后保持完整迷你播放器。</div>
+            <div class="fx-section-label">封面效果</div>
+            <div class="fx-toggle-grid mini-player-diy-grid">
+              <div class="fx-toggle" id="t-miniPlayerPulse" onclick="toggleMiniPlayerVisual('pulseEnabled')" title="让标准迷你播放器封面跟随音乐能量缩放"><span>封面律动</span><span class="dot"></span></div>
+              <div class="fx-toggle" id="t-miniPlayerGlow" onclick="toggleMiniPlayerVisual('glowEnabled')" title="显示封面外沿跟随音乐的律动光晕"><span>封面光晕</span><span class="dot"></span></div>
+            </div>
+            <div class="mini-player-collapse-hint">1.00 是标准力度，往右调越明显；调到 0 或关掉上面的开关即停用。</div>
+            <div class="fx-slider"><label>封面律动强度</label><input id="fx-miniplayerpulse" type="range" min="0" max="3" step="0.01"><output></output></div>
+            <div class="fx-slider"><label>封面光晕强度</label><input id="fx-miniplayerglow" type="range" min="0" max="3" step="0.01"><output></output></div>
+            <div class="fx-slider"><label>封面圆角</label><input id="fx-miniplayerradius" type="range" min="4" max="22" step="1"><output></output></div>
+          </div>
         </div>
       </div>
 

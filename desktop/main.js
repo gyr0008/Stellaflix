@@ -4,6 +4,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 const { execFile, execFileSync, spawn } = require('child_process');
 const systemMemory = require('./system-memory');
 const { parseListeningPid, parseTasklistName, buildPortLockDialog } = require('./port-lock');
@@ -17,13 +18,18 @@ const {
   registerWallpaperEngineScheme,
 } = require('./wallpaper-engine-library');
 const {
-  LocalMusicLibrary,
-  registerLocalMusicScheme,
-} = require('./local-music-library');
+  LOCAL_LIBRARY_DB_FILE_NAME,
+  createLocalLibraryStore,
+  isLocalLibraryStoreSupported,
+  normalizeStorePathKey,
+  buildIndexRecordFromFileRow,
+} = require('./local-library-store');
+const { createLocalLibraryWatcher } = require('./local-library-watcher');
 const { WallpaperEngineRuntime, noteWeDiagEvent } = require('./wallpaper-engine-runtime');
 const { FullDesktopModeRuntime } = require('./full-desktop-mode-runtime');
 const { createCoverWallpaperRuntime } = require('./cover-wallpaper-runtime');
 const { ensureTaskbarVisible, restoreTaskbarSync } = require('./desktop-taskbar-runtime');
+const { createMiniPlayerRuntime } = require('./mini-player-runtime');
 // Platform auth helpers are only needed on login/migration paths. Lazy-load so
 // cold start does not pull kugou/qishui/spotify modules before the window shows.
 function requireKugouApi() { return require('../kugou-api'); }
@@ -38,7 +44,6 @@ function clearSpotifyToken(...args) { return requireSpotifyApi().clearSpotifyTok
 const { autoUpdater } = require('electron-updater');
 
 registerWallpaperEngineScheme(protocol);
-registerLocalMusicScheme(protocol);
 
 let mainWindow = null;
 let localServer = null;
@@ -159,8 +164,6 @@ const NATIVE_HELPER_TEMP_PATH = INITIAL_CACHE_SETTINGS.nativePath;
 fs.mkdirSync(NATIVE_HELPER_TEMP_PATH, { recursive: true });
 process.env.STELLAFLIX_NATIVE_TEMP_DIR = NATIVE_HELPER_TEMP_PATH;
 systemMemory.setNativeTempPath(NATIVE_HELPER_TEMP_PATH);
-const localMusicLibrary = new LocalMusicLibrary({ userDataPath: STABLE_USER_DATA_PATH });
-const localMusicImportCapabilities = new Map();
 const wallpaperEngineLibrary = new WallpaperEngineLibrary({ userDataPath: STABLE_USER_DATA_PATH });
 const wallpaperEngineRuntime = new WallpaperEngineRuntime({
   library: wallpaperEngineLibrary,
@@ -176,6 +179,57 @@ const fullDesktopModeRuntime = new FullDesktopModeRuntime({
   beforePassive: ({ win, reason }) => prepareWallpaperEngineProjectPreviewBeforeDesktopEmbedding(win, reason),
   requestReconcile: (reason) => reconcileFullDesktopMode(reason),
   onStatus: (status) => broadcastDesktopWallpaperStatus(status),
+});
+// 壁纸桌面层进出时把主窗顶到 topmost。壁纸窗现在是不 SetParent 的 topmost 全屏窗，
+// 主窗不跟上的话，一开壁纸模式我们自己的窗口就被壁纸盖住了。退出时还原进入前的置顶状态。
+let coverWallpaperHostTopmostApplied = false;
+let coverWallpaperHostPriorTopmost = false;
+function applyCoverWallpaperHostTopmost(active) {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  try {
+    if (active === true) {
+      if (coverWallpaperHostTopmostApplied) return;
+      coverWallpaperHostPriorTopmost = typeof win.isAlwaysOnTop === 'function' ? win.isAlwaysOnTop() === true : false;
+      coverWallpaperHostTopmostApplied = true;
+      win.setAlwaysOnTop(true, 'screen-saver');
+      // 壁纸窗刚被 raise 过，主窗不显式抬一次会落在它下面。
+      if (typeof win.moveTop === 'function') win.moveTop();
+      return;
+    }
+    if (!coverWallpaperHostTopmostApplied) return;
+    coverWallpaperHostTopmostApplied = false;
+    win.setAlwaysOnTop(coverWallpaperHostPriorTopmost);
+  } catch (_) {}
+}
+// 壁纸模式桌面层：复用覆盖页运行时，只走独立 cover-wallpaper IPC 通道。
+// overlayUrl 用闭包延迟读取，避免依赖其 3500+ 行处的定义顺序。
+const coverWallpaperRuntime = createCoverWallpaperRuntime({
+  BrowserWindow,
+  screen,
+  ipcMain,
+  overlayUrl: (page) => overlayUrl(page),
+  getMainWindow: () => mainWindow,
+  isTrustedEvent: (event) => isTrustedMainWindowIpc(event),
+  onHostActiveChange: (active) => applyCoverWallpaperHostTopmost(active),
+});
+// 迷你播放器（pill 窗口）runtime：生命周期 + 状态同步 + 命令路由。
+// R2：close 命令若在壁纸桌面层（cover-wallpaper 桌面层）运行时需同时唤回主窗并退出壁纸。
+const miniPlayerRuntime = createMiniPlayerRuntime({
+  BrowserWindow,
+  screen,
+  ipcMain,
+  Menu,
+  powerMonitor,
+  overlayUrl: (page) => overlayUrl(page),
+  getMainWindow: () => mainWindow,
+  focusMainWindow: () => focusMainWindow(),
+  isTrustedMainWindowEvent: (event) => isTrustedMainWindowIpc(event),
+  isWallpaperDesktopActive: () => coverWallpaperRuntime.runtime.getStatus('mini-player-close').enabled === true,
+  getMainServerPort: () => mainServerPort || Number(process.env.PORT) || 3000,
+  isQuitting: () => appQuitting,
+  icon: APP_ICON_ICO,
+  userDataDir: () => app.getPath('userData'),
 });
 let wallpaperEngineCaptureSourceId = '';
 let wallpaperEngineCaptureGrant = null;
@@ -207,7 +261,14 @@ const WALLPAPER_ENGINE_CAPTURE_PREPARE_TIMEOUT_MS = 9000;
 const WALLPAPER_ENGINE_CAPTURE_RETRY_DELAY_MS = 720;
 const WALLPAPER_ENGINE_MAX_CAPTURE_FPS = 240;
 const WALLPAPER_ENGINE_HOST_RESUME_TIMEOUT_MS = 30000;
-const MAIN_WINDOW_BACKGROUND_THROTTLING = process.env.STELLAFLIX_KEEP_BACKGROUND_RENDERING === '1' ? false : true;
+// 对齐参照库 desktop/main.js:5698：主窗 backgroundThrottling 一律 false。
+// 原因：桌面歌词 / 壁纸（coverWallpaper）的状态推送由主渲染进程里的 260ms 定时器驱动
+// （public/js/modules/02-visual/18-cover-wallpaper.js:204）。主窗最小化到迷你条后，若主渲染进程被
+// Chromium 后台节流，切歌时壁纸状态不再推送 —— 表现为「沉浸壁纸切歌后不更新/消失」。
+// 深睡不受影响：isDeepBackgroundMode() 在 Electron 下以原生 minimized/visible 为准
+// （public/js/modules/00-state/08-desktop-render-power.js:128-130），不依赖 document.hidden。
+// 如需强制重新开启节流（排障用）可设 STELLAFLIX_THROTTLE_MAIN_BACKGROUND=1。
+const MAIN_WINDOW_BACKGROUND_THROTTLING = process.env.STELLAFLIX_THROTTLE_MAIN_BACKGROUND === '1';
 
 function wallpaperEngineTargetFps(display, requestedFps) {
   const displayFrequency = Math.max(24, Math.min(
@@ -548,7 +609,9 @@ const KUGOU_LOGIN_COOKIE_PRIORITY = [
 // 端口硬锁（方案A，2026-10-03）：只允许 LOCKED_PORT，被占时绝不静默 +1 退避。
 // 退避换 origin = localStorage 换桶 = 影视数据"消失"（10-01 事故根因，spec §1）。
 // 纯解析层在 desktop/port-lock.js（tests/port-lock.test.js 覆盖）。
-const LOCKED_PORT = 3000;
+// QA 工装专用旁路：仅限配合 STELLAFLIX_STARTUP_QA_* 隔离 userData 的离屏实例，
+// 正式启动路径不设该 env，端口仍硬锁 3000。
+const LOCKED_PORT = Number(process.env.STELLAFLIX_QA_SERVER_PORT) || 3000;
 
 function probePortFree(port) {
   return new Promise((resolve) => {
@@ -789,40 +852,6 @@ function isTrustedMainDocumentUrl(value) {
     return false;
   }
 }
-
-// 壁纸桌面层进出时把主窗顶到 topmost。壁纸窗现在是不 SetParent 的 topmost 全屏窗，
-// 主窗不跟上的话，一开壁纸模式我们自己的窗口就被壁纸盖住了。退出时还原进入前的置顶状态。
-let coverWallpaperHostTopmostApplied = false;
-let coverWallpaperHostPriorTopmost = false;
-function applyCoverWallpaperHostTopmost(active) {
-  const win = mainWindow;
-  if (!win || win.isDestroyed()) return;
-  try {
-    if (active === true) {
-      if (coverWallpaperHostTopmostApplied) return;
-      coverWallpaperHostPriorTopmost = typeof win.isAlwaysOnTop === 'function' ? win.isAlwaysOnTop() === true : false;
-      coverWallpaperHostTopmostApplied = true;
-      win.setAlwaysOnTop(true, 'screen-saver');
-      // 壁纸窗刚被 raise 过，主窗不显式抬一次会落在它下面。
-      if (typeof win.moveTop === 'function') win.moveTop();
-      return;
-    }
-    if (!coverWallpaperHostTopmostApplied) return;
-    coverWallpaperHostTopmostApplied = false;
-    win.setAlwaysOnTop(coverWallpaperHostPriorTopmost);
-  } catch (_) {}
-}
-// 壁纸模式桌面层：复用覆盖页运行时，只走独立 cover-wallpaper IPC 通道。
-// overlayUrl 用闭包延迟读取，避免依赖其 3500+ 行处的定义顺序。
-const coverWallpaperRuntime = createCoverWallpaperRuntime({
-  BrowserWindow,
-  screen,
-  ipcMain,
-  overlayUrl: (page) => overlayUrl(page),
-  getMainWindow: () => mainWindow,
-  isTrustedEvent: (event) => isTrustedMainWindowIpc(event),
-  onHostActiveChange: (active) => applyCoverWallpaperHostTopmost(active),
-});
 
 function isTrustedMainWindowIpc(event) {
   try {
@@ -2168,6 +2197,7 @@ function isZoomShortcutInput(input) {
 }
 
 function focusMainWindow() {
+  miniPlayerRuntime.focusFromMini();
   if (!mainWindow || mainWindow.isDestroyed()) return false;
   mainWindow.__stellaflixIntentionalHide = false;
   const desktopMode = fullDesktopModeRuntime.getStatus('focus-main-window');
@@ -4720,94 +4750,1182 @@ ipcMain.handle('stellaflix-wallpaper-engine-stop-scene', async (event, payload =
   }
 });
 
-ipcMain.handle('stellaflix-local-library-list', async (event) => {
-  if (!isTrustedMainWindowIpc(event)) return { ok: false, count: 0, tracks: [], error: 'UNTRUSTED_SENDER' };
-  try {
-    return await localMusicLibrary.listTracks();
-  } catch (error) {
-    return { ok: false, count: 0, tracks: [], error: error.message || 'LOCAL_LIBRARY_READ_FAILED' };
-  }
-});
+// ---------------------------------------------------------------------------
+// 音乐文件夹自动监控：fs.watch 的抖动由 desktop/local-library-watcher.js 收敛成
+// 「每个曲库根一次变更通知」。扩展名表与授权根同时供后续批次的目录扫描与
+// /api/local-file 复用（参照库 main.js L400-457 / L476-495 / L1069-1182）。
+// ---------------------------------------------------------------------------
 
-ipcMain.handle('stellaflix-local-library-lyric', async (event, localFileId) => {
-  if (!isTrustedMainWindowIpc(event)) return { ok: false, lyric: '', lyricSource: '', error: 'UNTRUSTED_SENDER' };
-  try {
-    return await localMusicLibrary.lyricForTrack(localFileId);
-  } catch (error) {
-    return { ok: false, lyric: '', lyricSource: '', error: error.message || 'LOCAL_LYRIC_READ_FAILED' };
-  }
-});
+const LOCAL_LIBRARY_EXTS = new Set([
+  '.mp3', '.mp2', '.flac', '.m4a', '.m4b', '.wav', '.ogg', '.oga', '.aac', '.opus', '.webm', '.weba', '.aif', '.aiff', '.aifc',
+  '.ape', '.dsf',
+  '.lrc', '.txt', '.srt', '.vtt', '.ass', '.ssa', '.yrc', '.krc', '.qrc', '.ttml',
+  '.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.webp', '.avif', '.gif', '.bmp', '.svg',
+]);
+// 曲库快照同时包含音频、歌词和封面文件；只有音频才计入 SQLite 的 audio 计数与曲库签名。
+const LOCAL_LIBRARY_AUDIO_EXTS = new Set([
+  '.mp3', '.mp2', '.flac', '.m4a', '.m4b', '.wav', '.ogg', '.oga', '.aac', '.opus', '.webm', '.weba', '.aif', '.aiff', '.aifc',
+  '.ape', '.dsf',
+]);
+// KRC / QRC 的明文与加密二进制共用一个后缀，统一按二进制送，解码放在渲染层。
+const LOCAL_LIBRARY_MIME = {
+  '.mp3': 'audio/mpeg',
+  '.mp2': 'audio/mpeg',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
+  '.m4b': 'audio/mp4',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.aac': 'audio/aac',
+  '.opus': 'audio/ogg',
+  '.webm': 'audio/webm',
+  '.weba': 'audio/webm',
+  '.aif': 'audio/x-aiff',
+  '.aiff': 'audio/x-aiff',
+  '.aifc': 'audio/x-aiff',
+  '.ape': 'audio/x-ape',
+  '.dsf': 'audio/x-dsf',
+  '.lrc': 'text/plain',
+  '.txt': 'text/plain',
+  '.srt': 'application/x-subrip',
+  '.vtt': 'text/vtt',
+  '.ass': 'text/x-ssa',
+  '.ssa': 'text/x-ssa',
+  '.yrc': 'text/plain',
+  '.krc': 'application/octet-stream',
+  '.qrc': 'application/octet-stream',
+  '.ttml': 'application/ttml+xml',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.jpe': 'image/jpeg',
+  '.jfif': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+};
 
-function pruneLocalMusicImportCapabilities() {
-  const now = Date.now();
-  for (const [token, capability] of localMusicImportCapabilities) {
-    if (!capability || capability.expiresAt <= now) localMusicImportCapabilities.delete(token);
+const authorizedLocalMusicRoots = new Set();
+// 本地文件代理令牌：一次性随机串，随 server 启动写进环境，渲染层拿不到也不该看到它。
+const LOCAL_FILE_TOKEN = crypto.randomBytes(16).toString('hex');
+
+/**
+ * 校验并规整音乐文件夹根路径。不是目录一律抛错，避免把任意路径挂进监控。
+ * @param {string} folderPath 原始路径。
+ * @returns {string} 规整后的绝对路径。
+ */
+function normalizeLocalMusicRoot(folderPath) {
+  const resolved = path.resolve(String(folderPath || ''));
+  const stat = fs.statSync(resolved);
+  if (!stat.isDirectory()) throw new Error('LOCAL_LIBRARY_NOT_DIRECTORY');
+  return resolved;
+}
+
+/**
+ * 记住一个已授权的音乐文件夹根，供后续扫描与本地文件读取校验使用。
+ * @param {string} folderPath 原始路径。
+ * @returns {string} 规整后的绝对路径。
+ */
+function rememberLocalMusicRoot(folderPath) {
+  const root = normalizeLocalMusicRoot(folderPath);
+  authorizedLocalMusicRoots.add(root);
+  return root;
+}
+
+/**
+ * 校验一个本地文件绝对路径是否落在已授权的曲库根内。越权一律抛错，调用方据此回 403。
+ * @param {string} filePath 绝对路径。
+ * @returns {string} 校验通过后的绝对路径。
+ */
+function resolveAuthorizedLocalFile(filePath) {
+  const target = path.resolve(String(filePath || ''));
+  for (const root of authorizedLocalMusicRoots) {
+    if (target === root || target.startsWith(root + path.sep)) return target;
   }
-  while (localMusicImportCapabilities.size > 8) {
-    const oldest = localMusicImportCapabilities.keys().next().value;
-    if (!oldest) break;
-    localMusicImportCapabilities.delete(oldest);
+  throw new Error('LOCAL_FILE_NOT_AUTHORIZED');
+}
+
+let localLibraryWatcher = null;
+let localLibraryWatchRoots = [];
+
+/**
+ * 判断一条监控事件的相对路径是否值得唤醒扫描。只认曲库支持的音频、歌词和封面扩展名，
+ * 标签软件写出的 `.tmp` / `.part` 中间文件和系统的 `Thumbs.db` 都会在这里被挡掉。
+ * @param {string} relPath fs.watch 给出的相对路径。
+ * @returns {boolean} 是否属于曲库关心的文件。
+ */
+function localLibraryWatchTrackedPath(relPath) {
+  const text = String(relPath || '');
+  if (!text) return false;
+  return LOCAL_LIBRARY_EXTS.has(path.extname(text).toLowerCase());
+}
+
+/**
+ * 把一次合并后的文件夹变更推给主 renderer。渲染层拿到通知后走既有增量扫描，
+ * 主进程这里不自己改曲库状态，避免和渲染层的曲库所有权判定打两套账。
+ * @param {object} payload 监控器给出的变更快照。
+ * @returns {void}
+ */
+function broadcastLocalLibraryWatchChange(payload) {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  const detail = payload || {};
+  mainWindow.webContents.send('stellaflix-local-library-watch-changed', {
+    folderPath: String(detail.folderPath || ''),
+    paths: Array.isArray(detail.paths) ? detail.paths.slice(0, 64) : [],
+    changed: Array.isArray(detail.paths) ? detail.paths.length : 0,
+    overflow: !!detail.overflow,
+    reason: String(detail.reason || ''),
+  });
+}
+
+/**
+ * 懒创建曲库监控器。监控本身不该影响播放，任何创建失败都只降级成"没有监控"。
+ * @returns {object|null} 监控器实例；不可用时返回 null。
+ */
+function getLocalLibraryWatcher() {
+  if (localLibraryWatcher) return localLibraryWatcher;
+  try {
+    localLibraryWatcher = createLocalLibraryWatcher({
+      isTrackedPath: localLibraryWatchTrackedPath,
+      onFlush: broadcastLocalLibraryWatchChange,
+    });
+  } catch (e) {
+    console.warn('[LocalLibraryWatch] create failed', e && e.message);
+    localLibraryWatcher = null;
+  }
+  return localLibraryWatcher;
+}
+
+/**
+ * 应用渲染层给出的监控列表。每个根都要先过 `rememberLocalMusicRoot` 授权校验，
+ * 不存在或不是目录的路径直接落进 rejected，不会挂上监控也不会阻断其余根。
+ * @param {Array<string>} folders 期望监控的文件夹列表。
+ * @returns {object} 实际生效的监控列表与被拒项。
+ */
+function applyLocalLibraryWatchRoots(folders) {
+  const source = Array.isArray(folders) ? folders : [];
+  const authorized = [];
+  const rejected = [];
+  for (const folder of source) {
+    const text = typeof folder === 'string' ? folder.trim() : '';
+    if (!text) continue;
+    try {
+      authorized.push(rememberLocalMusicRoot(text));
+    } catch (e) {
+      rejected.push({ folderPath: text, error: e && e.message ? String(e.message) : 'LOCAL_LIBRARY_NOT_DIRECTORY' });
+    }
+  }
+  const watcher = getLocalLibraryWatcher();
+  if (!watcher) {
+    localLibraryWatchRoots = [];
+    return { ok: false, error: 'LOCAL_LIBRARY_WATCH_UNAVAILABLE', roots: [], rejected };
+  }
+  const applied = watcher.setRoots(authorized);
+  localLibraryWatchRoots = Array.isArray(applied.roots) ? applied.roots : [];
+  const status = watcher.getStatus();
+  return {
+    ok: true,
+    roots: localLibraryWatchRoots,
+    added: applied.added || [],
+    removed: applied.removed || [],
+    rejected,
+    watching: status.roots || [],
+  };
+}
+
+/**
+ * 读取监控状态。设置面板与自检都用它确认监控是否真的挂上了。
+ * @returns {object} 监控状态快照。
+ */
+function localLibraryWatchStatusSnapshot() {
+  if (!localLibraryWatcher) return { ok: true, active: false, roots: [], watching: [] };
+  const status = localLibraryWatcher.getStatus();
+  const watching = status.roots || [];
+  return {
+    ok: true,
+    active: watching.some((entry) => entry && entry.active),
+    roots: localLibraryWatchRoots.slice(),
+    watching,
+  };
+}
+
+/**
+ * 关闭曲库监控。退出前调用，避免 fs 句柄拖住进程退出。
+ * @returns {void}
+ */
+function closeLocalLibraryWatcher() {
+  if (!localLibraryWatcher) return;
+  try { localLibraryWatcher.close(); } catch (_e) { /* 关闭失败不影响退出 */ }
+  localLibraryWatcher = null;
+  localLibraryWatchRoots = [];
+}
+
+// ---------------------------------------------------------------------------
+// 本地曲库主进程目录扫描（批2-B-2）：全量/增量遍历、文件 stat 并发、SQLite 落库桥。
+// 路径归一化与记录构造全部留主进程，渲染层只拿回已经规整好的文件描述。
+// ---------------------------------------------------------------------------
+
+const LOCAL_LIBRARY_SCAN_STAT_CONCURRENCY = 24;
+const LOCAL_LIBRARY_SCAN_VISIT_LIMIT = 60000;
+// 音乐库维护「失效文件」一次最多问 2000 条路径，渲染进程自己按 400 一批切，这里只兜住上限。
+const LOCAL_LIBRARY_PROBE_MAX = 2000;
+const LOCAL_LIBRARY_PROBE_CONCURRENCY = 8;
+const LOCAL_LIBRARY_INCREMENTAL_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const LOCAL_LIBRARY_NAME_COMPARE = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' }).compare;
+
+function compareLocalLibraryEntries(a, b) {
+  return LOCAL_LIBRARY_NAME_COMPARE(a.name, b.name);
+}
+
+function localLibraryScanStatConcurrency(count) {
+  count = Math.max(0, Number(count) || 0);
+  if (count >= 24000) return 8;
+  if (count >= 12000) return 10;
+  if (count >= 5000) return 12;
+  if (count >= 1200) return 16;
+  return LOCAL_LIBRARY_SCAN_STAT_CONCURRENCY;
+}
+
+function yieldLocalLibraryScanTurn() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function localLibraryRelativePath(root, relPath) {
+  return path.join(path.basename(root), relPath).replace(/\\/g, '/');
+}
+
+function isPathInsideLocalLibraryRoot(root, absPath) {
+  const rel = path.relative(root, absPath);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function normalizeLocalLibraryRelPath(relPath) {
+  return String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/');
+}
+
+function localLibraryRelPathFromRecord(root, record) {
+  if (!record) return '';
+  const fullPath = record.fullPath || record.filePath || record.path || record.localFilePathAbsolute || '';
+  if (fullPath) {
+    const abs = path.resolve(String(fullPath));
+    if (isPathInsideLocalLibraryRoot(root, abs)) return normalizeLocalLibraryRelPath(path.relative(root, abs));
+  }
+  let rel = record.relativePath || record.webkitRelativePath || record.name || '';
+  rel = normalizeLocalLibraryRelPath(rel);
+  const rootBase = normalizeLocalLibraryRelPath(path.basename(root));
+  if (rootBase && (rel === rootBase || rel.startsWith(rootBase + '/'))) rel = rel.slice(rootBase.length).replace(/^\/+/, '');
+  if (!rel || rel.split('/').includes('..')) return '';
+  return rel;
+}
+
+function localLibraryDirRelPath(relPath) {
+  const dir = normalizeLocalLibraryRelPath(path.dirname(String(relPath || '')));
+  return dir === '.' ? '' : dir;
+}
+
+function localFileProxyUrl(filePath) {
+  if (!mainServerPort) return pathToFileURL(filePath).href;
+  return `http://127.0.0.1:${mainServerPort}/api/local-file?token=${encodeURIComponent(LOCAL_FILE_TOKEN)}&path=${encodeURIComponent(filePath)}`;
+}
+
+function makeLocalLibraryFileRecord(root, item, stat) {
+  const webkitRelativePath = localLibraryRelativePath(root, item.rel);
+  return {
+    ...(item.source || {}),
+    fullPath: item.abs,
+    filePath: item.abs,
+    url: localFileProxyUrl(item.abs),
+    name: item.entry.name,
+    relativePath: webkitRelativePath,
+    webkitRelativePath,
+    size: stat.size,
+    lastModified: Math.round(stat.mtimeMs),
+    type: LOCAL_LIBRARY_MIME[item.ext] || '',
+  };
+}
+
+function rehydrateLocalLibraryFileRecord(root, record, relPath) {
+  const rel = normalizeLocalLibraryRelPath(relPath || localLibraryRelPathFromRecord(root, record));
+  if (!rel) return null;
+  const abs = path.resolve(root, rel);
+  if (!isPathInsideLocalLibraryRoot(root, abs)) return null;
+  const ext = path.extname(record && record.name || abs).toLowerCase();
+  if (!LOCAL_LIBRARY_EXTS.has(ext)) return null;
+  const webkitRelativePath = localLibraryRelativePath(root, rel);
+  return {
+    ...(record || {}),
+    fullPath: abs,
+    filePath: abs,
+    url: localFileProxyUrl(abs),
+    name: (record && record.name) || path.basename(abs),
+    relativePath: webkitRelativePath,
+    webkitRelativePath,
+    size: Number(record && record.size) || 0,
+    lastModified: Number(record && record.lastModified) || 0,
+    type: (record && record.type) || LOCAL_LIBRARY_MIME[ext] || '',
+  };
+}
+
+function makeLocalLibraryDirectoryRecord(root, relPath, stat) {
+  const rel = normalizeLocalLibraryRelPath(relPath);
+  return {
+    fullPath: path.join(root, rel),
+    relativePath: rel,
+    lastModified: Math.round(stat.mtimeMs),
+  };
+}
+
+/**
+ * 并发执行本地库文件 stat。大曲库逐个 await 会把文件夹导入时间拉长，这里限制并发避免压满磁盘队列。
+ * @param {string} root 已授权的本地曲库根目录。
+ * @param {Array<{abs:string, rel:string, entry:{name:string}, ext:string, index:number, source?:object}>} items 待读取元数据的文件。
+ * @returns {Promise<Array<object>>} 可直接返回给渲染层的文件描述。
+ */
+async function statLocalLibraryFiles(root, items) {
+  const files = [];
+  let cursor = 0;
+  let processed = 0;
+  let found = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const item = items[cursor++];
+      processed += 1;
+      if (processed % 160 === 0) await yieldLocalLibraryScanTurn();
+      let stat = null;
+      try {
+        stat = await fs.promises.stat(item.abs);
+      } catch (_e) {
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      files[item.index] = makeLocalLibraryFileRecord(root, item, stat);
+      found += 1;
+    }
+  }
+  const workerCount = Math.min(localLibraryScanStatConcurrency(items.length), Math.max(1, items.length));
+  const workers = new Array(workerCount);
+  for (let i = 0; i < workerCount; i += 1) workers[i] = worker();
+  await Promise.all(workers);
+  const compact = new Array(found);
+  let write = 0;
+  for (let i = 0; i < files.length; i += 1) {
+    if (files[i]) compact[write++] = files[i];
+  }
+  return compact;
+}
+
+async function collectLocalLibraryFolderEntries(root) {
+  const files = [];
+  const directories = [];
+  const stack = [''];
+  let visited = 0;
+  let scannedDirs = 0;
+  while (stack.length) {
+    const relDir = stack.pop();
+    const absDir = path.join(root, relDir);
+    scannedDirs += 1;
+    if (scannedDirs % 32 === 0) await yieldLocalLibraryScanTurn();
+    let dirStat = null;
+    try {
+      dirStat = await fs.promises.stat(absDir);
+    } catch (_e) {
+      continue;
+    }
+    if (!dirStat.isDirectory()) continue;
+    directories.push(makeLocalLibraryDirectoryRecord(root, relDir, dirStat));
+    let entries = [];
+    try {
+      entries = await fs.promises.readdir(absDir, { withFileTypes: true });
+    } catch (_e) {
+      continue;
+    }
+    entries.sort(compareLocalLibraryEntries);
+    for (const entry of entries) {
+      visited += 1;
+      if (visited % 360 === 0) await yieldLocalLibraryScanTurn();
+      if (visited > LOCAL_LIBRARY_SCAN_VISIT_LIMIT) break;
+      const rel = path.join(relDir, entry.name);
+      const abs = path.join(root, rel);
+      if (entry.isDirectory()) {
+        stack.push(rel);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!LOCAL_LIBRARY_EXTS.has(ext)) continue;
+      files.push({ abs, rel, entry, ext, index: files.length });
+    }
+    if (visited > LOCAL_LIBRARY_SCAN_VISIT_LIMIT) break;
+  }
+  return { files, directories, truncated: visited > LOCAL_LIBRARY_SCAN_VISIT_LIMIT };
+}
+
+function normalizeLocalLibraryPreviousSnapshot(snapshot) {
+  const source = Array.isArray(snapshot) ? { files: snapshot } : (snapshot || {});
+  const files = Array.isArray(source.files) ? source.files : [];
+  const directories = Array.isArray(source.directories) ? source.directories : [];
+  return { files, directories, truncated: !!source.truncated, savedAt: Number(source.savedAt) || 0 };
+}
+
+function createPreviousLocalLibraryLookups(root, snapshot) {
+  const previous = normalizeLocalLibraryPreviousSnapshot(snapshot);
+  const filesByRel = new Map();
+  const dirsByRel = new Map();
+  for (const file of previous.files) {
+    const rel = localLibraryRelPathFromRecord(root, file);
+    if (rel && !filesByRel.has(rel)) filesByRel.set(rel, file);
+  }
+  for (const dir of previous.directories) {
+    let rel = normalizeLocalLibraryRelPath(dir && dir.relativePath || '');
+    const fullPath = dir && (dir.fullPath || dir.path);
+    if (fullPath) {
+      const abs = path.resolve(String(fullPath));
+      if (isPathInsideLocalLibraryRoot(root, abs)) rel = normalizeLocalLibraryRelPath(path.relative(root, abs));
+    }
+    dirsByRel.set(rel, dir);
+  }
+  return { previous, filesByRel, dirsByRel };
+}
+
+async function scanLocalMusicFolderFull(folderPath) {
+  const root = rememberLocalMusicRoot(folderPath);
+  const listed = await collectLocalLibraryFolderEntries(root);
+  return {
+    ok: true,
+    folderPath: root,
+    files: await statLocalLibraryFiles(root, listed.files),
+    directories: listed.directories,
+    truncated: listed.truncated,
+    scanMode: 'full',
+  };
+}
+
+async function scanLocalMusicFolderIncremental(folderPath, previousSnapshot) {
+  const root = rememberLocalMusicRoot(folderPath);
+  const { previous, filesByRel, dirsByRel } = createPreviousLocalLibraryLookups(root, previousSnapshot);
+  if (!previous.files.length || !previous.directories.length || previous.truncated) return scanLocalMusicFolderFull(root);
+  if (previous.savedAt && Date.now() - previous.savedAt > LOCAL_LIBRARY_INCREMENTAL_MAX_AGE_MS) return scanLocalMusicFolderFull(root);
+
+  const listed = await collectLocalLibraryFolderEntries(root);
+  // 本次遍历若已达访问上限，listed.files/listed.directories 与磁盘现状不一致；此时增量合并会把缺失项误判为删除。
+  // 与 previous.truncated 分支同源处理：改用全量语义返回已遍历结果，避免残缺增量覆盖当前会话与持久快照。
+  if (listed.truncated) {
+    return {
+      ok: true,
+      folderPath: root,
+      files: await statLocalLibraryFiles(root, listed.files),
+      directories: listed.directories,
+      truncated: true,
+      scanMode: 'full',
+    };
+  }
+  const changedDirs = new Set();
+  for (const dir of listed.directories) {
+    const rel = normalizeLocalLibraryRelPath(dir.relativePath);
+    const prev = dirsByRel.get(rel);
+    if (!prev || Number(prev.lastModified) !== Number(dir.lastModified)) changedDirs.add(rel);
+  }
+
+  const pending = [];
+  const reusedByRel = new Map();
+  for (const item of listed.files) {
+    const rel = normalizeLocalLibraryRelPath(item.rel);
+    const previousFile = filesByRel.get(rel);
+    if (!previousFile || changedDirs.has(localLibraryDirRelPath(rel))) {
+      pending.push({ ...item, index: pending.length, source: previousFile || {} });
+      continue;
+    }
+    const reused = rehydrateLocalLibraryFileRecord(root, previousFile, rel);
+    if (reused) reusedByRel.set(rel, reused);
+    else pending.push({ ...item, index: pending.length, source: previousFile || {} });
+  }
+
+  const fresh = await statLocalLibraryFiles(root, pending);
+  const freshByRel = new Map();
+  for (const file of fresh) {
+    const rel = localLibraryRelPathFromRecord(root, file);
+    if (rel) freshByRel.set(rel, file);
+  }
+
+  const files = [];
+  for (const item of listed.files) {
+    const rel = normalizeLocalLibraryRelPath(item.rel);
+    const file = freshByRel.get(rel) || reusedByRel.get(rel);
+    if (file) files.push(file);
+  }
+
+  return {
+    ok: true,
+    folderPath: root,
+    files,
+    directories: listed.directories,
+    truncated: listed.truncated,
+    scanMode: 'incremental',
+    reused: reusedByRel.size,
+    refreshed: fresh.length,
+  };
+}
+
+async function scanLocalMusicFolder(folderPath, options) {
+  const snapshot = options && options.previousSnapshot;
+  let result = null;
+  if (snapshot && Array.isArray(snapshot.files) && Array.isArray(snapshot.directories)) {
+    result = await scanLocalMusicFolderIncremental(folderPath, snapshot);
+  } else {
+    // 渲染层没带快照时先问数据库：有历史行就能走增量扫描，只 stat 变化过的目录。
+    const stored = (!options || options.useStoredSnapshot !== false) ? loadLocalLibraryStoreRoot(folderPath, { index: false }) : null;
+    if (stored && stored.ok && stored.files.length && stored.directories.length) {
+      result = await scanLocalMusicFolderIncremental(folderPath, {
+        files: stored.files,
+        directories: stored.directories,
+        truncated: stored.truncated,
+        savedAt: stored.savedAt,
+      });
+      if (result && result.ok) result.storedSnapshot = true;
+    } else {
+      result = await scanLocalMusicFolderFull(folderPath);
+    }
+  }
+  if (result && result.ok) {
+    const summary = await syncLocalLibraryStoreFromScan(result.folderPath, result);
+    if (summary) result.db = summary;
+  }
+  return result;
+}
+
+/**
+ * 逐条确认一批音频文件还在不在磁盘上，供渲染进程的音乐库维护「失效文件」使用。
+ * 只回状态码，绝不回文件内容：'ok' 还在、'missing' 没了、'blocked' 不在已授权的音乐目录里。
+ * blocked 必须和 missing 分开——授权失败不等于文件被删了，混成一个会误报一整批。
+ * @param {Array<string>} paths 待确认的绝对路径。
+ * @returns {Promise<object>} { ok, checked, states, truncated }。
+ */
+async function probeAuthorizedLocalFiles(paths) {
+  const list = Array.isArray(paths) ? paths : [];
+  const truncated = list.length > LOCAL_LIBRARY_PROBE_MAX;
+  const targets = truncated ? list.slice(0, LOCAL_LIBRARY_PROBE_MAX) : list;
+  const states = new Array(targets.length).fill('missing');
+  let cursor = 0;
+  async function worker() {
+    for (;;) {
+      const index = cursor++;
+      if (index >= targets.length) return;
+      let resolved = '';
+      try {
+        resolved = resolveAuthorizedLocalFile(targets[index]);
+      } catch (e) {
+        states[index] = 'blocked';
+        continue;
+      }
+      try {
+        const stat = await fs.promises.stat(resolved);
+        states[index] = stat.isFile() ? 'ok' : 'missing';
+      } catch (e) {
+        states[index] = 'missing';
+      }
+    }
+  }
+  const workers = [];
+  const width = Math.min(LOCAL_LIBRARY_PROBE_CONCURRENCY, targets.length) || 0;
+  for (let i = 0; i < width; i++) workers.push(worker());
+  await Promise.all(workers);
+  return { ok: true, checked: targets.length, states, truncated };
+}
+
+async function refreshLocalMusicFileEntries(folderPath, snapshotOrFiles) {
+  const root = rememberLocalMusicRoot(folderPath);
+  const snapshot = normalizeLocalLibraryPreviousSnapshot(snapshotOrFiles);
+  const list = snapshot.files;
+  const files = [];
+  for (const file of list) {
+    if (!file) continue;
+    const record = rehydrateLocalLibraryFileRecord(root, file);
+    if (record) files.push(record);
+  }
+  return {
+    ok: true,
+    folderPath: root,
+    files,
+    directories: snapshot.directories,
+    snapshot: true,
+    restoredFromSnapshot: true,
+  };
+}
+
+/**
+ * 把扫描结果里的一条文件记录压成 SQLite 存储需要的最小字段集。
+ * 路径解析继续留在主进程，存储层只认归一化后的输入。
+ * @param {string} root 曲库根目录。
+ * @param {object} record 扫描产出的文件记录。
+ * @returns {object|null} 存储条目，非法记录返回 null。
+ */
+function localLibraryStoreFileEntry(root, record) {
+  if (!record) return null;
+  const rel = localLibraryRelPathFromRecord(root, record);
+  if (!rel) return null;
+  const abs = String(record.fullPath || record.filePath || path.resolve(root, rel));
+  const size = Number(record.size) || 0;
+  const mtime = Number(record.lastModified) || 0;
+  const name = String(record.name || path.basename(abs));
+  const ext = path.extname(name || abs).toLowerCase();
+  return {
+    rel: rel,
+    name: name,
+    ext: ext,
+    mime: String(record.type || LOCAL_LIBRARY_MIME[ext] || ''),
+    isAudio: LOCAL_LIBRARY_AUDIO_EXTS.has(ext),
+    size: size,
+    mtime: mtime,
+    pathKey: normalizeStorePathKey(abs),
+    // 与渲染层 localSongKeyFromFile 完全同构：原始绝对路径 + 大小 + 修改时间。
+    songKey: abs + ':' + size + ':' + mtime,
+  };
+}
+
+/**
+ * 把扫描结果同步进 SQLite。失败只记在返回值里，绝不影响本轮扫描结果本身。
+ * @param {string} root 曲库根目录。
+ * @param {object} scan 扫描结果。
+ * @returns {Promise<object|null>} 同步结果摘要。
+ */
+async function syncLocalLibraryStoreFromScan(root, scan) {
+  const store = getLocalLibraryStore();
+  if (!store || !scan || !scan.ok) return null;
+  const source = Array.isArray(scan.files) ? scan.files : [];
+  const files = [];
+  for (let i = 0; i < source.length; i += 1) {
+    const entry = localLibraryStoreFileEntry(root, source[i]);
+    if (entry) files.push(entry);
+  }
+  const dirSource = Array.isArray(scan.directories) ? scan.directories : [];
+  const directories = new Array(dirSource.length);
+  for (let i = 0; i < dirSource.length; i += 1) {
+    const dir = dirSource[i] || {};
+    directories[i] = { rel: normalizeLocalLibraryRelPath(dir.relativePath || ''), mtime: Number(dir.lastModified) || 0 };
+  }
+  try {
+    return await store.syncRoot({
+      folderPath: root,
+      files: files,
+      directories: directories,
+      truncated: !!scan.truncated,
+      scanMode: String(scan.scanMode || ''),
+    });
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_DB_SYNC_FAILED' };
   }
 }
 
-ipcMain.handle('stellaflix-local-library-authorize', async (event, payload = {}) => {
-  if (!isTrustedMainWindowIpc(event)) return { ok: false, count: 0, error: 'UNTRUSTED_SENDER' };
+/**
+ * 由 SQLite 行还原渲染层需要的文件描述。校验与 rehydrateLocalLibraryFileRecord 同源，
+ * 但直接按列构造对象，避免大曲库恢复时为每行多做一次浅拷贝。
+ * @param {string} root 曲库根目录。
+ * @param {object} row 数据库 files 行。
+ * @returns {object|null} 文件描述。
+ */
+function localLibraryStoreFileRecordFromRow(root, row) {
+  const rel = normalizeLocalLibraryRelPath(row && row.rel_path || '');
+  if (!rel) return null;
+  const abs = path.resolve(root, rel);
+  if (!isPathInsideLocalLibraryRoot(root, abs)) return null;
+  const name = String(row.name || path.basename(abs));
+  const ext = String(row.ext || path.extname(name) || '').toLowerCase();
+  if (!LOCAL_LIBRARY_EXTS.has(ext)) return null;
+  const webkitRelativePath = localLibraryRelativePath(root, rel);
+  return {
+    fullPath: abs,
+    filePath: abs,
+    url: localFileProxyUrl(abs),
+    name: name,
+    relativePath: webkitRelativePath,
+    webkitRelativePath: webkitRelativePath,
+    size: Number(row.size) || 0,
+    lastModified: Number(row.mtime) || 0,
+    type: String(row.mime || LOCAL_LIBRARY_MIME[ext] || ''),
+  };
+}
+
+/**
+ * 从 SQLite 一次性取回曲库文件列表、目录列表和索引记录。
+ * 旧路径要先读 IndexedDB 快照、跨 IPC 送回主进程再逐条 rehydrate；这里一次查询直接拼好。
+ * @param {string} folderPath 曲库根路径。
+ * @param {{index?:boolean}=} options 是否附带索引记录。
+ * @returns {object|null} 还原结果，数据库不可用返回 null。
+ */
+function loadLocalLibraryStoreRoot(folderPath, options) {
+  const store = getLocalLibraryStore();
+  if (!store) return null;
+  let root = '';
+  try {
+    root = rememberLocalMusicRoot(folderPath);
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_NOT_DIRECTORY' };
+  }
+  let loaded = null;
+  try {
+    loaded = store.loadRoot(root);
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_DB_LOAD_FAILED' };
+  }
+  if (!loaded || !loaded.ok) return loaded || null;
+  const wantIndex = !options || options.index !== false;
+  const rows = loaded.files;
   const files = [];
-  const seen = new Set();
-  for (const item of (Array.isArray(payload && payload.files) ? payload.files : []).slice(0, 50000)) {
-    const requestedPath = String(item && item.path || '').trim();
-    if (!requestedPath || /^[\\/]{2}/.test(requestedPath) || !path.isAbsolute(requestedPath)) continue;
-    if (!/\.(mp3|flac|wav|ogg|m4a|aac|opus)$/i.test(requestedPath)) continue;
-    let filePath = '';
+  const records = wantIndex ? {} : null;
+  let indexCount = 0;
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const record = localLibraryStoreFileRecordFromRow(root, row);
+    if (!record) continue;
+    files.push(record);
+    // index_updated_at 只由渲染层索引回写设置，是「这一行已有解析过的元数据」的唯一判据。
+    if (!wantIndex || !Number(row.index_updated_at) || !Number(row.is_audio)) continue;
+    const songKey = String(row.song_key || '');
+    if (!songKey) continue;
+    const indexRecord = buildIndexRecordFromFileRow(row);
+    indexRecord.fullPath = record.fullPath;
+    indexRecord.path = record.relativePath;
+    records[songKey] = indexRecord;
+    indexCount += 1;
+  }
+  const dirRows = loaded.directories;
+  const directories = new Array(dirRows.length);
+  for (let i = 0; i < dirRows.length; i += 1) {
+    const rel = normalizeLocalLibraryRelPath(dirRows[i] && dirRows[i].rel_path || '');
+    directories[i] = {
+      fullPath: rel ? path.join(root, rel) : root,
+      relativePath: rel,
+      lastModified: Number(dirRows[i] && dirRows[i].mtime) || 0,
+    };
+  }
+  return {
+    ok: true,
+    folderPath: root,
+    files: files,
+    directories: directories,
+    index: wantIndex ? { schema: 1, folderPath: root, savedAt: loaded.indexSavedAt, count: indexCount, records: records } : null,
+    truncated: !!loaded.truncated,
+    scanMode: String(loaded.scanMode || ''),
+    scanSignature: String(loaded.scanSignature || ''),
+    savedAt: Number(loaded.savedAt) || 0,
+    indexSavedAt: Number(loaded.indexSavedAt) || 0,
+    fileCount: Number(loaded.fileCount) || 0,
+    audioCount: Number(loaded.audioCount) || 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 存量用户旧 JSON 曲库 → 新 SQLite 曲库的一次性迁移（批2-B-3，合成临时根策略）。
+// 旧系统把曲库索引存在 userData 下的 local-music-library.json（含每条音频的绝对路径与标签/封面/歌词）。
+// 新系统改走「授权根 + 递归扫描 + SQLite」，本迁移把旧 JSON 的文件夹清单还原成新系统的授权根，
+// 喂给已落地的 scanLocalMusicFolder 重建曲库，并按归一化绝对路径把旧标签叠回新行（无感恢复）。
+// 旧 JSON 一律保留作回退，只在迁移成功后写一个 marker 文件，保证只跑一次、失败可安全重试。
+
+const LOCAL_MUSIC_LEGACY_INDEX_FILE = 'local-music-library.json';
+const LOCAL_MUSIC_LEGACY_MIGRATED_MARKER = 'local-music-library.migrated-v1';
+const LOCAL_MUSIC_LEGACY_VERSION = 1;
+
+// 纯函数：从一批音频绝对路径推导「最小根目录覆盖集」——
+// 删掉任何被其它根包含的目录，保证每个根都不被另一个根包住（避免重复扫描同一棵子树）。
+function legacyLocalMusicRootsFromRecords(audioPaths) {
+  const dirs = [];
+  for (const p of (Array.isArray(audioPaths) ? audioPaths : [])) {
+    if (typeof p !== 'string' || !p) continue;
     try {
-      filePath = fs.realpathSync.native ? fs.realpathSync.native(requestedPath) : fs.realpathSync(requestedPath);
-      if (/^[\\/]{2}/.test(filePath) || !fs.statSync(filePath).isFile()) continue;
-    } catch (_) {
-      continue;
-    }
-    const identity = process.platform === 'win32' ? filePath.toLowerCase() : filePath;
-    if (seen.has(identity)) continue;
-    seen.add(identity);
-    files.push({
-      path: filePath,
-      relativePath: String(item && item.relativePath || path.basename(filePath)).replace(/\0/g, '').slice(0, 2000),
+      // 音频「路径」是文件，扫描器需要的是它所在的「目录」，所以取 dirname。
+      dirs.push(path.dirname(path.resolve(p)));
+    } catch (_e) { /* 非法路径忽略 */ }
+  }
+  const unique = Array.from(new Set(dirs));
+  // 浅目录先处理：父目录先入列，子目录遇到已被父目录覆盖就跳过（O(n^2) 但 n 是文件夹数，量级很小）。
+  unique.sort((a, b) => (a.split(path.sep).length - b.split(path.sep).length) || (a < b ? -1 : 1));
+  const roots = [];
+  for (const d of unique) {
+    if (!roots.some((r) => isLocalMusicRootAncestor(r, d))) roots.push(d);
+  }
+  return roots;
+}
+
+function isLocalMusicRootAncestor(ancestor, child) {
+  if (ancestor === child) return true;
+  const rel = path.relative(ancestor, child);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// 把旧曲库记录的标签（artist/album/duration）按归一化绝对路径叠回新 store。
+// 用 store.overlayFileMetadata 做「只写这三列」的局部更新，绝不误伤扫描已写入的
+// title/genre/cover/lyric 等其它列；匹配不上就优雅跳过；单根失败不阻断其它根。
+function overlayLegacyMetadataIntoStore(store, roots, legacyRecords) {
+  if (!store || typeof store.loadRoot !== 'function' || typeof store.overlayFileMetadata !== 'function') {
+    return { ok: false, error: 'NO_STORE' };
+  }
+  const byPath = new Map();
+  for (const r of (Array.isArray(legacyRecords) ? legacyRecords : [])) {
+    const ap = typeof r.audioPath === 'string' ? r.audioPath : '';
+    const id = String(r.id || '').toLowerCase();
+    if (!ap || !/^[a-f0-9]{24}$/.test(id)) continue;
+    byPath.set(normalizeStorePathKey(ap), {
+      artist: typeof r.artist === 'string' ? r.artist : '',
+      album: typeof r.album === 'string' ? r.album : '',
+      duration: Math.max(0, Number(r.duration) || 0),
     });
   }
-  if (!files.length) return { ok: false, count: 0, error: 'NO_AUTHORIZED_LOCAL_AUDIO' };
-  pruneLocalMusicImportCapabilities();
-  const token = crypto.randomBytes(24).toString('hex');
-  localMusicImportCapabilities.set(token, {
-    senderId: event.sender.id,
-    files,
-    expiresAt: Date.now() + 3 * 60 * 1000,
+  if (!byPath.size) return { ok: true, overlaid: 0 };
+  let overlaid = 0;
+  for (const root of (Array.isArray(roots) ? roots : [])) {
+    let loaded = null;
+    try { loaded = store.loadRoot(root); } catch (_e) { continue; }
+    if (!loaded || !loaded.ok || !Array.isArray(loaded.files)) continue;
+    for (const row of loaded.files) {
+      const meta = byPath.get(normalizeStorePathKey(row.path_key || ''));
+      if (!meta) continue;
+      const fp = String(row.fingerprint || '');
+      if (!fp) continue;
+      try {
+        const res = store.overlayFileMetadata(root, fp, {
+          artist: meta.artist,
+          album: meta.album,
+          duration: meta.duration,
+          // 置位「已有解析元数据」标记列，让 loadLocalLibraryStoreRoot 的 index 判据通过，
+          // 叠回去的 artist/album/duration 才能被渲染层看到（否则迁移等于白写）。
+          localMetadataLoaded: 1,
+          updatedAt: Date.now(),
+        });
+        if (res && res.ok && res.saved) overlaid += res.saved;
+      } catch (_e) { /* 单根单条失败不阻断其它 */ }
+    }
+  }
+  return { ok: true, overlaid };
+}
+
+// 启动期一次性迁移：读取旧 JSON → 合成临时根 → 喂扫描器重建 → 叠加旧标签 → 写 marker。
+// 幂等：marker 已存在则跳过；旧 JSON 缺失/无法识别/无有效记录则安全返回不报错；失败只记日志不动旧 JSON。
+async function migrateLocalMusicLibraryFromLegacy(options) {
+  const opts = options || {};
+  const userDataPath = opts.userDataPath
+    || (typeof STABLE_USER_DATA_PATH !== 'undefined' ? STABLE_USER_DATA_PATH : '');
+  const jsonPath = opts.legacyJsonPath || path.join(userDataPath, LOCAL_MUSIC_LEGACY_INDEX_FILE);
+  const markerPath = opts.markerPath || path.join(userDataPath, LOCAL_MUSIC_LEGACY_MIGRATED_MARKER);
+  const store = opts.store || getLocalLibraryStore();
+  const scanFolder = typeof opts.scanFolder === 'function' ? opts.scanFolder : scanLocalMusicFolder;
+  if (!userDataPath) return { ok: false, error: 'NO_USER_DATA_PATH' };
+  if (!fs.existsSync(jsonPath)) return { ok: true, skipped: 'no-legacy-json' };
+  if (fs.existsSync(markerPath)) return { ok: true, skipped: 'already-migrated' };
+  let parsed = null;
+  try {
+    parsed = JSON.parse(await fs.promises.readFile(jsonPath, 'utf8'));
+  } catch (_e) {
+    return { ok: false, error: 'LEGACY_JSON_PARSE_FAILED' };
+  }
+  if (!parsed || parsed.version !== LOCAL_MUSIC_LEGACY_VERSION || !Array.isArray(parsed.records)) {
+    return { ok: true, skipped: 'legacy-json-unrecognized' };
+  }
+  const audioPaths = [];
+  for (const r of parsed.records) {
+    const ap = typeof r.audioPath === 'string' ? r.audioPath : '';
+    const id = String(r.id || '').toLowerCase();
+    if (ap && /^[a-f0-9]{24}$/.test(id)) audioPaths.push(ap);
+  }
+  const roots = legacyLocalMusicRootsFromRecords(audioPaths);
+  const results = [];
+  for (const root of roots) {
+    try {
+      const scan = await scanFolder(root);
+      results.push({ root, ok: !!(scan && scan.ok), files: scan ? (scan.files || []).length : 0 });
+    } catch (e) {
+      results.push({ root, ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  }
+  let overlay = { ok: true, overlaid: 0 };
+  if (store) {
+    try {
+      overlay = overlayLegacyMetadataIntoStore(store, roots, parsed.records);
+    } catch (_e) {
+      overlay = { ok: false, error: 'OVERLAY_FAILED' };
+    }
+  }
+  const anyOk = results.some((r) => r.ok);
+  if (anyOk && !opts.skipMarker) {
+    try {
+      await fs.promises.writeFile(markerPath, JSON.stringify({
+        migratedAt: Date.now(), userDataPath, roots, results, overlaid: overlay.overlaid || 0,
+      }));
+    } catch (_e) { /* 标记写失败不影响已完成的迁移，旧 JSON 仍在，下次启动会安全重试 */ }
+  }
+  return { ok: anyOk, roots: roots.length, scanned: results, overlaid: overlay.overlaid || 0 };
+}
+
+// ---------------------------------------------------------------------------
+// 本地曲库 SQLite 存储句柄：惰性创建、退出前收尾，统一包裹调用失败降级。
+// ---------------------------------------------------------------------------
+
+let localLibraryStoreHandle = null;
+let localLibraryStoreUnavailable = false;
+
+/**
+ * 惰性获取本地曲库 SQLite 存储。不可用时只标记一次并返回 null，调用方全部走原路径。
+ * @returns {object|null} 存储句柄或 null。
+ */
+function getLocalLibraryStore() {
+  if (localLibraryStoreHandle || localLibraryStoreUnavailable) return localLibraryStoreHandle;
+  if (!isLocalLibraryStoreSupported()) {
+    localLibraryStoreUnavailable = true;
+    return null;
+  }
+  try {
+    const handle = createLocalLibraryStore({ filePath: path.join(app.getPath('userData'), LOCAL_LIBRARY_DB_FILE_NAME) });
+    const status = handle.getStatus();
+    if (!status || !status.ok) {
+      localLibraryStoreUnavailable = true;
+      return null;
+    }
+    localLibraryStoreHandle = handle;
+  } catch (_e) {
+    localLibraryStoreUnavailable = true;
+    localLibraryStoreHandle = null;
+  }
+  return localLibraryStoreHandle;
+}
+
+/**
+ * 关闭曲库数据库连接，退出前调用，保证 WAL 正常收尾。
+ * @returns {void}
+ */
+function closeLocalLibraryStore() {
+  if (!localLibraryStoreHandle) return;
+  try {
+    localLibraryStoreHandle.close();
+  } catch (_e) { /* 关闭失败不影响退出 */ }
+  localLibraryStoreHandle = null;
+}
+
+/**
+ * 统一包裹曲库数据库调用。数据库不可用或单次调用抛错都只降级成失败返回值，渲染层继续走原路径。
+ * @param {(store:object)=>object} run 实际操作。
+ * @returns {object} 操作结果。
+ */
+function withLocalLibraryStore(run) {
+  const store = getLocalLibraryStore();
+  if (!store) return { ok: false, error: 'LOCAL_LIBRARY_DB_UNAVAILABLE' };
+  try {
+    return run(store);
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_DB_FAILED' };
+  }
+}
+
+ipcMain.handle('stellaflix-local-library-db-status', async (event) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  return withLocalLibraryStore((store) => store.getStatus());
+});
+
+ipcMain.handle('stellaflix-local-library-db-bump-play', async (event, payload) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  return withLocalLibraryStore((store) => store.bumpPlayStat(payload || {}));
+});
+
+// 「特别喜欢」的收藏标记：只写 SQLite 的 favorite 镜像，权威仍是渲染层的 localStorage 引用表。
+ipcMain.handle('stellaflix-local-library-db-set-favorite', async (event, payload) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  return withLocalLibraryStore((store) => store.setFavorite(payload || {}));
+});
+
+// 音乐文件夹监控：监控列表由渲染层的曲库根决定，主进程只负责把合并后的变更推回来。
+ipcMain.handle('stellaflix-local-library-watch-set-roots', async (event, folders) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', roots: [] };
+  try {
+    return applyLocalLibraryWatchRoots(folders);
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_WATCH_SET_FAILED', roots: [] };
+  }
+});
+
+ipcMain.handle('stellaflix-local-library-watch-status', async (event) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', roots: [] };
+  try {
+    return localLibraryWatchStatusSnapshot();
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_WATCH_STATUS_FAILED', roots: [] };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 批2-B-2：本地曲库扫描 / 落库 / 失效探测的 IPC 通道（stellaflix- 前缀，过信任闸）。
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('stellaflix-local-music-choose-folder', async (event) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    const owner = getSenderWindow(event);
+    const result = await dialog.showOpenDialog(owner, {
+      title: '选择本地音乐文件夹',
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || !result.filePaths || !result.filePaths[0]) return { ok: false, canceled: true };
+    return await scanLocalMusicFolder(result.filePaths[0]);
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_CHOOSE_FAILED' };
+  }
+});
+
+ipcMain.handle('stellaflix-local-music-scan-folder', async (event, folderPath, options) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    if (!folderPath) return { ok: false, error: 'LOCAL_LIBRARY_PATH_EMPTY' };
+    return await scanLocalMusicFolder(folderPath, options || {});
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_SCAN_FAILED' };
+  }
+});
+
+ipcMain.handle('stellaflix-local-music-refresh-entries', async (event, folderPath, files) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    if (!folderPath) return { ok: false, error: 'LOCAL_LIBRARY_PATH_EMPTY' };
+    return await refreshLocalMusicFileEntries(folderPath, files);
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_REFRESH_FAILED' };
+  }
+});
+
+ipcMain.handle('stellaflix-local-music-probe-entries', async (event, paths) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', states: [] };
+  try {
+    return await probeAuthorizedLocalFiles(paths);
+  } catch (e) {
+    return { ok: false, error: e.message || 'LOCAL_LIBRARY_PROBE_FAILED', states: [] };
+  }
+});
+
+ipcMain.handle('stellaflix-local-library-db-load', async (event, folderPath, options) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  if (!folderPath) return { ok: false, error: 'LOCAL_LIBRARY_PATH_EMPTY' };
+  const result = loadLocalLibraryStoreRoot(folderPath, options || {});
+  return result || { ok: false, error: 'LOCAL_LIBRARY_DB_UNAVAILABLE' };
+});
+
+ipcMain.handle('stellaflix-local-library-db-list-roots', async (event) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, roots: [], error: 'UNTRUSTED_SENDER' };
+  return withLocalLibraryStore((store) => store.listRoots());
+});
+
+ipcMain.handle('stellaflix-local-library-db-delete-files', async (event, folderPath, songKeys) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, deleted: 0, error: 'UNTRUSTED_SENDER' };
+  if (!folderPath) return { ok: false, deleted: 0, error: 'LOCAL_LIBRARY_PATH_EMPTY' };
+  return withLocalLibraryStore((store) => store.deleteFiles(folderPath, Array.isArray(songKeys) ? songKeys : []));
+});
+
+ipcMain.handle('stellaflix-local-library-db-save-index', async (event, folderPath, records) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  if (!folderPath) return { ok: false, error: 'LOCAL_LIBRARY_PATH_EMPTY' };
+  return withLocalLibraryStore((store) => store.saveIndexRecords(folderPath, Array.isArray(records) ? records : []));
+});
+
+ipcMain.handle('stellaflix-local-library-db-clear', async (event, folderPath) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  if (!folderPath) return { ok: false, error: 'LOCAL_LIBRARY_PATH_EMPTY' };
+  return withLocalLibraryStore((store) => store.clearRoot(folderPath));
+});
+
+ipcMain.handle('stellaflix-local-library-db-read-assets', async (event, keys) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  return withLocalLibraryStore((store) => store.readAssetRecords(Array.isArray(keys) ? keys : []));
+});
+
+ipcMain.handle('stellaflix-local-library-db-write-assets', async (event, records) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', saved: 0, total: 0 };
+  return withLocalLibraryStore((store) => {
+    const list = Array.isArray(records) ? records : [records];
+    let saved = 0;
+    for (let i = 0; i < list.length; i += 1) {
+      const result = store.writeAssetRecord(list[i]);
+      if (result && result.ok) saved += 1;
+    }
+    return { ok: true, saved: saved, total: list.length };
   });
-  return { ok: true, count: files.length, token };
 });
 
-ipcMain.handle('stellaflix-local-library-import', async (event, payload = {}) => {
-  if (!isTrustedMainWindowIpc(event)) return { ok: false, count: 0, tracks: [], error: 'UNTRUSTED_SENDER' };
-  pruneLocalMusicImportCapabilities();
-  const token = String(payload && payload.token || '').trim().toLowerCase();
-  const capability = /^[a-f0-9]{48}$/.test(token) ? localMusicImportCapabilities.get(token) : null;
-  if (!capability || capability.senderId !== event.sender.id || capability.expiresAt <= Date.now()) {
-    return { ok: false, count: 0, tracks: [], error: 'LOCAL_IMPORT_CAPABILITY_INVALID' };
-  }
-  localMusicImportCapabilities.delete(token);
+ipcMain.handle('stellaflix-local-library-db-read-lyrics', async (event, keys) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  return withLocalLibraryStore((store) => store.readLyricRecords(Array.isArray(keys) ? keys : []));
+});
+
+ipcMain.handle('stellaflix-local-library-db-restore-lyrics', async (event, entries) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  return withLocalLibraryStore((store) => store.restoreLyricRecords(Array.isArray(entries) ? entries : []));
+});
+
+/**
+ * 读取授权本地文件的字节范围（批3-A 渲染层标签解析器经 IPC 取字节用）。
+ * 参照库 readAuthorizedLocalFileRange 1:1 移植：授权→stat→起止 clamp→64MB 上限→768KB 分块 base64。
+ * 与 /api/local-file 播放代理是两条路：那条供 audio 流式播，这条供解析器随机小范围读 + 合批。
+ * @param {string} filePath 本地文件绝对路径。
+ * @param {number} start 起始字节（含）。
+ * @param {number|null} end 结束字节（不含），null 表示到文件尾。
+ * @returns {Promise<object>} {ok,size,start,end,byteLength,base64Chunks}。
+ */
+async function readAuthorizedLocalFileRange(filePath, start, end) {
+  const target = resolveAuthorizedLocalFile(filePath);
+  const stat = await fs.promises.stat(target);
+  if (!stat.isFile()) throw new Error('LOCAL_FILE_NOT_FOUND');
+  const fileSize = stat.size;
+  const from = Math.max(0, Math.min(fileSize, Number(start) || 0));
+  const requestedEnd = end == null ? fileSize : Number(end);
+  const to = Math.max(from, Math.min(fileSize, Number.isFinite(requestedEnd) ? requestedEnd : fileSize));
+  const maxBytes = 64 * 1024 * 1024;
+  const length = Math.min(maxBytes, to - from);
+  if (!length) return { ok: true, size: fileSize, start: from, end: from, byteLength: 0, base64Chunks: [] };
+  const handle = await fs.promises.open(target, 'r');
   try {
-    return await localMusicLibrary.importFiles(capability.files, { replace: false });
+    const chunkSize = 768 * 1024;
+    const buffer = Buffer.allocUnsafe(Math.min(chunkSize, length));
+    const base64Chunks = [];
+    let bytesReadTotal = 0;
+    // 文件读取允许短读；每轮沿实际字节数推进，直到范围结束或底层明确返回 EOF。
+    while (bytesReadTotal < length) {
+      const requestLength = Math.min(buffer.length, length - bytesReadTotal);
+      const result = await handle.read(buffer, 0, requestLength, from + bytesReadTotal);
+      const bytesRead = result && result.bytesRead || 0;
+      if (!bytesRead) break;
+      base64Chunks.push(buffer.subarray(0, bytesRead).toString('base64'));
+      bytesReadTotal += bytesRead;
+    }
+    return {
+      ok: true,
+      size: fileSize,
+      start: from,
+      end: from + bytesReadTotal,
+      byteLength: bytesReadTotal,
+      base64Chunks,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+ipcMain.handle('stellaflix-local-file-read-range', async (event, filePath, start, end) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return await readAuthorizedLocalFileRange(filePath, start, end);
   } catch (error) {
-    return { ok: false, count: 0, tracks: [], error: error.code || error.message || 'LOCAL_LIBRARY_IMPORT_FAILED' };
+    return { ok: false, error: (error && error.message) || 'LOCAL_FILE_READ_FAILED' };
   }
 });
 
-ipcMain.handle('stellaflix-local-library-remove', async (event, payload = {}) => {
-  if (!isTrustedMainWindowIpc(event)) return { ok: false, count: 0, tracks: [], error: 'UNTRUSTED_SENDER' };
-  try {
-    const ids = Array.isArray(payload && payload.ids) ? payload.ids.slice(0, 5000) : [];
-    return await localMusicLibrary.removeTracks(ids);
-  } catch (error) {
-    return { ok: false, count: 0, tracks: [], error: error.code || error.message || 'LOCAL_LIBRARY_REMOVE_FAILED' };
-  }
+ipcMain.handle('stellaflix-local-library-db-write-lyrics', async (event, records) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', saved: 0, total: 0 };
+  return withLocalLibraryStore((store) => {
+    const list = Array.isArray(records) ? records : [records];
+    let saved = 0;
+    for (let i = 0; i < list.length; i += 1) {
+      const result = store.writeLyricRecord(list[i]);
+      if (result && result.ok) saved += 1;
+    }
+    return { ok: true, saved: saved, total: list.length };
+  });
 });
 
 ipcMain.handle('stellaflix-cache-read-lyric', async (_event, key) => {
@@ -6231,6 +7349,8 @@ async function ensureLocalServerStarted() {
     mainServerPort = port;
     configureLocalAppPermissions();
     configureLocalServerEnvironment(port);
+    // 令牌必须在 require server.js 之前写入环境——模块加载时就读取。
+    process.env.STELLAFLIX_LOCAL_FILE_TOKEN = LOCAL_FILE_TOKEN;
     migrateLegacyAuthStorage();
 
     const serverModulePath = path.join(__dirname, '..', 'server.js');
@@ -6238,6 +7358,10 @@ async function ensureLocalServerStarted() {
     localServer = require(serverModulePath);
     await waitForServer(localServer, STARTUP_SERVER_TIMEOUT_MS);
     await waitForLocalHttpReady(port, STARTUP_HTTP_TIMEOUT_MS);
+    // 授权门必须注入，缺省是"全拒"：没注入前 /api/local-file 一律 403，绝不退化成开放代理。
+    if (localServer && typeof localServer.setLocalFileAuthorizer === 'function') {
+      localServer.setLocalFileAuthorizer(resolveAuthorizedLocalFile);
+    }
     writeStartupState('server-ready', { serverReadyAt: Date.now(), port });
     // 第三方音源：在 server 就绪后初始化 manager/audio-proxy，并注入 bridge
     try {
@@ -6686,23 +7810,27 @@ async function createWindowOnce() {
     sendWindowState(win);
     if (fullDesktopModeHostVisibilityTransitionDepth <= 0) suspendWallpaperEngineForHiddenHost(win, 'minimize');
     scheduleAppMemoryTrim('minimize', 1600);
+    miniPlayerRuntime.notifyMainWindowStateChanged();
   });
   win.on('restore', () => {
     win.__stellaflixIntentionalHide = false;
     sendWindowState(win);
     if (fullDesktopModeHostVisibilityTransitionDepth <= 0) resumeWallpaperEngineForVisibleHost(win, 'restore');
+    miniPlayerRuntime.notifyMainWindowStateChanged();
   });
   win.on('show', () => {
     win.__stellaflixIntentionalHide = false;
     if (fullDesktopModeHostVisibilityTransitionDepth > 0) return;
     sendWindowState(win);
     resumeWallpaperEngineForVisibleHost(win, 'show');
+    miniPlayerRuntime.notifyMainWindowStateChanged();
   });
   win.on('hide', () => {
     if (fullDesktopModeHostVisibilityTransitionDepth > 0) return;
     sendWindowState(win);
     suspendWallpaperEngineForHiddenHost(win, 'hide');
     scheduleAppMemoryTrim('hide', 2200);
+    miniPlayerRuntime.notifyMainWindowStateChanged();
   });
   win.on('focus', () => sendWindowState(win));
   win.on('blur', () => sendWindowState(win));
@@ -6797,6 +7925,7 @@ async function createWindowOnce() {
       closeOverlayWindows('main-window-closed');
       mainWindow = null;
     }
+    miniPlayerRuntime.notifyMainWindowStateChanged();
   });
   win.on('enter-full-screen', () => {
     windowFullscreenActive = true;
@@ -6962,10 +8091,23 @@ if (!_lock) {
       console.warn('[StellaflixVideo] 影视态初始化失败:', error && error.message || error);
     }
     try {
-      await localMusicLibrary.installProtocol(protocol);
-    } catch (error) {
+          } catch (error) {
       console.warn('[LocalMusic] media protocol unavailable:', error && error.message || error);
     }
+    // 旧曲库（local-music-library.json）一次性迁移到新 SQLite 层：幂等、不阻塞窗口创建、失败只记日志。
+    // 旧协议层（stellaflix-local://）仍在职责内为本地音乐兜底，迁移纯增量叠加，不删旧资产。
+    // userDataPath 必须用旧系统同一个 STABLE_USER_DATA_PATH（含 QA 覆盖），否则 QA 模式下会读错目录、静默跳过。
+    migrateLocalMusicLibraryFromLegacy({ userDataPath: STABLE_USER_DATA_PATH })
+      .then((res) => {
+        if (res && res.skipped) {
+          console.log('[LocalMusicMigration] skipped:', res.skipped);
+        } else if (res && res.ok) {
+          console.log(`[LocalMusicMigration] done: roots=${res.roots}, overlaid=${res.overlaid}`);
+        } else if (res && res.error) {
+          console.warn('[LocalMusicMigration] failed:', res.error);
+        }
+      })
+      .catch((err) => console.warn('[LocalMusicMigration] unexpected error:', err && err.message || err));
     try {
       await wallpaperEngineLibrary.installProtocol(protocol);
     } catch (error) {
@@ -6974,6 +8116,7 @@ if (!_lock) {
     const handleDisplayLayoutChanged = (_event, _display, changedMetrics) => {
       positionDesktopLyricsWindow();
       positionWallpaperWindow(Array.isArray(changedMetrics) ? 'display-metrics-changed' : 'display-layout-changed');
+      coverWallpaperRuntime.reconcile(Array.isArray(changedMetrics) ? 'display-metrics-changed' : 'display-layout-changed');
       if (fullDesktopModeRuntime.getStatus('display-layout-clamp').enabled !== true) {
         ensureMainWindowInsideDisplay(mainWindow);
       }
@@ -6986,8 +8129,14 @@ if (!_lock) {
     screen.on('display-metrics-changed', handleDisplayLayoutChanged);
     screen.on('display-added', handleDisplayLayoutChanged);
     screen.on('display-removed', handleDisplayLayoutChanged);
-    powerMonitor.on('resume', () => restoreUnexpectedFullscreenVisibility(mainWindow, 'system-resume'));
-    powerMonitor.on('unlock-screen', () => restoreUnexpectedFullscreenVisibility(mainWindow, 'screen-unlock'));
+    powerMonitor.on('resume', () => {
+      restoreUnexpectedFullscreenVisibility(mainWindow, 'system-resume');
+      coverWallpaperRuntime.reconcile('resume');
+    });
+    powerMonitor.on('unlock-screen', () => {
+      restoreUnexpectedFullscreenVisibility(mainWindow, 'screen-unlock');
+      coverWallpaperRuntime.reconcile('unlock-screen');
+    });
     await createWindow();
   }).catch((e) => reportWindowCreationFailure('Main', e));
 
@@ -7020,6 +8169,10 @@ if (!_lock) {
     unregisterFullDesktopEscapeShortcut();
     unregisterStellaflixGlobalHotkeys();
     closeDesktopLyricsWindow();
+    miniPlayerRuntime.dispose();
+    // 监控句柄必须排在 SQLite 之前收：句柄不关会吊住进程退出，库没关又会丢 WAL。
+    closeLocalLibraryWatcher();
+    closeLocalLibraryStore();
     disposeCustomSource();
     if (localServer && localServer.close) localServer.close();
     if (tray) {
@@ -7072,6 +8225,9 @@ if (!_lock) {
       // its exact WE source/DWM companion is disposed. Running these in
       // parallel can race the native detach acknowledgement.
       await disposeFullDesktopModeWithGuard();
+      await Promise.resolve(coverWallpaperRuntime.dispose()).catch((error) => {
+        console.warn('[CoverWallpaper] dispose failed:', error && error.message || error);
+      });
       await wallpaperEngineRuntime.dispose().then((result) => {
         if (result && result.ok === false) {
           console.warn('[Wallpaper Engine] dispose incomplete:', result.reason || 'WALLPAPER_ENGINE_WINDOW_CLOSE_FAILED');

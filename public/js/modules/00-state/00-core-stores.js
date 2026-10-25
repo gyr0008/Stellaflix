@@ -140,6 +140,7 @@ var queueHydrationState = {
 var CUSTOM_COVER_STORE_KEY = 'stellaflix-custom-covers';
 var CUSTOM_LYRIC_STORE_KEY = 'stellaflix-custom-lyrics-v1';
 var CUSTOM_LYRIC_PREF_STORE_KEY = 'stellaflix-custom-lyric-prefs-v1';
+var LOCAL_LYRIC_PICK_STORE_KEY = 'stellaflix-local-lyric-picks-v1';
 var CUSTOM_LYRIC_FONT_STORE_KEY = 'stellaflix-custom-lyric-fonts-v1';
 var CUSTOM_LYRIC_FONT_MAX_COUNT = 6;
 var CUSTOM_LYRIC_FONT_MAX_BYTES = 3.6 * 1024 * 1024;
@@ -250,6 +251,8 @@ if (typeof warmCustomCoverCache === 'function') {
 }
 var customLyricMap = readCustomLyricMap();
 var customLyricPrefs = readCustomLyricPrefs();
+var localLyricPicks = {};
+var localLyricPicksHydrated = false;
 var customLyricFonts = readCustomLyricFonts();
 registerSavedCustomLyricFonts();
 var localBeatMapCache = readLocalBeatMapCache();

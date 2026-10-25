@@ -22,6 +22,7 @@ updateStartSpaceUI();
 applyControlsAutoHidePreference();
 applyDesktopLyricsState(false);
 applyWallpaperModeState(false);
+if (typeof initCoverWallpaper === 'function') initCoverWallpaper(getDesktopWindowApi());
 setShelfMode(fx.shelf);
 if (fx.shelf === 'side') setShelfPinnedOpen(!!fx.shelfPinnedOpen, true, false);
 var restoredPlaybackAtStartup = restoreLastPlaybackSnapshot();

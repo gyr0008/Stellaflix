@@ -40,29 +40,56 @@ contextBridge.exposeInMainWorld('desktopWindow', {
     ipcRenderer.on('stellaflix-wallpaper-engine-host-bounds-changed', listener);
     return () => ipcRenderer.removeListener('stellaflix-wallpaper-engine-host-bounds-changed', listener);
   },
-  listLocalMusicLibrary: () => ipcRenderer.invoke('stellaflix-local-library-list'),
-  readLocalMusicLyric: (localFileId) => ipcRenderer.invoke('stellaflix-local-library-lyric', String(localFileId || '')),
-  importLocalMusicFiles: async (files) => {
-    const entries = [];
-    for (const file of Array.from(files || [])) {
-      let filePath = '';
-      try {
-        filePath = webUtils && typeof webUtils.getPathForFile === 'function' ? webUtils.getPathForFile(file) : '';
-      } catch (_) {}
-      if (!filePath) continue;
-      entries.push({
-        path: filePath,
-        relativePath: String(file && (file.webkitRelativePath || file.name) || ''),
-      });
+  // 批4-D 前置：从拖入的 File 反推父文件夹（去重），供新引擎按文件夹导入（渲染层拿不到落盘路径）。
+  localMusicFoldersForFiles: (files) => {
+    try {
+      const path = require('path');
+      const folders = [];
+      const seen = new Set();
+      for (const file of Array.from(files || [])) {
+        let filePath = '';
+        try {
+          filePath = webUtils && typeof webUtils.getPathForFile === 'function' ? webUtils.getPathForFile(file) : '';
+        } catch (_) {}
+        if (!filePath) continue;
+        const dir = path.dirname(filePath);
+        const key = dir.toLowerCase();
+        if (!seen.has(key)) { seen.add(key); folders.push(dir); }
+      }
+      return Promise.resolve({ ok: true, folders });
+    } catch (e) {
+      return Promise.resolve({ ok: false, folders: [], error: (e && e.message) || 'FOLDERS_FOR_FILES_FAILED' });
     }
-    if (!entries.length) return { ok: false, count: 0, tracks: [], error: 'NO_AUTHORIZED_LOCAL_AUDIO' };
-    const authorization = await ipcRenderer.invoke('stellaflix-local-library-authorize', { files: entries });
-    if (!authorization || authorization.ok !== true || !authorization.token) return authorization;
-    return ipcRenderer.invoke('stellaflix-local-library-import', { token: authorization.token });
   },
-  removeLocalMusicTracks: (ids) => ipcRenderer.invoke('stellaflix-local-library-remove', {
-    ids: Array.isArray(ids) ? ids.map((id) => String(id || '')) : [],
-  }),
+  localLibraryDbStatus: () => ipcRenderer.invoke('stellaflix-local-library-db-status'),
+  bumpLocalLibraryDbPlayStat: (payload) => ipcRenderer.invoke('stellaflix-local-library-db-bump-play', payload || {}),
+  setLocalLibraryDbFavorite: (payload) => ipcRenderer.invoke('stellaflix-local-library-db-set-favorite', payload || {}),
+  // 音乐文件夹自动监控：监控列表由渲染层的曲库根决定，主进程只负责把合并后的变更推回来。
+  setLocalLibraryWatchRoots: (folders) => ipcRenderer.invoke('stellaflix-local-library-watch-set-roots', Array.isArray(folders) ? folders : []),
+  getLocalLibraryWatchStatus: () => ipcRenderer.invoke('stellaflix-local-library-watch-status'),
+  onLocalLibraryWatchChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('stellaflix-local-library-watch-changed', listener);
+    return () => ipcRenderer.removeListener('stellaflix-local-library-watch-changed', listener);
+  },
+  // 批2-B-2：本地曲库扫描 / 落库 / 失效探测的渲染层入口，通道名与 main.js 一一对应。
+  chooseLocalMusicFolder: () => ipcRenderer.invoke('stellaflix-local-music-choose-folder'),
+  scanLocalMusicFolder: (folderPath, options) => ipcRenderer.invoke('stellaflix-local-music-scan-folder', folderPath, options || {}),
+  refreshLocalMusicFileEntries: (folderPath, files) => ipcRenderer.invoke('stellaflix-local-music-refresh-entries', folderPath, files),
+  probeAuthorizedLocalFiles: (paths) => ipcRenderer.invoke('stellaflix-local-music-probe-entries', paths),
+  loadLocalLibraryDbRoot: (folderPath, options) => ipcRenderer.invoke('stellaflix-local-library-db-load', folderPath, options || {}),
+  listLocalLibraryDbRoots: () => ipcRenderer.invoke('stellaflix-local-library-db-list-roots'),
+  deleteLocalLibraryDbFiles: (folderPath, songKeys) => ipcRenderer.invoke('stellaflix-local-library-db-delete-files', folderPath, songKeys),
+  saveLocalLibraryDbIndexRecords: (folderPath, records) => ipcRenderer.invoke('stellaflix-local-library-db-save-index', folderPath, records),
+  clearLocalLibraryDbRoot: (folderPath) => ipcRenderer.invoke('stellaflix-local-library-db-clear', folderPath),
+  readLocalLibraryDbAssets: (keys) => ipcRenderer.invoke('stellaflix-local-library-db-read-assets', keys),
+  writeLocalLibraryDbAssets: (records) => ipcRenderer.invoke('stellaflix-local-library-db-write-assets', records),
+  readLocalLibraryDbLyrics: (keys) => ipcRenderer.invoke('stellaflix-local-library-db-read-lyrics', keys),
+  writeLocalLibraryDbLyrics: (records) => ipcRenderer.invoke('stellaflix-local-library-db-write-lyrics', records),
+  restoreLocalLibraryDbLyrics: (entries) => ipcRenderer.invoke('stellaflix-local-library-db-restore-lyrics', entries),
+  // 批3-A：标签解析器经 IPC 读授权本地文件字节范围（与 /api/local-file 播放代理两条路）。
+  readLocalFileRange: (filePath, start, end) => ipcRenderer.invoke('stellaflix-local-file-read-range', String(filePath || ''), start, end),
   readLyricCache: (key) => ipcRenderer.invoke('stellaflix-cache-read-lyric', key || ''),
   writeLyricCache: (key, payload) => ipcRenderer.invoke('stellaflix-cache-write-lyric', key || '', payload || {}),
   close: (behavior) => ipcRenderer.invoke('desktop-window-close', behavior),
@@ -122,6 +149,16 @@ contextBridge.exposeInMainWorld('desktopWindow', {
     const listener = (_event, payload) => callback(payload || {});
     ipcRenderer.on('stellaflix-desktop-lyrics-enabled-state', listener);
     return () => ipcRenderer.removeListener('stellaflix-desktop-lyrics-enabled-state', listener);
+  },
+  setMiniPlayerEnabled: (enabled) => ipcRenderer.invoke('stellaflix-mini-player-set-enabled', enabled === true),
+  setMiniPlayerMode: (mode) => ipcRenderer.invoke('stellaflix-mini-player-set-mode', String(mode || '')),
+  prepareMiniPlayerTransition: () => ipcRenderer.invoke('stellaflix-mini-player-prepare-transition'),
+  updateMiniPlayer: (payload) => ipcRenderer.invoke('stellaflix-mini-player-update', payload || {}),
+  onMiniPlayerCommand: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('stellaflix-mini-player-command', listener);
+    return () => ipcRenderer.removeListener('stellaflix-mini-player-command', listener);
   },
   setWallpaperMode: (enabled, payload) => ipcRenderer.invoke('stellaflix-wallpaper-set-enabled', !!enabled, payload || {}),
   updateWallpaperMode: (payload) => ipcRenderer.invoke('stellaflix-wallpaper-update', payload || {}),

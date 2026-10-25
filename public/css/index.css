@@ -1122,9 +1122,11 @@ html:fullscreen body.desktop-shell #wallpaper-engine-freeze {
 #cover-wallpaper-board{position:fixed;inset:0;z-index:0;display:none;pointer-events:none;opacity:0;transition:opacity .45s ease}
 #cover-wallpaper-board.mounted{display:block}
 #cover-wallpaper-board.active{opacity:1}
-/* 背景板是封面派生的整幅画面，与封面模糊底图/自定义背景叠层会互相糊掉，启用时让位。 */
-/* #album-bg-next 必须一起让位：它是切歌交叉淡入的孪生层，同为 z-index:0 但 DOM 排在
-   #cover-wallpaper-board 之后，漏掉它就会在切歌时把壁纸盖住（只剩一圈光晕）。 */
+/* 背景板是封面派生的整幅画面，与封面模糊底图/自定义背景叠层会互相糊掉，启用时让位。
+   #album-bg-next 必须一起让位：它是切歌交叉淡入的孪生层
+   （03-beat/05-cover-loading-crop.js setAlbumBackground 在两个槽位间交替加 .visible），
+   同为 z-index:0 但 DOM 排在 #cover-wallpaper-board 之后，漏掉它就会在切歌时
+   盖住背景板 —— 中间压暗成「原有背景」、四边因 blur(120px) 采到透明像素露出板的光晕。 */
 body.cover-wallpaper-board-active #album-bg,
 body.cover-wallpaper-board-active #album-bg-next,
 body.cover-wallpaper-board-active #custom-bg,
@@ -19368,3 +19370,228 @@ body.desktop-shell.desktop-wallpaper-mode.diy-mode #bottom-bar.stage-mode {
 @media (max-width: 480px) {
   .radio-mode-grid { grid-template-columns: 1fr; }
 }
+
+/* ── 迷你播放器：收起过渡 + 设置面板（移植自参照源码 app.css :32-36 / :1427-1442，追加于文件末尾以保证源码序覆盖） ── */
+body.mini-collapsing #desktop-window-shell{transform-origin:var(--mini-collapse-x,92%) var(--mini-collapse-y,96%);transition:transform .2s cubic-bezier(.3,0,.8,.15),opacity .17s cubic-bezier(.4,0,.9,.4) .02s,filter .18s ease;will-change:transform,opacity,filter}
+body.mini-collapsing.desktop-maximized #desktop-window-shell{border-radius:26px!important}
+body.mini-collapsing.mini-collapse-run #desktop-window-shell{transform:translateZ(0) scale(.6);opacity:0;filter:brightness(.82) saturate(.92)}
+body.mini-collapse-reset #desktop-window-shell{transition:none!important;transform:translateZ(0) scale(1)!important;opacity:1!important;filter:none!important;will-change:auto}
+@media (prefers-reduced-motion:reduce){body.mini-collapsing #desktop-window-shell{transition-duration:.06s!important}}
+.mini-player-collapse-setting{width:100%;margin:0 0 9px;font-family:inherit;text-align:left}
+.mini-player-enable-setting{width:100%;margin-bottom:14px}
+.fx-mini-player-settings{padding:2px 0 4px}
+.fx-mini-player-settings-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;padding:13px 14px;border:1px solid rgba(var(--fc-accent-rgb),.15);border-radius:14px;background:rgba(var(--fc-accent-rgb),.045);box-shadow:inset 0 1px 0 rgba(255,255,255,.055)}
+.fx-mini-player-settings-head>span{display:flex;flex-direction:column;gap:4px;min-width:0}
+.fx-mini-player-settings-head strong{font-size:13px;font-weight:720;color:rgba(255,255,255,.92);letter-spacing:.04em}
+.fx-mini-player-settings-head small{font-size:10px;color:rgba(255,255,255,.42);letter-spacing:.03em}
+.fx-mini-player-settings-head>em{flex:0 0 auto;padding:4px 7px;border:1px solid rgba(var(--fc-accent-rgb),.22);border-radius:999px;background:rgba(var(--fc-accent-rgb),.07);color:rgba(var(--fc-accent-rgb),.82);font-size:9px;font-style:normal;font-weight:800;letter-spacing:.12em}
+.fx-mini-player-settings>.fx-section-label{margin-top:15px}
+.mini-player-collapse-hint{margin:-2px 2px 2px;padding:0 4px;color:rgba(255,255,255,.38);font-size:10px;line-height:1.5}
+.mini-player-collapse-copy{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.mini-player-collapse-copy strong{font-size:11.5px;font-weight:600;color:inherit;white-space:nowrap}
+.mini-player-collapse-copy small{margin-left:auto;font-size:9.5px;font-weight:650;letter-spacing:.06em;color:rgba(255,255,255,.38)}
+.mini-player-collapse-glyph{width:21px;height:21px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 21px;padding:0!important;border-radius:7px;border:1px solid rgba(255,139,157,.22);background:rgba(255,105,128,.075);color:rgba(255,174,188,.82);font-size:16px;font-style:normal;font-weight:360;line-height:1}
+.mini-player-collapse-setting.on .mini-player-collapse-glyph{border-color:rgba(255,154,170,.38);background:rgba(255,105,128,.13);color:#ffd3da}
+.mini-player-collapse-setting.on .mini-player-collapse-copy small{color:var(--fc-accent)}
+
+/* ── 发现类弹窗「premium 玻璃壳」1:1 移植自 Mineradio-LX-Music-1.7.0 二级视图壳净值
+   （其 index.html:4836-4881 三层覆盖链折叠后的最终生效值；radial 900px 420px 层与
+   inset 0 0 0 1px .025 阴影为其死代码，未随迁）。
+   作用域 = .modal-mask.sfv-glass-modal（平台推荐/音乐电台两弹窗）；本地曲库弹窗不挂。
+   约束：本段必须留在全局作用域——掉进任何 @media 会让桌面宽度拿不到壳尺寸/玻璃。 ── */
+.modal-mask.sfv-glass-modal {
+  z-index: 80;
+  background:
+    radial-gradient(900px 480px at 14% -12%, rgba(255, 255, 255, .16), transparent 56%),
+    radial-gradient(720px 440px at 96% 108%, rgba(var(--fc-accent-rgb), .11), transparent 60%),
+    rgba(0, 0, 0, .34)
+}
+.modal-mask.sfv-glass-modal .modal {
+  isolation: isolate;
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 34px;
+  background:
+    radial-gradient(900px 480px at 14% -12%, rgba(255, 255, 255, .16), transparent 56%),
+    radial-gradient(720px 440px at 96% 108%, rgba(var(--fc-accent-rgb), .11), transparent 60%),
+    linear-gradient(145deg, rgba(27, 30, 39, .72), rgba(10, 12, 18, .60) 54%, rgba(8, 10, 15, .68));
+  box-shadow: 0 38px 110px rgba(0, 0, 0, .55), 0 12px 34px rgba(0, 0, 0, .30), inset 0 1px 0 rgba(255, 255, 255, .30), inset 1px 0 0 rgba(255, 255, 255, .08), inset 0 -1px 0 rgba(255, 255, 255, .06);
+  backdrop-filter: blur(42px) saturate(1.48) contrast(1.04);
+  -webkit-backdrop-filter: blur(42px) saturate(1.48) contrast(1.04);
+  color: #fff;
+  text-align: left;
+  transform: scale(.982);
+  filter: saturate(.94);
+  transition: transform .26s, filter .26s;
+}
+.modal-mask.sfv-glass-modal .modal::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: 1px;
+  border-radius: 33px;
+  background: linear-gradient(118deg, rgba(255, 255, 255, .17), rgba(255, 255, 255, .02) 34%, rgba(var(--fc-accent-rgb), .08));
+  opacity: .88;
+  pointer-events: none;
+}
+.modal-mask.sfv-glass-modal .modal::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  left: 7%;
+  right: 7%;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .70), rgba(var(--fc-accent-rgb), .58), transparent);
+  box-shadow: 0 1px 18px rgba(255, 255, 255, .20);
+  pointer-events: none;
+}
+.modal-mask.sfv-glass-modal .modal > * { position: relative; z-index: 1; }
+.modal-mask.sfv-glass-modal.show .modal {
+  transform: none;
+  filter: none;
+}
+body.render-deep-sleep .modal-mask.sfv-glass-modal .modal {
+  backdrop-filter: blur(8px) saturate(1.04);
+  -webkit-backdrop-filter: blur(8px) saturate(1.04);
+}
+/* 两弹窗内壳=尺寸唯一钳制者（特异性高于外层 .modal 规则，勿在外层重复尺寸）：
+   承载参照库 premium 窗净值尺寸，只撤自家旧外观；首版曾在此写 auto/none 撤尺寸，
+   导致 29 张电台卡把壳撑出视口、头部顶没——教训已钉进 glass-modal-shell 测试。 */
+.modal-mask.sfv-glass-modal .home-radio-modes-modal {
+  width: min(1480px, calc(100vw - 144px));
+  max-width: min(1480px, calc(100vw - 144px));
+  height: min(790px, calc(100vh - 150px));
+  max-height: min(790px, calc(100vh - 150px));
+  padding: 0;
+  background: transparent; border: 0; border-radius: 34px; box-shadow: none;
+}
+.modal-mask.sfv-glass-modal .home-platform-recommend-modal {
+  width: min(1480px, calc(100vw - 144px));
+  max-width: min(1480px, calc(100vw - 144px));
+  height: min(790px, calc(100vh - 150px));
+  max-height: min(790px, calc(100vh - 150px));
+  padding: 22px;
+  background: transparent; border: 0; border-radius: 34px; box-shadow: none;
+}
+.modal-mask.sfv-glass-modal .home-platform-recommend-list { max-height: none; }
+/* 壳给了确定高度 → 列内固定行必须退出收缩。.home-platform-recommend-tabs 是横向滚动容器，
+   滚动容器的自动最小尺寸为 0，首版被 flex 收缩压到 6px、五个平台 pill 只剩顶部（10-26 真机截图实证）。 */
+.modal-mask.sfv-glass-modal .home-platform-recommend-head,
+.modal-mask.sfv-glass-modal .home-platform-recommend-tabs,
+.modal-mask.sfv-glass-modal .home-platform-recommend-status,
+.modal-mask.sfv-glass-modal .home-platform-recommend-actions { flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) {
+  .modal-mask.sfv-glass-modal .modal { transition: none !important; }
+}
+
+/* ── 排行榜行墙 + 电台内容层「净值」1:1 移植自 Mineradio-LX-Music-1.7.0 public/index.html
+   （740-745 基础层 + 4628-4644 premium 层 + 4451-4465 行墙 + 4487-4503 电台，三层覆盖链折叠后的最终生效值；
+   .online-playlist-* 与 #secondary-library-page 属别页，未随迁）。
+   作用域=排行榜弹窗内容层 + 电台弹窗内容层；玻璃壳净值见上方 .sfv-glass-modal 段，勿在此重复尺寸。
+   约束：本段必须留在全局作用域——掉进任何 @media 会让桌面宽度拿不到行墙尺寸（backtotop 事故同款）；
+   唯一例外=段末 max-width:820px 的退化四列，必须留在媒体查询内（tests/ranking-radio-content-netvalue.test.js 双向钉）。
+   载体偏离（只多不少，数值零改）：①参照库两页是整页二级视图，SF 用弹窗承载 → 内容区改为弹窗内滚动；
+   ②参照库把 .ranking-row 拆成 4457/4463 两条同选择器规则，此处按声明顺序合并为一条（级联结果等价）；
+   ③电台分类 tab 在 SF 叫 .home-radio-modes-tabs（参照库叫 .radio-mode-tabs），净值按 SF 名落地。 ── */
+.playlist-square-tabs{display:flex;gap:7px;overflow-x:auto;padding:0 1px 8px;scrollbar-width:none}
+.playlist-square-tabs::-webkit-scrollbar{display:none}
+.playlist-square-tag{height:31px;padding:0 12px;flex:0 0 auto;border:1px solid rgba(255,255,255,.10);border-radius:999px;background:rgba(255,255,255,.04);color:rgba(255,255,255,.56);font:720 10.5px inherit;cursor:pointer}
+.playlist-square-tag:hover,.playlist-square-tag.active{color:#fff;border-color:rgba(var(--fc-accent-rgb),.45);background:rgba(var(--fc-accent-rgb),.13)}
+.ranking-platform-tabs{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+.ranking-platform-tabs::-webkit-scrollbar{display:none}
+.ranking-platform-btn{height:34px;flex:0 0 auto;padding:0 13px;border:1px solid rgba(255,255,255,.105);border-radius:999px;background:rgba(255,255,255,.045);color:rgba(255,255,255,.60);font:750 11px inherit;cursor:pointer;transition:background .18s,border-color .18s,color .18s,transform .18s}
+.ranking-platform-btn:hover{color:#fff;background:rgba(255,255,255,.085);transform:translateY(-1px)}
+.ranking-platform-btn.active{color:#fff;border-color:rgba(var(--fc-accent-rgb),.48);background:rgba(var(--fc-accent-rgb),.15);box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 20px rgba(var(--fc-accent-rgb),.08)}
+.ranking-toolbar-spacer{flex:1}
+.ranking-content{padding-top:14px!important}
+.ranking-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:14px 16px;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:linear-gradient(145deg,rgba(255,255,255,.055),rgba(0,0,0,.12));box-shadow:inset 0 1px 0 rgba(255,255,255,.055)}
+.ranking-summary-copy{min-width:0}
+.ranking-summary-title{font-size:16px;font-weight:790;color:#fff}
+.ranking-summary-note{margin-top:5px;font-size:10.5px;color:rgba(255,255,255,.44)}
+.ranking-summary-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.ranking-list{display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.075);border-radius:20px;overflow:hidden;background:rgba(0,0,0,.16)}
+.ranking-row{display:grid;grid-template-columns:46px 50px minmax(0,1fr) 72px 112px;align-items:center;gap:12px;min-height:68px;padding:8px 13px;border:0;border-bottom:1px solid rgba(255,255,255,.05);background:transparent;color:#fff;text-align:left;transition:background .18s,transform .18s;content-visibility:auto;contain:layout paint style;contain-intrinsic-size:0 68px}
+.ranking-row:last-child{border-bottom:0}
+.ranking-row:hover{background:linear-gradient(90deg,rgba(var(--fc-accent-rgb),.09),rgba(255,255,255,.025));transform:translateX(2px)}
+.ranking-number{font-size:17px;font-weight:850;text-align:center;color:rgba(255,255,255,.38);font-variant-numeric:tabular-nums}
+.ranking-row:nth-child(-n+3) .ranking-number{color:rgba(var(--fc-accent-rgb),.90);text-shadow:0 0 18px rgba(var(--fc-accent-rgb),.18)}
+.ranking-cover{width:50px;height:50px;border-radius:13px;object-fit:cover;background:linear-gradient(135deg,rgba(var(--fc-accent-rgb),.28),rgba(255,255,255,.05));box-shadow:0 9px 22px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.11)}
+.ranking-copy{min-width:0}
+.ranking-song-title{font-size:13.5px;font-weight:760;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ranking-song-sub{margin-top:5px;font-size:10.5px;color:rgba(255,255,255,.44);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ranking-source{justify-self:end;padding:5px 8px;border:1px solid rgba(255,255,255,.08);border-radius:999px;color:rgba(255,255,255,.48);font-size:9.5px;font-weight:760;white-space:nowrap}
+.ranking-row-actions{display:flex;justify-content:flex-end;gap:5px}
+.ranking-icon-btn{width:32px;height:32px;display:grid;place-items:center;padding:0;border:1px solid rgba(255,255,255,.11);border-radius:10px;background:rgba(255,255,255,.045);color:rgba(255,255,255,.67);font:800 13px/1 inherit;cursor:pointer}
+.ranking-icon-btn:hover{color:#fff;border-color:rgba(var(--fc-accent-rgb),.40);background:rgba(var(--fc-accent-rgb),.12)}
+.ranking-state{padding:54px 20px;text-align:center;color:rgba(255,255,255,.40);font-size:12px}
+.ranking-state strong{display:block;margin-bottom:8px;color:rgba(255,255,255,.78);font-size:16px}
+.ranking-load-more{width:100%;height:46px;border:0;border-top:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.025);color:rgba(255,255,255,.62);font:750 11px inherit;cursor:pointer}
+.ranking-load-more:hover{color:#fff;background:rgba(var(--fc-accent-rgb),.08)}
+.radio-content{padding-top:14px!important}
+.radio-intro{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:14px;padding:15px 18px;border:1px solid rgba(255,255,255,.085);border-radius:19px;background:linear-gradient(120deg,rgba(var(--fc-accent-rgb),.10),rgba(255,255,255,.035),rgba(0,0,0,.14));box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
+.radio-intro strong{display:block;font-size:16px;color:#fff}
+.radio-intro span{display:block;margin-top:5px;font-size:10.5px;color:rgba(255,255,255,.46)}
+.radio-intro-mark{flex:0 0 auto;padding:7px 11px;border-radius:999px;background:rgba(var(--fc-accent-rgb),.12);color:rgba(255,255,255,.78);font-size:10px;font-weight:760}
+.home-radio-modes-tabs{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+.home-radio-modes-tabs::-webkit-scrollbar{display:none}
+.radio-category-btn{height:34px;flex:0 0 auto;padding:0 14px;border:1px solid rgba(255,255,255,.105);border-radius:999px;background:rgba(255,255,255,.045);color:rgba(255,255,255,.58);font:750 11px inherit;cursor:pointer;transition:all .18s}
+.radio-category-btn:hover{color:#fff;background:rgba(255,255,255,.09);transform:translateY(-1px)}
+.radio-category-btn.active{color:#fff;border-color:rgba(var(--fc-accent-rgb),.48);background:rgba(var(--fc-accent-rgb),.15);box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+/* 电台卡底色：参照库不用纯色变量渐变，而是把两个主题色 color-mix 压进暗底（138deg），
+   29 张卡同屏时对比度才不会互相吃掉。此处只覆写 background，其余卡属性维持上方自家规则。 */
+.radio-mode-card{background:linear-gradient(138deg,color-mix(in srgb,var(--radio-a) 65%,#10131a),color-mix(in srgb,var(--radio-b) 72%,#080a10))}
+/* 排行榜弹窗内壳=尺寸唯一钳制者（同 .home-radio-modes-modal 口径，勿写 auto/none，见 glass-modal-shell 教训） */
+.modal-mask.sfv-glass-modal .daily-hot-ranking-modal {
+  width: min(1480px, calc(100vw - 144px));
+  max-width: min(1480px, calc(100vw - 144px));
+  height: min(790px, calc(100vh - 150px));
+  max-height: min(790px, calc(100vh - 150px));
+  padding: 0;
+  background: transparent; border: 0; border-radius: 34px; box-shadow: none;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+/* 载体偏离：弹窗承载整页 → 内容区在弹窗内滚动，行墙不得把壳撑高 */
+.modal-mask.sfv-glass-modal .ranking-content{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.modal-mask.sfv-glass-modal .ranking-platform-tabs,.modal-mask.sfv-glass-modal #ranking-chart-tabs{flex:0 0 auto}
+.modal-mask.sfv-glass-modal .radio-intro{flex:0 0 auto;margin:14px 24px 0}
+/* 网格容器拿到确定高度后，align-content:normal 会把 auto 行拉满余量：3 张卡时单行从 156px 撑到 200px+，
+   卡内 kicker/标题按参照库的 margin-top:44px 顶对齐 → 视觉上变成「卡片填满了页面」。收成 start 保住净值卡高。 */
+.modal-mask.sfv-glass-modal .radio-mode-grid{align-content:start}
+.daily-hot-ranking-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 22px 24px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 16px;
+}
+.daily-hot-ranking-head h2 { font-size: 20px; font-weight: 600; color: #f0f3ff; margin: 0 0 4px; line-height: 1.3; }
+.daily-hot-ranking-head h2 + p { font-size: 12.5px; color: rgba(235, 240, 255, 0.55); line-height: 1.55; margin: 0; }
+.daily-hot-ranking-kicker { display: block; font-size: 9.5px; font-weight: 750; letter-spacing: .18em; text-transform: uppercase; color: rgba(var(--fc-accent-rgb), .72); }
+.daily-hot-ranking-close {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(235, 240, 255, 0.7);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s;
+}
+.daily-hot-ranking-close:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+/* 二级视图公共外壳：参照库里 .secondary-* 属 premium 层（index.html:4628-4644），
+   写在 .ranking-platform-tabs(4451) 与 .playlist-square-tabs(约4500) 之后 → 同元素双类名时由它胜出
+   （#ranking-chart-tabs 与平台 tab 行的 padding 因此是 12px 22px 0，不是 0 1px 8px / 4px）。
+   顺序=级联的一部分，勿把本段上移到 ranking/playlist 之前。 */
+.secondary-toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:12px 22px 0}
+.secondary-content{padding:15px 22px 22px}
+.secondary-action{min-height:36px;padding:0 13px;border:1px solid rgba(255,255,255,.11);border-radius:12px;background:linear-gradient(145deg,rgba(255,255,255,.085),rgba(255,255,255,.025));box-shadow:inset 0 1px 0 rgba(255,255,255,.075),0 8px 22px rgba(0,0,0,.12);color:rgba(255,255,255,.76);font:inherit;font-size:11px;font-weight:700;cursor:pointer;transition:background .2s,border-color .2s,color .2s,transform .2s}
+.secondary-action:hover,.secondary-action:focus-visible{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.22);color:#fff;transform:translateY(-1px);outline:2px solid rgba(var(--fc-accent-rgb),.28);outline-offset:1px}
+.secondary-action.primary{border-color:rgba(var(--fc-accent-rgb),.32);color:#eafffb;background:linear-gradient(145deg,rgba(var(--fc-accent-rgb),.19),rgba(var(--fc-accent-rgb),.075));box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 10px 28px rgba(var(--fc-accent-rgb),.08)}
+.secondary-action.danger{color:#ff9aa7;border-color:rgba(255,83,103,.22)}
+@media (max-width:820px){.ranking-row{grid-template-columns:34px 44px minmax(0,1fr) 92px;padding:8px}.ranking-cover{width:44px;height:44px}.ranking-source{display:none}.ranking-summary{align-items:flex-start;flex-direction:column}.ranking-summary-actions{width:100%}.ranking-summary-actions .secondary-action{flex:1}}
+
