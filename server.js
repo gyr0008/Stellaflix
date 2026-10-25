@@ -8034,10 +8034,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---------- LX 脚本源路由族（批 T7，移植上游 server.js:2725-3145 各段） ----------
-  // 9 条路由：status/resolve/lyric/import/select/toggle/check/delete/search。
-  // 裁决1：playlist-search:3118、playlist-square:3132、daily-hot/platform-charts/
-  // song-cover-search:3060-3104 不在移植范围（searchPlaylists 爬虫已裁、推荐路由无消费方、
-  // 163 官方 API 冲突「平台API全下线」裁决）；本前缀下未知子路径统一 404 LX_ROUTE_NOT_FOUND。
+  // 13 条路由：status/resolve/lyric/import/select/toggle/check/delete/search
+  //   + daily-hot/platform-charts/playlist-search/playlist-square（批 T15.5a 补移植）。
+  // 裁决1（批 T7）曾缓期后四条；主人 10-25 拍板方案A后由批 T15.5a 补齐：上游把它们保留为
+  // 免 cookie 裸 HTTP 元数据爬虫（实现在 lx-search.js），供 T15.5b 前端改道消费，
+  // 之后 T16 才能拆掉五平台官方路由与文件。song-cover-search 经查本仓无消费方，仍不建。
   // 裁决2：本地信任闸仅施加于本路由族；全局 isCrossSiteWrite 守卫不动。
   if (pn.startsWith('/api/lx-source/')) {
     if (!isTrustedLocalApiRequest(req)) {
@@ -8211,6 +8212,82 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pn === '/api/lx-source/daily-hot') {
+      // 上游 server.js:3060-3073 /api/daily-hot → 我方挂到 lx-source 前缀下统一走本地信任闸。
+      // 参数名我方化为 platform（上游 source），source 仍作兼容别名；爬虫实现在 lx-search.js。
+      try {
+        const result = await lxSearch.fetchDailyHot({
+          limit: url.searchParams.get('limit'),
+          source: url.searchParams.get('platform') || url.searchParams.get('source'),
+          chart: url.searchParams.get('chart'),
+        });
+        // 上游 :2465 空榜即非 ok → 502；我方另补机器码（沿用上游 catch 词 DAILY_HOT_FAILED），
+        // nativeError 仅在空榜时透传（上游 response 丢弃该字段，此处利于 T15.5b 前端排错）。
+        sendJSON(res, result.ok ? result : { ...result, code: 'DAILY_HOT_FAILED' }, result.ok ? 200 : 502);
+      } catch (err) {
+        sendJSON(res, {
+          ok: false, songs: [], chartMode: 'unavailable', chartLabel: '', chartId: '',
+          error: err.message || 'DAILY_HOT_FAILED', code: 'DAILY_HOT_FAILED',
+        }, 502);
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/platform-charts') {
+      // 上游 server.js:3075-3083：纯静态目录，无出站请求；未知平台 400。
+      const platform = String(url.searchParams.get('platform') || url.searchParams.get('source') || '').toLowerCase();
+      const charts = lxSearch.chartCatalog(platform);
+      if (!charts) {
+        sendJSON(res, { ok: false, platform, charts: [], error: 'UNSUPPORTED_CHART_SOURCE', code: 'UNSUPPORTED_CHART_SOURCE' }, 400);
+      } else {
+        sendJSON(res, { ok: true, platform, charts });
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/playlist-search') {
+      // 上游 server.js:3118-3130（searchPlaylists 五家裸爬虫族，批 T15.5a 落在 lx-search.js）。
+      try {
+        const result = await lxSearch.searchPlaylists({
+          query: url.searchParams.get('q') || url.searchParams.get('keywords') || '',
+          limit: url.searchParams.get('limit'),
+          page: url.searchParams.get('page'),
+          sources: url.searchParams.get('sources') || url.searchParams.get('platform'),
+        });
+        sendJSON(res, result, result.ok ? 200 : 502);
+      } catch (err) {
+        sendJSON(res, {
+          ok: false, playlists: [], failures: [],
+          error: err.message || 'PLAYLIST_SEARCH_FAILED', code: 'PLAYLIST_SEARCH_FAILED',
+        }, 502);
+      }
+      return;
+    }
+
+    if (pn === '/api/lx-source/playlist-square') {
+      // 上游 server.js:3132-3145：分类词直接作为歌单检索 query，browseMode 供前端区分浏览态。
+      try {
+        const category = String(url.searchParams.get('category') || '流行').trim().slice(0, 40);
+        const result = await lxSearch.searchPlaylists({
+          query: category,
+          limit: url.searchParams.get('limit') || 24,
+          page: url.searchParams.get('page') || 1,
+          sources: url.searchParams.get('platform') || url.searchParams.get('sources') || 'tx,wy,kw,kg,mg',
+        });
+        const payload = { ...result, category, browseMode: 'public-playlist-search' };
+        sendJSON(res, payload, result.ok ? 200 : 502);
+      } catch (err) {
+        sendJSON(res, {
+          ok: false, playlists: [], failures: [], browseMode: 'public-playlist-search',
+          error: err.message || 'PLAYLIST_SQUARE_FAILED', code: 'PLAYLIST_SQUARE_FAILED',
+        }, 502);
+      }
+      return;
+    }
+
+    // 上游 server.js:3085-3103 /api/song-cover-search：本仓首页/资料卡封面走本地上传+裁剪
+    // （public/index.html 封面面板 → triggerUploadInput('cover') / commitCoverCrop），
+    // 无云端封面搜索消费方 —— 批 T15.5a 按 brief 裁决不建（grep 证据见 task-15.5a-report）。
     sendJSON(res, { ok: false, error: 'LX_ROUTE_NOT_FOUND', code: 'LX_ROUTE_NOT_FOUND' }, 404);
     return;
   }

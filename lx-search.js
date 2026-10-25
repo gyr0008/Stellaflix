@@ -11,8 +11,15 @@
  *  - :406-409 缓存写入门槛（songs 非空）+ 80 条上限 FIFO 逐出
  *  - :368-411 searchAll Promise.allSettled 聚合 + `source|songmid||id` 去重 + 逐源 failures
  *
- * 身份转换：源展示别名（小秋/小芸…）与 playlist 侧车随 Task 6+ 需求再评估，本文件不携带；
- * provider 端点、签名盐值、线格式逐字保留（协议词汇，非品牌身份）。
+ * 身份转换：源展示别名以本仓既有前端标签表为准（public/js/modules/05-playback/07-search.js
+ * 的 LX_SEARCH_SOURCE_LABELS），端点、签名盐值、线格式逐字保留（协议词汇，非品牌身份）。
+ *
+ * 批 T15.5a 补移植（上游保留的免登录裸 HTTP 元数据爬虫族）：
+ *  - 上游 lx-search.js:263-352 五家歌单搜索变体 + :413-448 searchPlaylists 聚合；
+ *  - 上游 server.js:2145-2358 五家日榜种子（163 playlist/detail、QQ musicu.fcg 两段式、
+ *    kuwo __NUXT__ 直出解析、kugou global.features、migu querycontentbyId）+ :2358 榜单目录；
+ *  - 上游 server.js:2411-2466 全平台交叉汇总与 chartMode/chartLabel 契约。
+ * 本批刻意不带 T6 冷却、也不带上游 dailyHotCache(6h)/playlistSearchCache(2min)（YAGNI，见 brief）。
  *
  * 有意的上游偏离（批 T6 brief 规定）：
  *  - 冷却时长曲线：上游 :391 为线性 15s×(failures-1) 封顶 120s；本实现按 brief 取
@@ -25,11 +32,58 @@
  * song 冻结形状（Task 6/8/9/10/11 消费）：
  *  { source, id, songmid?, name, singer, album, interval, pic }
  *  扩展（批 T9 裁决1）：kg 条目带 hash（FileHash）；mg 条目带 copyrightId。
+ *  日榜条目（批 T15.5a）同冻结形状 —— 上游 daily-hot 侧的 albumName/picUrl 一律改写为我方
+ *  album/pic，strMediaMid/albumMid/types 等播放无关字段不携带（LX 脚本 resolve 只需
+ *  source + songmid/hash/copyrightId + name/singer）。
+ * 歌单卡形状（批 T15.5a，上游 lx-search.js:47-64 playlistResult 同款字段）：
+ *  { id, input, source, sourceName, name, creator, description, cover,
+ *    trackCount, playCount, collectCount, tags, url }
  */
 
 const crypto = require('node:crypto');
 
 const DEFAULT_SOURCES = 'tx,wy,kw,kg,mg';
+
+// 五家展示名：取本仓既有前端标签表（07-search.js LX_SEARCH_SOURCE_LABELS）而非上游别名字表。
+const SOURCE_NAMES = { tx: '小秋', wy: '小芸', kw: '小蜗', kg: '小狗', mg: '小菇' };
+
+// 平台榜单静态目录（上游 server.js:2358 PLATFORM_CHART_CATALOG 等价物；id 为平台侧榜单编号，
+// 属协议词汇照抄；顺序即默认榜单优先序，首行为该平台默认榜）。
+const PLATFORM_CHART_CATALOG = Object.freeze({
+  tx: Object.freeze([
+    { id: '26', name: '热歌榜' }, { id: '62', name: '飙升榜' }, { id: '27', name: '新歌榜' },
+    { id: '4', name: '流行指数榜' }, { id: '5', name: '内地榜' }, { id: '3', name: '欧美榜' },
+    { id: '16', name: '韩国榜' }, { id: '17', name: '日本榜' },
+  ]),
+  wy: Object.freeze([
+    { id: '3778678', name: '热歌榜' }, { id: '19723756', name: '飙升榜' },
+    { id: '3779629', name: '新歌榜' }, { id: '2884035', name: '原创榜' },
+  ]),
+  kw: Object.freeze([
+    { id: '16', name: '热歌榜' }, { id: '17', name: '新歌榜' }, { id: '93', name: '飙升榜' },
+  ]),
+  kg: Object.freeze([
+    { id: '8888', name: 'TOP 500' }, { id: '6666', name: '飙升榜' }, { id: '31308', name: '新歌榜' },
+  ]),
+  mg: Object.freeze([{ id: '27186466', name: '尖叫热歌榜' }]),
+});
+
+const DAILY_HOT_SOURCES = Object.freeze(['tx', 'wy', 'kw', 'kg', 'mg']);
+// 上游 server.js:2465 空榜中文文案；路由层照此回 error，另补机器码 DAILY_HOT_FAILED。
+const DAILY_HOT_EMPTY_MESSAGE = '平台暂未返回可验证的真实榜单';
+
+function chartCatalog(platform) {
+  const key = String(platform || '').toLowerCase().trim();
+  const rows = key ? PLATFORM_CHART_CATALOG[key] : null;
+  if (!Array.isArray(rows)) return null;
+  return rows.map(row => ({ id: row.id, name: row.name }));
+}
+
+function platformChartDefinition(source, chartId) {
+  const rows = PLATFORM_CHART_CATALOG[String(source || '').toLowerCase()] || [];
+  const wanted = String(chartId || '');
+  return rows.find(item => String(item.id) === wanted) || rows[0] || null;
+}
 
 function durationText(seconds) {
   seconds = Math.max(0, Math.round(Number(seconds) || 0));
@@ -55,8 +109,203 @@ function clampLimit(limit) {
   return Math.min(Math.max(Number(limit) || 12, 1), 30);
 }
 
+function clampHotLimit(limit) {
+  return Math.min(Math.max(Number(limit) || 100, 1), 100);
+}
+
+// ---------- 批 T15.5a：纯函数 normalizer（无网络，模块级共享） ----------
+
+// 上游 lx-search.js:32-45：歌单侧车字段带 HTML 实体与标签，展示前统一清洗。
+function cleanText(value) {
+  return String(value || '')
+    .replace(/&nbsp;|&#32;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// 上游 lx-search.js:47-64 playlistResult：字段集合即前端歌单卡契约（本批照抄，
+// 仅 sourceName 取我方 SOURCE_NAMES；封面 http→https 同上游）。
+function playlistCard(source, item) {
+  item = item || {};
+  const id = String(item.id || '').trim();
+  return {
+    id,
+    input: String(item.input || id).trim(),
+    source,
+    sourceName: SOURCE_NAMES[source] || source,
+    name: cleanText(item.name) || `${SOURCE_NAMES[source] || source}歌单`,
+    creator: cleanText(item.creator),
+    description: cleanText(item.description),
+    cover: String(item.cover || '').replace(/^http:\/\//i, 'https://'),
+    trackCount: Math.max(0, Number(item.trackCount) || 0),
+    playCount: Math.max(0, Number(item.playCount) || 0),
+    collectCount: Math.max(0, Number(item.collectCount) || 0),
+    tags: Array.isArray(item.tags) ? item.tags.map(cleanText).filter(Boolean).slice(0, 5) : [],
+    url: String(item.url || ''),
+  };
+}
+
+// 上游 server.js:2056 dailyHotNormalizeText：跨平台汇总去重用的归一化比对键。
+function normalizeMatchText(value) {
+  return String(value || '').toLowerCase().replace(/&amp;/g, '&').replace(/[\s·•・,，、/\\|_\-]+/g, ' ').trim();
+}
+
+function hotContentKey(song) {
+  return `${normalizeMatchText(song && song.name)}|${normalizeMatchText((song && (song.singer || song.artist)) || '')}`;
+}
+
+// 上游 dailyHotDurationText 与 search scraper 的 durationText 同形；但咪咕榜单的 length
+// 已是秒字符串，故仅对纯数字做换算，其余原样透出（避免 "4:00" 被算成 0:00）。
+function hotInterval(value) {
+  const text = String(value == null ? '' : value).trim();
+  if (!text) return '';
+  return /^\d+(\.\d+)?$/.test(text) ? durationText(Number(text)) : text;
+}
+
+function normalizeHotWySong(item) {
+  item = item || {};
+  const album = item.album || item.al || {};
+  const durationMs = Number(item.duration == null ? item.dt : item.duration) || 0;
+  return {
+    source: 'wy',
+    id: item.id,
+    songmid: item.id,
+    name: item.name || '',
+    singer: singers(item.artists || item.ar),
+    album: album.name || '',
+    interval: durationText(durationMs / 1000),
+    pic: album.picUrl || album.pic || '',
+  };
+}
+
+function normalizeHotTxSong(item) {
+  item = (item && item.data) || item || {};
+  const albumMid = item.albummid || (item.album && item.album.mid) || '';
+  return {
+    source: 'tx',
+    id: item.songid || item.id,
+    songmid: item.songmid || item.mid,
+    name: item.title || item.songname || item.name || '',
+    singer: singers(item.singer),
+    album: item.albumname || (item.album && item.album.name) || '',
+    interval: durationText(item.interval),
+    pic: albumMid ? `https://y.gtimg.cn/music/photo_new/T002R500x500M000${albumMid}.jpg` : '',
+  };
+}
+
+function normalizeHotKwSong(item) {
+  item = item || {};
+  const id = String(item.id || '');
+  const pic = String(item.pic || '').trim();
+  return {
+    source: 'kw',
+    id,
+    songmid: id,
+    name: item.name || '',
+    singer: item.singer || '',
+    album: item.albumName || '',
+    interval: item.interval || '',
+    // 上游日榜行原样透出 pic；本仓 kuwoCoverUrl 会重排绝对 URL（丢一层哈希目录），
+    // 故绝对 URL 直通、仅相对片段走补齐helper。
+    pic: /^https?:\/\//i.test(pic) ? pic : kuwoCoverUrl({ pic }),
+  };
+}
+
+function normalizeHotKgSong(item) {
+  item = item || {};
+  const hash = String(item.Hash || item.hash || '');
+  if (!hash) return null;
+  const singer = String(item.author_name || '').trim();
+  const fileName = String(item.FileName || item.filename || '').trim();
+  // 酷狗榜单 FileName 常为「歌手 - 歌名」，按上游两条切分规则还原纯歌名。
+  const prefix = singer ? `${singer} - ` : '';
+  let name = fileName;
+  if (prefix && fileName.startsWith(prefix)) name = fileName.slice(prefix.length);
+  else if (fileName.includes(' - ')) name = fileName.split(' - ').slice(1).join(' - ');
+  const songId = item.audio_id || item.Audioid || hash;
+  return {
+    source: 'kg',
+    id: songId,
+    songmid: songId,
+    hash,
+    name,
+    singer,
+    album: '',
+    interval: hotInterval(item.timeLen),
+    pic: '',
+  };
+}
+
+function normalizeHotMgSong(row) {
+  const item = (row && row.objectInfo) || row || {};
+  const images = Array.isArray(item.albumImgs) ? item.albumImgs : [];
+  const image = images.find(entry => String(entry && entry.imgSizeType) === '01') || images[0] || {};
+  const songId = item.songId || item.contentId || item.copyrightId;
+  return {
+    source: 'mg',
+    id: songId,
+    songmid: songId,
+    copyrightId: String(item.copyrightId || ''),
+    name: item.songName || item.name || '',
+    singer: item.singer || singers(item.artists),
+    album: item.album || item.albumName || '',
+    interval: hotInterval(item.length),
+    pic: image.webpImg || image.img || '',
+  };
+}
+
+// 上游 server.js:2213-2247：kuwo 直出 __NUXT__ 是压缩后的 IIFE，参数位被替换成 a/b/c 令牌，
+// 需先按顶层逗号切出实参表建令牌映射，再逐令牌还原字符串常量。
+function splitTopLevelArguments(text) {
+  const output = [];
+  let start = 0;
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      if (escaped) { escaped = false; continue; }
+      if (char === '\\') { escaped = true; continue; }
+      if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'") { quote = char; continue; }
+    if (char === '(' || char === '[' || char === '{') depth += 1;
+    else if (char === ')' || char === ']' || char === '}') depth -= 1;
+    else if (char === ',' && depth === 0) {
+      output.push(text.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  output.push(text.slice(start).trim());
+  return output;
+}
+
+function decodeNuxtToken(token, argumentMap) {
+  token = String(token || '').trim();
+  if (Object.prototype.hasOwnProperty.call(argumentMap, token) && argumentMap[token] !== token) {
+    return decodeNuxtToken(argumentMap[token], argumentMap);
+  }
+  if (/^"(?:\\.|[^"\\])*"$/.test(token)) {
+    try { return JSON.parse(token); } catch (_error) {}
+  }
+  return '';
+}
+
 function createLxSearch({ fetchImpl = globalThis.fetch, now = () => Date.now() } = {}) {
-  async function fetchJson(url, options = {}) {
+  // 上游 :66-107 HTTP 层：3 次重试 + Retry-After 尊重 + 12s 超时 + UA/referer 默认头。
+  // 批 T15.5a 拆出 consume（response → 载荷），JSON 与文本两条链路共用同一退避/头约定；
+  // 上游 playlist 侧的 useNodeFetch 开关属 Electron net 适配，本仓 fetchImpl 即全局 fetch，无对应需求。
+  async function request(url, options, consume) {
     let lastError;
     for (let attempt = 0; attempt < 3; attempt++) {
       const controller = new AbortController();
@@ -82,7 +331,7 @@ function createLxSearch({ fetchImpl = globalThis.fetch, now = () => Date.now() }
           }
           throw error;
         }
-        return await response.json();
+        return await consume(response);
       } catch (error) {
         lastError = error;
         const retryable = /HTTP_(?:429|5\d\d)|abort|timeout|fetch|network|socket|ECONN|ENOTFOUND/i.test(String(error && (error.message || error)));
@@ -95,6 +344,14 @@ function createLxSearch({ fetchImpl = globalThis.fetch, now = () => Date.now() }
       }
     }
     throw lastError || new Error('SEARCH_REQUEST_FAILED');
+  }
+
+  function fetchJson(url, options = {}) {
+    return request(url, options, response => response.json());
+  }
+
+  function fetchText(url, options = {}) {
+    return request(url, options, response => response.text());
   }
 
   // ---------- 五家 scraper（上游 :109-261，输出归一为冻结 song 形状） ----------
@@ -242,6 +499,346 @@ function createLxSearch({ fetchImpl = globalThis.fetch, now = () => Date.now() }
 
   const SCRAPERS = { tx: searchTx, wy: searchWy, kw: searchKw, kg: searchKg, mg: searchMg };
 
+  // ---------- 五家歌单搜索变体（批 T15.5a，上游 lx-search.js:263-352；免登录裸 HTTP） ----------
+
+  async function searchTxPlaylists(query, limit, page = 1) {
+    const url = `https://c.y.qq.com/soso/fcgi-bin/client_music_search_songlist?remoteplace=txt.yqq.playlist&searchid=${Date.now()}&query=${encodeURIComponent(query)}&page_no=${page}&num_per_page=${limit}&format=json`;
+    const data = await fetchJson(url, { headers: { referer: 'https://y.qq.com/' } });
+    return (data?.data?.list || []).map(item => playlistCard('tx', {
+      id: item.dissid,
+      name: item.dissname,
+      creator: item.creator?.name,
+      description: item.introduction,
+      cover: item.imgurl,
+      trackCount: item.song_count || item.copyrightnum,
+      playCount: item.listennum,
+      url: item.dissid ? `https://y.qq.com/n/ryqq/playlist/${item.dissid}` : '',
+    }));
+  }
+
+  async function searchWyPlaylists(query, limit, page = 1) {
+    const url = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(query)}&type=1000&offset=${(page - 1) * limit}&limit=${limit}`;
+    const data = await fetchJson(url, { headers: { referer: 'https://music.163.com/' } });
+    return (data?.result?.playlists || []).map(item => playlistCard('wy', {
+      id: item.id,
+      name: item.name,
+      creator: item.creator?.nickname,
+      description: item.description,
+      cover: item.coverImgUrl,
+      trackCount: item.trackCount,
+      playCount: item.playCount,
+      collectCount: item.bookCount,
+      tags: item.officialTags,
+      url: item.id ? `https://music.163.com/playlist?id=${item.id}` : '',
+    }));
+  }
+
+  async function searchKwPlaylists(query, limit, page = 1) {
+    const url = `https://search.kuwo.cn/r.s?all=${encodeURIComponent(query)}&ft=playlist&client=kt&pn=${page - 1}&rn=${limit}&rformat=json&encoding=utf8&mobi=1`;
+    const data = await fetchJson(url);
+    return (data?.abslist || []).map(item => {
+      const id = item.playlistid || item.DC_TARGETID;
+      return playlistCard('kw', {
+        id,
+        name: item.name,
+        creator: item.nickname,
+        description: item.intro,
+        cover: item.hts_pic || item.pic,
+        trackCount: item.songnum,
+        playCount: item.playcnt,
+        tags: String(item.tags || '').split(/[;,，]/),
+        url: id ? `https://www.kuwo.cn/playlist_detail/${id}` : '',
+      });
+    });
+  }
+
+  async function searchKgPlaylists(query, limit, page = 1) {
+    const url = `https://specialsearch.kugou.com/special_search?keyword=${encodeURIComponent(query)}&page=${page}&pagesize=${limit}&platform=WebFilter&filter=0&iscorrection=1`;
+    const data = await fetchJson(url, { headers: { referer: 'https://www.kugou.com/' } });
+    return (data?.data?.lists || []).map(item => playlistCard('kg', {
+      id: item.specialid,
+      name: item.specialname,
+      creator: item.nickname,
+      description: item.intro,
+      cover: item.img,
+      trackCount: item.song_count,
+      playCount: item.total_play_count || item.play_count,
+      collectCount: item.collect_count,
+      tags: String(item.tag_str || '').split(/[;,，]/),
+      url: item.specialid ? `https://www.kugou.com/yy/special/single/${item.specialid}.html` : '',
+    }));
+  }
+
+  // 歌单检索复用 searchMg 同款签名盐与头（sid/开关位不同：searchSwitch 只开 songlist）。
+  async function searchMgPlaylists(query, limit, page = 1) {
+    const timestamp = String(Date.now());
+    const deviceId = '963B7AA0D21511ED807EE5846EC87D20';
+    const sign = crypto.createHash('md5').update(`${query}6cdc72a439cef99a3418d2a78aa28c73yyapp2d16148780a1dcc7408e06336b98cfd50${deviceId}${timestamp}`).digest('hex');
+    const searchSwitch = encodeURIComponent(JSON.stringify({
+      song: 0, album: 0, singer: 0, tagSong: 0, mvSong: 0, bestShow: 0, songlist: 1, lyricSong: 0,
+    }));
+    const url = `https://jadeite.migu.cn/music_search/v3/search/searchAll?isCorrect=0&isCopyright=1&searchSwitch=${searchSwitch}&pageSize=${limit}&text=${encodeURIComponent(query)}&pageNo=${page}&sort=0&sid=USS`;
+    const data = await fetchJson(url, { headers: { uiVersion: 'A_music_3.6.1', deviceId, timestamp, sign, channel: '0146921' } });
+    return (data?.songListResultData?.result || []).map(item => playlistCard('mg', {
+      id: item.id,
+      name: item.name,
+      creator: item.userName,
+      description: item.intro,
+      cover: item.musicListPicUrl,
+      trackCount: item.musicNum,
+      playCount: item.playNum,
+      collectCount: item.keepNum,
+      tags: item.ts,
+      url: item.id ? `https://music.migu.cn/v3/music/playlist/${item.id}` : '',
+    }));
+  }
+
+  const PLAYLIST_SCRAPERS = {
+    tx: searchTxPlaylists, wy: searchWyPlaylists, kw: searchKwPlaylists,
+    kg: searchKgPlaylists, mg: searchMgPlaylists,
+  };
+
+  function resolvePlaylistSources(sources) {
+    const list = Array.isArray(sources)
+      ? sources
+      : String(sources || DEFAULT_SOURCES).split(',');
+    return list.map(source => String(source).trim()).filter(source => PLAYLIST_SCRAPERS[source]);
+  }
+
+  // 上游 lx-search.js:413-448 searchPlaylists；我方改对象参数（同 searchAll 裁决4），
+  // 失败项沿本仓 {source,error} 形状（上游的 name 别名字段不携带）；缓存与冷却本批不接（YAGNI）。
+  async function searchPlaylists({ query, limit, page, sources } = {}) {
+    const q = String(query || '').trim();
+    if (!q) return { ok: true, playlists: [], failures: [] };
+    const safeLimit = clampLimit(limit);
+    const safePage = Math.min(Math.max(Number(page) || 1, 1), 50);
+    const requested = resolvePlaylistSources(sources);
+    const settled = await Promise.allSettled(requested.map(source => PLAYLIST_SCRAPERS[source](q, safeLimit, safePage)));
+    const playlists = [];
+    const failures = [];
+    settled.forEach((result, index) => {
+      const source = requested[index];
+      if (result.status === 'fulfilled') playlists.push(...result.value);
+      else failures.push({ source, error: result.reason?.message || 'PLAYLIST_SEARCH_FAILED' });
+    });
+    const seen = new Set();
+    return {
+      // 上游 :432 语义：只要有源成功返回就 ok，逐源失败另表。
+      ok: playlists.length > 0 || failures.length < requested.length,
+      playlists: playlists.filter(item => {
+        const key = `${item.source}|${item.id}`;
+        if (!item.id || !item.name || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+      failures,
+      page: safePage,
+      query: q,
+    };
+  }
+
+  // ---------- 日榜种子五族（批 T15.5a，上游 server.js:2145-2358；免登录裸 HTTP） ----------
+
+  async function fetchHotWySeeds(limit, chartId = '3778678') {
+    const endpoints = [
+      `https://music.163.com/api/playlist/detail?id=${encodeURIComponent(chartId)}`,
+      `https://music.163.com/api/v6/playlist/detail?id=${encodeURIComponent(chartId)}`,
+    ];
+    let lastError = null;
+    for (const endpoint of endpoints) {
+      try {
+        const data = await fetchJson(endpoint);
+        const tracks = data?.result?.tracks || data?.playlist?.tracks || [];
+        const songs = tracks.map(normalizeHotWySong).filter(song => song.name);
+        if (songs.length) return songs.slice(0, limit);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) throw lastError;
+    return [];
+  }
+
+  async function fetchHotTxSeeds(limit, chartId = '26') {
+    const target = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
+    const headers = { referer: 'https://y.qq.com/n/ryqq/toplist/26', 'content-type': 'application/json' };
+    const all = await fetchJson(target, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        comm: { ct: 24, cv: 0 },
+        req_1: { module: 'musicToplist.ToplistInfoServer', method: 'GetAll', param: {} },
+      }),
+    });
+    const groups = all?.req_1?.data?.group || [];
+    const requestedTopId = Number(chartId) || 26;
+    const hot = groups.flatMap(group => group?.toplist || []).find(item => Number(item?.topId) === requestedTopId);
+    if (!hot?.period) throw new Error('QQ_HOT_CHART_PERIOD_MISSING');
+    const data = await fetchJson(target, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        comm: { ct: 24, cv: 0 },
+        req_1: {
+          module: 'musicToplist.ToplistInfoServer', method: 'GetDetail',
+          param: { topid: requestedTopId, offset: 0, num: Math.max(30, limit), period: hot.period },
+        },
+      }),
+    });
+    return (data?.req_1?.data?.songInfoList || [])
+      .map(normalizeHotTxSong)
+      .filter(song => song.name)
+      .slice(0, limit);
+  }
+
+  async function fetchHotKwSeeds(limit, chartId = '16') {
+    const html = await fetchText(`https://m.kuwo.cn/newh5app/ranklist_detail/${encodeURIComponent(chartId)}`, {
+      headers: { referer: 'https://m.kuwo.cn/newh5app/ranklist' },
+    });
+    const match = html.match(/<script>\s*window\.__NUXT__=([\s\S]*?)<\/script>/i);
+    if (!match) throw new Error('KUWO_CHART_DATA_MISSING');
+    const expression = match[1].trim().replace(/;$/, '');
+    const functionMatch = expression.match(/^\(function\(([^)]*)\)\{([\s\S]*)\}\(([\s\S]*)\)\)$/);
+    if (!functionMatch) throw new Error('KUWO_CHART_FORMAT_CHANGED');
+    const parameters = functionMatch[1].split(',').map(value => value.trim());
+    const argumentsList = splitTopLevelArguments(functionMatch[3]);
+    const argumentMap = Object.create(null);
+    parameters.forEach((parameter, index) => { argumentMap[parameter] = argumentsList[index]; });
+    const rows = [];
+    const rowPattern = /\w+\[\d+\]=\{id:(\d+),name:([^,]+),pic:("(?:\\.|[^"\\])*"|[^,]+),album_name:([^,]+),artist_name:("(?:\\.|[^"\\])*"|[^,]+)/g;
+    let rowMatch;
+    while ((rowMatch = rowPattern.exec(functionMatch[2])) && rows.length < limit) {
+      rows.push({
+        id: rowMatch[1],
+        name: decodeNuxtToken(rowMatch[2], argumentMap),
+        pic: decodeNuxtToken(rowMatch[3], argumentMap),
+        albumName: decodeNuxtToken(rowMatch[4], argumentMap),
+        singer: decodeNuxtToken(rowMatch[5], argumentMap),
+      });
+    }
+    return rows.map(normalizeHotKwSong).filter(song => song.name);
+  }
+
+  async function fetchHotKgSeeds(limit, chartId = '8888') {
+    const output = [];
+    const seen = new Set();
+    const pageCount = Math.max(1, Math.ceil(limit / 22));
+    for (let page = 1; page <= pageCount && output.length < limit; page += 1) {
+      const html = await fetchText(`https://www.kugou.com/yy/rank/home/${page}-${encodeURIComponent(chartId)}.html`, {
+        headers: { referer: 'https://www.kugou.com/yy/html/rank.html' },
+      });
+      const match = html.match(/global\.features\s*=\s*(\[[\s\S]*?\]);/i);
+      if (!match) continue;
+      let rows = [];
+      try { rows = JSON.parse(match[1]); } catch (_error) { rows = []; }
+      rows.forEach(row => {
+        const song = normalizeHotKgSong(row);
+        if (!song || seen.has(song.hash) || output.length >= limit) return;
+        seen.add(song.hash);
+        output.push(song);
+      });
+    }
+    return output;
+  }
+
+  async function fetchHotMgSeeds(limit, chartId = '27186466') {
+    const target = `https://app.c.nf.migu.cn/MIGUM3.0/v1.0/content/querycontentbyId.do?columnId=${encodeURIComponent(chartId)}&needAll=0`;
+    const data = await fetchJson(target, { headers: { referer: 'https://music.migu.cn/' } });
+    if (String(data?.code || '') !== '000000') throw new Error(data?.info || 'MIGU_HOT_CHART_FAILED');
+    return (data?.columnInfo?.contents || [])
+      .map(normalizeHotMgSong)
+      .filter(song => song.name)
+      .slice(0, limit);
+  }
+
+  const HOT_SEEDS = { tx: fetchHotTxSeeds, wy: fetchHotWySeeds, kw: fetchHotKwSeeds, kg: fetchHotKgSeeds, mg: fetchHotMgSeeds };
+
+  // 上游 server.js:2388-2410：单平台榜单。原生取数失败或数量不足时宁可少展示，
+  // 绝不用关键词搜索补满 —— 否则普通搜索结果会伪装成榜单名次（上游注释同义）。
+  async function fetchSinglePlatformHot(source, limit, requestedChart) {
+    const chart = platformChartDefinition(source, requestedChart);
+    let nativeSongs = [];
+    let nativeError = '';
+    try {
+      nativeSongs = await HOT_SEEDS[source](Math.max(limit, 30), chart && chart.id);
+    } catch (error) {
+      nativeError = error?.message || String(error || 'PLATFORM_CHART_FAILED');
+    }
+    const songs = nativeSongs.slice(0, limit);
+    const label = `${SOURCE_NAMES[source] || String(source).toUpperCase()}${(chart && chart.name) || '热歌榜'}`;
+    return {
+      songs,
+      chartMode: nativeSongs.length ? 'native' : 'unavailable',
+      chartLabel: nativeSongs.length ? `${label} · 平台原榜 ${songs.length} 首` : `${label} · 暂不可用`,
+      chartId: (chart && chart.id) || '',
+      chartName: (chart && chart.name) || '',
+      nativeError,
+    };
+  }
+
+  // 上游 server.js:2414-2434：逐平台第 N 行轮转取样 + 歌名|歌手归一化去重。
+  function mixPlatformCharts(results, limit) {
+    const output = [];
+    const seen = new Set();
+    let row = 0;
+    while (output.length < limit) {
+      let added = false;
+      for (const result of results) {
+        const song = result?.songs?.[row];
+        if (!song) continue;
+        const key = hotContentKey(song);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        output.push(song);
+        added = true;
+        if (output.length >= limit) break;
+      }
+      row += 1;
+      if (!added && results.every(result => !result?.songs?.[row])) break;
+    }
+    return output;
+  }
+
+  // 上游 server.js:2435-2466 getDailyHotSongs；我方改对象参数，且不带 6h dailyHotCache
+  // （brief YAGNI）→ 响应不含 cached/updatedAt 两字段。
+  async function fetchDailyHot({ limit, source: requestedSource, chart: requestedChart } = {}) {
+    const safeLimit = clampHotLimit(limit);
+    const normalized = String(requestedSource || '').toLowerCase();
+    const source = /^(tx|wy|kw|kg|mg)$/.test(normalized) ? normalized : 'all';
+    const chart = source === 'all' ? null : platformChartDefinition(source, requestedChart);
+    let songs = [];
+    let chartMode = 'native';
+    let chartLabel = '';
+    let nativeError = '';
+    if (source === 'all') {
+      const perPlatformLimit = Math.min(60, Math.max(25, Math.ceil(safeLimit / DAILY_HOT_SOURCES.length) + 15));
+      const results = await Promise.all(DAILY_HOT_SOURCES.map(item => fetchSinglePlatformHot(item, perPlatformLimit)));
+      songs = mixPlatformCharts(results, safeLimit);
+      chartMode = 'mixed-native';
+      chartLabel = '各平台真实榜单交叉汇总';
+      nativeError = results.map(result => result.nativeError).filter(Boolean).join('; ');
+    } else {
+      const result = await fetchSinglePlatformHot(source, safeLimit, chart && chart.id);
+      songs = result.songs;
+      chartMode = result.chartMode;
+      chartLabel = result.chartLabel;
+      nativeError = result.nativeError;
+    }
+    const value = {
+      ok: songs.length > 0,
+      songs,
+      chartSource: source,
+      chartMode,
+      chartLabel,
+      chartId: (chart && chart.id) || '',
+      chartName: (chart && chart.name) || '',
+    };
+    if (!songs.length) {
+      value.error = DAILY_HOT_EMPTY_MESSAGE;
+      if (nativeError) value.nativeError = nativeError;
+    }
+    return value;
+  }
+
+
   // ---------- 熔断冷却 + 搜索缓存（上游 :359-375、:361-394、:406-409；批 T6 启用） ----------
   const searchCache = new Map();
   const providerHealth = new Map();
@@ -320,7 +917,7 @@ function createLxSearch({ fetchImpl = globalThis.fetch, now = () => Date.now() }
     return value;
   }
 
-  return { searchAll, searchOne };
+  return { searchAll, searchOne, searchPlaylists, fetchDailyHot, chartCatalog };
 }
 
 // 模块级便捷入口（对齐上游 module.exports 直接可用习惯；默认走全局 fetch）。
@@ -330,4 +927,9 @@ module.exports = {
   createLxSearch,
   searchAll: (params) => defaultLxSearch.searchAll(params),
   searchOne: (source, params) => defaultLxSearch.searchOne(source, params),
+  searchPlaylists: (params) => defaultLxSearch.searchPlaylists(params),
+  fetchDailyHot: (params) => defaultLxSearch.fetchDailyHot(params),
+  chartCatalog,
+  SOURCE_NAMES,
+  PLATFORM_CHART_CATALOG,
 };

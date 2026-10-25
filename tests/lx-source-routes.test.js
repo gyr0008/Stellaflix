@@ -470,7 +470,7 @@ test('POST /api/lx-source/delete 单删返回剩余 installed；未知 id 400 + 
   assert.equal(status.body.sources.length, 1);
 });
 
-test('批删 delete ids 数组成功；未移植的 playlist-search 落 404', async () => {
+test('批删 delete ids 数组成功；仍未移植的子路径落 404', async () => {
   const second = await apiJson('/api/lx-source/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -484,7 +484,9 @@ test('批删 delete ids 数组成功；未移植的 playlist-search 落 404', as
   });
   assert.equal(del.status, 200);
   assert.equal(del.body.deleted, 1);
-  const gone = await apiJson('/api/lx-source/playlist-search');
+  // 批 T15.5a 已补移植 playlist-search（形状断言见 tests/lx-metadata-routes.test.js）；
+  // song-cover-search 经查本仓无消费方仍不建 → 前缀下未知子路径继续 404。
+  const gone = await apiJson('/api/lx-source/trending');
   assert.equal(gone.status, 404);
   assert.equal(gone.body.code, 'LX_ROUTE_NOT_FOUND');
 });
