@@ -51,7 +51,7 @@
   function save(pref, pageId) {
     try {
       var key = storageKey(pageId);
-      if (pref && pref.type) localStorage.setItem(key, JSON.stringify(pref));
+      if (pref && (pref.type || pref.glassColor || pref.panelColor)) localStorage.setItem(key, JSON.stringify(pref));
       else localStorage.removeItem(key);
     } catch (e) {}
   }
@@ -191,6 +191,27 @@
     img.src = src;
   }
 
+  // ---------------------------------------------------------------- 面板配色（fx Color Lab 同款行，按页存两层色）
+  // glassColor＝中间玻璃层（.sfv-page-bg-layer 的 --sfv-glass-tint）；
+  // panelColor＝最里层面板（页面容器 --sfv-cat-bg / 片库 --sfv-library-bg）。
+  // 最外层卡片外壳不在本模块管，由「自定义网格 → 卡片外壳 → 容器背景」单点控制。
+  function normalizePanelHex(value) {
+    var s = String(value == null ? '' : value).trim();
+    return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : '';
+  }
+  function setPanelColor(pageId, field, hex) {
+    if (field !== 'glassColor' && field !== 'panelColor') return false;
+    var pid = pageId || getDiyPageId();
+    if (!pid) return false;
+    var norm = normalizePanelHex(hex);
+    var pref = load(pid) || {};
+    if (norm) pref[field] = norm;
+    else delete pref[field];
+    save(pref, pid);
+    apply();
+    return true;
+  }
+
   function setPageBgColor(color, host) {
     // 同步 host 实底（.sfv-browse 或 #sfv-search-page）、html 兜底背景（填满 clip-path 圆角裁切区）。
     // html 走 --page-bg-diy 变量由样式表承接，不能用内联 background !important：
@@ -278,14 +299,17 @@
       var libImg = '';
       if (pref && pref.type === 'color' && pref.value) libBg = pref.value;
       else if (pref && pref.type === 'image' && pref.value) libImg = 'url("' + pref.value + '")';
+      // 面板行取色覆盖「背景类型＝颜色」预设（片库三层塌两层：无玻璃层，面板即页面背景）
+      var libPanel = normalizePanelHex(pref && pref.panelColor);
+      if (libPanel) libBg = libPanel;
       if (libBg) host.style.setProperty('--sfv-library-bg', libBg);
       else host.style.removeProperty('--sfv-library-bg');
       // 图片壁纸走 ::before 虚化层（直接铺 overlay 背景会把海报文字一起糊掉）
       if (libImg) host.style.setProperty('--sfv-library-bg-image', libImg);
       else host.style.removeProperty('--sfv-library-bg-image');
-      // 选中态强调色：纯色预设即时换算；图片用上传时缓存的主色适配结果（无缓存走 CSS 珊瑚红 fallback）
+      // 选中态强调色：跟随最终面板底色（预设或取色）即时换算；图片用上传时缓存的主色适配结果
       var accent = null;
-      if (pref && pref.type === 'color' && pref.value) accent = resolveAccentForColor(pref.value);
+      if (libBg) accent = resolveAccentForColor(libBg);
       else if (pref && pref.type === 'image' && pref.accent) accent = { accent: pref.accent, text: pref.accentText || '#15131a' };
       if (accent) {
         host.style.setProperty('--sfv-library-accent', accent.accent);
@@ -300,6 +324,9 @@
 
     // 片单/追片/搜索/历史统一乳白兜底四角（对齐片单页浅色实底语境）。
     var catBg = '#faf8f5';
+    // 两层分开管：glassColor 只染中间玻璃层，panelColor 只染最里层面板（越层同色会抹平景深）
+    var glassColor = normalizePanelHex(pref && pref.glassColor);
+    var panelColor = normalizePanelHex(pref && pref.panelColor);
 
     // 搜索页背景一体化：仅自定义「图片」时挂载玻璃层（需承载图片）；
     // 纯「颜色」偏好（或无偏好）时不挂玻璃层——宿主 --sfv-cat-bg 已实色铺满即可，
@@ -317,7 +344,10 @@
       clearLayer(layer);
       layer.classList.remove('sfv-page-bg--tint');
       layer.style.removeProperty('--sfv-glass-tint');
-      if (pref && pref.type === 'image' && pref.value) {
+      if (glassColor) {
+        layer.classList.add('sfv-page-bg--tint');
+        layer.style.setProperty('--sfv-glass-tint', rgba(glassColor, 0.78));
+      } else if (pref && pref.type === 'image' && pref.value) {
         // 自定义图片：铺满覆盖整块背景（cover），玻璃质感由 .sfv-page-bg-layer 的 filter 保留
         var img = document.createElement('img');
         img.src = pref.value; img.alt = ''; img.draggable = false;
@@ -337,7 +367,8 @@
       var layer = host.querySelector(':scope > .sfv-page-bg-layer');
       if (layer) { try { layer.parentNode.removeChild(layer); } catch (e) {} }
     }
-    // 四角/兜底背景与玻璃层同色，避免 clip-path 圆角裁切区露异色
+    // 面板行取色覆盖「背景类型＝颜色」预设；四角/兜底与宿主面板同色，避免 clip-path 圆角区露异色
+    if (panelColor) catBg = panelColor;
     setPageBgColor(catBg, host);
     observeOverlay();
   }
@@ -383,6 +414,19 @@
           '<h4>预设背景色</h4>' +
           '<div class="sfv-bg-diy-swatches"></div>' +
         '</section>' +
+        '<section class="sfv-bg-diy-sec sfv-bg-diy-panel-sec">' +
+          '<h4>分层配色</h4>' +
+          '<div class="lyric-color-row sfv-bg-diy-panel-row sfv-bg-diy-glass-row">' +
+            '<input id="sfv-panel-glass-picker" class="lyric-color-picker" type="color" value="#faf8f5" title="玻璃层色">' +
+            '<div class="fx-color-row-label">玻璃层色<small id="sfv-panel-glass-value">默认</small></div>' +
+            '<button type="button" class="fx-mini-btn ghost sfv-panel-reset" data-field="glassColor">默认</button>' +
+          '</div>' +
+          '<div class="lyric-color-row sfv-bg-diy-panel-row sfv-bg-diy-base-row">' +
+            '<input id="sfv-panel-base-picker" class="lyric-color-picker" type="color" value="#ffffff" title="底层面板色">' +
+            '<div class="fx-color-row-label"><span id="sfv-panel-base-label">底层面板色</span><small id="sfv-panel-base-value">默认</small></div>' +
+            '<button type="button" class="fx-mini-btn ghost sfv-panel-reset" data-field="panelColor">默认</button>' +
+          '</div>' +
+        '</section>' +
         '<section class="sfv-bg-diy-sec">' +
           '<h4>自定义图片</h4>' +
           '<input type="file" accept="image/*" class="sfv-bg-diy-file">' +
@@ -408,8 +452,32 @@
 
     mask.querySelector('[data-act="reset"]').addEventListener('click', function () {
       var pid = _modalPageId || getDiyPageId();
-      save(null, pid); apply(); refreshStatus(); paintSwatches();
+      save(null, pid); apply(); refreshStatus(); paintSwatches(); refreshPanelRows();
     });
+
+    // 面板配色行：默认钮清字段；picker input 实时预览；Color Lab 接管取色
+    Array.prototype.forEach.call(mask.querySelectorAll('.sfv-panel-reset'), function (btn) {
+      btn.addEventListener('click', function () {
+        setPanelColor(null, btn._dataField || btn.getAttribute('data-field'), null);
+        refreshPanelRows();
+      });
+    });
+    [['sfv-panel-glass-picker', 'glassColor'], ['sfv-panel-base-picker', 'panelColor']].forEach(function (pair) {
+      var picker = mask.querySelector('#' + pair[0]);
+      if (!picker) return;
+      picker.addEventListener('input', function () {
+        setPanelColor(null, pair[1], picker.value);
+        refreshPanelRows();
+      });
+      if (typeof window !== 'undefined' && typeof window.bindColorLabPicker === 'function') {
+        window.bindColorLabPicker(picker);
+      }
+    });
+    // .lyric-color-picker 全局 pointer-events:none（色块收不到点击），fx 侧实际靠
+    // 行级 pointerdown 打开 Color Lab；新行入 DOM 后必须补挂行绑定。
+    if (typeof window !== 'undefined' && typeof window.bindColorLabRows === 'function') {
+      window.bindColorLabRows();
+    }
 
     var fileInput = mask.querySelector('.sfv-bg-diy-file');
     fileInput.addEventListener('change', function () {
@@ -418,7 +486,7 @@
       var reader = new FileReader();
       reader.onload = function () {
         save({ type: 'image', value: reader.result }, pid);
-        apply(); refreshStatus(); paintSwatches();
+        apply(); refreshStatus(); paintSwatches(); refreshPanelRows();
         // 片库壁纸：上传时一次性提取主色并缓存进偏好（异步；换偏好后旧回调自动作废）
         if (pid === 'library') {
           extractImageAccent(reader.result, function (a) {
@@ -437,6 +505,22 @@
     });
     return MODAL;
   }
+  function refreshPanelRows() {
+    if (!MODAL) return;
+    var pid = _modalPageId || getDiyPageId();
+    var pref = pid ? load(pid) : null;
+    var pairs = [
+      ['sfv-panel-glass-picker', 'sfv-panel-glass-value', pref && pref.glassColor],
+      ['sfv-panel-base-picker', 'sfv-panel-base-value', pref && pref.panelColor]
+    ];
+    pairs.forEach(function (p) {
+      var picker = MODAL.querySelector('#' + p[0]);
+      var valueEl = document.getElementById(p[1]);
+      if (picker && p[2]) picker.value = p[2];
+      if (valueEl) valueEl.textContent = p[2] ? String(p[2]).toUpperCase() : '默认';
+    });
+  }
+
   function openModal() {
     var pid = getDiyPageId();
     if (!pid) return;
@@ -448,14 +532,25 @@
         (pid === 'track' ? '追片背景' : (pid === 'search' ? '搜索背景' :
         (pid === 'library' ? '片库背景' : '历史背景'))));
     }
+    // 片库深色语境无玻璃层，只显面板行（=覆盖预设色板的页面底色）；浅页两行全显
+    var glassRow = MODAL.querySelector('.sfv-bg-diy-glass-row');
+    if (glassRow) glassRow.style.display = (pid === 'library') ? 'none' : '';
     // 四页统一开放预设色板（追片/历史/片单/搜索）
     var colorSec = MODAL.querySelector('.sfv-bg-diy-colors');
     if (colorSec) colorSec.style.display = '';
     paintSwatches();
     MODAL.classList.add('show');
     refreshStatus();
+    refreshPanelRows();
   }
-  function closeModal() { if (MODAL) MODAL.classList.remove('show'); }
+  function closeModal() {
+    if (!MODAL) return;
+    MODAL.classList.remove('show');
+    // 取色窗重挂在 body 且抬到了本弹窗同层，弹窗关掉后它会浮在影视空间里；
+    // 只在它仍绑着 DIY 配色行时收掉，别连带关掉 fx 控制台自己的取色窗。
+    var labId = (typeof window !== 'undefined' && window.colorLabState && window.colorLabState.id) || '';
+    if (/^sfv-panel-/.test(labId) && typeof window.closeColorLab === 'function') window.closeColorLab();
+  }
   function isModalOpen() { return !!MODAL && MODAL.classList.contains('show'); }
 
   // 预设色板渲染（根据当前页 pref 高亮选中项）；片库用深色 6 档，其余页用浅色 6 档
@@ -603,6 +698,9 @@
     getDiyPageId: getDiyPageId,
     resolveAccentForColor: resolveAccentForColor,
     computeImageAccent: computeImageAccent,
+    setPanelColor: setPanelColor,
+    refreshPanelRows: refreshPanelRows,
+    getModal: function () { return MODAL; },
     openModal: openModal,
     closeModal: closeModal,
     isModalOpen: isModalOpen,

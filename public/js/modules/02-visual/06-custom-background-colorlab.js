@@ -139,6 +139,12 @@ function applyColorLabValue(hex, silent) {
   else if (id === 'lyric-color-picker') setLyricColorCustom(hex, true);
   else if (id === 'lyric-highlight-picker') setLyricHighlightCustom(hex, true);
   else if (id === 'lyric-glow-picker') setLyricGlowCustom(hex, true);
+  else if ((id === 'sfv-panel-glass-picker' || id === 'sfv-panel-base-picker') &&
+           window.StellaflixVideo && window.StellaflixVideo.pageBgDiy) {
+    var diy = window.StellaflixVideo.pageBgDiy;
+    diy.setPanelColor(null, id === 'sfv-panel-glass-picker' ? 'glassColor' : 'panelColor', hex);
+    if (typeof diy.refreshPanelRows === 'function') diy.refreshPanelRows();
+  }
   if (!silent) showToast('颜色: ' + hex.toUpperCase());
 }
 function commitColorLabValue(silent) {
@@ -195,8 +201,18 @@ function placeFxFloatingPanel(pop, anchor, opts) {
   } else {
     var roomRight = vw - rect.right - pad;
     var roomLeft = rect.left - pad;
-    if (roomRight >= pw + gap || roomRight >= roomLeft) left = rect.right + gap;
-    else left = rect.left - pw - gap;
+    // 影视「背景 DIY」弹窗居中，取色窗按锚点右侧展开会压在弹窗右半（离触发行远、盖住预览区）。
+    // 主人 10-25 裁定：改开在弹窗左外侧。以弹窗盒子而非色块行为基准，避免 440px 弹窗被窗体压住；
+    // 左侧放不下（窄视口）才回退原右侧逻辑。fx 控制台贴屏幕右缘本就落左侧，故不加此分支。
+    var dialog = anchor.closest ? anchor.closest('.sfv-bg-diy-dialog') : null;
+    var dRect = dialog && dialog.getBoundingClientRect ? dialog.getBoundingClientRect() : null;
+    if (dRect && dRect.left - pad >= pw + gap) {
+      left = dRect.left - pw - gap;
+    } else if (roomRight >= pw + gap || roomRight >= roomLeft) {
+      left = rect.right + gap;
+    } else {
+      left = rect.left - pw - gap;
+    }
     left = Math.max(pad, Math.min(vw - pw - pad, left));
     top = rect.top + rect.height / 2 - ph / 2;
     top = Math.max(pad, Math.min(vh - ph - pad, top));
@@ -204,6 +220,14 @@ function placeFxFloatingPanel(pop, anchor, opts) {
   pop.style.left = Math.round(left) + 'px';
   pop.style.top = Math.round(top) + 'px';
   pop.style.transform = 'none';
+}
+function topmostHostZIndex(node) {
+  var best = 0;
+  for (var p = node && node.parentNode; p && p !== document.documentElement; p = p.parentNode) {
+    var z = parseInt(getComputedStyle(p).zIndex, 10);
+    if (z > best) best = z;
+  }
+  return best;
 }
 function openColorLabForPicker(picker) {
   var pop = document.getElementById('color-lab-pop');
@@ -214,6 +238,21 @@ function openColorLabForPicker(picker) {
   }
   colorLabState.picker = picker;
   colorLabState.id = picker.id || '';
+  // fx-panel 收起时 opacity:0 + pointer-events:none，藏在其内的取色窗会跟着失效；
+  // 影视空间弹窗调起时必须重挂 body（fixed 定位，视觉无差）。
+  if (pop.parentNode !== document.body) document.body.appendChild(pop);
+  // 取色窗 CSS 只有 1401，影视空间「背景 DIY」遮罩顶到 z-index 上限（浏览器夹成 2147483647），
+  // 从这类高栈层弹窗内调起时会被遮罩整层压住＝点了没反应；抬到宿主同层，
+  // 因 pop 刚重挂到 body 末尾，同层后者在上，故可见且可点。
+  // 先摘掉上一次抬升的内联值再量，否则第二次从同层弹窗调起会把自己比下去、缩回遮罩后。
+  pop.style.zIndex = '';
+  var ownZ = parseInt(getComputedStyle(pop).zIndex, 10) || 0;
+  var hostZ = topmostHostZIndex(picker);
+  if (hostZ > ownZ) {
+    pop.style.zIndex = String(hostZ);
+    // 同层比 DOM 序：遮罩在取色窗之后入 DOM 就会反压上来，抬高必须同时挪到 body 末尾
+    document.body.appendChild(pop);
+  }
   var label = picker.closest('.lyric-color-row');
   var title = document.getElementById('color-lab-title');
   if (title) title.textContent = label ? (label.textContent || 'Color').replace(/#[0-9a-f]{6}/ig, '').trim().slice(0, 24) : 'Color';
