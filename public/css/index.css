@@ -1123,7 +1123,12 @@ html:fullscreen body.desktop-shell #wallpaper-engine-freeze {
 #cover-wallpaper-board.mounted{display:block}
 #cover-wallpaper-board.active{opacity:1}
 /* 背景板是封面派生的整幅画面，与封面模糊底图/自定义背景叠层会互相糊掉，启用时让位。 */
-body.cover-wallpaper-board-active #album-bg,body.cover-wallpaper-board-active #custom-bg,body.cover-wallpaper-board-active #theme-bg-tint{opacity:0!important}
+/* #album-bg-next 必须一起让位：它是切歌交叉淡入的孪生层，同为 z-index:0 但 DOM 排在
+   #cover-wallpaper-board 之后，漏掉它就会在切歌时把壁纸盖住（只剩一圈光晕）。 */
+body.cover-wallpaper-board-active #album-bg,
+body.cover-wallpaper-board-active #album-bg-next,
+body.cover-wallpaper-board-active #custom-bg,
+body.cover-wallpaper-board-active #theme-bg-tint{opacity:0!important}
 
 /* 底色组只压 opacity，不再 visibility 掉布局（上游软化）。
    #canvas-container 不隐藏：粒子画布透明底，z=1 浮在 z=0 的壁纸层之上，

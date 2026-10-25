@@ -104,3 +104,37 @@ test('关闭：两侧都释放且桌面推送签名清零', async () => {
   assert.equal(ctx.calls.updateCoverWallpaperMode.length, 0);
   assert.equal(ctx.calls.boardPushes, 0);
 });
+
+test('背景板推送循环：260ms 节流 + 签名抑制（colors 不计入签名）', async () => {
+  // 既有 4 例全走 applyCoverWallpaperState(true) 强制路径，从未触达 pushCoverWallpaperBoardState(false)
+  // 的节流/签名抑制分支；本例以可控 performance.now 与可控调色板直接驱动背景板推送循环。
+  const ctx = buildContext({ fx: { coverWallpaperSurface: 'board' } });
+  let clock = 0;
+  ctx.sandbox.performance = { now: function () { return clock; } };
+  // colors 变化必须不改变签名（signature 故意不含 colors）——用可切换调色板取证。
+  let palette = 0;
+  ctx.sandbox.desktopOverlayColors = function () {
+    return { primary: '#p' + palette, secondary: '#s', highlight: '#h', glow: '#g' };
+  };
+
+  // 首帧强制推送：boardAt=0、boardKey=K0、恰好一推。
+  clock = 0;
+  await ctx.sandbox.applyCoverWallpaperState(true);
+  assert.equal(ctx.calls.boardPushes, 1);
+
+  // (a) 距上次推送 <260ms 的非强制推送被节流拦截，绝不重复推送。
+  clock = 100;
+  ctx.sandbox.pushCoverWallpaperBoardState(false);
+  assert.equal(ctx.calls.boardPushes, 1, '节流窗口（<260ms）内的非强制推送不得再次推送');
+
+  // (b) 越过 260ms 但签名未变：仅改 colors（不计入签名）→ 仍落在 1400ms 抑制窗口内，不推送。
+  clock = 300;
+  palette = 1;
+  ctx.sandbox.pushCoverWallpaperBoardState(false);
+  assert.equal(ctx.calls.boardPushes, 1, '仅 colors 变化不改签名，应被抑制窗口吞掉');
+
+  // 签名变化（preset 计入签名）→ 突破抑制窗口，立即推送。
+  ctx.sandbox.fx.preset = 7;
+  ctx.sandbox.pushCoverWallpaperBoardState(false);
+  assert.equal(ctx.calls.boardPushes, 2, '签名变化应突破抑制窗口并推送');
+});

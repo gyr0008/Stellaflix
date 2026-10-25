@@ -126,6 +126,15 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   setWallpaperMode: (enabled, payload) => ipcRenderer.invoke('stellaflix-wallpaper-set-enabled', !!enabled, payload || {}),
   updateWallpaperMode: (payload) => ipcRenderer.invoke('stellaflix-wallpaper-update', payload || {}),
   getWallpaperModeStatus: () => ipcRenderer.invoke('stellaflix-wallpaper-get-status'),
+  setCoverWallpaperMode: (enabled, payload) => ipcRenderer.invoke('stellaflix-cover-wallpaper-set-enabled', !!enabled, payload || {}),
+  updateCoverWallpaperMode: (payload) => ipcRenderer.invoke('stellaflix-cover-wallpaper-update', payload || {}),
+  getCoverWallpaperModeStatus: () => ipcRenderer.invoke('stellaflix-cover-wallpaper-get-status'),
+  onCoverWallpaperModeState: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('stellaflix-cover-wallpaper-runtime-state', listener);
+    return () => ipcRenderer.removeListener('stellaflix-cover-wallpaper-runtime-state', listener);
+  },
   updateDesktopIconShields: (payload) => ipcRenderer.send('stellaflix-full-desktop-icon-shields', payload || {}),
   setDesktopSoftwareLocked: (locked) => ipcRenderer.invoke('stellaflix-full-desktop-set-software-lock', locked === true),
   setDesktopIconsVisible: (visible) => ipcRenderer.invoke('stellaflix-full-desktop-set-icons-visible', visible !== false),
