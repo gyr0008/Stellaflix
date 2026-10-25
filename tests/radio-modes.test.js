@@ -291,6 +291,15 @@ test('radio modes play path builds queue and calls playQueueAt', async () => {
         ],
       };
     },
+    // 批1 T15.5b 起 buildRadioModeSongs 经 07-search 的 fetchLxSearchResults 出网（跨模块全局，
+    // 真实页由 loader 提供）。本套件只验电台成队链路，故按该函数契约（{songs, failures}）
+    // 打桩并断言其确实经 lx 聚合路径出网；改道契约本身由 tests/lx-reroute-batch1.test.js 钉桩。
+    fetchLxSearchResults: async function (query, options) {
+      assert.ok(String(query || '').length > 0, 'fetchLxSearchResults 应收到非空查询词');
+      assert.ok(options && options.sources, '电台应显式指定 lx 源集（批1 契约）');
+      const r = await sandbox.apiJson('/api/lx-source/search?q=' + encodeURIComponent(query));
+      return { songs: r.songs || [], failures: r.failures || [] };
+    },
     playQueue: [],
     currentIdx: -1,
     playQueueAt: async function (idx, opts) {

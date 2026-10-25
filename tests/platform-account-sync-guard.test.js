@@ -58,10 +58,22 @@ assert(
   'liked-state identity must remain provider scoped'
 );
 assert(
-  /\/api\/spotify\/playlist\/collect/.test(playlistDetail)
-    && /\/api\/qishui\/playlist\/collect/.test(playlistDetail)
-    && /\/api\/playlist\/subscribe/.test(playlistDetail),
-  'playlist collection must remain wired for each supported provider'
+  /\/api\/playlist\/subscribe/.test(playlistDetail),
+  'netease cookie playlist subscribe stays wired until the T16 account batch retires it'
+);
+// 批 T15.5b：平台前缀的歌单写回/红心/评论消费方整体改道 lx-source，
+// 官方路由本身仍留在 server.js（删除归 T16），所以这里只做负向钉桩。
+assert(
+  !/\/api\/spotify\/playlist\/collect/.test(playlistDetail)
+    && !/\/api\/qishui\/playlist\/collect/.test(playlistDetail),
+  'platform-prefixed playlist collect consumers must be retired from the frontend'
+);
+assert(
+  !/apiJson\(\s*'\/api\/(kugou|spotify|qishui|qq)\/song\/like(?:\/check)?/.test(accountActions)
+    && !/apiJson\(\s*'\/api\/song\/(like|comments)/.test(accountActions)
+    && !/likeUrl:\s*'\/api\//.test(accountActions)
+    && !/likeCheckUrl:\s*'\/api\//.test(accountActions),
+  'official like/comment sync consumers must be gone; like state is a local stub'
 );
 
 console.log('[OK] Platform account actions, provider-affine listen reports, and truthful duration-sync boundaries are guarded.');

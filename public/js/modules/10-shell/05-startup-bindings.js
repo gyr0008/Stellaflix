@@ -85,6 +85,8 @@ if (!restoredPlaybackAtStartup) {
 safeRenderQueuePanel('startup-restore');
 updateCustomCoverButton();
 updateCustomLyricControls();
+// 批 T15.5b：红心改本地桩后不再有在线拉取，启动时从 localStorage 回填一次再刷按钮。
+restoreLocalLikedSongs();
 updateLikeButtons();
 setTimeout(initUpdatePreview, 9000);
 window.addEventListener('beforeunload', function () {

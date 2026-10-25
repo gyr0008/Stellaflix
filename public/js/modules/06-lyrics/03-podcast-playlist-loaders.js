@@ -106,6 +106,17 @@ function playlistQueuePageSize(provider, initial) {
 function playlistQueuePageUrl(source, offset, limit) {
   return playlistTracksEndpoint(source.provider, source.id, { offset: Math.max(0, offset || 0), limit: Math.max(1, limit || PLAYLIST_QUEUE_INITIAL_BATCH_SIZE) });
 }
+// 批 T15.5b：歌单入队分页同样经 playlistTracksPage——qq/kugou/qishui/spotify 走 lx 导入族
+// 切片，网易云 cookie 路由继续用上面的 playlistQueuePageUrl 构 URL（不得把平台 ID
+// 拼进 /api/playlist/tracks，那是官方四路退役后剩下的网易云专用路由）。
+var PLAYLIST_QUEUE_IMPORT_PROVIDERS = ['qq', 'kugou', 'qishui', 'spotify'];
+function playlistQueuePage(source, offset, limit) {
+  var size = Math.max(1, Number(limit) || PLAYLIST_QUEUE_INITIAL_BATCH_SIZE);
+  if (PLAYLIST_QUEUE_IMPORT_PROVIDERS.indexOf(source.provider) >= 0) {
+    return playlistTracksPage(source.provider, source.id, offset, { timeoutMs: 16000 }, size);
+  }
+  return apiJson(playlistQueuePageUrl(source, offset, size), { timeoutMs: 16000 });
+}
 function cancelPlaylistQueueHydration(reason) {
   var previous = queueHydrationState;
   if (previous && previous.timer) clearTimeout(previous.timer);
@@ -142,7 +153,7 @@ async function hydratePlaylistQueueNextPage(reason) {
   var limit = playlistQueuePageSize(state.provider, false);
   state.loading = true;
   state.pausedForBuffer = false;
-  state.promise = apiJson(playlistQueuePageUrl(source, offset, limit), { timeoutMs: 16000 }).then(function (r) {
+  state.promise = playlistQueuePage(source, offset, limit).then(function (r) {
     if (!playlistQueueHydrationValid(state, token)) return false;
     var rawTracks = r && r.tracks || [];
     if (r && r.error && !rawTracks.length) throw new Error(r.message || r.error);
@@ -222,7 +233,7 @@ async function loadPlaylistIntoQueueById(id, autoplay, title, opts) {
   var seedTracks = Array.isArray(opts.seedTracks) && opts.seedTracks.length ? opts.seedTracks.map(cloneSong) : [];
   try {
     if (!seedTracks.length) {
-      r = await apiJson(playlistQueuePageUrl(source, 0, playlistQueuePageSize(source.provider, true)), { timeoutMs: 16000 });
+      r = await playlistQueuePage(source, 0, playlistQueuePageSize(source.provider, true));
       seedTracks = (r && r.tracks || []).map(cloneSong);
     } else {
       r = {

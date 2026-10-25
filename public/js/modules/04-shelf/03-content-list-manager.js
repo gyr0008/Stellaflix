@@ -243,36 +243,28 @@ function makeContentListManager() {
     }, 360);
   }
 
-  function contentPageUrl(offset) {
-    if (!contentSource) return '';
-    var limit = PLAYLIST_LAZY_BATCH_SIZE;
-    if (contentSource.provider === 'qq') {
-      return '/api/qq/playlist/tracks?id=' + encodeURIComponent(contentSource.id) + '&limit=' + limit + '&offset=' + Math.max(0, offset || 0);
+  // 批 T15.5b：qq/kugou/qishui/spotify 四个平台歌单的曲目读取改走 lx 导入族
+  // （POST /api/platform-playlist/import：一次取全量、前端切片分页）。T15.5a §6 的衔接说明
+  // 即此：卡片/前缀里的 source + id 就是导入参数。官方 */playlist/tracks 消费点在此退役
+  // （路由删除归 T16）。网易云 /api/playlist/tracks 与播客路由不属本批改道目标，原样保留待 T16。
+  // 曲目取数与切片分页复用 06-lyrics 的 playlistTracksPage（同一套 lx 导入契约，避免两份实现）。
+  var CONTENT_IMPORT_PROVIDERS = ['qq', 'kugou', 'qishui', 'spotify'];
+
+  async function contentPageFetch(offset) {
+    if (!contentSource) return { tracks: [], nextOffset: 0, total: 0, hasMore: false };
+    if (CONTENT_IMPORT_PROVIDERS.indexOf(contentSource.provider) < 0 && contentSource.provider !== 'netease') {
+      return { tracks: [], nextOffset: 0, total: 0, hasMore: false };
     }
-    if (contentSource.provider === 'kugou') {
-      return '/api/kugou/playlist/tracks?id=' + encodeURIComponent(contentSource.id) + '&limit=' + limit + '&offset=' + Math.max(0, offset || 0);
-    }
-    if (contentSource.provider === 'qishui') {
-      return '/api/qishui/playlist/tracks?id=' + encodeURIComponent(contentSource.id) + '&limit=' + limit + '&offset=' + Math.max(0, offset || 0);
-    }
-    if (contentSource.provider === 'spotify') {
-      return '/api/spotify/playlist/tracks?id=' + encodeURIComponent(contentSource.id) + '&limit=' + limit + '&offset=' + Math.max(0, offset || 0);
-    }
-    if (contentSource.provider === 'netease') {
-      return '/api/playlist/tracks?id=' + encodeURIComponent(contentSource.id) + '&limit=' + limit + '&offset=' + Math.max(0, offset || 0);
-    }
-    return '';
+    return await playlistTracksPage(contentSource.provider, contentSource.id, offset);
   }
 
   async function loadMoreContentRows(reason) {
     if (!open || contentLoadingMore || !contentHasMore || !contentSource) return false;
-    var url = contentPageUrl(contentNextOffset);
-    if (!url) return false;
     var token = requestToken;
     contentLoadingMore = true;
     panelDirty = true;
     try {
-      var r = await apiJson(url);
+      var r = await contentPageFetch(contentNextOffset);
       if (!open || token !== requestToken) return false;
       var tracks = r && r.tracks || [];
       var before = allTracks.length;
@@ -714,15 +706,7 @@ function makeContentListManager() {
       try {
         r = podcastCollectionKey
           ? await apiJson('/api/podcast/my/items?key=' + encodeURIComponent(podcastCollectionKey) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE)
-          : (qqPlaylistId
-            ? await apiJson('/api/qq/playlist/tracks?id=' + encodeURIComponent(qqPlaylistId) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE + '&offset=0')
-            : (kugouPlaylistId
-              ? await apiJson('/api/kugou/playlist/tracks?id=' + encodeURIComponent(kugouPlaylistId) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE + '&offset=0')
-              : (qishuiPlaylistId
-                ? await apiJson('/api/qishui/playlist/tracks?id=' + encodeURIComponent(qishuiPlaylistId) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE + '&offset=0')
-                : (spotifyPlaylistId
-                  ? await apiJson('/api/spotify/playlist/tracks?id=' + encodeURIComponent(spotifyPlaylistId) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE + '&offset=0')
-                  : await apiJson('/api/playlist/tracks?id=' + encodeURIComponent(playlistId) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE + '&offset=0')))));
+          : await contentPageFetch(0);
       } catch (e) {
         if (!open || token !== requestToken) return;
         console.warn('[ShelfContentLoadApi]', playlistId, e);

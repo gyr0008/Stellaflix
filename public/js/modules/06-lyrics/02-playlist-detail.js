@@ -266,11 +266,72 @@ function playlistTracksEndpoint(provider, id, params) {
       query += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
     });
   }
-  if (provider === 'qq') return '/api/qq/playlist/tracks?' + query;
-  if (provider === 'kugou') return '/api/kugou/playlist/tracks?' + query;
-  if (provider === 'qishui') return '/api/qishui/playlist/tracks?' + query;
-  if (provider === 'spotify') return '/api/spotify/playlist/tracks?' + query;
+  // 批 T15.5b：qq/kugou/qishui/spotify 四路官方 */playlist/tracks 的消费点退役
+  // （改走下方 playlistTracksPage → lx 导入族）；此处仅剩网易云 cookie 路由本体，随 T16 处置。
   return '/api/playlist/tracks?' + query;
+}
+
+var PLAYLIST_DETAIL_IMPORT_LX_SOURCE = { qq: 'tx', kugou: 'kg', qishui: 'qs', spotify: 'sp' };
+var playlistDetailImportCache = { key: '', tracks: null };
+
+function playlistDetailPageFromFullTracks(tracks, offset, limit) {
+  var all = Array.isArray(tracks) ? tracks : [];
+  var size = Math.max(1, Number(limit) || PLAYLIST_DETAIL_BATCH_SIZE);
+  var from = Math.max(0, Number(offset) || 0);
+  var page = all.slice(from, from + size);
+  var next = from + page.length;
+  return { tracks: page, nextOffset: next, total: all.length, hasMore: next < all.length };
+}
+
+function playlistDetailImportedTrack(song) {
+  song = song || {};
+  var view = Object.assign({}, song, {
+    name: song.name || song.title || '',
+    artist: song.artist || song.singer || '',
+    singer: song.singer || song.artist || '',
+    album: song.album || song.albumName || '',
+    albumName: song.albumName || song.album || '',
+    cover: song.cover || song.pic || song.img || song.picUrl || ''
+  });
+  view.picUrl = view.picUrl || view.cover || '';
+  if (!view.duration && view.interval) {
+    var parts = String(view.interval).split(':').map(Number);
+    view.duration = parts.length === 2 ? (parts[0] * 60 + parts[1]) : (Number(view.interval) || 0);
+  }
+  view.duration = Number(view.duration) || 0;
+  return view;
+}
+
+// 批 T15.5b：平台歌单曲目读取统一走 lx 导入族 POST /api/platform-playlist/import
+// （T15.5a §6 衔接：source + id 即导入参数），一次取全量后按调用方页宽切片分页；
+// 返回体沿用官方曲目路由的 {tracks,nextOffset,total,hasMore,playlist} 契约，
+// 消费方无需分支。网易云/本地仍走原 cookie 路由。
+async function playlistTracksPage(provider, id, offset, options, limit) {
+  provider = normalizePlaylistProvider(provider);
+  offset = Math.max(0, Number(offset) || 0);
+  limit = Math.max(1, Number(limit) || PLAYLIST_DETAIL_BATCH_SIZE);
+  var importSource = PLAYLIST_DETAIL_IMPORT_LX_SOURCE[provider];
+  if (!importSource) {
+    return await apiJson(playlistTracksEndpoint(provider, id, { limit: limit, offset: offset }), options);
+  }
+  var key = provider + '|' + id;
+  if (!playlistDetailImportCache.tracks || playlistDetailImportCache.key !== key) {
+    var requestOptions = Object.assign({}, options || {});
+    requestOptions.method = 'POST';
+    requestOptions.headers = { 'Content-Type': 'application/json' };
+    requestOptions.body = JSON.stringify({ input: String(id), source: importSource });
+    if (!requestOptions.signal) requestOptions.timeoutMs = 90000;
+    var imported = await apiJson('/api/platform-playlist/import', requestOptions);
+    var playlist = imported && imported.playlist ? imported.playlist : null;
+    var songs = playlist && Array.isArray(playlist.songs) ? playlist.songs : [];
+    var tracks = songs.map(playlistDetailImportedTrack);
+    // 只缓存成功的全量曲目：空结果（导入失败/空歌单）不落缓存，避免一次抖动后永远读到空列表。
+    if (!tracks.length) throw new Error('PLAYLIST_IMPORT_EMPTY');
+    playlistDetailImportCache = { key: key, tracks: tracks };
+  }
+  var page = playlistDetailPageFromFullTracks(playlistDetailImportCache.tracks, offset, limit);
+  page.playlist = { trackCount: page.total };
+  return page;
 }
 function playlistPanelDetailHtml(pl, provider, detailWindow) {
   provider = normalizePlaylistProvider(provider);
@@ -282,7 +343,7 @@ function playlistPanelDetailHtml(pl, provider, detailWindow) {
   var img = cover ? '<img class="pl-detail-cover" src="' + escHtml(cover) + '" alt="" decoding="async" onerror="this.style.opacity=0.2">' : '<div class="pl-detail-cover"></div>';
   var expectedTotal = Math.max(tracks.length, Number(playlistPanelDetailState.total) || Number(pl.trackCount) || 0);
   var rows = playlistPanelDetailRowsHtml(detailWindow);
-  var canUncollect = !!(pl && pl.subscribed && !pl.virtual && (provider === 'netease' || provider === 'qishui' || provider === 'spotify'));
+  var canUncollect = !!(pl && pl.subscribed && !pl.virtual && provider === 'netease');
   var collectionButton = canUncollect
     ? '<button class="fx-mini-btn ghost pl-detail-top-btn" type="button" data-pl-detail-collection="0">取消收藏</button>'
     : '';
@@ -389,7 +450,7 @@ async function loadMorePlaylistPanelDetailTracks(reason) {
   st.loadingMore = reason !== 'initial';
   if (st.loadingMore) renderPlaylistPanelDetailRows();
   try {
-    var r = await apiJson(playlistTracksEndpoint(provider, pid, { limit: PLAYLIST_DETAIL_BATCH_SIZE, offset: offset }), controller ? { signal: controller.signal } : { timeoutMs: 12000 });
+    var r = await playlistTracksPage(provider, pid, offset, controller ? { signal: controller.signal } : { timeoutMs: 12000 });
     if (playlistPanelDetailState.token !== token || playlistPanelDetailState.key !== st.key) return false;
     var rawTracks = r && r.tracks || [];
     if (r && r.error && !rawTracks.length) throw new Error(r.message || r.error);
@@ -481,11 +542,10 @@ async function togglePlaylistPanelCollection(collected) {
   var parts = state.key.split(':');
   var provider = normalizePlaylistProvider(parts[0]);
   var id = parts.slice(1).join(':');
-  var endpoint = provider === 'netease'
-    ? '/api/playlist/subscribe'
-    : (provider === 'qishui'
-      ? '/api/qishui/playlist/collect'
-      : (provider === 'spotify' ? '/api/spotify/playlist/collect' : ''));
+  // 批 T15.5b：官方 /api/{qishui,spotify}/playlist/collect 写回消费点退役——
+  // lx 世界没有平台账号写回（上游同款：收藏=本地歌单），无在线写回即不提供按钮/不写网络。
+  // 网易云 /api/playlist/subscribe 属 cookie 路由，非本批目标，随 T16 一并处置。
+  var endpoint = provider === 'netease' ? '/api/playlist/subscribe' : '';
   if (!endpoint) {
     showToast(playlistProviderName(provider) + '暂不支持写回歌单收藏');
     return;

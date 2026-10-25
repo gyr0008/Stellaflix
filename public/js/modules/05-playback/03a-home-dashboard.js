@@ -101,9 +101,10 @@ var homePlatformRecommendationState = {
   previousFocus: null,
   neteaseLoading: false,
   feeds: {
-    qishui: { loading: false, loaded: false, songs: [], error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
-    kugou: { loading: false, loaded: false, songs: [], error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
-    spotify: { loading: false, loaded: false, songs: [], error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
+    qq: { loading: false, loaded: false, songs: [], charts: [], chartId: '', chartLabel: '', error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
+    qishui: { loading: false, loaded: false, songs: [], charts: [], chartId: '', chartLabel: '', error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
+    kugou: { loading: false, loaded: false, songs: [], charts: [], chartId: '', chartLabel: '', error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
+    spotify: { loading: false, loaded: false, songs: [], charts: [], chartId: '', chartLabel: '', error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
   },
 };
 
@@ -2047,27 +2048,26 @@ function homePlatformRecommendationSourceLabel(source) {
 }
 
 function homePlatformRecommendationFeedConfig(source) {
+  // 批 T15.5b：平台推荐卡内容源改指 lx cookie-less 元数据路由（T15.5a §6）——
+  // platform-charts 出该平台可选榜单，daily-hot?platform=&chart= 出榜单歌曲；
+  // 官方 /api/qishui/feed、/api/kugou/recommendations、/api/spotify/recommendations
+  // 三处消费点在此退役（路由删除归 T16，页签本身也随平台登录一并退役）。
+  // lx 世界只有五家音源（tx/wy/kw/kg/mg）：汽水/Spotify 不是 lx 源，无榜单可给，
+  // 返回 null 走「暂无平台推荐接口」空态（零网络请求，不做关键词搜索补位）。
   return {
-    qishui: {
-      endpoint: '/api/qishui/feed?limit=12',
-      sectionTitle: '推荐 Feed',
-      cardLabel: '汽水推荐 Feed',
-      readyText: '来自汽水推荐 Feed',
-      playlistName: '汽水推荐 Feed',
+    qq: {
+      lxPlatform: 'tx',
+      sectionTitle: 'QQ 音乐热榜',
+      cardLabel: 'QQ 音乐 · lx 榜单',
+      readyText: '来自 lx 音源的 QQ 音乐热榜',
+      playlistName: 'QQ 音乐热榜',
     },
     kugou: {
-      endpoint: '/api/kugou/recommendations?limit=12',
-      sectionTitle: '推荐 FM',
-      cardLabel: '酷狗推荐 FM',
-      readyText: '来自酷狗 FM 推荐',
-      playlistName: '酷狗推荐 FM',
-    },
-    spotify: {
-      endpoint: '/api/spotify/recommendations?limit=12',
-      sectionTitle: '个性化推荐',
-      cardLabel: 'Spotify 推荐',
-      readyText: '来自 Spotify 个性化推荐',
-      playlistName: 'Spotify 个性化推荐',
+      lxPlatform: 'kg',
+      sectionTitle: '酷狗音乐热榜',
+      cardLabel: '酷狗音乐 · lx 榜单',
+      readyText: '来自 lx 音源的酷狗音乐热榜',
+      playlistName: '酷狗音乐热榜',
     },
   }[source] || null;
 }
@@ -2175,6 +2175,22 @@ function homePlatformRecommendationEmptyHtml(source, message) {
     '<span>' + escHtml(message || '当前版本没有可验证的平台推荐接口，未使用关键词搜索替代。') + '</span></div>';
 }
 
+function homePlatformRecommendationChartChipsHtml(source, feedState) {
+  // 15.5a §6.2：platform-charts 的静态目录铺成榜单选择条，选中 id 回填 daily-hot?chart=。
+  // 只有 1 个榜单（或目录读取失败）时不铺条，保持原有单榜形态。
+  var charts = feedState && Array.isArray(feedState.charts) ? feedState.charts : [];
+  if (charts.length < 2) return '';
+  return '<div class="home-platform-recommend-tabs home-platform-recommend-chart-tabs" role="group" aria-label="榜单选择">' +
+    charts.map(function (chart) {
+      var chartId = String((chart && chart.id) || '');
+      var chartName = String((chart && chart.name) || chartId);
+      var active = !!(feedState.chartId && String(feedState.chartId) === chartId);
+      return '<button type="button"' + (active ? ' class="active" aria-current="true"' : '') +
+        ' data-home-chart-source="' + escHtml(source) + '" data-home-chart-id="' + escHtml(chartId) + '">' +
+        escHtml(chartName) + '</button>';
+    }).join('') + '</div>';
+}
+
 function renderHomePlatformRecommendations() {
   var mask = document.getElementById('home-platform-recommend-mask');
   var list = document.getElementById('home-platform-recommend-list');
@@ -2236,31 +2252,27 @@ function renderHomePlatformRecommendations() {
       var sectionTitle = feedConfig.sectionTitle;
       var cardLabel = feedConfig.cardLabel;
       var readyText = feedConfig.readyText;
-      if (source === 'qishui' && feedState.fallback) {
-        sectionTitle = '你的音乐';
-        cardLabel = '汽水喜欢 / 最近播放';
-        readyText = '汽水推荐 Feed 暂不可用，当前显示你的喜欢与最近播放';
-      } else if (source === 'spotify' && feedState.mode === 'liked-affinity') {
-        sectionTitle = '你的喜欢';
-        cardLabel = 'Spotify 喜欢的歌曲';
-        readyText = '来自 Spotify Web API 的喜欢歌曲';
-      } else if (source === 'spotify' && feedState.mode === 'personal-top') {
-        sectionTitle = '你的常听';
-        cardLabel = 'Spotify 常听歌曲';
-        readyText = '来自 Spotify Web API 的个人常听';
-      }
+      // 15.5b：lx 榜单 cookie-less，不再有「你的喜欢/常听」等登录态模式分支；
+      // 逐平台榜单名直接取自 daily-hot 响应（15.5a §6 chartLabel）。
+      if (feedState.chartLabel) readyText += ' · ' + feedState.chartLabel;
       status.textContent = readyText;
-      list.innerHTML = '<section><h3>' + escHtml(sectionTitle) + '</h3><div class="home-platform-recommend-grid">' + feedState.songs.map(function (item, index) {
-        return homePlatformRecommendationCard(source + '-song', index, item, cardLabel);
-      }).join('') + '</div></section>';
+      list.innerHTML = '<section><h3>' + escHtml(sectionTitle) + '</h3>' +
+        homePlatformRecommendationChartChipsHtml(source, feedState) +
+        '<div class="home-platform-recommend-grid">' + feedState.songs.map(function (item, index) {
+          return homePlatformRecommendationCard(source + '-song', index, item, cardLabel);
+        }).join('') + '</div></section>';
     } else {
       var authRequired = /(?:AUTH|LOGIN)_REQUIRED|NOT_CONFIGURED/i.test(feedState.error);
-      var feedFailed = !!feedState.error && !authRequired;
+      // 15.5a 关注点：unavailable = 该平台本次没有可验证的真实榜单，按空态处理，不做错误告警。
+      var chartUnavailable = feedState.mode === 'unavailable';
+      var feedFailed = !!feedState.error && !authRequired && !chartUnavailable;
       status.textContent = feedFailed ? sourceLabel + '推荐读取失败' : sourceLabel + '暂未返回推荐内容';
       status.classList.toggle('is-error', feedFailed);
-      list.innerHTML = homePlatformRecommendationEmptyHtml(source, feedState.message || (feedFailed
-        ? '推荐接口当前不可用，未使用关键词搜索补位。'
-        : '连接' + sourceLabel + '后可读取平台推荐，未使用关键词搜索替代。'));
+      list.innerHTML = homePlatformRecommendationEmptyHtml(source, feedState.message || (chartUnavailable
+        ? '该平台榜单本次未返回可验证的真实榜单，未使用关键词搜索补位。'
+        : (feedFailed
+          ? '推荐接口当前不可用，未使用关键词搜索补位。'
+          : '该平台暂无可展示的 lx 榜单内容，未使用关键词搜索替代。')));
     }
     return;
   }
@@ -2290,10 +2302,6 @@ async function loadHomePlatformNeteaseRecommendations(force) {
   }
 }
 
-async function loadHomePlatformQishuiRecommendations(force) {
-  return loadHomePlatformFeedRecommendations('qishui', force);
-}
-
 async function loadHomePlatformFeedRecommendations(source, force) {
   var config = homePlatformRecommendationFeedConfig(source);
   var feedState = homePlatformRecommendationState.feeds[source];
@@ -2304,15 +2312,35 @@ async function loadHomePlatformFeedRecommendations(source, force) {
   feedState.message = '';
   renderHomePlatformRecommendations();
   try {
-    var separator = config.endpoint.indexOf('?') >= 0 ? '&' : '?';
-    var data = await apiJson(config.endpoint + separator + 't=' + Date.now(), { timeoutMs: 14000 });
-    var rawSongs = data && (data.songs || data.tracks || data.items || data.recommendations);
-    feedState.songs = (Array.isArray(rawSongs) ? rawSongs : []).map(cloneSong);
+    // 15.5a §6 pipeline：platform-charts 铺出该平台可选榜单，选中 id 回填 daily-hot?chart=。
+    // 榜单读取失败不阻塞内容（daily-hot 不带 chart= 时由服务端自选平台原榜）。
+    if (force || !Array.isArray(feedState.charts) || !feedState.charts.length) {
+      try {
+        var chartData = await apiJson('/api/lx-source/platform-charts?platform=' +
+          encodeURIComponent(config.lxPlatform) + '&t=' + Date.now(), { timeoutMs: 8000 });
+        feedState.charts = chartData && Array.isArray(chartData.charts) ? chartData.charts : [];
+        if (feedState.chartId && !feedState.charts.some(function (chart) { return String(chart && chart.id) === feedState.chartId; })) feedState.chartId = '';
+      } catch (chartError) {
+        console.warn('[HomePlatformCharts:' + source + ']', chartError);
+        feedState.charts = [];
+      }
+    }
+    var chartParam = feedState.chartId ? '&chart=' + encodeURIComponent(feedState.chartId) : '';
+    var data = await apiJson('/api/lx-source/daily-hot?platform=' + encodeURIComponent(config.lxPlatform) +
+      '&limit=12' + chartParam + '&t=' + Date.now(), { timeoutMs: 14000 });
+    var rawSongs = data && Array.isArray(data.songs) ? data.songs : [];
+    // 15.5a §6：daily-hot 冻结形状给的是 `pic`，卡片读 `cover`——消费侧映射，不改路由。
+    feedState.songs = rawSongs.map(function (item) {
+      var song = Object.assign({}, item || {});
+      if (!song.cover) song.cover = song.pic || song.picUrl || '';
+      return cloneSong(song);
+    });
     feedState.error = data && data.error ? String(data.error) : '';
     feedState.message = data && data.message ? String(data.message) : '';
-    feedState.mode = data && data.mode ? String(data.mode) : '';
-    feedState.source = data && data.source ? String(data.source) : '';
-    feedState.fallback = !!(data && data.fallback);
+    feedState.mode = data && data.chartMode ? String(data.chartMode) : '';
+    feedState.source = data && data.chartSource ? String(data.chartSource) : (config.lxPlatform || '');
+    feedState.chartLabel = data && data.chartLabel ? String(data.chartLabel) : '';
+    feedState.fallback = !!(data && data.nativeError);
     feedState.provenance = data && data.provenance ? String(data.provenance) : '';
     feedState.loaded = true;
   } catch (error) {
@@ -2389,6 +2417,16 @@ function bindHomePlatformRecommendationControls() {
     loadHomePlatformRecommendations(tab.getAttribute('data-home-recommend-source'), false);
   });
   if (list) list.addEventListener('click', function (event) {
+    var chartChip = event.target.closest('[data-home-chart-id]');
+    if (chartChip && list.contains(chartChip)) {
+      var chartSource = chartChip.getAttribute('data-home-chart-source');
+      var chartState = homePlatformRecommendationState.feeds[chartSource];
+      if (chartState) {
+        chartState.chartId = String(chartChip.getAttribute('data-home-chart-id') || '');
+        loadHomePlatformFeedRecommendations(chartSource, true);
+      }
+      return;
+    }
     var card = event.target.closest('[data-home-recommend-kind]');
     if (!card || !list.contains(card)) return;
     var kind = card.getAttribute('data-home-recommend-kind');
@@ -2396,7 +2434,10 @@ function bindHomePlatformRecommendationControls() {
     closeHomePlatformRecommendations();
     if (kind === 'netease-playlist' && typeof openHomePlaylist === 'function') openHomePlaylist(index);
     else if (kind === 'netease-song' && typeof playHomeSong === 'function') playHomeSong(index);
-    else if (/^(qishui|kugou|spotify)-song$/.test(kind)) playHomePlatformFeedSong(kind.replace(/-song$/, ''), index);
+    // 15.5b：平台榜单卡的 kind 前缀就是 feedConfig 的键（qq/kugou），不再硬编码平台名单。
+    else if (/-song$/.test(kind) && homePlatformRecommendationFeedConfig(kind.replace(/-song$/, ''))) {
+      playHomePlatformFeedSong(kind.replace(/-song$/, ''), index);
+    }
   });
   if (list) list.addEventListener('scroll', scheduleHomePlatformDailyWindowRender, { passive: true });
   window.addEventListener('resize', scheduleHomePlatformDailyWindowRender, { passive: true });
@@ -2421,13 +2462,15 @@ function openHomePlatformRecommendations(preferredSource) {
   homePlatformRecommendationState.open = true;
   mask.classList.add('show');
   mask.setAttribute('aria-hidden', 'false');
+  // 15.5b：汽水/Spotify 在 lx 世界没有对应榜单源（feedConfig 为空），
+  // 登录态派生的默认页签改落到有 cookie-less 榜单的 QQ（tx）卡，避免一开面板就是空态。
   var defaultSource = loginStatus && loginStatus.loggedIn
     ? 'netease'
     : (qishuiLoginStatus && (qishuiLoginStatus.loggedIn || qishuiLoginStatus.configured)
-      ? 'qishui'
+      ? 'qq'
       : (kugouLoginStatus && kugouLoginStatus.loggedIn
         ? 'kugou'
-        : (spotifyLoginStatus && (spotifyLoginStatus.loggedIn || spotifyLoginStatus.configured) ? 'spotify' : 'netease')));
+        : (spotifyLoginStatus && (spotifyLoginStatus.loggedIn || spotifyLoginStatus.configured) ? 'qq' : 'netease')));
   var source = /^(netease|qishui|qq|kugou|spotify)$/.test(String(preferredSource || '')) ? preferredSource : defaultSource;
   loadHomePlatformRecommendations(source, false);
   setTimeout(function () {
