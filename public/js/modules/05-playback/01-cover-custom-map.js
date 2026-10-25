@@ -158,7 +158,9 @@ function isInlineCoverSrc(src) {
   return typeof src === 'string' && (
     /^data:image\//i.test(src) ||
     /^blob:/i.test(src) ||
-    /^stellaflix-local:\/\/cover\//i.test(src)
+    /^stellaflix-local:\/\/cover\//i.test(src) ||
+    // 批4：本地封面走 /api/local-file 代理地址，直出（不走封面代理、不加尺寸参数，否则被 isProxyableCoverUrl 判空）。
+    /\/api\/local-file\b/i.test(src)
   );
 }
 function isProxyableCoverUrl(url) {

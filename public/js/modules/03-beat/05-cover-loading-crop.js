@@ -13,6 +13,12 @@ function hideAIDepthChip() {
 function loadCoverFromUrl(directUrl, opts) {
   opts = opts || {};
   var preserveOnSwitch = !!(opts.trackSwitch || opts.seamlessCover || opts.seamlessTrackSwitch);
+  // 批4：内嵌封面以 data: URL 提供（coverSourceToDataUrl 产出），原始 gate 只认 http/stellaflix-local → 会清成灰。
+  // 走 applyCoverDataUrl 直出（它负责 canvas + 舞台背景 + 缩略图）。
+  if (typeof directUrl === 'string' && /^data:image\//i.test(directUrl)) {
+    applyCoverDataUrl(directUrl, opts);
+    return;
+  }
   if (!directUrl || typeof directUrl !== 'string' || (!/^https?:\/\//i.test(directUrl) && !/^stellaflix-local:\/\/cover\//i.test(directUrl))) {
     if (!coverApplyStillCurrent(opts)) return;
     if (preserveOnSwitch && uniforms.uHasCover.value > 0.5) {

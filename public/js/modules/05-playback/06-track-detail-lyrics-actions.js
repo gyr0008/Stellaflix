@@ -1288,8 +1288,16 @@ function isCloudSong(song) {
   return !!(song && song.id && songAccountProvider(song) === 'netease');
 }
 function isSongLiked(song) {
-  var key = songAccountStateKey(song);
-  return !!(key && likedSongMap[key]);
+  var provider = songAccountProvider(song);
+  // 在线歌且已登录平台时，红心态以平台回读为准（比本地副本更权威）；
+  // 本地曲目以及未登录/没有平台通道的在线歌，回落到本地「特别喜欢」表。
+  if (provider !== 'local' && typeof isSongAccountLoggedIn === 'function' && isSongAccountLoggedIn(provider)) {
+    var key = songAccountStateKey(song);
+    return !!(key && likedSongMap[key]);
+  }
+  if (typeof isSpecialLikedSong === 'function') return isSpecialLikedSong(song);
+  var localKey = songAccountStateKey(song);
+  return !!(localKey && likedSongMap[localKey]);
 }
 function ensureLoggedInForAction(provider) {
   provider = provider || 'netease';
@@ -1416,6 +1424,15 @@ function refreshSearchResultActionStates() {
   });
 }
 async function toggleLikeSong(song) {
+  // 本地文件没有平台账号通道，走本地「特别喜欢」表——这是本地曲目唯一的收藏入口。
+  if (typeof specialLikedIsLocalSong === 'function' && specialLikedIsLocalSong(song) &&
+    typeof toggleSpecialLikedSong === 'function') {
+    toggleSpecialLikedSong(song);
+    updateLikeButtons(song);
+    safeRenderQueuePanel('like-toggle-local', { scrollCurrent: miniQueueOpen });
+    refreshSearchResultActionStates();
+    return;
+  }
   var provider = songAccountProvider(song);
   var adapter = songAccountAdapter(provider);
   if (!adapter || !adapter.like || !adapter.likeUrl) {
@@ -1444,6 +1461,8 @@ async function toggleLikeSong(song) {
     });
     if (r && (r.error || r.success === false)) throw new Error(r.error || r.message || 'LIKE_FAILED');
     likedSongMap[stateKey] = r && r.liked != null ? !!r.liked : next;
+    // 平台写回成功后同步一条本地引用：在线歌以平台为准，本地表只是换设备/未登录时的兜底副本。
+    if (typeof syncSpecialLikedOnlineRef === 'function') syncSpecialLikedOnlineRef(song, !!likedSongMap[stateKey]);
     showToast(next ? '已加入红心喜欢' : '已取消红心');
   } catch (err) {
     likedSongMap[stateKey] = !next;

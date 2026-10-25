@@ -69,30 +69,32 @@ function applyPersistentLocalLibraryTracks(result) {
   return persistentLocalLibraryTracks;
 }
 async function removePersistentLocalTracks(ids) {
-  if (!canRemovePersistentLocalTracks()) return null;
-  var list = (Array.isArray(ids) ? ids : [ids])
-    .map(normalizeLocalTrackId)
-    .filter(function (id) { return /^[a-f0-9]{24}$/.test(id); });
-  if (!list.length) return null;
-  var result = await window.desktopWindow.removeLocalMusicTracks(list);
-  if (!result || result.ok !== true) {
-    throw new Error(result && result.error || 'LOCAL_LIBRARY_REMOVE_FAILED');
+  // 批4-D：只走新引擎（内存态 + SQLite 行）。
+  var raw = (Array.isArray(ids) ? ids : [ids]).map(function (v) { return String(v || ''); }).filter(Boolean);
+  if (!raw.length) return null;
+  if (!window.stellaMlibSeam || typeof window.stellaMlibSeam.removeLocalTracks !== 'function') return null;
+  var engineRes = await window.stellaMlibSeam.removeLocalTracks(raw);
+  if (engineRes && engineRes.ok) {
+    persistentLocalLibraryTracks = (typeof getLocalLibraryTracks === 'function' ? getLocalLibraryTracks() : persistentLocalLibraryTracks).map(cloneSong);
+    if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
+    return { ok: true, removed: engineRes.removed };
   }
-  applyPersistentLocalLibraryTracks(result);
-  return result;
+  return null;
 }
 function removeLocalTrackFromLibraryAndQueue(song) {
   if (!song) return Promise.resolve(false);
-  var localId = normalizeLocalTrackId(song.localFileId || song.localKey);
-  if (!/^[a-f0-9]{24}$/.test(localId)) {
+  var rawId = String(song.localFileId || song.localKey || '');
+  var isLegacy = /^[a-f0-9]{24}$/.test(normalizeLocalTrackId(rawId));
+  var isEngineKey = /:\d+:\d+$/.test(rawId); // 新引擎 songKey = abs:size:mtime
+  if (!rawId || (!isLegacy && !isEngineKey)) {
     showToast('这首歌不在持久化本地曲库中');
     return Promise.resolve(false);
   }
-  if (!canRemovePersistentLocalTracks()) {
+  if (!canRemovePersistentLocalTracks() && !(window.stellaMlibSeam && typeof window.stellaMlibSeam.removeLocalTracks === 'function')) {
     showToast('当前环境无法删除本地曲库');
     return Promise.resolve(false);
   }
-  return removePersistentLocalTracks([localId]).then(function (result) {
+  return removePersistentLocalTracks([isLegacy ? normalizeLocalTrackId(rawId) : rawId]).then(function (result) {
     if (!result) return false;
     var queueKey = queueItemKey(song);
     var idx = -1;
@@ -139,6 +141,73 @@ async function importPersistentLocalAudioFiles(files) {
   }
   return result;
 }
+// 批4-C2：新优先导入——选目录（主进程扫描落库）→ 新引擎水合+解析，失败回退旧拖入面板。
+async function importLocalMusicFolderViaEngine() {
+  if (!window.desktopWindow || typeof window.desktopWindow.chooseLocalMusicFolder !== 'function') {
+    return { ok: false, fallback: true, error: 'ENGINE_UNAVAILABLE' };
+  }
+  if (!window.stellaMlibSeam || typeof window.stellaMlibSeam.hydrateFolder !== 'function') {
+    return { ok: false, fallback: true, error: 'SEAM_UNAVAILABLE' };
+  }
+  var chosen;
+  try { chosen = await window.desktopWindow.chooseLocalMusicFolder(); }
+  catch (e) { return { ok: false, fallback: true, error: 'CHOOSE_FAILED' }; }
+  if (chosen && chosen.canceled) return { ok: false, canceled: true }; // 用户取消，不回退
+  var folderPath = chosen && (chosen.folderPath || chosen.path);
+  if (!folderPath) return { ok: false, fallback: true, error: 'NO_FOLDER' };
+  // chooseLocalMusicFolder 已扫描落库；这里直接水合+解析，不重复扫描。
+  var res = await window.stellaMlibSeam.hydrateFolder(folderPath);
+  if (res && res.ok && res.count > 0) {
+    if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
+    if (typeof safeShelfRebuild === 'function') safeShelfRebuild('local-folder-import', true);
+    if (typeof showToast === 'function') showToast('已导入 ' + res.count + ' 首本地音乐');
+    return { ok: true, count: res.count, folderPath: folderPath };
+  }
+  return { ok: false, fallback: true, error: 'ENGINE_EMPTY' };
+}
+// 按钮入口：先试新引擎；引擎不可用/失败才回退旧拖入式文件夹选择（port don't delete）。
+async function triggerLocalFolderImport() {
+  var res = null;
+  try { res = await importLocalMusicFolderViaEngine(); } catch (e) { res = { ok: false, fallback: true }; }
+  if (res && (res.ok || res.canceled)) return res;
+  if (typeof triggerUploadInput === 'function') triggerUploadInput('folder');
+  return res || { ok: false };
+}
+window.triggerLocalFolderImport = triggerLocalFolderImport;
+
+// 批4-D：拖入/单曲选择统一走新引擎——File 反推父文件夹按文件夹导入；引擎彻底不可用则本次会话内存态播放（不持久化）。
+async function importDroppedFilesViaEngine(files) {
+  var list = Array.prototype.slice.call(files || []);
+  if (!list.length) return { ok: false };
+  var audioFiles = sortedAudioUploadFiles(list);
+  var imgFile = firstImageUploadFile(list);
+  if (!audioFiles.length) { if (imgFile) handleCoverFiles([imgFile]); return { ok: false }; }
+  function sessionOnly() {
+    importLocalAudioSongs(audioFiles.map(localSongFromAudioFile), { coverFile: audioFiles.length === 1 ? imgFile : null });
+    return { ok: false, sessionOnly: true };
+  }
+  if (!window.desktopWindow || typeof window.desktopWindow.localMusicFoldersForFiles !== 'function'
+    || !window.stellaMlibSeam || typeof window.stellaMlibSeam.addLocalMusicFolder !== 'function') {
+    return sessionOnly();
+  }
+  var res = null;
+  try { res = await window.desktopWindow.localMusicFoldersForFiles(list); } catch (_e) { res = null; }
+  var folders = (res && res.ok && Array.isArray(res.folders)) ? res.folders : [];
+  if (!folders.length) return sessionOnly();
+  var total = 0;
+  for (var i = 0; i < folders.length; i += 1) {
+    var r = await window.stellaMlibSeam.addLocalMusicFolder(folders[i]);
+    if (r && r.ok) total += r.count;
+  }
+  if (total > 0) {
+    if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
+    if (typeof safeShelfRebuild === 'function') safeShelfRebuild('local-drop-import', true);
+    if (typeof showToast === 'function') showToast('已导入 ' + total + ' 首本地音乐');
+    return { ok: true, count: total };
+  }
+  return sessionOnly();
+}
+
 function isLocalPlaybackSnapshot(snapshot) {
   var song = snapshot && snapshot.current;
   return !!(song && (song.type === 'local' || song.source === 'local' || song.localKey || song.localFileId));
@@ -162,19 +231,25 @@ function restoredLocalTrackIndex(tracks, snapshot) {
   return isFinite(fallback) && fallback >= 0 && fallback < tracks.length ? Math.round(fallback) : 0;
 }
 async function restorePersistedLocalLibrary() {
-  if (!window.desktopWindow || typeof window.desktopWindow.listLocalMusicLibrary !== 'function') return false;
   var snapshotAtRequest = restoredLastPlaybackSnapshot;
   var queueAtRequest = playQueue;
   var indexAtRequest = currentIdx;
   var localSongAtRequest = currentLocalSong;
-  var result;
-  try { result = await window.desktopWindow.listLocalMusicLibrary(); } catch (e) { return false; }
-  if (!result || result.ok !== true || !Array.isArray(result.tracks)) return false;
-  var tracks = result.tracks.map(function (song) {
-    var copy = hydrateCustomCover(Object.assign({}, song));
-    copy.localMissing = false;
-    return copy;
-  }).filter(function (song) { return song && song.localUrl && song.localKey; });
+  // 批4-D 前置：先水合新引擎，再以新引擎为曲库来源；新引擎空且旧库仍可用时才回退旧 IPC（过渡共存）。
+  var tracks = [];
+  if (window.stellaMlibSeam && typeof window.stellaMlibSeam.hydrateAll === 'function') {
+    try { await window.stellaMlibSeam.hydrateAll(); } catch (_e) { /* 新引擎水合失败走旧回退 */ }
+  }
+  if (typeof getLocalLibraryTracks === 'function') {
+    try {
+      tracks = (getLocalLibraryTracks() || []).map(function (song) {
+        var copy = hydrateCustomCover(Object.assign({}, song));
+        copy.localMissing = false;
+        return copy;
+      }).filter(function (song) { return song && song.localUrl && song.localKey; });
+    } catch (_e2) { tracks = []; }
+  }
+  if (!tracks.length) return false;
   persistentLocalLibraryTracks = tracks.map(cloneSong);
   if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
   var snapshot = snapshotAtRequest;
@@ -470,29 +545,9 @@ async function handleFiles(files, opts) {
   var audioFiles = sortedAudioUploadFiles(files);
   var imgFile = firstImageUploadFile(files);
   if (audioFiles.length) {
-    var songs;
-    var persistenceFailed = false;
-    if (canUsePersistentLocalMusicLibrary()) {
-      showToast('正在读取 ' + audioFiles.length + ' 首本地音乐的标签与歌词…');
-      try {
-        var persisted = await importPersistentLocalAudioFiles(audioFiles);
-        songs = persisted && persisted.tracks;
-        if (!songs || !songs.length) throw new Error('LOCAL_LIBRARY_IMPORT_EMPTY');
-        persistentLocalLibraryTracks = songs.map(cloneSong);
-        if (typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
-        if (persisted && Array.isArray(persisted.failures) && persisted.failures.length) {
-          setTimeout(function () { showToast('有 ' + persisted.failures.length + ' 个文件无法读取，其余歌曲已保存'); }, 900);
-        }
-      } catch (e) {
-        persistenceFailed = true;
-        console.warn('[LocalImport] persistent library unavailable, using this session only', e);
-      }
-    }
-    if (!songs || !songs.length) songs = audioFiles.map(localSongFromAudioFile);
-    importLocalAudioSongs(songs, { coverFile: songs.length === 1 ? imgFile : null, mode: opts.mode || '' });
-    if (persistenceFailed) {
-      setTimeout(function () { showToast('本地曲库保存失败：这些歌曲仅本次可用，重启后不会保留'); }, 260);
-    }
+    // 批4-D：音频统一走新引擎（File→父文件夹→按文件夹导入，持久化 + mlib/首页条带更新）。
+    // 引擎彻底不可用时 importDroppedFilesViaEngine 内部已做会话态播放。
+    await importDroppedFilesViaEngine(files);
     return;
   }
   if (imgFile) {
@@ -524,7 +579,7 @@ document.addEventListener('dragleave', function (e) { e.preventDefault(); dragCo
 document.addEventListener('dragover', function (e) { e.preventDefault(); });
 document.addEventListener('drop', function (e) {
   e.preventDefault(); dragCount = 0; dropOv.classList.remove('show');
-  if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+  if (e.dataTransfer.files.length) importDroppedFilesViaEngine(e.dataTransfer.files);
 });
 
 // ============================================================

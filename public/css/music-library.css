@@ -1,0 +1,686 @@
+/* ============================================================================
+   Stellaflix 本地音乐资料库页面层（Task 4 页面壳）
+   移植自参考仓库 MineRadio-Apple-Music index.css:1693-3157 的 .mlib-* 规则，
+   反向改名：.mlib-* -> .stella-mlib-*；根层保留 #music-library /
+   #music-library-scroll（Stellaflix 自有）；视图容器改为本计划 id 约定。
+   已删除：参考仓库的顶部入口按钮、源圆点及一切平台/源选择相关规则。
+   辉光一律走 var(--home-accent)，参考仓库的青色 rgba 字面量一律违禁移植。
+   body 类：mlib-active / mlib-axis-playlists|albums|artists /
+            mlib-detail-open / mlib-leaving；html 类：stella-mlib-has-hover。
+   ========================================================================== */
+
+:root {
+  --stella-mlib-safe-top: 126px;            /* 内容停靠起点 = 搜索栏 82px + 呼吸 */
+  --stella-mlib-content-top: var(--stella-mlib-safe-top); /* mask 在内容第一像素处必须已不透明 */
+  --stella-mlib-safe-bottom: 150px;
+  --stella-mlib-fade-bottom: 22px;          /* 底部淡出带只在内容终点之下 */
+  --stella-mlib-edge-feather: 56px;
+  --stella-mlib-gutter: clamp(24px,3.2vw,56px);
+}
+
+/* 资料库打开时首页让位（优先级高于其它 #empty-home 显隐规则） */
+body.mlib-active #empty-home {
+  opacity: 0 !important;
+  pointer-events: none !important
+}
+
+/* ---------- 页面壳：进出场 ---------- */
+#music-library {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  opacity: 0;
+  transform: translateY(22px) scale(.994);
+  filter: blur(10px);
+  pointer-events: none;
+  transition: opacity .46s cubic-bezier(.16, 1, .3, 1),
+    transform .58s cubic-bezier(.16, 1, .3, 1),
+    filter .46s cubic-bezier(.16, 1, .3, 1)
+}
+
+body.mlib-active #music-library {
+  opacity: 1;
+  transform: none;
+  filter: blur(0);
+  pointer-events: auto
+}
+
+body.mlib-leaving #music-library {
+  opacity: 0;
+  transform: translateY(14px) scale(.99);
+  filter: blur(8px);
+  transition-duration: .26s;
+  pointer-events: none
+}
+
+/* ---------- 全屏滚动容器：上下留安全区，内容穿过搜索栏/播放器时由 mask 自然淡出 ---------- */
+/* mask 分两段：内容起点/终点之外才是淡出带，内容本身必须落在完全不透明的区间里。
+   顶部：0 -> content-top 完成淡出（搜索栏区域）；
+   底部：content-bottom -> 视口底 完成淡出（播放器区域）。
+   静止时内容起点恰好贴着不透明边界，页头既不会被裁掉也不会被半透明化。 */
+#music-library-scroll {
+  height: 100%;
+  min-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: var(--stella-mlib-safe-top) var(--stella-mlib-gutter) var(--stella-mlib-safe-bottom);
+  box-sizing: border-box;
+  scroll-padding-top: calc(var(--stella-mlib-safe-top) + 8px);
+  scroll-padding-bottom: calc(var(--stella-mlib-safe-bottom) + 8px);
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom,
+      transparent 0,
+      #000 var(--stella-mlib-content-top),
+      #000 calc(100% - var(--stella-mlib-fade-bottom)),
+      transparent calc(100% - var(--stella-mlib-fade-bottom) + var(--stella-mlib-edge-feather)));
+  mask-image: linear-gradient(to bottom,
+      transparent 0,
+      #000 var(--stella-mlib-content-top),
+      #000 calc(100% - var(--stella-mlib-fade-bottom)),
+      transparent calc(100% - var(--stella-mlib-fade-bottom) + var(--stella-mlib-edge-feather)))
+}
+
+#music-library-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0
+}
+
+/* 小屏收紧安全区与羽化 */
+@media (max-width: 760px) {
+  :root {
+    --stella-mlib-safe-top: 104px;
+    --stella-mlib-content-top: var(--stella-mlib-safe-top);
+    --stella-mlib-safe-bottom: 132px;
+    --stella-mlib-edge-feather: 44px
+  }
+}
+
+/* ---------- 页头/眉标/标题/副信息 排版 ---------- */
+.stella-mlib-page-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding-bottom: 30px
+}
+
+.stella-mlib-eyebrow {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, .42)
+}
+
+.stella-mlib-title {
+  margin: 0;
+  font-size: clamp(30px, 3.4vw, 44px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: .01em;
+  color: #fff;
+  text-shadow: 0 10px 38px rgba(0, 0, 0, .5)
+}
+
+.stella-mlib-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, .58)
+}
+
+/* ---------- 网格 + 容器查询 ---------- */
+/* container 上下文挂在包裹层，不挂滚动容器 —— 滚动容器上 container-type 会失效 */
+#mlib-view-grid {
+  display: block
+}
+
+#mlib-grid-wrap {
+  container-type: inline-size
+}
+
+/* 网格（对照 Apple Music 的资料库排列）：等宽封面 + 下方居中文案。
+   列数用容器查询而不是视口查询，窗口在 1000-1300 之间抖动时更稳。 */
+#mlib-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--stella-mlib-cols, 5), minmax(0, 1fr));
+  gap: clamp(16px, 1.8vw, 26px) clamp(14px, 1.6vw, 24px)
+}
+
+@container (max-width: 1080px) { #mlib-grid { --stella-mlib-cols: 4 } }
+@container (max-width: 860px) { #mlib-grid { --stella-mlib-cols: 3 } }
+@container (max-width: 620px) { #mlib-grid { --stella-mlib-cols: 2 } }
+@container (max-width: 380px) { #mlib-grid { --stella-mlib-cols: 1 } }
+
+/* 轴（板块）默认列数：艺人头像更小更密，取 6 列；歌单/专辑维持 5 列 */
+body.mlib-axis-playlists #mlib-grid { --stella-mlib-cols: 5 }
+body.mlib-axis-albums #mlib-grid { --stella-mlib-cols: 5 }
+body.mlib-axis-artists #mlib-grid { --stella-mlib-cols: 6 }
+
+/* ---------- 卡片：不再"框"化，只承载封面与下方文字 ---------- */
+/* 封面 1:1；文字透明白底、水平居中。悬停靠封面抬升与主色辉光表达，不靠底色。 */
+.stella-mlib-album-card {
+  position: relative;
+  flex: 0 0 auto;
+  width: clamp(160px, 22vw, 236px);
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  scroll-snap-align: start;
+  scroll-margin-top: 96px;
+  scroll-margin-bottom: calc(var(--stella-mlib-safe-bottom) + 16px);
+  transition: transform .22s cubic-bezier(.16, 1, .3, 1)
+}
+
+.stella-mlib-album-card:hover {
+  transform: translateY(-4px)
+}
+
+/* 卡片一律是二级详情入口（buildCard 三轴都挂 is-openable），故不再写「不可开态给
+   cursor:default」那一档——它永远命中不到，留着只会误导后来人「有不可点的卡」。 */
+
+/* 网格里的卡片宽度由列宽决定，不再是固定宽度 */
+#mlib-grid .stella-mlib-album-card {
+  width: auto;
+  min-width: 0
+}
+
+/* ---------- 封面（.mlib-art -> .stella-mlib-art）+ 骨架微光 ---------- */
+.stella-mlib-art {
+  position: relative;
+  display: block;
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .045);
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .10);
+  transition: box-shadow .22s
+}
+
+.stella-mlib-album-card:hover .stella-mlib-art {
+  box-shadow: 0 24px 62px rgba(0, 0, 0, .48),
+    0 0 30px color-mix(in srgb, var(--home-accent) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .14)
+}
+
+.stella-mlib-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity .38s ease
+}
+
+.stella-mlib-art.is-loaded img {
+  opacity: 1
+}
+
+/* 图片加载前的骨架微光 */
+.stella-mlib-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .055) 50%, transparent 80%);
+  background-size: 220% 100%;
+  animation: stella-mlib-shimmer 1.6s linear infinite
+}
+
+.stella-mlib-art.is-loaded::after {
+  content: none
+}
+
+@keyframes stella-mlib-shimmer {
+  from { background-position: 120% 0 }
+  to { background-position: -120% 0 }
+}
+
+/* ---------- 封面悬停播放按钮 ---------- */
+/* 复用既有图标按钮的玻璃语汇（圆角/边框/背景/阴影/模糊），但独立成一个类：
+   不改动共享图标按钮类本身，避免影响首页与其它页面。
+   定位相对 .stella-mlib-art，不参与网格布局 —— 绝不会撑开卡片或让封面跳动。 */
+.stella-mlib-play-btn {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .38);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(4px) scale(.94);
+  pointer-events: none;
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .18);
+  transition: opacity .16s ease, transform .16s cubic-bezier(.16, 1, .3, 1),
+    background .18s, border-color .18s, box-shadow .18s
+}
+
+.stella-mlib-play-btn svg {
+  width: 19px;
+  height: 19px;
+  fill: currentColor;
+  stroke: none;
+  /* 播放三角在视觉上重心偏左，右移 1px 更居中 */
+  margin-left: 2px
+}
+
+.stella-mlib-play-btn:hover {
+  background: color-mix(in srgb, var(--home-accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--home-accent) 52%, transparent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .46),
+    0 0 24px color-mix(in srgb, var(--home-accent) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .22)
+}
+
+.stella-mlib-play-btn:focus-visible {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  outline: 2px solid var(--home-accent);
+  outline-offset: 2px
+}
+
+/* 有 hover 的设备：悬停这张卡片时淡入。显隐基于卡片自身的 :hover，不是页面全局鼠标状态。 */
+html.stella-mlib-has-hover .stella-mlib-album-card:hover .stella-mlib-play-btn,
+html.stella-mlib-has-hover .stella-mlib-album-card:focus-within .stella-mlib-play-btn {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto
+}
+
+/* 极轻微反馈，只动画 filter —— 不碰尺寸/位置，网格不会抖 */
+html.stella-mlib-has-hover .stella-mlib-album-card:hover .stella-mlib-art img {
+  filter: brightness(1.04)
+}
+
+html.stella-mlib-has-hover .stella-mlib-album-card:hover .stella-mlib-art img,
+html.stella-mlib-has-hover .stella-mlib-album-card:hover .stella-mlib-play-btn {
+  transition: opacity .16s ease, transform .16s cubic-bezier(.16, 1, .3, 1), filter .18s ease,
+    background .18s, border-color .18s, box-shadow .18s
+}
+
+/* 无 hover 的设备（触屏）：不显示圆形按钮 —— 否则几十张封面各压一个角标，
+   正好违反"不得覆盖关键封面内容"。改为整张封面可点即播放（见委托里的封面分支），
+   并保留按下反馈。桌面端布局完全不受影响。
+   艺人头像也在 .stella-mlib-album-card 里（三轴共用同一张卡），故一并纳入触摸手势。
+   注意头像那一档点的是「打开艺人详情」（委托里 COVER_SELECTOR 只认 .stella-mlib-art），
+   不是即播——指针手势表达的是「可点」，不是「可播」。
+   取舍：只在 CSS 侧补 .stella-mlib-artist-art，不照参照库给头像补挂 .stella-mlib-art 基类——
+   基类带 border-radius:18px / 底色 / 阴影 / ::after 微光，挂上会把圆头像切成方角并叠出双层微光。 */
+html:not(.stella-mlib-has-hover) .stella-mlib-album-card .stella-mlib-art,
+html:not(.stella-mlib-has-hover) .stella-mlib-album-card .stella-mlib-artist-art {
+  cursor: pointer
+}
+
+html:not(.stella-mlib-has-hover) .stella-mlib-album-card .stella-mlib-art:active,
+html:not(.stella-mlib-has-hover) .stella-mlib-album-card .stella-mlib-artist-art:active {
+  filter: brightness(.94)
+}
+
+html:not(.stella-mlib-has-hover) .stella-mlib-play-btn {
+  display: none
+}
+
+/* ---------- 卡片文字区：无底色、水平居中 ---------- */
+.stella-mlib-album-meta {
+  padding: 11px 6px 0;
+  text-align: center
+}
+
+.stella-mlib-album-name {
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 1.35;
+  color: #fff;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, .55);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical
+}
+
+.stella-mlib-album-sub {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, .60);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, .5);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical
+}
+
+/* ---------- 艺人：分组分界条 + 圆形头像 + 首字母兜底 ---------- */
+/* "其他"分组（数字/符号开头）的分界：跨整行，避免末尾条目看起来像排序坏了 */
+.stella-mlib-artist-divider {
+  grid-column: 1 / -1;
+  margin: 6px 0 2px;
+  font-size: 11px;
+  letter-spacing: .06em;
+  color: rgba(255, 255, 255, .42)
+}
+
+/* 艺人头像：统一圆形裁切。拿不到「艺人代表图像」时用名称首字母占位，
+   绝不用专辑封面冒充（专辑封面在 .stella-mlib-art 里是方的，这里强制成圆）。 */
+.stella-mlib-artist-art {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  overflow: hidden
+}
+
+.stella-mlib-artist-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block
+}
+
+.stella-mlib-artist-initial {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  /* 尺寸随卡片宽度变化，不写死 */
+  font-size: clamp(26px, 3.4vw, 54px);
+  color: rgba(255, 255, 255, .82);
+  background: linear-gradient(160deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, .05));
+  text-transform: uppercase;
+  user-select: none
+}
+
+/* 艺人卡片不做悬停封面缩放（圆形头像缩放会溢出圆框），只保留卡片抬升 */
+html.stella-mlib-has-hover .stella-mlib-artist-card:hover .stella-mlib-artist-art img {
+  transform: none
+}
+
+/* 头像图片叠在首字母占位上：加载成功才显示图片（失败则移除 img，占位自动露出）。 */
+.stella-mlib-artist-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity .2s ease
+}
+
+.stella-mlib-artist-art.has-image .stella-mlib-artist-img {
+  opacity: 1
+}
+
+/* 首字母占位若取不到字符（空名），退回音乐图标 */
+.stella-mlib-artist-initial.is-icon svg {
+  width: 42%;
+  height: 42%;
+  color: rgba(255, 255, 255, .7)
+}
+
+/* ---------- 详情页（二级视图，由 body.mlib-detail-open 切换显隐） ---------- */
+#mlib-view-detail {
+  display: none
+}
+
+body.mlib-detail-open #mlib-view-detail {
+  display: block
+}
+
+body.mlib-detail-open #mlib-view-grid {
+  display: none
+}
+
+/* 返回按钮：胶囊形，弱边框，悬停提亮 */
+#mlib-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 8px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .04);
+  color: rgba(255, 255, 255, .78);
+  font: 500 13px inherit;
+  cursor: pointer;
+  transition: background .18s ease, color .18s ease, border-color .18s ease
+}
+
+#mlib-detail-back:hover {
+  background: rgba(255, 255, 255, .10);
+  color: #fff;
+  border-color: rgba(255, 255, 255, .22)
+}
+
+#mlib-detail-back svg {
+  width: 15px;
+  height: 15px
+}
+
+/* 详情头部排版 */
+#mlib-detail-head {
+  max-width: 1240px
+}
+
+.stella-mlib-detail-title {
+  margin: 2px 0 0;
+  font-size: clamp(24px, 2.6vw, 36px);
+  font-weight: 720;
+  line-height: 1.18;
+  color: #fff;
+  /* 长标题换行，但不挤压右侧控件 */
+  overflow-wrap: anywhere;
+  text-shadow: 0 10px 34px rgba(0, 0, 0, .5)
+}
+
+/* ---------- 曲目列表：连续行 + 细分隔线，不是一歌一卡 ---------- */
+#mlib-detail-tracks {
+  margin-top: 26px;
+  max-width: 1240px
+}
+
+.stella-mlib-track + .stella-mlib-track::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, .10)
+}
+
+.stella-mlib-track {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) minmax(0, .42fr) 56px 34px;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 10px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background .16s
+}
+
+.stella-mlib-track:hover {
+  background: rgba(255, 255, 255, .10)
+}
+
+.stella-mlib-track[data-playing="true"] {
+  background: rgba(0, 0, 0, .16)
+}
+
+.stella-mlib-track[data-playing="true"] .stella-mlib-track-name {
+  color: var(--home-accent)
+}
+
+/* 左侧 2px 播放指示条 */
+.stella-mlib-track[data-playing="true"]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--home-accent)
+}
+
+.stella-mlib-track-no {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, .60);
+  font-variant-numeric: tabular-nums;
+  text-align: right
+}
+
+.stella-mlib-track-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis
+}
+
+.stella-mlib-track-artist,
+.stella-mlib-track-dur {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, .70);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis
+}
+
+.stella-mlib-track-dur {
+  text-align: right;
+  font-variant-numeric: tabular-nums
+}
+
+/* 更多操作：默认隐藏，行悬停/聚焦时淡入。用 opacity 而不是 display，
+   所以行的尺寸与文字位置永远不跳。 */
+.stella-mlib-track-more {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .30);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .16s ease, background .18s, border-color .18s
+}
+
+.stella-mlib-track:hover .stella-mlib-track-more,
+.stella-mlib-track:focus-within .stella-mlib-track-more,
+.stella-mlib-track-more:focus-visible {
+  opacity: 1;
+  pointer-events: auto
+}
+
+.stella-mlib-track-more:hover {
+  background: rgba(255, 255, 255, .14);
+  border-color: rgba(255, 255, 255, .30)
+}
+
+/* 无 hover 设备：悬停不是唯一入口 —— 常驻显示更多操作 */
+@media (hover: none) {
+  .stella-mlib-track-more {
+    opacity: .9;
+    pointer-events: auto
+  }
+}
+
+@media (max-width: 760px) {
+  .stella-mlib-track {
+    grid-template-columns: 28px minmax(0, 1fr) 48px 34px
+  }
+
+  .stella-mlib-track-artist {
+    display: none
+  }
+}
+
+/* ---------- 状态盒：加载 / 未导入 / 出错 / 空 ---------- */
+/* .stella-mlib-state-box 是共享钩子：网格态靠 #mlib-state-box 命中，
+   详情态的 #mlib-state-box 被 body.mlib-detail-open 隐藏，只能靠这个类拿到同一套样式。 */
+#mlib-state-box, .stella-mlib-state-box {
+  max-width: 1240px;
+  margin: 18px auto 0;
+  padding: 22px 24px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, .085);
+  background: linear-gradient(142deg, rgba(18, 21, 26, .55), rgba(8, 9, 13, .66));
+  color: rgba(255, 255, 255, .66);
+  font-size: 13px;
+  line-height: 1.6
+}
+
+#mlib-state-box:empty, .stella-mlib-state-box:empty {
+  display: none
+}
+
+#mlib-state-box[data-tone="warn"], .stella-mlib-state-box[data-tone="warn"] {
+  border-color: rgba(244, 210, 138, .34);
+  color: rgba(255, 242, 189, .86)
+}
+
+/* 状态盒内部子元素：三枚类由 08-mlib-page.js fillStateBox 产出（heading/hint/btn）。
+   取色只用本文件既有字面量与 var(--home-accent)，不新造主题色、不写死青色 rgba。 */
+.stella-mlib-state-heading {
+  font-size: 15px;
+  font-weight: 620;
+  line-height: 1.35;
+  color: #fff
+}
+
+.stella-mlib-state-hint {
+  margin-top: 6px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, .66) /* 沿用正文透明度 */
+}
+
+.stella-mlib-state-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 8px 16px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .04);
+  color: #fff;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background .18s ease, color .18s ease, border-color .18s ease
+}
+
+.stella-mlib-state-btn:hover {
+  background: rgba(255, 255, 255, .10);
+  border-color: color-mix(in srgb, var(--home-accent) 52%, transparent);
+  color: #fff
+}
+
+/* 列表收尾占位：保证最后一行不被底部 mask 淡出带压住 */
+.stella-mlib-end-cap {
+  height: 24px
+}

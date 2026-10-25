@@ -180,6 +180,9 @@ function listenSongSnapshot(song) {
     provider: song.provider || song.source || song.type || '',
     resolvedPlaybackProvider: song.resolvedPlaybackProvider || song.playbackProvider || song.audioProvider || song.providerResolved || '',
     duration: Number(song.duration) || 0,
+    // 本地曲目额外带上 SQLite 的行键：snap.key 是 queueItemKey（前缀 local:），不能直接当 song_key 用。
+    localKey: song.type === 'local' ? localLibraryDbSongKeyFromSong(song) : '',
+    pathKey: song.type === 'local' ? localLibraryPathKeyFromSong(song) : '',
   };
 }
 function beginListenSession(song, context) {
@@ -280,6 +283,7 @@ function finalizeListenSession(completed) {
   });
   recordListenRollupV2(record);
   saveListenStatsState();
+  syncLocalLibraryDbPlayStat(snap, { listenMs: record.listenMs, completed: !!completed, playedAt: now });
   reportListenSession(record, session, actualDurationMs);
   if (emptyHomeActive) renderHomeDiscover();
 }

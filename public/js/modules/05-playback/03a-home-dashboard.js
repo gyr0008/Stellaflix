@@ -702,7 +702,12 @@ function homeDashboardSetStableBackgroundImage(element, src) {
 function homeDashboardCardHtml(card) {
   var cover = card.cover || homeDashboardGeneratedCover(card.title, card.label, card.tone);
   var artStyle = cover ? ' style="background-image:url(&quot;' + escHtml(cssImageUrl(cover)) + '&quot;)"' : '';
+  // data-mlib-axis 只有资料库入口卡才带：该属性是 09-mlib-bindings 委托点击的唯一映射源，
+  // 而本函数是 count 不等时 innerHTML 重建的唯一出口——这里不发，重建后三卡就再也 closest 不到了。
+  // 无轴的卡（CONTINUE/Video/将来新卡）保持干净属性面：挂空值＝第二个映射源。
+  var axisAttr = card.axis ? ' data-mlib-axis="' + escHtml(card.axis) + '"' : '';
   return '<button class="home-card ' + escHtml(card.className || '') + '" data-home-tone="' + escHtml(card.tone || 'playlist') + '"' +
+    axisAttr +
     ' type="button" onclick="' + card.action + '">' +
     '<div class="home-card-label">' + escHtml(card.label || '') + '</div>' +
     '<div class="home-card-title">' + escHtml(card.title || '') + '</div>' +
@@ -717,6 +722,14 @@ function homeDashboardPatchCard(button, card) {
   var displayCover = card.cover || homeDashboardGeneratedCover(card.title, card.label, card.tone);
   if (button.className !== className) button.className = className;
   if (button.getAttribute('data-home-tone') !== card.tone) button.setAttribute('data-home-tone', card.tone);
+  // 轴属性与卡表同步：有轴＝写，无轴＝摘净（残留会让这张卡被委托点击认成别的轴＝第二个映射源）。
+  // 只在属性真的存在时才 removeAttribute，无轴卡不会每轮 patch 都写一次属性。
+  var axisAttrValue = card.axis ? String(card.axis) : '';
+  if (axisAttrValue) {
+    if (button.getAttribute('data-mlib-axis') !== axisAttrValue) button.setAttribute('data-mlib-axis', axisAttrValue);
+  } else if (button.getAttribute('data-mlib-axis') !== null) {
+    button.removeAttribute('data-mlib-axis');
+  }
   if (button.getAttribute('onclick') !== card.action) button.setAttribute('onclick', card.action);
   var label = button.querySelector('.home-card-label');
   var title = button.querySelector('.home-card-title');
@@ -744,49 +757,49 @@ function renderHomeDashboardQuickCards() {
   var summary = typeof homeListenSummary === 'function' ? homeListenSummary() : {};
   var recent = summary && summary.recent || null;
   var current = homeDashboardCurrentSong();
-  var daily = homeDiscoverState && homeDiscoverState.songs && homeDiscoverState.songs[0] || null;
   var continueItem = current || recent;
   var localSongs = homeDashboardLocalSongs();
-  var localCount = localSongs.length;
-  var accountPlaylistCount = homeDiscoverState && Array.isArray(homeDiscoverState.playlists) ? homeDiscoverState.playlists.length : 0;
-  var ownPlaylistCount = Array.isArray(userPlaylists) ? userPlaylists.length : 0;
-  var libraryCount = localCount + accountPlaylistCount + ownPlaylistCount;
   var cards = [
     {
       label: 'CONTINUE',
       title: continueItem && (continueItem.name || continueItem.title) || '开始听歌',
-      sub: continueItem ? (homeDashboardSubtitle(continueItem) || recent && (recent.artist || recent.source) || '继续当前队列') : '从音乐库或每日推荐开始',
+      sub: continueItem ? (homeDashboardSubtitle(continueItem) || recent && (recent.artist || recent.source) || '继续当前队列') : '从歌单或专辑开始',
       cover: homeDashboardSongCover(current, 360) || recent && recent.cover || '',
       action: 'resumeHomeDashboardPlayback()',
       tone: 'search',
       className: 'home-card-featured',
     },
     {
-      label: 'LIBRARY',
-      title: '音乐库',
-      sub: libraryCount ? (libraryCount + ' 项内容 · 本地音乐与歌单') : '歌单、本地音乐和已登录平台',
-      cover: localSongs[0] ? homeDashboardSongCover(localSongs[0], 260) : '',
-      action: 'openHomeDashboardLibrary()',
+      label: 'PLAYLISTS',
+      title: '歌单',
+      sub: '导入的歌单与本地歌单',
+      cover: '',
+      action: '',
       tone: 'library',
       className: 'home-card-quick',
+      // 与 index.html 静态三卡逐一对应的入口轴（09-mlib-bindings 委托点击的唯一映射源）。
+      // 卡表＝重建/patch 两条路径的唯一真源，缺了它首屏 6≠5 重建后属性就没了（三卡点了没反应）。
+      axis: 'playlists',
     },
     {
-      label: 'DAILY MIX',
-      title: '每日推荐',
-      sub: daily ? ((daily.name || daily.title || '今日歌曲') + (homeDashboardSubtitle(daily) ? ' · ' + homeDashboardSubtitle(daily) : '')) : '使用当前 Stellaflix 推荐数据',
-      cover: homeDashboardSongCover(daily, 260),
-      action: 'playHomeDaily()',
+      label: 'ALBUMS',
+      title: '专辑',
+      sub: '资料库 · 建设中',
+      cover: '',
+      action: '',
       tone: 'mix',
       className: 'home-card-quick',
+      axis: 'albums',
     },
     {
-      label: 'RECENT',
-      title: '最近播放',
-      sub: recent ? ((recent.name || '最近一首') + (recent.artist ? ' · ' + recent.artist : '')) : '播放过的歌曲会出现在这里',
-      cover: recent && recent.cover || '',
-      action: 'playHomeRecent()',
+      label: 'ARTISTS',
+      title: '艺人',
+      sub: '资料库 · 建设中',
+      cover: '',
+      action: '',
       tone: 'playlist',
       className: 'home-card-quick',
+      axis: 'artists',
     },
     {
       label: 'Video',
@@ -814,8 +827,7 @@ function renderHomeDashboardQuickCards() {
   // / 本地音乐 / 任意有 cover 的数据里取一个真实 URL 填充，避免一律变成蓝色圆盘 SVG。
   // 背景（蓝色圆盘根因链的最后一环）：
   //   CONTINUE → cover 来自 current/recent（播放状态依赖，切态瞬间可能空）
-  //   LIBRARY  → cover 来自 localSongs[0]（本地库依赖，空库时空）
-  //   RECENT   → cover 来自 recent.cover（同上）
+  //   歌单/专辑/艺人 → 入口占位卡，cover 恒为空，靠本兜底池取图维持材质
   //   VIDEO    → cover 来自 SFV.home.getVideoLeftPosterImage()（快照依赖，没拍时空）
   //   这些字段一旦为空，即使 loadHomeDiscover 返回了 homeDiscoverState.songs（FOR YOU
   //   区域有真实封面），顶部 5 张卡也享受不到 —— 因为它们的 cover 字段完全不读 songs。
@@ -847,11 +859,11 @@ function renderHomeDashboardQuickCards() {
     // 按语义填最贴近的兜底
     // CONTINUE（第 0 张）：用最可能正在听的 → recent 优先（池第 0 位即 songs[0]）
     if (!cards[0].cover) cards[0].cover = poolAt(0);
-    // LIBRARY（第 1 张）：本地歌曲 / 歌单 → 池第 1 位
+    // 歌单（第 1 张）：本地歌曲 / 歌单 → 池第 1 位
     if (!cards[1].cover) cards[1].cover = poolAt(1);
-    // DAILY MIX（第 2 张）：songs[0] 就是它自己的 daily，一般不会空；保险兜底
+    // 专辑（第 2 张）：songs[0] 语义最接近，保险兜底
     if (!cards[2].cover) cards[2].cover = poolAt(0);
-    // RECENT（第 3 张）：近期一首 → 池第 2/0 位
+    // 艺人（第 3 张）：近期一首 → 池第 2/0 位
     if (!cards[3].cover) cards[3].cover = poolAt(2 % pool.length);
     // VIDEO（第 4 张）：跨态连线没取到时，用池最后一位（避免和前 4 张重复太多）
     if (!cards[4].cover) cards[4].cover = poolAt(pool.length - 1);
@@ -1185,8 +1197,15 @@ var LOCAL_SORT_MODES = ['default', 'title', 'artist', 'duration'];
 var LOCAL_SORT_LABELS = { default: '默认', title: '标题', artist: '歌手', duration: '时长' };
 
 function homeDashboardLocalTracks() {
-  if (typeof persistentLocalLibraryTracks === 'undefined' || !Array.isArray(persistentLocalLibraryTracks)) return [];
-  return persistentLocalLibraryTracks.filter(function (song) {
+  // 批4-D 前置：优先读新引擎（内存同步态），空则回退旧 persistentLocalLibraryTracks（迁移过渡期共存）。
+  var tracks = [];
+  if (typeof getLocalLibraryTracks === 'function') {
+    try { tracks = getLocalLibraryTracks() || []; } catch (e) { tracks = []; }
+  }
+  if ((!tracks || !tracks.length) && typeof persistentLocalLibraryTracks !== 'undefined' && Array.isArray(persistentLocalLibraryTracks)) {
+    tracks = persistentLocalLibraryTracks;
+  }
+  return (tracks || []).filter(function (song) {
     return song && (song.localUrl || song.localFileId || song.localKey);
   });
 }
