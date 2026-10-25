@@ -1809,11 +1809,6 @@ async function playQueueAt(idx, opts) {
         else if (data.loggedIn) txt = '此歌曲需 VIP · 当前仅播放试听片段';
         else txt = '当前未登录 · 仅播放试听片段';
         document.getElementById('trial-text').textContent = txt;
-        var trialLoginBtn = document.getElementById('trial-login-btn');
-        if (trialLoginBtn) {
-          trialLoginBtn.style.display = data.loggedIn ? 'none' : '';
-          trialLoginBtn.onclick = function () { openProviderLogin(playbackProvider); };
-        }
         document.getElementById('trial-banner').classList.add('show');
       }
       markPlayPhase('audio-element');

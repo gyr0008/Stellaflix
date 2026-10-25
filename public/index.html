@@ -435,8 +435,9 @@
           <path d="M9.5 20v-5h5v5" />
         </svg>
       </button>
-      <button id="user-btn" class="icon-btn logged-out login-eye-avatar" onclick="onUserBtnClick()" title="登录账号">
-        <span class="login-word">登录</span>
+      <button id="user-btn" class="icon-btn local-profile-pill" onclick="onUserBtnClick()" title="本地档案">
+        <span class="top-account-pill online local-profile" data-account-provider="local"><img
+            id="user-btn-avatar" alt=""><span class="top-account-name">未设置昵称</span></span>
       </button>
     </div>
 
@@ -1280,7 +1281,6 @@
         <line x1="12" y1="16" x2="12.01" y2="16" />
       </svg>
       <span id="trial-text">仅播放试听片段</span>
-      <span id="trial-login-btn" class="login-link" onclick="showLoginModal()">扫码登录</span>
       <span class="close" onclick="document.getElementById('trial-banner').classList.remove('show')">×</span>
     </div>
 
@@ -1598,83 +1598,10 @@
 
     <canvas id="login-guide-canvas" aria-hidden="true"></canvas>
 
-    <!-- 登录模态 -->
-    <div id="login-modal" class="modal-mask">
-      <div class="modal dual-login-modal">
-        <div class="login-panel-head">
-          <div><b>登录接入</b><small>拖接口端口到 SF</small></div>
-          <button id="login-reset-all-btn" class="login-reset-all-btn" type="button"
-            onclick="logoutAllAccountsAndResetEasterEgg()" title="清除所有平台登录">退出登录</button>
-          <button class="login-panel-close" type="button" onclick="closeLoginModal()">×</button>
-        </div>
-        <div id="login-node-graph" class="login-node-graph" data-provider="netease">
-          <svg id="login-workflow-svg" class="workflow-link-layer login-link-layer" aria-hidden="true"></svg>
-          <div class="login-platform-tabs login-node-providers" id="login-platform-tabs">
-            <button id="login-provider-netease" class="netease active workflow-node" type="button" data-login-provider="netease"
-              onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><b>网易云</b><small>官方扫码 / Cookie</small><span class="flow-port out" data-login-provider-output="netease" title="拖到 SF 接入口"></span></button>
-            <button id="login-provider-qq" class="qq workflow-node" type="button" data-login-provider="qq" onclick="selectLoginProviderNode('qq')"><span
-                class="provider-logo">QQ</span><b>QQ 音乐</b><small>官方扫码 / Cookie</small><span class="flow-port out" data-login-provider-output="qq" title="拖到 SF 接入口"></span></button>
-            <button id="login-provider-kugou" class="kugou workflow-node" type="button" data-login-provider="kugou" onclick="selectLoginProviderNode('kugou')"><span
-                class="provider-logo">KG</span><b>酷狗音乐</b><small>官方窗口 / Cookie</small><span class="flow-port out" data-login-provider-output="kugou" title="拖到 SF 接入口"></span></button>
-            <button id="login-provider-qishui" class="qishui workflow-node" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span
-                class="provider-logo">QS</span><b>汽水音乐</b><small>官方扫码 / 抖音确认</small><span class="flow-port out" data-login-provider-output="qishui" title="拖到 SF 接入口"></span></button>
-            <button id="login-provider-spotify" class="spotify workflow-node" type="button" data-login-provider="spotify" onclick="selectLoginProviderNode('spotify')"><span
-                class="provider-logo">SP</span><b>Spotify</b><small>官方 OAuth</small><span class="flow-port out" data-login-provider-output="spotify" title="拖到 SF 接入口"></span></button>
-          </div>
-          <div class="login-node-hub workflow-node" data-login-node="sf">
-            <span class="flow-port in" data-login-sf-target="sf" title="SF 接入口"></span>
-            <span class="login-node-orb" aria-label="Stellaflix"><svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="300" height="300" rx="64" fill="#F7F4EC"/><ellipse cx="150" cy="160" rx="128" ry="34" fill="none" stroke="#2E2B26" stroke-width="14" transform="rotate(-16 150 160)"/><circle cx="150" cy="148" r="70" fill="#5B7A9D"/><path d="M 45 178 A 128 34 -16 0 0 150 190" fill="none" stroke="#2E2B26" stroke-width="14" stroke-linecap="round"/><path d="M 232 118 L 246 146 L 232 138 L 218 146 Z" fill="#2E2B26"/></svg></span>
-            <div class="login-node-copy"><b>SF</b><small>等待接入</small></div>
-            <div class="login-mode-nodes">
-              <button id="login-mode-official" class="login-mode-node active workflow-node" type="button" data-login-mode="official"
-                onclick="selectLoginMode('official')"><span class="provider-logo">QR</span><b>扫码</b><small>官方窗口</small></button>
-              <button id="login-mode-cookie" class="login-mode-node workflow-node" type="button" data-login-mode="cookie"
-                onclick="selectLoginMode('cookie')"><span class="provider-logo">CK</span><b>Cookie</b><small>保存会话</small></button>
-            </div>
-            <div class="login-usage-stats">
-              <div class="usage-stat-item">
-                <span class="usage-stat-label">总时长</span>
-                <span id="usage-total-time" class="usage-stat-value">00:00:00</span>
-              </div>
-              <div class="usage-stat-divider"></div>
-              <div class="usage-stat-item">
-                <span class="usage-stat-label">今日</span>
-                <span id="usage-today-time" class="usage-stat-value">00:00:00</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div id="login-auth-drawer" class="login-auth-drawer">
-          <div class="login-auth-copy">
-            <h2 id="login-modal-title">扫码登录网易云音乐</h2>
-            <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
-            <div id="qr-status">拖动接口到 SF 接入口后开始登录。</div>
-          </div>
-          <div class="login-auth-body">
-            <div id="qr-shell" class="qr-shell">
-              <img id="qr-img" src="" alt="">
-              <button id="qq-web-login-card" class="qq-login-mark" type="button"
-                onclick="openProviderWebLogin()"><b>QQ</b><span>打开官方扫码窗口</span></button>
-            </div>
-            <div id="qq-cookie-panel" class="qq-cookie-panel">
-              <textarea id="qq-cookie-input" class="qq-cookie-input" spellcheck="false" autocomplete="off"
-                placeholder="uin=...; qqmusic_key=...; qm_keyst=..."></textarea>
-              <div class="qq-cookie-actions">
-                <div class="qq-cookie-note">从 y.qq.com 的登录会话导入。</div>
-                <button id="qq-cookie-save-btn" class="modal-btn primary" type="button"
-                  onclick="submitQQCookieLogin()">保存</button>
-              </div>
-            </div>
-          </div>
-          <div class="btn-row login-auth-actions">
-            <button class="modal-btn" onclick="skipLoginAndFocusSearch()">先搜索一首歌</button>
-            <button id="qq-cookie-toggle-btn" class="modal-btn" type="button"
-              onclick="toggleQQCookiePanel()">手动导入</button>
-            <button id="refresh-qr-btn" class="modal-btn primary" onclick="startSelectedLoginConnection()">开始登录</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- 16a：平台登录弹窗（#login-modal：五平台行 / 音源关系图谱 node-graph / 二维码 / Cookie
+         粘贴 / 退出登录）整套退役，右上角入口改本地档案页（#user-modal + 07-local-profile.js）；
+         收听统计卡（usage-total-time/usage-today-time）已并入档案页。
+         旧 01-05 登录 JS 的物理删除与官方路由退役属 16b/16c。 -->
 
     <!-- 音频路由牵线面板 -->
     <div id="audio-output-workflow-modal" class="modal-mask">
@@ -1695,37 +1622,39 @@
       </div>
     </div>
 
-    <!-- 用户模态 -->
+    <!-- 本地档案弹窗（16a：替代原五平台账号/登录弹窗，不登录任何平台） -->
     <div id="user-modal" class="modal-mask">
-      <div class="modal dual-user-modal">
-        <h2>账号信息</h2>
-        <div id="account-provider-chip" class="account-provider-chip netease"><span
-            class="account-source-dot netease"></span><span>网易云音乐</span></div>
+      <div class="modal dual-user-modal local-profile-modal">
+        <h2>本地档案</h2>
         <img id="user-modal-avatar" src=""
           style="width:72px;height:72px;border-radius:50%;margin:0 auto 12px;object-fit:cover;background:rgba(255,255,255,0.1);display:block">
-        <div id="user-modal-name" style="font-size:15px;margin-bottom:4px"></div>
-        <div id="user-modal-vip"
-          style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:20px;letter-spacing:.5px"></div>
-        <div class="user-platform-tabs" id="user-platform-tabs">
-          <button id="user-provider-netease" class="netease active" type="button"
-            onclick="setActiveAccountProvider('netease')">网易云</button>
-          <button id="user-provider-qq" class="qq" type="button" onclick="setActiveAccountProvider('qq')">QQ 音乐</button>
-          <button id="user-provider-kugou" class="kugou" type="button" onclick="setActiveAccountProvider('kugou')">酷狗音乐</button>
-          <button id="user-provider-qishui" class="qishui" type="button" onclick="setActiveAccountProvider('qishui')">汽水音乐</button>
-          <button id="user-provider-spotify" class="spotify" type="button" onclick="setActiveAccountProvider('spotify')">Spotify</button>
-          <button id="user-provider-both" class="both" type="button" onclick="enableDualAccountView()">我两个都要</button>
+        <div id="user-modal-name" style="font-size:15px;margin-bottom:16px"></div>
+        <div class="local-profile-fields" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+          <label style="font-size:12px;color:rgba(255,255,255,0.6);display:block">昵称（≤16 字）
+            <input id="local-profile-nickname" type="text" maxlength="16" autocomplete="off" spellcheck="false"
+              placeholder="给自己起个名字"
+              style="width:100%;box-sizing:border-box;margin-top:6px;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.06);color:inherit">
+          </label>
+          <div class="btn-row" style="gap:8px">
+            <button id="local-profile-avatar-btn" class="modal-btn" type="button" onclick="pickLocalProfileAvatar()">更换头像</button>
+            <button id="local-profile-save-btn" class="modal-btn primary" type="button" onclick="saveLocalProfileForm()">保存档案</button>
+          </div>
+          <input id="local-profile-avatar-file" type="file" accept="image/*" style="display:none"
+            onchange="onLocalProfileAvatarFile(this)">
         </div>
-        <div class="account-modal-actions">
-          <button id="account-add-netease" class="modal-btn" onclick="openProviderLogin('netease')">补登网易云</button>
-          <button id="account-add-qq" class="modal-btn" onclick="openProviderLogin('qq')">补登 QQ 音乐</button>
-          <button id="account-add-kugou" class="modal-btn" onclick="openProviderLogin('kugou')">补登酷狗音乐</button>
-          <button id="account-add-qishui" class="modal-btn" onclick="openProviderLogin('qishui')">登录汽水音乐</button>
-          <button id="account-add-spotify" class="modal-btn" onclick="openProviderLogin('spotify')">连接 Spotify</button>
+        <div class="login-usage-stats">
+          <div class="usage-stat-item">
+            <span class="usage-stat-label">总时长</span>
+            <span id="usage-total-time" class="usage-stat-value">00:00:00</span>
+          </div>
+          <div class="usage-stat-divider"></div>
+          <div class="usage-stat-item">
+            <span class="usage-stat-label">今日</span>
+            <span id="usage-today-time" class="usage-stat-value">00:00:00</span>
+          </div>
         </div>
-        <div id="account-hint" class="account-hint">QQ 音乐真实登录暂未接入，当前先预览双平台账号交互。</div>
         <div class="btn-row">
           <button class="modal-btn" onclick="closeUserModal()">关闭</button>
-          <button id="account-logout-btn" class="modal-btn primary" onclick="logoutActiveAccount()">退出当前平台</button>
         </div>
       </div>
     </div>

@@ -60,13 +60,14 @@ test('② 孤儿扫描跳过 *_1.js 副本', () => {
 // 批 T13：现场计数 111→113、15→17 段 —— 基线本身已双漂移（112≠111，且分段因 misc 散段
 // 实为 17≠15，前者在计数断言即红、从未暴露后者）。T13 新增 15-lx-source-manager.js 登记
 // 进 05-playback 连续段（不增段数），按「实际+本模块」修正两值，顺带关闭该基线红。
-test('本仓库现场：modulePaths 全部存在且分段为 17 段/113 模块', () => {
+// 任务16a：再 +1（08-account/07-local-profile.js 登记在 08-account 连续段内，不增段数）→ 114。
+test('本仓库现场：modulePaths 全部存在且分段为 17 段/114 模块', () => {
   const paths = readModulePathsFromLoader();
   for (const p of paths) {
     assert.ok(fs.existsSync(path.join(APP_ROOT, 'public', p)), 'modulePaths 引用文件缺失: ' + p);
   }
   const runs = bundle.buildRuns(paths);
-  assert.strictEqual(paths.length, 113);
+  assert.strictEqual(paths.length, 114);
   assert.strictEqual(runs.length, 17);
 });
 

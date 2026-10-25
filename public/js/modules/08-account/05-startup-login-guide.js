@@ -106,18 +106,11 @@ function runLoginGuideParticles(done) {
   loginGuideRaf = requestAnimationFrame(draw);
 }
 function maybeRunStartupLoginGuide(source) {
-  if (startupLoginGuideShown || loginGuideAnimating) return;
-  if (document.body.classList.contains('splash-active')) return;
-  if (immersiveMode) return;
-  if (!loginStatusChecked || loginStatusCheckFailed || loginStatus.loggedIn || playing) return;
-  var loginModal = document.getElementById('login-modal');
-  var userModal = document.getElementById('user-modal');
-  if ((loginModal && loginModal.classList.contains('show')) || (userModal && userModal.classList.contains('show'))) return;
-  startupLoginGuideShown = true;
-  setTimeout(function () {
-    if (loginStatus.loggedIn || playing || immersiveMode || document.body.classList.contains('splash-active')) return;
-    runLoginGuideParticles(function () { showLoginModal({ guided: true, source: source || 'startup' }); });
-  }, source === 'splash' ? 6200 : 2600);
+  // 16a：平台登录弹窗（#login-modal）整套离场，本引导的落点（粒子 → showLoginModal）
+  // 已成不存在的界面，继续放粒子等于承诺一个没有的 UI。函数签名与 03-splash /
+  // 05-startup-bindings 的调用点保留（随 08-account 文件在 16d 一并物理删除），
+  // 空场待机引导在同文件下半段，不属登录链路，不受影响。
+  return;
 }
 
 // ============================================================
