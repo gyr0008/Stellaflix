@@ -2,11 +2,11 @@
 
 /**
  * tests/lx-metadata-routes.test.js — 批 T15.5a：LX 元数据路由补移植
- * （daily-hot 日榜 / platform-charts 静态目录 / playlist-search 歌单搜索 / playlist-square 广场）
+ * （playlist-search 歌单搜索 / playlist-square 广场；日榜/平台榜已于 10-26 归一退役，见文末）
  *
  * 两层测试：
  *  ① 单元层：createLxSearch({ fetchImpl }) 桩回放 —— fixture 按上游解析路径的字段反推
- *     （上游 server.js:2145-2358 日榜种子、lx-search.js:263-352 五家 playlist 变体），零真实网络。
+ *     （上游 lx-search.js:263-352 五家 playlist 变体），零真实网络。
  *  ② 路由层：进程内 require('../server.js')（PORT 先于模块加载就位，取 3998 避开既有
  *     3999 / 398xx 段），globalThis.fetch 在 require 之前替换为 URL 前缀路由桩 ——
  *     与 tests/lx-source-routes.test.js 同款起服方式（run-all.js 逐文件串行、各文件独立进程）。
@@ -101,66 +101,12 @@ function stubFetch(routes) {
 }
 
 const HOSTS = {
-  tx: 'u.y.qq.com/cgi-bin/musicu.fcg',
-  wy: 'music.163.com/api/playlist/detail',
-  wyv6: 'music.163.com/api/v6/playlist/detail',
-  kw: 'm.kuwo.cn/newh5app/ranklist_detail',
-  kg: 'kugou.com/yy/rank/home',
-  mg: 'app.c.nf.migu.cn/MIGUM3.0/v1.0/content/querycontentbyId.do',
   txPl: 'c.y.qq.com/soso/fcgi-bin/client_music_search_songlist',
   wyPl: 'music.163.com/api/cloudsearch/pc',
   kwPl: 'search.kuwo.cn/r.s',
   kgPl: 'specialsearch.kugou.com/special_search',
   mgPl: 'jadeite.migu.cn/music_search/v3/search/searchAll',
 };
-
-// ---------- 五家日榜 fixture（字段形态取自上游解析路径） ----------
-
-const WY_HOT = { result: { tracks: [
-  { id: 111, name: '半岛铁盒', artists: [{ name: '周杰伦' }],
-    album: { id: 222, name: '八度空间', picUrl: 'https://p1.music.126.net/badu.jpg' }, duration: 315000 },
-  { id: 112, name: '开不了口', ar: [{ name: '周杰伦' }],
-    al: { name: '范特西', picUrl: 'https://p1.music.126.net/fantexi.jpg' }, dt: 300000 },
-] } };
-
-const TX_HOT_GETALL = { req_1: { data: { group: [
-  { toplist: [{ topId: 62, period: ['2026_03_04'] }, { topId: 26, period: ['2026_03_05'] }] },
-] } } };
-const TX_HOT_DETAIL = { req_1: { data: { songInfoList: [
-  { songid: 100200, mid: '004TesTx', songmid: '004TesTx', title: '夜曲', singer: [{ name: '周杰伦' }, { name: '费玉清' }],
-    albummid: '08g20Z3F47tQQ0', albumname: '十一月的萧邦', interval: 214 },
-] } } };
-
-// 每行行尾再带一个字段：上游 rowPattern 的 artist_name 分支 `[^,]+` 会吞到下一个逗号，
-// 真实 __NUXT__ 载荷行内字段更多，此处照此形态构造，避免相邻行被吞。
-const KW_HOT_HTML = '<html><script>window.__NUXT__=(function(a,b,c,d,e){var r={};'
-  + 'r[0]={id:900001,name:a,pic:b,album_name:c,artist_name:d,mv:0};'
-  + 'r[1]={id:900002,name:e,pic:b,album_name:c,artist_name:d,mv:1};'
-  + 'return {rank:r}}("蜗榜单曲","https://img1.kuwo.cn/star/albumcover/500/12/34/abcd.jpg","蜗专辑","蜗歌手","蜗榜单曲两"));'
-  + '</script></html>';
-
-const KG_HOT_HTML = '<html><script>var global={};global.features='
-  + '[{"Hash":"HASH_KG_1","audio_id":700001,"author_name":"狗歌手","FileName":"狗歌手 - 狗榜单曲","timeLen":180,"album_id":42},'
-  + '{"Hash":"HASH_KG_2","audio_id":700002,"author_name":"狗歌手","FileName":"狗歌手 - 狗榜单曲","timeLen":200,"album_id":43}];'
-  + '</script></html>';
-
-const MG_HOT = { code: '000000', columnInfo: { contents: [
-  { objectInfo: { songId: 'MG_SONG_1', copyrightId: 'CR_MG_1', songName: '菇榜单曲', singer: '菇歌手',
-    album: '菇专辑', albumId: 'MG_ALB_1', length: '240',
-    albumImgs: [{ imgSizeType: '02', img: 'https://img.migu.cn/normal.jpg' }, { imgSizeType: '01', webpImg: 'https://img.migu.cn/big.webp' }],
-    lrcUrl: 'https://a.migu.cn/1.lrc' } },
-] } };
-
-// 日榜五家路由表；extra 传 null 表示摘除该平台（未路由 → 快速失败）。
-function hotRoutes(extra = {}) {
-  const routes = {
-    [HOSTS.wy]: WY_HOT, [HOSTS.wyv6]: WY_HOT,
-    [HOSTS.kw]: KW_HOT_HTML, [HOSTS.kg]: KG_HOT_HTML, [HOSTS.mg]: MG_HOT,
-    [HOSTS.tx]: (url, options) => (String(options.body || '').includes('GetAll') ? reply(TX_HOT_GETALL) : reply(TX_HOT_DETAIL)),
-  };
-  Object.assign(routes, extra);
-  return Object.entries(routes).filter(([, handler]) => handler !== null);
-}
 
 // ---------- 五家歌单 fixture ----------
 
@@ -191,23 +137,8 @@ const PLAYLIST_CARD_KEYS = ['id', 'input', 'source', 'sourceName', 'name', 'crea
   'description', 'cover', 'trackCount', 'playCount', 'collectCount', 'tags', 'url'];
 
 // ==================================================================
-// ① 单元层：chartCatalog / searchPlaylists / fetchDailyHot
+// ① 单元层：searchPlaylists
 // ==================================================================
-
-test('chartCatalog：已知平台返回榜单目录（id/name 行副本），未知平台返回 null', () => {
-  const tx = lxSearchModule.chartCatalog('tx');
-  assert.ok(Array.isArray(tx) && tx.length >= 8);
-  assert.deepEqual(tx[0], { id: '26', name: '热歌榜' });
-  assert.deepEqual(lxSearchModule.chartCatalog('WY').map(row => row.id),
-    ['3778678', '19723756', '3779629', '2884035']);
-  assert.deepEqual(lxSearchModule.chartCatalog('mg'), [{ id: '27186466', name: '尖叫热歌榜' }]);
-  assert.equal(lxSearchModule.chartCatalog('spotify'), null);
-  assert.equal(lxSearchModule.chartCatalog(''), null);
-  // 副本语义：调用方改不动模块级目录
-  const again = lxSearchModule.chartCatalog('kw');
-  again[0].name = '被改写';
-  assert.equal(lxSearchModule.chartCatalog('kw')[0].name, '热歌榜');
-});
 
 test('SOURCE_NAMES：五家展示名沿用本仓前端标签表（07-search.js LX_SEARCH_SOURCE_LABELS）', () => {
   assert.deepEqual(lxSearchModule.SOURCE_NAMES, { tx: '小秋', wy: '小芸', kw: '小蜗', kg: '小狗', mg: '小菇' });
@@ -316,140 +247,8 @@ test('searchPlaylists 空 q 早退 {ok:true,playlists:[],failures:[]}；limit �
   assert.match(calls[0].url, /rn=30/); // clampLimit 上限
 });
 
-test('fetchDailyHot wy：playlist/detail 主端点 → 冻结 song 形状（8 键，album/pic 我方命名）', async () => {
-  const { impl } = stubFetch(hotRoutes());
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await fetchDailyHot({ source: 'wy', limit: 5 });
-  assert.equal(result.ok, true);
-  assert.equal(result.chartMode, 'native');
-  assert.equal(result.chartId, '3778678');
-  assert.equal(result.chartSource, 'wy');
-  assert.equal(result.chartName, '热歌榜');
-  assert.equal(result.chartLabel, '小芸热歌榜 · 平台原榜 2 首');
-  assert.deepEqual(result.songs, [
-    { source: 'wy', id: 111, songmid: 111, name: '半岛铁盒', singer: '周杰伦', album: '八度空间', interval: '5:15', pic: 'https://p1.music.126.net/badu.jpg' },
-    { source: 'wy', id: 112, songmid: 112, name: '开不了口', singer: '周杰伦', album: '范特西', interval: '5:00', pic: 'https://p1.music.126.net/fantexi.jpg' },
-  ]);
-  assert.equal(result.nativeError, undefined);
-});
-
-test('fetchDailyHot wy：主端点缺数据时回落 v6/playlist/detail（上游双端点语义）', async () => {
-  const { impl, calls } = stubFetch([[HOSTS.wyv6, WY_HOT]]);
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await fetchDailyHot({ source: 'wy', chart: '19723756', limit: 5 });
-  assert.equal(result.songs.length, 2);
-  assert.equal(result.chartId, '19723756');
-  assert.equal(result.chartName, '飙升榜');
-  assert.ok(calls.some(call => call.url.includes(HOSTS.wy)), '先打主端点');
-  assert.ok(calls.some(call => call.url.includes(HOSTS.wyv6)), '再打 v6 端点');
-});
-
-test('fetchDailyHot tx：GetAll 定位 topId 的 period → GetDetail songInfoList', async () => {
-  const { impl, calls } = stubFetch(hotRoutes());
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await fetchDailyHot({ source: 'tx', limit: 5 });
-  assert.equal(result.chartId, '26');
-  assert.equal(result.chartLabel, '小秋热歌榜 · 平台原榜 1 首');
-  assert.deepEqual(result.songs, [
-    { source: 'tx', id: 100200, songmid: '004TesTx', name: '夜曲', singer: '周杰伦、费玉清',
-      album: '十一月的萧邦', interval: '3:34', pic: 'https://y.gtimg.cn/music/photo_new/T002R500x500M00008g20Z3F47tQQ0.jpg' },
-  ]);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(JSON.parse(calls[1].options.body).req_1.param, { topid: 26, offset: 0, num: 30, period: ['2026_03_05'] });
-  assert.equal(calls[0].options.headers.referer, 'https://y.qq.com/n/ryqq/toplist/26');
-});
-
-test('fetchDailyHot tx：catalog 无该 chartId 时取首个榜单（platformChartDefinition 回退）', async () => {
-  const { impl } = stubFetch(hotRoutes());
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await fetchDailyHot({ source: 'tx', chart: '4', limit: 5 });
-  assert.equal(result.chartId, '4');
-  assert.equal(result.chartName, '流行指数榜');
-});
-
-test('fetchDailyHot kw：__NUXT__ 行解析（去重同名行 + 专辑/歌手字段我方命名）', async () => {
-  const { impl, calls } = stubFetch(hotRoutes());
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await fetchDailyHot({ source: 'kw', chart: '17', limit: 5 });
-  assert.match(calls[0].url, /ranklist_detail\/17/);
-  assert.equal(result.chartName, '新歌榜');
-  assert.equal(result.chartLabel, '小蜗新歌榜 · 平台原榜 2 首');
-  assert.deepEqual(result.songs, [
-    { source: 'kw', id: '900001', songmid: '900001', name: '蜗榜单曲', singer: '蜗歌手', album: '蜗专辑', interval: '', pic: 'https://img1.kuwo.cn/star/albumcover/500/12/34/abcd.jpg' },
-    { source: 'kw', id: '900002', songmid: '900002', name: '蜗榜单曲两', singer: '蜗歌手', album: '蜗专辑', interval: '', pic: 'https://img1.kuwo.cn/star/albumcover/500/12/34/abcd.jpg' },
-  ]);
-});
-
-test('fetchDailyHot kg：global.features 分页 + 去「歌手 - 」前缀 + hash 扩展键（T9 裁决1 同款）', async () => {
-  const { impl, calls } = stubFetch(hotRoutes());
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await fetchDailyHot({ source: 'kg', limit: 5 });
-  assert.match(calls[0].url, /rank\/home\/1-8888\.html/);
-  assert.equal(result.chartId, '8888');
-  assert.equal(result.chartName, 'TOP 500');
-  assert.deepEqual(result.songs, [
-    { source: 'kg', id: 700001, songmid: 700001, hash: 'HASH_KG_1', name: '狗榜单曲', singer: '狗歌手', album: '', interval: '3:00', pic: '' },
-    { source: 'kg', id: 700002, songmid: 700002, hash: 'HASH_KG_2', name: '狗榜单曲', singer: '狗歌手', album: '', interval: '3:20', pic: '' },
-  ]);
-});
-
-test('fetchDailyHot mg：querycontentbyId 非 000000 视为失败，000000 时 albumImgs 01 优先 + copyrightId 扩展键', async () => {
-  const { impl, calls } = stubFetch(hotRoutes());
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await fetchDailyHot({ source: 'mg', limit: 5 });
-  assert.match(calls[0].url, /columnId=27186466/);
-  assert.equal(calls[0].options.headers.referer, 'https://music.migu.cn/');
-  assert.deepEqual(result.songs, [
-    { source: 'mg', id: 'MG_SONG_1', songmid: 'MG_SONG_1', copyrightId: 'CR_MG_1', name: '菇榜单曲',
-      singer: '菇歌手', album: '菇专辑', interval: '4:00', pic: 'https://img.migu.cn/big.webp' },
-  ]);
-  const bad = createImpl(stubFetch([[HOSTS.mg, { code: '999999', info: '咪咕榜单不可用' }]]).impl).fetchDailyHot;
-  const failed = await bad({ source: 'mg', limit: 5 });
-  assert.equal(failed.ok, false);
-  assert.equal(failed.chartMode, 'unavailable');
-  assert.deepEqual(failed.songs, []);
-  assert.match(failed.nativeError, /咪咕榜单不可用/);
-});
-
-test('fetchDailyHot 单平台全失败 → ok:false + chartMode unavailable + nativeError 透传，不抛异常', async () => {
-  const { impl } = stubFetch(hotRoutes({ [HOSTS.kw]: null }));
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await quiet(() => fetchDailyHot({ source: 'kw', limit: 5 }));
-  assert.equal(result.ok, false);
-  assert.equal(result.status, undefined);
-  assert.equal(result.chartMode, 'unavailable');
-  assert.equal(result.chartLabel, '小蜗热歌榜 · 暂不可用');
-  assert.equal(result.chartId, '16');
-  assert.deepEqual(result.songs, []);
-  assert.match(result.nativeError, /LX_META_NO_ROUTE/);
-});
-
-test('fetchDailyHot 全平台：五榜交叉汇总 mixed-native，同名去重，单平台失败不影响整体', async () => {
-  const { impl } = stubFetch(hotRoutes({ [HOSTS.mg]: null }));
-  const { fetchDailyHot } = createImpl(impl);
-  const result = await quiet(() => fetchDailyHot({ limit: 10 }));
-  assert.equal(result.ok, true);
-  assert.equal(result.chartSource, 'all');
-  assert.equal(result.chartMode, 'mixed-native');
-  assert.equal(result.chartLabel, '各平台真实榜单交叉汇总');
-  assert.equal(result.chartId, '');
-  assert.deepEqual(result.songs.map(song => song.source).slice(0, 4), ['tx', 'wy', 'kw', 'kg']);
-  assert.equal(result.songs.filter(song => !song.name).length, 0);
-});
-
-test('fetchDailyHot limit：默认 100、上限 100，非正数按上游回落默认值', async () => {
-  const { fetchDailyHot } = createImpl(stubFetch(hotRoutes()).impl);
-  const one = await fetchDailyHot({ source: 'wy', limit: 1 });
-  assert.equal(one.songs.length, 1);
-  assert.equal(one.chartLabel, '小芸热歌榜 · 平台原榜 1 首');
-  const huge = await fetchDailyHot({ source: 'wy', limit: 99999 });
-  assert.equal(huge.songs.length, 2, '上限钳到 100，实际按平台返回数');
-  const zero = await fetchDailyHot({ source: 'wy', limit: 0 });
-  assert.equal(zero.songs.length, 2, 'limit 0 走上游 `Number(limit) || 100` 默认 100');
-});
-
 // ==================================================================
-// ② 路由层：/api/lx-source/{daily-hot,platform-charts,playlist-search,playlist-square}
+// ② 路由层：/api/lx-source/{playlist-search,playlist-square}
 // ==================================================================
 
 function createImpl(fetchImpl) {
@@ -457,13 +256,11 @@ function createImpl(fetchImpl) {
 }
 
 const NEW_ROUTES = [
-  '/api/lx-source/daily-hot',
-  '/api/lx-source/platform-charts',
   '/api/lx-source/playlist-search?q=x',
   '/api/lx-source/playlist-square',
 ];
 
-test('闸：四条元数据路由同样受 isTrustedLocalApiRequest 保护 → 403 FORBIDDEN_ORIGIN', async () => {
+test('闸：元数据路由同样受 isTrustedLocalApiRequest 保护 → 403 FORBIDDEN_ORIGIN', async () => {
   for (const path of NEW_ROUTES) {
     const cross = await apiJson(path, { headers: { 'Sec-Fetch-Site': 'cross-site' } });
     assert.equal(cross.status, 403, path + ' cross-site');
@@ -472,46 +269,6 @@ test('闸：四条元数据路由同样受 isTrustedLocalApiRequest 保护 → 4
     assert.equal(external.status, 403, path + ' external origin');
     assert.equal(external.body.code, 'FORBIDDEN_ORIGIN');
   }
-});
-
-test('GET /api/lx-source/daily-hot 200：{ok,songs,chartMode,chartLabel,chartId} + platform/chart 参数', async () => {
-  stubRoutes.set('https://m.kuwo.cn/newh5app/ranklist_detail/', () => reply(KW_HOT_HTML));
-  const { status, body } = await apiJson('/api/lx-source/daily-hot?platform=kw&chart=17&limit=3');
-  assert.equal(status, 200);
-  assert.equal(body.ok, true);
-  assert.equal(body.chartMode, 'native');
-  assert.equal(body.chartLabel, '小蜗新歌榜 · 平台原榜 2 首');
-  assert.equal(body.chartId, '17');
-  assert.equal(body.chartSource, 'kw');
-  assert.equal(body.songs.length, 2);
-  assert.deepEqual(Object.keys(body.songs[0]), ['source', 'id', 'songmid', 'name', 'singer', 'album', 'interval', 'pic']);
-  stubRoutes.delete('https://m.kuwo.cn/newh5app/ranklist_detail/');
-});
-
-test('GET /api/lx-source/daily-hot 空榜 → 502 + ok:false + 机器码 DAILY_HOT_FAILED', async () => {
-  const { status, body } = await quiet(() => apiJson('/api/lx-source/daily-hot?platform=kg&limit=2'));
-  assert.equal(status, 502);
-  assert.equal(body.ok, false);
-  assert.deepEqual(body.songs, []);
-  assert.equal(body.chartMode, 'unavailable');
-  assert.equal(body.code, 'DAILY_HOT_FAILED');
-  assert.match(body.error, /平台暂未返回可验证的真实榜单/);
-});
-
-test('GET /api/lx-source/platform-charts 200：静态目录；未知 platform → 400 UNSUPPORTED_CHART_SOURCE', async () => {
-  const ok = await apiJson('/api/lx-source/platform-charts?platform=tx');
-  assert.equal(ok.status, 200);
-  assert.equal(ok.body.ok, true);
-  assert.equal(ok.body.platform, 'tx');
-  assert.deepEqual(ok.body.charts[0], { id: '26', name: '热歌榜' });
-  const legacy = await apiJson('/api/lx-source/platform-charts?source=kw');
-  assert.equal(legacy.status, 200);
-  assert.deepEqual(legacy.body.charts.map(row => row.name), ['热歌榜', '新歌榜', '飙升榜']);
-  const bad = await apiJson('/api/lx-source/platform-charts?platform=qishui');
-  assert.equal(bad.status, 400);
-  assert.equal(bad.body.ok, false);
-  assert.deepEqual(bad.body.charts, []);
-  assert.equal(bad.body.code, 'UNSUPPORTED_CHART_SOURCE');
 });
 
 test('GET /api/lx-source/playlist-search 200：{ok,playlists,failures,page,query}，sources/platform 两种参数名', async () => {
@@ -574,8 +331,7 @@ test('元数据路由不碰平台官方模块：五家 API 文件零引用（裸
   // 免登录裸爬：新链路不携带任何 Cookie 请求头（cookie 一词仅出现在注释自述里）
   assert.equal(/headers\s*:\s*\{[^}]*cookie/i.test(text), false);
   const serverText = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  for (const route of ['/api/lx-source/daily-hot', '/api/lx-source/platform-charts',
-    '/api/lx-source/playlist-search', '/api/lx-source/playlist-square']) {
+  for (const route of ['/api/lx-source/playlist-search', '/api/lx-source/playlist-square']) {
     assert.ok(serverText.includes(route), 'server.js 应含 ' + route);
   }
 });
@@ -584,4 +340,19 @@ test('仍未移植的子路径继续落 404 LX_ROUTE_NOT_FOUND（song-cover-sear
   const gone = await apiJson('/api/lx-source/song-cover-search?q=x');
   assert.equal(gone.status, 404);
   assert.equal(gone.body.code, 'LX_ROUTE_NOT_FOUND');
+});
+
+// 10-26 主人裁决「排行榜归一=留 main 版」：lx-source 侧的日榜/平台榜属重复实现，已退役。
+// main 的 daily-hot-api.js + /api/daily-hot 是 1:1 上游唯一实现，本分支单独运行时这两条路 404。
+test('日榜/平台榜路由已退役 → 404 LX_ROUTE_NOT_FOUND（归一到 /api/daily-hot）', async () => {
+  for (const route of ['/api/lx-source/daily-hot?platform=tx', '/api/lx-source/platform-charts?platform=tx']) {
+    const gone = await apiJson(route);
+    assert.equal(gone.status, 404, route + ' 应落 404');
+    assert.equal(gone.body.code, 'LX_ROUTE_NOT_FOUND', route);
+  }
+});
+
+test('lx-search 模块面收缩：fetchDailyHot/chartCatalog 不再导出', () => {
+  assert.equal(lxSearchModule.chartCatalog, undefined);
+  assert.equal(createImpl(realFetch).fetchDailyHot, undefined);
 });

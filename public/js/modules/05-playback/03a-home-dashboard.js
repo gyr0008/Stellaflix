@@ -2314,9 +2314,13 @@ async function loadHomePlatformFeedRecommendations(source, force) {
   try {
     // 15.5a §6 pipeline：platform-charts 铺出该平台可选榜单，选中 id 回填 daily-hot?chart=。
     // 榜单读取失败不阻塞内容（daily-hot 不带 chart= 时由服务端自选平台原榜）。
+    // 15.5a §6 pipeline → 排行榜归一（10-26 主人裁定「留 main 版」）：端点改指本仓第一方共享切片
+    // daily-hot-api.js（1:1 上游，含 6h 缓存与逐平台配额）+ server.js 的
+    // GET /api/platform-charts?source= 与 GET /api/daily-hot?limit&source&refresh&chart。
+    // 参数名随上游回归 source（lx 重复实现曾自创 platform 名）；刷新走 refresh=1。
     if (force || !Array.isArray(feedState.charts) || !feedState.charts.length) {
       try {
-        var chartData = await apiJson('/api/lx-source/platform-charts?platform=' +
+        var chartData = await apiJson('/api/platform-charts?source=' +
           encodeURIComponent(config.lxPlatform) + '&t=' + Date.now(), { timeoutMs: 8000 });
         feedState.charts = chartData && Array.isArray(chartData.charts) ? chartData.charts : [];
         if (feedState.chartId && !feedState.charts.some(function (chart) { return String(chart && chart.id) === feedState.chartId; })) feedState.chartId = '';
@@ -2326,8 +2330,8 @@ async function loadHomePlatformFeedRecommendations(source, force) {
       }
     }
     var chartParam = feedState.chartId ? '&chart=' + encodeURIComponent(feedState.chartId) : '';
-    var data = await apiJson('/api/lx-source/daily-hot?platform=' + encodeURIComponent(config.lxPlatform) +
-      '&limit=12' + chartParam + '&t=' + Date.now(), { timeoutMs: 14000 });
+    var data = await apiJson('/api/daily-hot?source=' + encodeURIComponent(config.lxPlatform) +
+      '&limit=12' + chartParam + (force ? '&refresh=1' : '') + '&t=' + Date.now(), { timeoutMs: 14000 });
     var rawSongs = data && Array.isArray(data.songs) ? data.songs : [];
     // 15.5a §6：daily-hot 冻结形状给的是 `pic`，卡片读 `cover`——消费侧映射，不改路由。
     feedState.songs = rawSongs.map(function (item) {
@@ -2340,7 +2344,9 @@ async function loadHomePlatformFeedRecommendations(source, force) {
     feedState.mode = data && data.chartMode ? String(data.chartMode) : '';
     feedState.source = data && data.chartSource ? String(data.chartSource) : (config.lxPlatform || '');
     feedState.chartLabel = data && data.chartLabel ? String(data.chartLabel) : '';
-    feedState.fallback = !!(data && data.nativeError);
+    // 归一后无 nativeError 字段可据（lx 重复实现的私有条款）。改用上游对「榜单真实性」的
+    // 同一判据：chartMode 落 expanded/fallback/supplemented 即非原榜（daily-hot-api.js:495 同源）。
+    feedState.fallback = /(?:expanded|fallback|supplemented)/.test(feedState.mode);
     feedState.provenance = data && data.provenance ? String(data.provenance) : '';
     feedState.loaded = true;
   } catch (error) {

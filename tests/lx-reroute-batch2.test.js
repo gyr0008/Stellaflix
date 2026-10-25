@@ -12,8 +12,8 @@
  *     lx 冻结形状（singer/album/pic/interval）在消费侧归一为曲目口径（artist/albumName/cover/duration）。
  *  ④ 歌单族：官方平台 `:playlist/tracks` 四路退役 → POST /api/platform-playlist/import 全量 +
  *     前端切片分页（server.js:5870）；网易云 cookie 路由保留待 T16；失败不落缓存。
- *  ⑤ 推荐卡：官方 feed / recommendations 路由 → /api/lx-source/daily-hot + /api/lx-source/platform-charts
- *     （server.js:8091/8112），字段映射 cover = song.pic（15.5a §6.1）。
+ *  ⑤ 推荐卡：官方 feed / recommendations 路由 → 一等公民 /api/daily-hot + /api/platform-charts
+ *     （10-26 排行榜归一：lx-source 侧的重复实现已退役）；字段映射 cover = song.pic（15.5a §6.1）。
  * 手法：marker 切片 / 具名函数切片 + vm + apiJson 桩（沿用 lx-reroute-batch1 / local-collect-adapter 惯例）。
  */
 
@@ -509,10 +509,12 @@ test('推荐卡①：feedConfig 只留 lx 平台映射，官方 feed/recommendat
     '官方推荐端点须整体退役（注释里的退役说明除外，路由删除归 T16）');
 });
 
-test('推荐卡②：loader = platform-charts 目录 + daily-hot?platform=&limit=12&chart=，cover=song.pic', () => {
+test('推荐卡②：loader = platform-charts 目录 + daily-hot?source=&limit=12&chart=，cover=song.pic', () => {
+  // 排行榜归一（10-26 主人裁定「留 main 版」）：端点从 /api/lx-source/{daily-hot,platform-charts}
+  // 改指 main 侧 1:1 上游切片的第一方端点；参数名随上游回归 source（我方 lx 版曾用 platform）。
   const loader = namedFunctionSource(dashboardSource(), 'loadHomePlatformFeedRecommendations');
-  assert.match(loader, /apiJson\('\/api\/lx-source\/platform-charts\?platform='[\s\S]*config\.lxPlatform/);
-  assert.match(loader, /apiJson\('\/api\/lx-source\/daily-hot\?platform='[\s\S]*config\.lxPlatform/);
+  assert.match(loader, /apiJson\('\/api\/platform-charts\?source='[\s\S]*config\.lxPlatform/);
+  assert.match(loader, /apiJson\('\/api\/daily-hot\?source='[\s\S]*config\.lxPlatform/);
   assert.match(loader, /&limit=12/);
   assert.match(loader, /'&chart='[\s\S]*feedState\.chartId/);
   assert.match(loader, /song\.cover = song\.pic \|\| song\.picUrl/);
@@ -553,7 +555,10 @@ test('销号：批2 五件内官方消费端点仅剩注释与网易云 cookie �
     const text = codeOnly(read(rel));
     const hits = (text.match(/\/api\/(qq|kugou|qishui|spotify)\/[a-z/]+/gi) || []);
     assert.deepEqual(hits, [], `${rel} 不应再消费平台前缀官方路由: ${hits.join(', ')}`);
-    const generic = (text.match(/'\/api\/(song\/like|song\/comments|search|daily-hot|platform-charts)[^']*'/g) || []);
+    // 归一后 daily-hot / platform-charts 不再算「官方端点」：它们是本仓第一方共享切片
+    // （daily-hot-api.js + server.js 路由，10-26 主人裁定留 main 版），03a 推荐卡正是其消费方。
+    // 其余仍在禁止名单内的才是官方 cookie 路由；`/api/search?keywords=`（网易云）另列白名单。
+    const generic = (text.match(/'\/api\/(song\/like|song\/comments|search)[^']*'/g) || []);
     assert.deepEqual(generic.filter((h) => !allowed.some((re) => re.test(h))), [], `${rel} 官方端点: ${generic.join(', ')}`);
   }
 });

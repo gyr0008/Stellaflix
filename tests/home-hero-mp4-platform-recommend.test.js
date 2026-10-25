@@ -153,8 +153,11 @@ test('platform recommendation entry uses real feeds and does not synthesize radi
   }
   assert.doesNotMatch(feedConfig, /\/api\/qq\/|search/);
   const feedLoader = namedFunctionSource(dashboardScript, 'loadHomePlatformFeedRecommendations');
-  assert.match(feedLoader, /apiJson\('\/api\/lx-source\/platform-charts\?platform='/);
-  assert.match(feedLoader, /apiJson\('\/api\/lx-source\/daily-hot\?platform='/);
+  // 排行榜归一（10-26 主人裁定「留 main 版」）：lx-source 前缀下的日榜/平台榜重复实现退役，
+  // 推荐卡改指 main 侧 1:1 上游切片的第一方端点（daily-hot-api.js + server.js 的
+  // GET /api/daily-hot?limit&source&refresh&chart 与 GET /api/platform-charts?source）。
+  assert.match(feedLoader, /apiJson\('\/api\/platform-charts\?source='/);
+  assert.match(feedLoader, /apiJson\('\/api\/daily-hot\?source='/);
   assert.match(feedLoader, /song\.cover = song\.pic \|\| song\.picUrl/);
   assert.match(feedLoader, /feedState\.fallback/);
   assert.match(feedLoader, /feedState\.mode/);

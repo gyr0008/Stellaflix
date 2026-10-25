@@ -8088,39 +8088,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (pn === '/api/lx-source/daily-hot') {
-      // 上游 server.js:3060-3073 /api/daily-hot → 我方挂到 lx-source 前缀下统一走本地信任闸。
-      // 参数名我方化为 platform（上游 source），source 仍作兼容别名；爬虫实现在 lx-search.js。
-      try {
-        const result = await lxSearch.fetchDailyHot({
-          limit: url.searchParams.get('limit'),
-          source: url.searchParams.get('platform') || url.searchParams.get('source'),
-          chart: url.searchParams.get('chart'),
-        });
-        // 上游 :2465 空榜即非 ok → 502；我方另补机器码（沿用上游 catch 词 DAILY_HOT_FAILED），
-        // nativeError 仅在空榜时透传（上游 response 丢弃该字段，此处利于 T15.5b 前端排错）。
-        sendJSON(res, result.ok ? result : { ...result, code: 'DAILY_HOT_FAILED' }, result.ok ? 200 : 502);
-      } catch (err) {
-        sendJSON(res, {
-          ok: false, songs: [], chartMode: 'unavailable', chartLabel: '', chartId: '',
-          error: err.message || 'DAILY_HOT_FAILED', code: 'DAILY_HOT_FAILED',
-        }, 502);
-      }
-      return;
-    }
-
-    if (pn === '/api/lx-source/platform-charts') {
-      // 上游 server.js:3075-3083：纯静态目录，无出站请求；未知平台 400。
-      const platform = String(url.searchParams.get('platform') || url.searchParams.get('source') || '').toLowerCase();
-      const charts = lxSearch.chartCatalog(platform);
-      if (!charts) {
-        sendJSON(res, { ok: false, platform, charts: [], error: 'UNSUPPORTED_CHART_SOURCE', code: 'UNSUPPORTED_CHART_SOURCE' }, 400);
-      } else {
-        sendJSON(res, { ok: true, platform, charts });
-      }
-      return;
-    }
-
     if (pn === '/api/lx-source/playlist-search') {
       // 上游 server.js:3118-3130（searchPlaylists 五家裸爬虫族，批 T15.5a 落在 lx-search.js）。
       try {
