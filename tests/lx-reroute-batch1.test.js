@@ -30,6 +30,37 @@ const P_07 = 'public/js/modules/05-playback/07-search.js';
 const P_RADIO = 'public/js/modules/05-playback/04a-radio-modes.js';
 const P_MATCH = 'public/js/modules/05-playback/03c-local-online-match.js';
 const P_AGENT = 'public/js/agent-music-tools.js';
+// 修复轮1（评审 Critical-2）：在线匹配钉桩不得再用 `isSameTitleArtist: () => true` 桩掩盖
+// singer-only 候选的匹配失败——须用 11-provider-fallback.js 的「真实」谓词，配 lx 冻结形状 fixture。
+const P_FALLBACK = 'public/js/modules/05-playback/11-provider-fallback.js';
+
+// 装载整份 11-provider-fallback.js 取真实 isSameTitleArtist（连同其私有 normalizeMatchText /
+// artistNameParts）——逐个具名函数切片不可行（normalizeMatchText 的正则字面量含引号字符，
+// 花括号扫描会误判），故整模块 eval 后取其函数引用。03c 边界未归一时该谓词对 singer-only
+// 候选恒 false（正是本 bug）。
+let _realIsSameTitleArtist = null;
+function realIsSameTitleArtist() {
+  if (_realIsSameTitleArtist) return _realIsSameTitleArtist;
+  const stubEl = () => ({ style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } }, children: [], innerHTML: '', textContent: '', setAttribute() {}, getAttribute() { return null; }, appendChild() {}, insertBefore(c) { return c; }, removeChild() {}, querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }) });
+  const sandbox = Object.assign({}, BASE_GLOBALS, {
+    document: {
+      getElementById: () => null, createElement: () => stubEl(), querySelector: () => null,
+      querySelectorAll: () => [], addEventListener() {}, body: stubEl(),
+    },
+    localStorage: makeStorage(),
+  });
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(
+    'try {\n' + read(P_FALLBACK) + '\n; globalThis.__exports = { isSameTitleArtist };\n} catch (e) { window.__loadError = e; }\n',
+    sandbox, { filename: 'lx-reroute-batch1.11-provider-fallback.js' },
+  );
+  if (sandbox.__loadError) {
+    throw new Error('11-provider-fallback.js 装载失败: ' + (sandbox.__loadError.stack || String(sandbox.__loadError)));
+  }
+  _realIsSameTitleArtist = sandbox.__exports.isSameTitleArtist;
+  return _realIsSameTitleArtist;
+}
 
 const BASE_GLOBALS = {
   console, Date, Math, JSON, String, Number, Array, Object, Boolean, Promise, RegExp, Error,
@@ -189,7 +220,9 @@ function loadMatchSandbox(withDispatcher) {
   const calls = [];
   const extra = {
     accountProviderOrder: () => ['netease', 'qq'],
-    isSameTitleArtist: () => true,
+    // 修复轮1（Critical-2）：用真实 isSameTitleArtist（只读 .artist/.artists）+ lx 冻结形状
+    // fixture（候选带 singer、无 artist），03c 边界未归一时必判不命中 → 本钉桩修复前 RED。
+    isSameTitleArtist: realIsSameTitleArtist(),
     queueItemKey: () => '',
     playbackRestoreSongSnapshot: (s) => Object.assign({}, s),
     apiJson: async (url) => {

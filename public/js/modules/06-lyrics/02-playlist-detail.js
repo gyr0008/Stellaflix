@@ -273,6 +273,12 @@ function playlistTracksEndpoint(provider, id, params) {
 
 var PLAYLIST_DETAIL_IMPORT_LX_SOURCE = { qq: 'tx', kugou: 'kg', qishui: 'qs', spotify: 'sp' };
 var playlistDetailImportCache = { key: '', tracks: null };
+// 修复轮1（评审 Important-1）：lx 导入源冷导入 = 一次 POST /api/platform-playlist/import 取全表，
+// playlistTracksPage 对无 signal 路径用 90000ms 导入预算；面板 initial 若挂 12000ms AbortController
+// 会把这条全表导入砍到 12s → 大歌单首屏必被腰斩。故对导入源沿用同一导入级预算（90000ms），
+// 非导入源（网易云 cookie 路由）仍保持原 12000ms。
+var PLAYLIST_DETAIL_IMPORT_ABORT_MS = 90000;
+var PLAYLIST_DETAIL_PAGE_ABORT_MS = 12000;
 
 function playlistDetailPageFromFullTracks(tracks, offset, limit) {
   var all = Array.isArray(tracks) ? tracks : [];
@@ -444,13 +450,15 @@ async function loadMorePlaylistPanelDetailTracks(reason) {
   }
   var offset = reason === 'initial' ? 0 : Math.max(0, Number(st.nextOffset) || st.tracks.length);
   var token = st.token;
+  // 修复轮1（评审 Important-1）：导入源冷导入用导入级预算，非导入源维持 12s（详见常量注释）。
+  var abortBudgetMs = PLAYLIST_DETAIL_IMPORT_LX_SOURCE[provider] ? PLAYLIST_DETAIL_IMPORT_ABORT_MS : PLAYLIST_DETAIL_PAGE_ABORT_MS;
   var controller = window.AbortController ? new AbortController() : null;
-  var timer = controller ? setTimeout(function () { controller.abort(); }, 12000) : 0;
+  var timer = controller ? setTimeout(function () { controller.abort(); }, abortBudgetMs) : 0;
   st.controller = controller;
   st.loadingMore = reason !== 'initial';
   if (st.loadingMore) renderPlaylistPanelDetailRows();
   try {
-    var r = await playlistTracksPage(provider, pid, offset, controller ? { signal: controller.signal } : { timeoutMs: 12000 });
+    var r = await playlistTracksPage(provider, pid, offset, controller ? { signal: controller.signal } : { timeoutMs: abortBudgetMs });
     if (playlistPanelDetailState.token !== token || playlistPanelDetailState.key !== st.key) return false;
     var rawTracks = r && r.tracks || [];
     if (r && r.error && !rawTracks.length) throw new Error(r.message || r.error);
@@ -480,7 +488,23 @@ async function loadMorePlaylistPanelDetailTracks(reason) {
     }
     return added > 0;
   } catch (e) {
-    if (playlistPanelDetailState.token !== token || (e && e.name === 'AbortError')) return false;
+    if (playlistPanelDetailState.token !== token) return false;
+    if (e && e.name === 'AbortError') {
+      // 修复轮1（评审 Important-1）：中止此前直接 return，不复位 loading → 面板卡在「载入中」。
+      // cancelPlaylistPanelDetailRequest 会先把 state.controller 置空再 abort，据此区分两类中止：
+      // 外部取消（用户切走/收起）保持静默；本模块预算超时须复位载入态并写失败文案，
+      // 否则空曲目走 playlistPanelNoticeHtml('', false) 渲染成空白，把腰斩谎报成空歌单。
+      var externallyCancelled = playlistPanelDetailState.controller !== controller;
+      st.loading = false;
+      st.loadingMore = false;
+      st.hasMore = false;
+      if (externallyCancelled) return false;
+      st.error = 'PLAYLIST_DETAIL_PAGE_TIMEOUT';
+      st.message = st.tracks.length ? '后续歌曲载入超时，可继续滚动重试' : '歌单详情加载超时，请稍后重试';
+      if (reason === 'initial') renderPlaylistPanelDetailState();
+      else renderPlaylistPanelDetailRows();
+      return false;
+    }
     console.warn('[PlaylistPanelDetailPage]', pid, reason, e);
     st.loading = false;
     st.loadingMore = false;

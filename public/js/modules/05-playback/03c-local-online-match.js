@@ -85,9 +85,14 @@ async function searchLocalOnlineMatchOneProvider(localSong, provider) {
   for (var i = 0; i < list.length; i++) {
     var candidate = list[i];
     if (!candidate) continue;
-    if (typeof isSameTitleArtist === 'function' && !isSameTitleArtist(localSong, candidate)) continue;
+    // 修复轮1（评审 Critical-2）：lx 路由返回冻结形状（歌手字段 singer，见 lx-search.js:33-37），
+    // 而 isSameTitleArtist → artistNameParts（11-provider-fallback.js:285-296）只读 .artist/.artists，
+    // singer-only 候选恒判不匹配 → 本地歌在线匹配恒失败。参照 11-provider-fallback.js:496/512
+    // 既有边界归一约定，桥接 singer→artist 后再比对；命中回标 provider 用归一后的视图（artist 齐备）。
+    var view = Object.assign({}, candidate, { artist: candidate.artist || candidate.singer || '' });
+    if (typeof isSameTitleArtist === 'function' && !isSameTitleArtist(localSong, view)) continue;
     if (typeof isSameTitleArtist !== 'function') break;
-    var stamped = Object.assign({}, candidate);
+    var stamped = Object.assign({}, view);
     if (!stamped.provider) stamped.provider = provider;
     return stamped;
   }

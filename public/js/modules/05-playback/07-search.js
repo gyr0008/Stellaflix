@@ -560,17 +560,40 @@ function renderControlSourceSwitcher(matches) {
     '</div>';
   controlSourcePositionSwitcher();
 }
-async function findControlSourceMatchResult(song, provider) {
+async function findControlSourceMatchResult(rawSong, provider) {
+  // 修复轮1（评审 Critical-1 同侧扩展）：入参的「当前播放曲」同样可能是 lx 冻结形状——
+  // 电台队列 radioModeQueueSong（04a-radio-modes.js:242-249）原样 clone lx 搜索结果、
+  // 队列曲因此只有 singer 无 artist，令 controlSourceSwitchQuery 退化为「仅歌名」查询、
+  // sourceSwitchArtistParts(source) 为空 → sourceCandidateRejectReason 恒判 artist_mismatch。
+  // 与候选同一规则归一入参（artist||singer），两侧同形才可比对；不改动传入对象本身。
+  var song = rawSong
+    ? Object.assign({}, rawSong, { artist: rawSong.artist || rawSong.singer || '' })
+    : rawSong;
   var query = controlSourceSwitchQuery(song);
   if (!query) return { song: null, issue: 'no_source' };
   var data = await apiJson(controlSourceSearchUrl(provider, query), { timeoutMs: 6000 });
   var list = data && (data.songs || data.result || []);
-  if (!Array.isArray(list) || !list.length) return { song: null, issue: 'no_source' };
+  // 修复轮1（评审 Critical-1）：/api/lx-source/search 返回 lx 冻结形状（歌手字段名 singer，
+  // 见 lx-search.js:33-37），而下游 sourceCandidateRejectReason → sourceSwitchArtistParts /
+  // artistNameParts（11-provider-fallback.js:285）与 scoreSongSearchResult 全部只读 .artist/.artists
+  // → singer-only 候选恒被判 artist_mismatch，切源匹配零命中。参照本仓既有边界归一约定
+  // （11-provider-fallback.js:496/512 `Object.assign({}, c, { artist: c.artist || c.singer || '' })`），
+  // 在进入拒绝/匹配谓词前统一桥接 singer→artist；命中歌曲回传时 artist/singer 双键齐备。
+  if (!Array.isArray(list) || !list.length) {
+    // 修复轮1（评审 Important-2）：server.js:8083 `ok = songs>0 || failures==0` → 「全源失败」
+    // 是 HTTP 502 + 非空 failures[]。空命中但有 failures 属「音源不可用」，须区别于「查无结果」
+    // 的 no_source（后者标签是「无正版音源」），否则会拿全源失败谎称无版权。
+    var switchFailures = data && Array.isArray(data.failures) ? data.failures : [];
+    return { song: null, issue: switchFailures.length ? 'source_failed' : 'no_source' };
+  }
   var best = null;
   var bestScore = -Infinity;
   var bestIssue = 'no_source';
   for (var i = 0; i < list.length; i++) {
-    var candidate = list[i];
+    var rawCandidate = list[i];
+    var candidate = rawCandidate
+      ? Object.assign({}, rawCandidate, { artist: rawCandidate.artist || rawCandidate.singer || '' })
+      : rawCandidate;
     var issue = sourceCandidateRejectReason(song, candidate, provider);
     if (issue) {
       if (bestIssue === 'no_source' || issue === 'blocked_artist' || issue === 'artist_extra' || issue === 'artist_mismatch') bestIssue = issue;
@@ -661,8 +684,14 @@ async function switchCurrentSongSource(provider) {
     }
     if (requestId !== controlSourceSwitcherState.requestId) return;
     if (!match) {
-      showSourceFallbackNotice('未找到可切换音源', controlSourceProviderTitle(provider) + ' 暂时没有匹配到同名同歌手版本。');
-      showSourceFallbackNotice('该平台无正版音源', controlSourceProviderTitle(provider) + ': ' + controlSourceIssueLabel(issue));
+      // 修复轮1（评审 Important-2）：全源失败（source_failed）呈现逐源失败语义，
+      // 不得再走「没有匹配到同名同歌手版本 / 该平台无正版音源」的空命中文案。
+      if (issue === 'source_failed') {
+        showSourceFallbackNotice('音源暂不可用', controlSourceProviderTitle(provider) + ' 各音源获取失败，请稍后重试。');
+      } else {
+        showSourceFallbackNotice('未找到可切换音源', controlSourceProviderTitle(provider) + ' 暂时没有匹配到同名同歌手版本。');
+        showSourceFallbackNotice('该平台无正版音源', controlSourceProviderTitle(provider) + ': ' + controlSourceIssueLabel(issue));
+      }
       controlSourceSwitcherState.loading = false;
       renderControlSourceSwitcher(controlSourceSwitcherState.matches || {});
       return;
@@ -884,6 +913,8 @@ function sourceCandidateRejectReason(source, candidate, provider) {
 function controlSourceIssueLabel(issue) {
   if (issue === 'blocked_artist' || issue === 'derivative') return '翻唱禁用';
   if (issue === 'artist_mismatch' || issue === 'artist_extra') return '非原唱版本';
+  // 修复轮1（评审 Important-2）：全源失败（502 + 非空 failures）不是「无版权」，单列音源不可用语义。
+  if (issue === 'source_failed') return '音源暂不可用';
   return '无正版音源';
 }
 var SEARCH_ORIGINAL_ARTIST_HINTS = [

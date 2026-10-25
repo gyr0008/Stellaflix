@@ -216,14 +216,23 @@ async function buildRadioModeSongs(mode) {
   // `mode.searchSources || 'kw,kg,mg'`），复用 07-search.js 的 fetchLxSearchResults；
   // 旧注释「Stellaflix 没有 /api/lx-source/search」自 T11 起已失效，官方 /api/search 消费点在此退役。
   var searchSources = mode.searchSources || 'kw,kg,mg';
+  // 修复轮1（评审 Important-2）：server.js:8083 `ok = songs>0 || failures==0` → 「全源失败」
+  // 返回 502 + 非空 failures[]，fetchLxSearchResults 正常透传（不 throw）。此前只读 result.songs，
+  // 把全源失败当零命中 → 电台谎称「没有找到可播放的歌曲」。逐查询收集 failures 记入
+  // radioModeState.lastSearchFailures，供 playRadioMode 区分「音源不可用」与「命中为零」。
+  var collectedFailures = [];
   var batches = await Promise.all(queries.map(function (query) {
     return fetchLxSearchResults(query, { limit: 36, sources: searchSources })
       .then(function (result) {
+        if (result && Array.isArray(result.failures) && result.failures.length) {
+          collectedFailures = collectedFailures.concat(result.failures);
+        }
         var items = result && Array.isArray(result.songs) ? result.songs : [];
         return items.filter(function (song) { return radioModeAcceptsSong(mode, song); }).slice(0, 24);
       })
       .catch(function (error) { console.warn('[RadioModeSearch]', query, error); return []; });
   }));
+  radioModeState.lastSearchFailures = collectedFailures;
   var combined = local.slice();
   batches.forEach(function (items) { combined = combined.concat(items); });
   var songs = radioUniqueSongs(combined, 60).filter(function (song) { return radioModeAcceptsSong(mode, song); });
@@ -248,7 +257,25 @@ async function playRadioMode(id) {
   try {
     var songs = await buildRadioModeSongs(mode);
     if (token !== radioModeState.requestToken) return;
-    if (!songs.length) throw new Error('没有找到可播放的歌曲');
+    if (!songs.length) {
+      // 修复轮1（评审 Important-2）：区分「全源失败」与「命中为零」——有 failures 说明各音源
+      // 获取失败（非无版权/无结果），呈现音源不可用文案。
+      var radioFailures = radioModeState.lastSearchFailures || [];
+      if (radioFailures.length) {
+        // 源名沿用 07-search 的 lxSearchSourceLabel（跨模块全局，同 fetchLxSearchResults 用法）；
+        // 独立装载（单文件沙箱/旧构建）时退化为原始源码，不得因缺函数再抛新错。
+        var failedLabels = radioFailures.map(function (f) {
+          var code = String((f && f.source) || '');
+          if (!code) return '音源';
+          try {
+            if (typeof lxSearchSourceLabel === 'function') return lxSearchSourceLabel(code);
+          } catch (e) { /* 标签缺失只影响文案，不阻断提示 */ }
+          return code.toUpperCase();
+        }).join('、');
+        throw new Error('音源暂不可用（' + failedLabels + ' 获取失败），请稍后重试');
+      }
+      throw new Error('没有找到可播放的歌曲');
+    }
     playQueue = songs.map(function (song) { return radioModeQueueSong(song, mode); });
     currentIdx = 0;
     if (typeof safeRenderQueuePanel === 'function') safeRenderQueuePanel('radio-mode-play', { scrollCurrent: true });
