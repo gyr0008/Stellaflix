@@ -452,6 +452,7 @@ platformPlaylistImport.setSearchImplementation(async function (query, options) {
 });
 const { setupGlobalProxy } = require('./desktop/global-proxy');
 const hlsAdFilter = require('./desktop/hls-ad-filter');
+const { createDrpySidecar } = require('./desktop/drpy-sidecar');
 
 // 排行榜「各平台热榜」（自 Mineradio-LX-Music-1.7.0 server.js:2047-2466 逐字移植，见 daily-hot-api.js）。
 // 偏离: LX 的抓取走 electronNet.fetch（Chromium 栈、跟随 Windows 系统代理）；SF 是纯 Node，
@@ -996,6 +997,64 @@ function systemProxyDispatcher(proxyUrl) {
     bangumiProxyAgents.set(proxyUrl, agent);
   }
   return bangumiProxyAgents.get(proxyUrl);
+}
+
+// ---------- /api/proxy 请求头覆盖（规则源 Referer/UA） ----------
+// 前端把规则解析出的 Referer / User-Agent 挂在代理地址的 sfvReferer / sfvUA 上带过来。
+// 只放行这两个头（Cookie/Authorization 走的是真实请求头白名单，不经此通道），且
+// Referer 必须与目标同域族——否则本代理就成了「带任意来源身份访问任意站点」的跳板。
+const SFV_REFERER_MAX = 2000;
+const SFV_UA_MAX = 512;
+// 两段式公共后缀（co.uk / com.cn 之类）：这类域下「同后缀不同租户」并不属于同一家站点，
+// 因此按三段取家族键。清单只收本项目源站常见后缀，未收录的新增只会让判定更宽一档。
+const MULTI_LABEL_SUFFIXES = new Set(['co.uk', 'org.uk', 'ac.uk', 'com.cn', 'net.cn', 'org.cn',
+  'gov.cn', 'edu.cn', 'co.jp', 'co.kr', 'com.br', 'com.au', 'com.tw', 'com.hk', 'com.my', 'co.in']);
+
+// 站点家族键：cdn.example.com / www.example.com 同为 example.com，防盗链 Referer 常跨子域
+function domainFamily(host) {
+  const parts = String(host || '').toLowerCase().split('.');
+  if (parts.length < 2) return '';
+  const last2 = parts.slice(-2).join('.');
+  if (parts.length >= 3 && MULTI_LABEL_SUFFIXES.has(last2)) return parts.slice(-3).join('.');
+  return last2;
+}
+
+function hostInFamily(targetHost, refHost) {
+  const t = domainFamily(targetHost);
+  const r = domainFamily(refHost);
+  return !!t && !!r && t === r;
+}
+
+// 头部值不得含 CR/LF 等分隔符（Node fetch 会拒，但显式校验免得整请求失败）
+function safeHeaderValue(v, max) {
+  const s = String(v || '');
+  if (!s || s.length > max) return '';
+  if (/[\x00-\x1f\x7f]/.test(s)) return '';
+  return s;
+}
+
+function sfvHeaderOverrides(searchParams, parsed) {
+  const out = {};
+  const rawRef = searchParams.get('sfvReferer');
+  if (rawRef) {
+    const value = safeHeaderValue(rawRef, SFV_REFERER_MAX);
+    let ref = null;
+    if (value) {
+      try { ref = new URL(value); } catch (e) { ref = null; }
+    }
+    // 拒绝带凭据的 Referer，并要求与目标同域族
+    if (ref && (ref.protocol === 'http:' || ref.protocol === 'https:') &&
+        !ref.username && !ref.password && hostInFamily(parsed.hostname, ref.hostname)) {
+      out.Referer = ref.href;
+      out.Origin = ref.origin;
+    }
+  }
+  const rawUa = searchParams.get('sfvUA');
+  if (rawUa) {
+    const ua = safeHeaderValue(rawUa, SFV_UA_MAX);
+    if (ua) out['User-Agent'] = ua;
+  }
+  return out;
 }
 
 // Bangumi 镜像等上游的错误体形态不统一：可能是 {"message":"..."}，
@@ -8250,6 +8309,8 @@ const server = http.createServer(async (req, res) => {
         'Sec-Fetch-Site': 'cross-site',
       };
       if (range) headers['Range'] = range;
+      // 规则源自带防盗链头覆盖（sfvReferer/sfvUA，见 sfvHeaderOverrides 的同域族校验）
+      Object.assign(headers, sfvHeaderOverrides(url.searchParams, parsed));
       // 白名单透传客户端发来的认证头（弹弹play / DanDanPlay / cookie 等）
       ['x-auth', 'x-appid', 'x-signature', 'x-timestamp', 'x-appsecret', 'cookie'].forEach(function (k) {
         if (req.headers[k]) headers[k] = req.headers[k];
@@ -8757,16 +8818,74 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---------- drpy-lite sidecar 状态（批 2） ----------
+  if (pn === '/api/drpy/status') {
+    try {
+      // 原先写死 Access-Control-Allow-Origin: *，任何网页都能读走 sidecar 的随机端口
+      // 与接口口令；改走应用统一的 Origin 白名单（同源页面本就不需要该头）。
+      sendJSON(res, drpySidecar.status(), 200);
+    } catch (e) {
+      sendJSON(res, {error: e.message}, 500);
+    }
+    return;
+  }
+
+  // ---------- drpy 外挂规则仓库：预览 + 下载（批 3 / 批 6） ----------
+  // POST /api/drpy/rules/preview  body: {repoUrl}  只读：只拉 manifest，零写入
+  // POST /api/drpy/rules/sync     body: {repoUrl}  下载：实时抓取仓库并原子替换 rules/js
+  // 出厂不内置任何仓库地址（合规红线）；地址由用户在页面里自备。
+  // 两个响应原先自写 Access-Control-Allow-Origin: *，任何网页都能读走同步结果；
+  // 统一改走 sendJSON + corsHeadersFor 的 Origin 白名单（同源页面本就不需要该头）。
+  if (pn === '/api/drpy/rules/sync' || pn === '/api/drpy/rules/preview') {
+    const isPreview = pn === '/api/drpy/rules/preview';
+    let body = '';
+    let overflow = false;
+    req.on('data', (c) => {
+      if (overflow) return;
+      body += c;
+      // 超限必须给回话：只 destroy 不让 req 'end' 触发，前端 fetch 会一直悬着
+      if (body.length > 64 * 1024) {
+        overflow = true;
+        sendJSON(res, { ok: false, reason: '请求体超过 64KB' }, 413);
+        req.destroy();
+      }
+    });
+    req.on('end', async () => {
+      if (overflow) return;
+      try {
+        const { repoUrl } = JSON.parse(body || '{}');
+        const repo = require('./desktop/drpy-rules-repo');
+        const result = isPreview
+          ? await repo.previewRules(repoUrl)
+          : await repo.syncRules(repoUrl, path.join(drpySidecar.status().liteDir, 'rules', 'js'));
+        sendJSON(res, result, result.ok ? 200 : 400);
+      } catch (e) {
+        sendJSON(res, { ok: false, reason: '请求体非法: ' + e.message }, 400);
+      }
+    });
+    return;
+  }
+
   let filePath = pn === '/' ? '/index.html' : pn;
   filePath = path.join(__dirname, 'public', filePath);
   serveStatic(res, filePath);
 });
+
+// drpy-lite sidecar 单例（status 查询用）。port=0 随机端口：防孤儿实例占位冲突，
+// 渲染层一律经 /api/drpy/status 动态获取 baseUrl，不硬编码端口。
+const drpySidecar = createDrpySidecar({port: 0});
 
 server.listen(PORT, HOST, () => {
   console.log('======================================================');
   console.log(' 粒子音乐可视化 v2  →  http://localhost:' + PORT);
   console.log(' 登录态: ' + (userCookie ? '已登录(cookie已加载)' : '未登录'));
   console.log('======================================================');
+  // drpy-lite sidecar：规则目录出厂为空，用户自备规则（合规红线见 desktop/drpy-sidecar.js）
+  try {
+    drpySidecar.start();
+  } catch (e) {
+    console.warn('[drpy-sidecar] 启动失败（不阻断主服务）:', e.message);
+  }
 });
 
 server.clearAllLoginCredentials = clearAllRuntimeLoginCredentials;

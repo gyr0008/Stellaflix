@@ -4395,6 +4395,17 @@ html.control-glass-svg-ok .sfv-page-bg-layer {
 }
 .sfv-glass-footer-hint { font-size: 10px; color: rgba(255, 255, 255, .30); }
 
+/* 外置规则仓库面板（drpy/T4）：仓库说明行 + 预览清单里的规则文案 */
+.sfv-drpy-note { display: block; margin-bottom: 6px; font-size: 10px; line-height: 1.55; color: rgba(255, 255, 255, .38); }
+.sfv-glass-item-desc {
+  margin-top: 2px; font-size: 11px; color: rgba(255, 255, 255, .55);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sfv-drpy-repo-rule { cursor: default; }
+.sfv-drpy-repo-rule:hover { transform: none; }
+.sfv-drpy-hint { display: block; font-size: 11px; color: rgba(255, 255, 255, .5); }
+.sfv-drpy-hint.bad { color: rgba(255, 150, 140, .92); }
+
 /* ===== Startup default space = video: early home shell from music module chain (body.sfv-home-boot) =====
    Music 3D / particles / login / dashboard still fully init. This only keeps splash reveal on a video home skeleton. */
 body.video-space-active.sfv-home-boot #empty-home .home-grid .home-card-art {

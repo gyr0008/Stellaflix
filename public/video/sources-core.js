@@ -97,6 +97,14 @@
       addedAt: input.addedAt || Date.now(),
       mirrors: mirrors,
     };
+    // drpy（T4）源扩展字段：type='drpy' 走播放地址二次解析；kind 仅用于 UI 标注。
+    // drpyModule 是稳定身份：sidecar 用随机端口，api 里的端口每次启动都变，
+    // 因此导入只认模块名，请求时由 IO 层按当前 baseUrl 现拼端点。
+    if (input.type === 'drpy') {
+      out.source.type = 'drpy';
+      var mod = String(input.drpyModule == null ? '' : input.drpyModule).trim();
+      if (mod) out.source.drpyModule = mod;
+    }
     return out;
   }
 
@@ -113,10 +121,20 @@
     var n = normalizeSource(input);
     if (!n.ok) return n;
     var list = getSources();
-    // 同 api 视为同源，避免重复导入
     for (var i = 0; i < list.length; i++) {
-      if (list[i].api === n.source.api) {
-        return { ok: false, source: list[i], reason: 'duplicate-api' };
+      var cur = list[i];
+      if (!cur) continue;
+      // drpy 双方都有模块名 → 按模块名去重（api 端口每次启动都变，逐字比 api 会把
+      // 每次重启都变成「导入一套新源、留下一整套废源」）
+      if (n.source.type === 'drpy' && cur.type === 'drpy' && n.source.drpyModule && cur.drpyModule) {
+        if (cur.drpyModule === n.source.drpyModule) {
+          return { ok: false, source: cur, reason: 'duplicate-module' };
+        }
+        continue;
+      }
+      // 其余：同 api 视为同源，避免重复导入
+      if (cur.api === n.source.api) {
+        return { ok: false, source: cur, reason: 'duplicate-api' };
       }
     }
     list.push(n.source);
@@ -204,9 +222,11 @@
 
   /**
    * 解析 CMS10 的 vod_play_from / vod_play_url。
+   * @param {boolean} [allowOpaque=false] - drpy(T4) 源的集地址是不透明 id（由 sidecar
+   *        二次解析成直链），置 true 放行非 http 集 URL；默认 false 维持注入防护。
    * @returns {Array<{from:string, episodes:Array<{name:string,url:string,index:number}>}>}
    */
-  function parsePlayUrl(playFrom, playUrl) {
+  function parsePlayUrl(playFrom, playUrl, allowOpaque) {
     if (!playUrl) return [];
     var froms = String(playFrom == null ? '' : playFrom).split('$$$');
     var groups = String(playUrl).split('$$$');
@@ -231,7 +251,7 @@
         }
         url = String(url).trim();
         if (!url) continue;
-        if (!/^https?:/i.test(url)) continue; // 丢弃非 http(s)，防 javascript: 等注入
+        if (!/^https?:/i.test(url) && !allowOpaque) continue; // 丢弃非 http(s)，防 javascript: 等注入
         eps.push({ name: (name || '').trim() || ('第' + (eps.length + 1) + '集'), url: url, index: eps.length });
       }
       if (eps.length) {

@@ -28,6 +28,15 @@ const RULE_FILE = path.join(ROOT, 'outputs', 'video-source-import', 'stellaflix-
 const FIX = path.join(__dirname, 'fixtures', '555dy');
 const EXPECT_HOSTS = ['www.555k31.com', '5k12.top', 'www.5k20.top'];
 
+// 被守的是「离线导入交付包」，住在 outputs/（.gitignore 第 86 行整目录忽略，由导入流程手工生成），
+// 隔离工作树与 fresh clone 里根本没有这个文件 → 本测在那种环境结构性不可能通过。
+// 按仓库既有约定（tests/drpy-bridge-integration.test.js 对可选件同款处理）SKIP 并退 0。
+// 运行时真身不受影响：public/video/kazumi-builtin-rules.js 的 555dy 三条由 tests/kazumi-builtin-rules.test.js 守，不依赖本文件。
+if (!fs.existsSync(RULE_FILE)) {
+  console.log('SKIP kazumi-555dy-rules: 交付包不在本工作树（outputs/ 被 .gitignore 忽略），只在本机有离线导入产物时生效');
+  process.exit(0);
+}
+
 /** 在 vm 沙箱里加载 xpath-engine + rule-schema，返回 {XE, Schema} */
 function loadEngine() {
   const dom = new JSDOM('<html><body></body></html>', { runScripts: 'outside-only' });

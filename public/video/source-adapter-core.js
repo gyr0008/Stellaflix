@@ -44,8 +44,70 @@
     return u.origin === global.location.origin;
   }
 
+  /*
+   * 媒体请求头覆盖表（按媒体 origin 记账）。
+   * T4/drpy 规则解析出的直链常带站点自己的 Referer/User-Agent，缺它 CDN 直接 403；
+   * 播放器与 /api/proxy 之间只传 URL，因此把覆盖头挂在代理地址的查询参数上带过去。
+   * 只记 origin→头，不记整条 URL：m3u8 分片与清单同源，能复用同一条目。
+   * Cookie/Authorization 一律不接受（见 server.js 的 sfv 头白名单）。
+   */
+  var MEDIA_HEADER_CAP = 32;
+  var mediaHeaders = Object.create(null); // origin → { referer?, ua? }
+
+  function pickHeader(headers, names) {
+    if (!headers || typeof headers !== 'object') return '';
+    var keys = Object.keys(headers);
+    for (var i = 0; i < keys.length; i++) {
+      var k = String(keys[i]).toLowerCase();
+      for (var j = 0; j < names.length; j++) {
+        if (k === names[j]) {
+          var v = headers[keys[i]];
+          if (typeof v === 'string' && v.trim()) return v.trim();
+        }
+      }
+    }
+    return '';
+  }
+
+  /**
+   * 登记某媒体地址的出站请求头覆盖。
+   * @param {string} mediaUrl 解析后的媒体直链（用它所在 origin 记账）
+   * @param {Object} headers 规则返回的原始头（仅取 Referer / User-Agent）
+   * @returns {boolean} 是否至少登记了一项
+   */
+  function setMediaHeaders(mediaUrl, headers) {
+    var u = parseUrl(mediaUrl);
+    if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) return false;
+    var referer = pickHeader(headers, ['referer']);
+    var ua = pickHeader(headers, ['user-agent', 'ua']);
+    if (!referer && !ua) return false;
+    var entry = {};
+    if (referer) entry.referer = referer;
+    if (ua) entry.ua = ua;
+    var keys = Object.keys(mediaHeaders);
+    if (keys.length >= MEDIA_HEADER_CAP && keys.indexOf(u.origin) < 0) {
+      delete mediaHeaders[keys[0]]; // 容量满按插入序淘汰最旧
+    }
+    mediaHeaders[u.origin] = entry;
+    return true;
+  }
+
+  function getMediaHeaders(mediaUrl) {
+    var u = parseUrl(mediaUrl);
+    if (!u) return null;
+    return mediaHeaders[u.origin] || null;
+  }
+
+  // 单测/换源复位用
+  function clearMediaHeaders() { mediaHeaders = Object.create(null); }
+
   function toProxyUrl(rawUrl) {
-    return PROXY_PATH + '?url=' + encodeURIComponent(rawUrl);
+    var out = PROXY_PATH + '?url=' + encodeURIComponent(rawUrl);
+    var h = getMediaHeaders(rawUrl);
+    if (!h) return out;
+    if (h.referer) out += '&sfvReferer=' + encodeURIComponent(h.referer);
+    if (h.ua) out += '&sfvUA=' + encodeURIComponent(h.ua);
+    return out;
   }
 
   function basename(pathname) {
@@ -351,6 +413,9 @@
     parseUrl: parseUrl,
     sameOrigin: sameOrigin,
     toProxyUrl: toProxyUrl,
+    setMediaHeaders: setMediaHeaders,
+    getMediaHeaders: getMediaHeaders,
+    clearMediaHeaders: clearMediaHeaders,
     basename: basename,
     nativeHlsSupported: nativeHlsSupported,
     resolve: resolve,

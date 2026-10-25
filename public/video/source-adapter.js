@@ -506,6 +506,8 @@
     resolve: resolve,
     open: open,
     toProxyUrl: toProxyUrl,
+    setMediaHeaders: SAC.setMediaHeaders,
+    getMediaHeaders: SAC.getMediaHeaders,
     isHlsUrl: isHlsUrl,
     attachHls: attachHls,
     attachFlv: attachFlv,

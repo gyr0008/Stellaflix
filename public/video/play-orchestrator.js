@@ -36,6 +36,11 @@
     return /\.(m3u8|m3u|mp4|flv|webm|mkv|aac|m4s|ts)(\?|$)/i.test(u || '');
   }
 
+  // T4/drpy 规则对「非普通 http」的集返回特殊协议（parse:0），与 drpyS
+  // libs_drpy/drpyCustom.js:44 SPECIAL_URL 同集合；这类地址浏览器/mpv 都放不了，
+  // 只能转交 BT 队列（汇联页下载后播）。
+  var SPECIAL_PROTO = /^(ftp|magnet|thunder|ws):/i;
+
   /**
    * 关闭浏览层，但仅在播放器已可见之后。
    * 防御：任何让播放器「晚现形」的异步起播分支（如分享页探测）都会先暴露影视首页
@@ -130,6 +135,17 @@
 
     // 直链播放：经 source-adapter 跨域直链走 /api/proxy；进度键锚定 站点:vod:集数
     var doPlay = function (playUrl) {
+      // 特殊协议（磁力/FTP）：不进播放器，转交 BT 队列，避免把放不了的地址喂给 mpv
+      if (SPECIAL_PROTO.test(playUrl)) {
+        var bt = SFV.huilianPage;
+        var moved = !!(bt && typeof bt.handoff === 'function' && bt.handoff(playUrl));
+        dep('toast')(moved ? '该集为磁力/FTP 地址，已转交 BT 下载队列（影视「汇联」页看进度）'
+                           : '该集为磁力/FTP 地址，需桌面版并配置好 BT 下载后才能播放');
+        if (SFV.detailSource && typeof SFV.detailSource.failPlaybackSwitch === 'function') {
+          try { SFV.detailSource.failPlaybackSwitch('磁力/FTP 地址需经 BT 下载播放'); } catch (e) {}
+        }
+        return;
+      }
       dep('toast')('正在加载影片…');
       // 热切换确认：真正进入 doPlay 才算切换成功，写入播放会话 currentKey
       if (SFV.detailSource && typeof SFV.detailSource.confirmPlaybackSwitch === 'function') {
@@ -138,6 +154,11 @@
       var sourceName = (view.source && view.source.name) ? view.source.name : ((view.source && view.source.id) ? view.source.id : '');
       var coverUrl = dep('resolvePic')(view);
       var meta = { url: playUrl, title: title, id: id };
+      // 规则源（drpy/T4）解析出的 Referer、User-Agent 按媒体 origin 登记，
+      // 由 /api/proxy 出站时套用；不登记就只剩 server 伪造的通用头，站点 CDN 会 403。
+      if (ep && ep.header && SFV.source && typeof SFV.source.setMediaHeaders === 'function') {
+        try { SFV.source.setMediaHeaders(playUrl, ep.header); } catch (e) {}
+      }
       if (resumeAt > 0) meta.resumeAt = resumeAt;
       // source.open：同步 true / 异步 Promise 都算已接管；仅同步 false 才回退 openUrl
       var opened = false;
