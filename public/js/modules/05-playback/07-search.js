@@ -475,12 +475,17 @@ function controlSourceProviderTitle(provider) {
   var item = controlSourceProviders().filter(function (p) { return p.key === provider; })[0];
   return item ? item.title : provider;
 }
+// 批 T15.5b：切源匹配/在线匹配统一走 lx 聚合搜索的「按源定向」形态
+// （/api/lx-source/search?sources=<单源>，与播放解析 /api/lx-source/resolve 同一源名口径）。
+// 官方 /api/{qq,kugou,qishui,spotify}/search 与 /api/search 的消费方在此退役，路由删除归 T16。
+// 汽水(qs)/Spotify(sp) 不是 lx 音源，无按源定向可用 → 退化为五源汇总，交由同名匹配筛选。
+var CONTROL_SOURCE_LX_SOURCES = { netease: 'wy', qq: 'tx', kugou: 'kg', kuwo: 'kw', migu: 'mg' };
+var LX_SEARCH_SOURCES_PARAM = 'tx,wy,kw,kg,mg';
 function controlSourceSearchUrl(provider, query) {
-  if (provider === 'qq') return '/api/qq/search?keywords=' + encodeURIComponent(query) + '&limit=8';
-  if (provider === 'kugou') return '/api/kugou/search?keywords=' + encodeURIComponent(query) + '&limit=8';
-  if (provider === 'qishui') return '/api/qishui/search?keywords=' + encodeURIComponent(query) + '&limit=8';
-  if (provider === 'spotify') return '/api/spotify/search?keywords=' + encodeURIComponent(query) + '&limit=8';
-  return '/api/search?keywords=' + encodeURIComponent(query) + '&limit=10';
+  var key = String(provider || '').trim().toLowerCase();
+  var sources = CONTROL_SOURCE_LX_SOURCES[key] || (/^(tx|wy|kw|kg|mg)$/.test(key) ? key : LX_SEARCH_SOURCES_PARAM);
+  return '/api/lx-source/search?q=' + encodeURIComponent(query) +
+    '&limit=12&sources=' + encodeURIComponent(sources);
 }
 function ensureControlSourceSwitcher() {
   var el = document.getElementById('control-source-switcher');

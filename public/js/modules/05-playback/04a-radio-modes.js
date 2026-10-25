@@ -212,10 +212,12 @@ async function buildRadioModeSongs(mode) {
   }
   queries.push(mode.title);
   queries = queries.filter(function (item, index, list) { return item && list.indexOf(item) === index; }).slice(0, 3);
-  // Stellaflix 没有 LX 的 /api/lx-source/search（它依赖外部 LX 脚本源），
-  // 复用 Stellaflix 自带的 /api/search（网易云统一搜索）为电台模式补全网络结果。
+  // 批 T15.5b：电台网络补全改指 lx 聚合搜索（上游 index.html:26284 buildRadioModeSongs 同款
+  // `mode.searchSources || 'kw,kg,mg'`），复用 07-search.js 的 fetchLxSearchResults；
+  // 旧注释「Stellaflix 没有 /api/lx-source/search」自 T11 起已失效，官方 /api/search 消费点在此退役。
+  var searchSources = mode.searchSources || 'kw,kg,mg';
   var batches = await Promise.all(queries.map(function (query) {
-    return apiJson('/api/search?keywords=' + encodeURIComponent(query) + '&limit=36&t=' + Date.now(), { timeoutMs: 32000 })
+    return fetchLxSearchResults(query, { limit: 36, sources: searchSources })
       .then(function (result) {
         var items = result && Array.isArray(result.songs) ? result.songs : [];
         return items.filter(function (song) { return radioModeAcceptsSong(mode, song); }).slice(0, 24);

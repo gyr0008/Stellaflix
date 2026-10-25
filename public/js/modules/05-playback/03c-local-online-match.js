@@ -75,9 +75,11 @@ function localOnlineMatchCandidateProviders() {
 async function searchLocalOnlineMatchOneProvider(localSong, provider) {
   var query = [localSong.name || localSong.title || '', localSong.artist || ''].filter(Boolean).join(' ').trim();
   if (!query) return null;
+  // 批 T15.5b：匹配查询统一走 lx 聚合搜索；controlSourceSearchUrl 不可用时的兜底
+  // 也必须是 lx 形态（旧官方 /api/search 兜底随路由一并退役）。
   var url = typeof controlSourceSearchUrl === 'function'
     ? controlSourceSearchUrl(provider, query)
-    : '/api/search?keywords=' + encodeURIComponent(query) + '&limit=12';
+    : '/api/lx-source/search?q=' + encodeURIComponent(query) + '&limit=12&sources=tx,wy,kw,kg,mg';
   var data = await apiJson(url, { timeoutMs: LOCAL_ONLINE_MATCH_SEARCH_TIMEOUT_MS });
   var list = (data && (data.songs || data.result)) || [];
   for (var i = 0; i < list.length; i++) {

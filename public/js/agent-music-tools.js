@@ -418,26 +418,22 @@
             // 第二阶段查询失败时，继续走原 NO_MATCH 路径，不向用户抛技术错。
             if (!Array.isArray(resultFailures)) resultFailures = [];
           }
-          // 第三阶段 fallback：跨平台（QQ/酷狗）搜索。netease cloudsearch 因版权常无热门
-          // 歌手（周杰伦/陈奕迅等）的原版，但 QQ/酷狗 有正版。并行搜两个平台，按相同严格
-          // 歌手过滤筛候选，任一非空则替换 scored；任一失败或都空仍走 NO_MATCH。
+          // 第三阶段 fallback：跨平台（QQ→tx / 酷狗→kg）搜索。网易云正版常缺热门歌手
+          // （周杰伦/陈奕迅等）的原版，QQ/酷狗 有正版。批 T15.5b：改指 lx 聚合搜索单请求
+          // 双源（官方 /api/qq/search、/api/kugou/search 消费点退役，删除归 T16），
+          // 按相同严格歌手过滤筛候选，非空则替换 scored；失败或仍空则走 NO_MATCH。
           if (!scored.length) {
             try {
               var crossTimeBudget = Math.max(8000, Number(options.timeoutMs) || 18000);
-              var crossResults = await Promise.all([
-                apiJson('/api/qq/search?keywords=' + encodeURIComponent(title) +
-                  '&limit=' + fetchLimit + '&t=' + Date.now(),
-                  { timeoutMs: crossTimeBudget })
-                  .then(function (r) { return r; }).catch(function () { return null; }),
-                apiJson('/api/kugou/search?keywords=' + encodeURIComponent(title) +
-                  '&limit=' + fetchLimit + '&t=' + Date.now(),
-                  { timeoutMs: crossTimeBudget })
-                  .then(function (r) { return r; }).catch(function () { return null; })
-              ]);
-              var crossSongs = [];
-              crossResults.forEach(function (r) {
-                if (r && Array.isArray(r.songs)) crossSongs = crossSongs.concat(r.songs);
-              });
+              var crossResult = await apiJson(
+                '/api/lx-source/search?q=' + encodeURIComponent(title) +
+                '&limit=' + fetchLimit +
+                '&sources=' + encodeURIComponent('tx,kg') +
+                '&t=' + Date.now(),
+                { timeoutMs: crossTimeBudget }
+              );
+              if (crossResult && Array.isArray(crossResult.failures)) resultFailures = crossResult.failures;
+              var crossSongs = crossResult && Array.isArray(crossResult.songs) ? crossResult.songs : [];
               if (crossSongs.length) {
                 var crossScored = crossSongs.map(function (song, index) {
                   return {
