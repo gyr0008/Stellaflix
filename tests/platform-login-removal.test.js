@@ -458,7 +458,7 @@ test('③ package.json：保留 NCM 依赖，摘登录/QR 打包条目', () => {
     assert.ok(!pkg.build.files.includes(f), 'build.files 不得再打包 ' + f);
   }
   assert.ok(pkg.build.files.includes('platform-playlist-import.js'), 'lx 导入口 platform-playlist-import 保留');
-  assert.ok(pkg.build.files.includes('qishui-audio-decryptor/**/*'), '本机解密运行时不连坐（打包白名单保留）');
+  assert.ok(!pkg.build.files.some((f) => String(f).includes('qishui-audio-decryptor')), '16e：解密运行时无消费方，打包白名单须摘除');
   assert.ok(pkg.build.files.includes('*-api.js'), 'agent-api.js 由通配符覆盖，不得误删');
   assert.doesNotMatch(read('electron-builder.internal-beta.json'), /qishui-auth-v6|qishui-qr-login/);
 });

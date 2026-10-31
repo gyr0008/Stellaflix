@@ -33,7 +33,6 @@
     "cuefield/**/*",
     "server.js",
     "*-api.js",
-    "qishui-audio-decryptor/**/*",
     "LICENSE",
     "NOTICE.md",
     "docs/THIRD_PARTY_PORTS.md",

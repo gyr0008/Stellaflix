@@ -21,6 +21,7 @@ const {
   registerLocalMusicScheme,
 } = require('./local-music-library');
 const { WallpaperEngineRuntime } = require('./wallpaper-engine-runtime');
+const { purgeStaleLoginCredentials } = require('./stale-login-credential-purge');
 const { FullDesktopModeRuntime } = require('./full-desktop-mode-runtime');
 const { autoUpdater } = require('electron-updater');
 
@@ -2441,14 +2442,29 @@ function ensureDesktopShortcut() {
   }
 }
 
+function staleLoginCredentialDirs() {
+  const dirs = [STABLE_USER_DATA_PATH, path.join(__dirname, '..'), path.join(__dirname, '..', 'data')];
+  try { dirs.push(app.getPath('sessionData')); } catch (_) {}
+  return dirs;
+}
+
 async function clearAllProviderLoginState(reason) {
+  let purged = [];
+  try {
+    const purgeResult = purgeStaleLoginCredentials({
+      dirs: staleLoginCredentialDirs(),
+      markerFile: path.join(STABLE_USER_DATA_PATH, '.stale-login-purge.json'),
+      force: true,
+    });
+    if (purgeResult && purgeResult.removed) purged = purgeResult.removed;
+  } catch (_) { /* 文件清理失败不阻塞运行时状态清理 */ }
   if (localServer && typeof localServer.clearAllLoginCredentials === 'function') {
     const result = localServer.clearAllLoginCredentials(reason || 'login-reset');
     if (!result || result.ok !== true) {
       throw new Error(result && result.error || 'LOCAL_SERVER_LOGIN_STATE_CLEAR_FAILED');
     }
   }
-  return { ok: true };
+  return { ok: true, removed: purged };
 }
 
 function getWindowDisplay(win) {
@@ -4824,16 +4840,6 @@ function configureLocalServerEnvironment(port) {
 }
 
 const APP_OWNED_MIGRATION_FILES = [
-  '.cookie',
-  '.qq-cookie',
-  '.kugou-cookie',
-  '.qishui-cookie',
-  '.qishui-token',
-  '.qishui-oauth.json',
-  '.qishui-qr-identity.json',
-  '.qishui-qr-login.json',
-  '.spotify-token.json',
-  '.spotify-credentials.json',
   'current-fx-autosave.json',
   'desktop-behavior.json',
   'cuefield-feedback.jsonl',
@@ -4918,61 +4924,6 @@ function migrateLegacyAuthStorage() {
   removeDeprecatedKugouVipEvidenceFiles();
   migrateMisplacedAppOwnedFiles();
   try {
-    const legacyNeteaseCookie = path.join(__dirname, '..', '.cookie');
-    if (fs.existsSync(legacyNeteaseCookie)) {
-      if (!fs.existsSync(process.env.COOKIE_FILE)) {
-        fs.copyFileSync(legacyNeteaseCookie, process.env.COOKIE_FILE);
-      }
-      fs.unlinkSync(legacyNeteaseCookie);
-    }
-  } catch (e) {
-    console.warn('Netease cookie migration skipped:', e.message);
-  }
-  try {
-    const legacyQQCookie = path.join(__dirname, '..', '.qq-cookie');
-    if (fs.existsSync(legacyQQCookie)) {
-      if (!fs.existsSync(process.env.QQ_COOKIE_FILE)) {
-        fs.copyFileSync(legacyQQCookie, process.env.QQ_COOKIE_FILE);
-      }
-      fs.unlinkSync(legacyQQCookie);
-    }
-  } catch (e) {
-    console.warn('QQ cookie migration skipped:', e.message);
-  }
-  try {
-    const legacyKugouCookie = path.join(__dirname, '..', '.kugou-cookie');
-    if (fs.existsSync(legacyKugouCookie)) {
-      if (!fs.existsSync(process.env.KUGOU_COOKIE_FILE)) {
-        fs.copyFileSync(legacyKugouCookie, process.env.KUGOU_COOKIE_FILE);
-      }
-      fs.unlinkSync(legacyKugouCookie);
-    }
-  } catch (e) {
-    console.warn('Kugou cookie migration skipped:', e.message);
-  }
-  try {
-    const legacyQishuiCookie = path.join(__dirname, '..', '.qishui-cookie');
-    if (fs.existsSync(legacyQishuiCookie)) {
-      if (!fs.existsSync(process.env.QISHUI_COOKIE_FILE)) {
-        fs.copyFileSync(legacyQishuiCookie, process.env.QISHUI_COOKIE_FILE);
-      }
-      fs.unlinkSync(legacyQishuiCookie);
-    }
-  } catch (e) {
-    console.warn('Qishui cookie migration skipped:', e.message);
-  }
-  try {
-    const legacyQishuiToken = path.join(__dirname, '..', '.qishui-token');
-    if (fs.existsSync(legacyQishuiToken)) {
-      if (!fs.existsSync(process.env.QISHUI_TOKEN_FILE)) {
-        fs.copyFileSync(legacyQishuiToken, process.env.QISHUI_TOKEN_FILE);
-      }
-      fs.unlinkSync(legacyQishuiToken);
-    }
-  } catch (e) {
-    console.warn('Qishui token migration skipped:', e.message);
-  }
-  try {
     // 远程库（Subsonic/Navidrome）功能已删除：清理两处残留的明文凭据文件
     for (const leftover of [
       path.join(STABLE_USER_DATA_PATH, 'subsonic-servers.json'),
@@ -4982,47 +4933,6 @@ function migrateLegacyAuthStorage() {
     }
   } catch (e) {
     console.warn('Subsonic credential cleanup failed:', e.message);
-  }
-  try {
-    const qishuiOAuthTarget = process.env.QISHUI_OAUTH_CONFIG_FILE;
-    const legacyQishuiOAuthFiles = [
-      path.join(__dirname, '..', '.qishui-oauth.json'),
-      path.join(__dirname, '..', 'qishui-oauth.json'),
-    ];
-    for (const legacyQishuiOAuth of legacyQishuiOAuthFiles) {
-      if (qishuiOAuthTarget && fs.existsSync(legacyQishuiOAuth) && !fs.existsSync(qishuiOAuthTarget)) {
-        fs.copyFileSync(legacyQishuiOAuth, qishuiOAuthTarget);
-        break;
-      }
-    }
-  } catch (e) {
-    console.warn('Qishui OAuth config migration skipped:', e.message);
-  }
-  try {
-    const legacySpotifyToken = path.join(__dirname, '..', '.spotify-token.json');
-    if (fs.existsSync(legacySpotifyToken)) {
-      if (!fs.existsSync(process.env.SPOTIFY_TOKEN_FILE)) {
-        fs.copyFileSync(legacySpotifyToken, process.env.SPOTIFY_TOKEN_FILE);
-      }
-      fs.unlinkSync(legacySpotifyToken);
-    }
-  } catch (e) {
-    console.warn('Spotify token migration skipped:', e.message);
-  }
-  try {
-    const spotifyConfigTarget = process.env.SPOTIFY_CONFIG_FILE;
-    const legacySpotifyConfigFiles = [
-      path.join(__dirname, '..', '.spotify-credentials.json'),
-      path.join(__dirname, '..', 'spotify-credentials.json'),
-    ];
-    for (const legacySpotifyConfig of legacySpotifyConfigFiles) {
-      if (spotifyConfigTarget && fs.existsSync(legacySpotifyConfig) && !fs.existsSync(spotifyConfigTarget)) {
-        fs.copyFileSync(legacySpotifyConfig, spotifyConfigTarget);
-        break;
-      }
-    }
-  } catch (e) {
-    console.warn('Spotify config migration skipped:', e.message);
   }
 }
 
@@ -5037,6 +4947,13 @@ async function ensureLocalServerStarted() {
     configureLocalAppPermissions();
     configureLocalServerEnvironment(port);
     migrateLegacyAuthStorage();
+    const purgeResult = purgeStaleLoginCredentials({
+      dirs: staleLoginCredentialDirs(),
+      markerFile: path.join(STABLE_USER_DATA_PATH, '.stale-login-purge.json'),
+    });
+    if (purgeResult && purgeResult.removed && purgeResult.removed.length) {
+      console.log('[StaleLoginPurge] removed', purgeResult.removed.join(','));
+    }
 
     const serverModulePath = path.join(__dirname, '..', 'server.js');
     try { delete require.cache[require.resolve(serverModulePath)]; } catch (_) {}

@@ -35,7 +35,6 @@
       "server.js",
       "*-api.js",
       "platform-playlist-import.js",
-      "qishui-audio-decryptor/**/*",
       "LICENSE",
       "NOTICE.md",
       "docs/THIRD_PARTY_PORTS.md",

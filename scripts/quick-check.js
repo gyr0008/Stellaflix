@@ -2261,14 +2261,6 @@ function checkInternalBetaPackagingGuard() {
   if (stellaflix.runtimeName !== 'Stellaflix_Beat' || update.disabled !== true || update.provider !== 'none') {
     fail('internal beta runtime name and update-disable metadata must stay isolated');
   }
-  const requiredRuntimeFiles = ['qishui-audio-decryptor/**/*'];
-  const packageBuildFiles = pkg.build && Array.isArray(pkg.build.files) ? pkg.build.files : [];
-  const betaBuildFiles = Array.isArray(beta.files) ? beta.files : [];
-  requiredRuntimeFiles.forEach((entry) => {
-    if (!packageBuildFiles.includes(entry) || !betaBuildFiles.includes(entry)) {
-      fail(`electron-builder files must include runtime dependency ${entry}`);
-    }
-  });
   if (!beta.nsis || beta.nsis.include !== 'build/installer-internal-beta.nsh' || !/Stellaflix_Beat-v\$\{version\}-灰度内测版/.test(beta.nsis.artifactName || '')) {
     fail('internal beta NSIS config must use the beta wrapper and beta artifact name');
   }
@@ -2285,9 +2277,6 @@ function checkInternalBetaPackagingGuard() {
     fail('desktop runtime must read beta name/AppUserModelID from package metadata');
   }
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
-  if (!/qishui-audio-decryptor\/track-decryptor/.test(serverText)) {
-    fail('server qishui decryptor dependency must stay covered by package files');
-  }
   if (!/local\.disabled === true/.test(serverText) || !/provider === 'none'/.test(serverText)) {
     fail('server update config must support disabled internal beta update metadata');
   }

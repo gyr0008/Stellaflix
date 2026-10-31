@@ -623,6 +623,12 @@ const LEGACY_COOKIE_FILES = [
   process.env.QQ_COOKIE_FILE || path.join(__dirname, '.qq-cookie'),
   process.env.KUGOU_COOKIE_FILE || path.join(__dirname, '.kugou-cookie'),
   process.env.QISHUI_COOKIE_FILE || path.join(__dirname, '.qishui-cookie'),
+  process.env.QISHUI_TOKEN_FILE || path.join(__dirname, '.qishui-token'),
+  process.env.QISHUI_OAUTH_CONFIG_FILE || path.join(__dirname, '.qishui-oauth.json'),
+  process.env.SPOTIFY_TOKEN_FILE || path.join(__dirname, '.spotify-token.json'),
+  process.env.SPOTIFY_CONFIG_FILE || path.join(__dirname, '.spotify-credentials.json'),
+  path.join(__dirname, '.qishui-qr-identity.json'),
+  path.join(__dirname, '.qishui-qr-login.json'),
 ];
 function clearAllRuntimeLoginCredentials(reason) {
   const removed = [];

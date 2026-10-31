@@ -67,10 +67,8 @@ public/index.*.html
 
 # Proprietary third-party runtime (not redistributable)
 # ByteDance/Qishui web security runtime and the Qishui audio decryptor remain the
-# property of their respective rights holders (declared in NOTICE.md), so they are
-# excluded from this public repository. They stay on local disk and are still packed
-# into local builds (see the "files" list in package.json); a fresh clone must supply
-# them separately to use Qishui login / audio decryption.
+# property of their respective rights holders (declared in NOTICE.md). T16d/T16e 后
+# 两条运行时链路均已退役、不再打包；忽略规则保留只为吞掉本机历史落盘文件。
 qishui-auth-v6/
 qishui-audio-decryptor/
 
