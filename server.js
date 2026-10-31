@@ -21,38 +21,13 @@ const cloudsearch = neteaseApiFn('cloudsearch');
 const song_detail = neteaseApiFn('song_detail');
 const song_url = neteaseApiFn('song_url');
 const song_url_v1 = neteaseApiFn('song_url_v1');
-const login_qr_key = neteaseApiFn('login_qr_key');
-const login_qr_create = neteaseApiFn('login_qr_create');
-const login_qr_check = neteaseApiFn('login_qr_check');
-const login_status = neteaseApiFn('login_status');
-const vip_info = neteaseApiFn('vip_info');
-const vip_info_v2 = neteaseApiFn('vip_info_v2');
-const logout = neteaseApiFn('logout');
-const user_account = neteaseApiFn('user_account');
-const user_playlist = neteaseApiFn('user_playlist');
-const comment_music = neteaseApiFn('comment_music');
 const album = neteaseApiFn('album');
 const artist_detail = neteaseApiFn('artist_detail');
 const artist_top_song = neteaseApiFn('artist_top_song');
 const artist_songs = neteaseApiFn('artist_songs');
-const like_song = neteaseApiFn('like');
-const likelist = neteaseApiFn('likelist');
-const song_like_check = neteaseApiFn('song_like_check');
-const album_sub = neteaseApiFn('album_sub');
-const album_sublist = neteaseApiFn('album_sublist');
-const playlist_subscribe = neteaseApiFn('playlist_subscribe');
-const comment = neteaseApiFn('comment');
-const comment_like = neteaseApiFn('comment_like');
-const scrobble = neteaseApiFn('scrobble');
-const listen_data_total = neteaseApiFn('listen_data_total');
 const playlist_tracks = neteaseApiFn('playlist_tracks');
-const playlist_track_add = neteaseApiFn('playlist_track_add');
-const playlist_create = neteaseApiFn('playlist_create');
 const playlist_detail = neteaseApiFn('playlist_detail');
 const playlist_track_all = neteaseApiFn('playlist_track_all');
-const personalized = neteaseApiFn('personalized');
-const recommend_resource = neteaseApiFn('recommend_resource');
-const recommend_songs = neteaseApiFn('recommend_songs');
 // 批 T16c：播客整条下线——网易云官方播客族接口常量（dj 前缀 8 枚）随路由一并退役
 // （grep 自证：此前唯一消费方是 /api/podcast/*）。
 const lyric = neteaseApiFn('lyric');
@@ -335,84 +310,6 @@ function readLxPlaylists() {
 const tls = require('tls');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
-// 批 T16c：dj-analyzer（播客 DJ 长音频离线锁拍）整文件退役，此处 require 一并摘除。
-// B2 惰性加载：qishui-audio-decryptor/ 是 gitignore 的本机专有运行时（.gitignore:70-76），
-// fresh clone / CI 缺件属正常态。顶层 require 会让整个 server 崩在启动（0.1.4 安装包
-// SF-BOOT-SERVER-START 的根因）。改为首次用到汽水解密时才加载，缺件降级走普通代理。
-let _trackDecryptorMod; // undefined=未尝试, null=缺件, object=已加载
-function loadTrackDecryptor() {
-  if (_trackDecryptorMod === undefined) {
-    try {
-      _trackDecryptorMod = require('./qishui-audio-decryptor/track-decryptor');
-    } catch (e) {
-      console.warn('[Qishui] decryptor runtime missing; qishui encrypted audio falls back to direct proxy:', e.code || e.message);
-      _trackDecryptorMod = null;
-    }
-  }
-  return _trackDecryptorMod && _trackDecryptorMod.TrackDecryptor ? _trackDecryptorMod.TrackDecryptor : null;
-}
-const {
-  normalizeQQVipPayload: normalizeQQVipPayloadStrict,
-  resolveQQVipFromProbes,
-  qqVipSessionCacheKey,
-  qqVipCacheTtlMs,
-  qqVipEntitlementRights,
-  preserveQQVipStalePositive,
-  qqVipObjectLooksExpired: qqVipObjectLooksExpiredStrict,
-} = require('./qq-vip-api');
-const {
-  handleKugouSearch,
-  handleKugouLyric,
-  handleKugouGuessLike,
-  handleKugouUserPlaylists,
-  handleKugouPlaylistTracks,
-  handleKugouLikeCheck,
-  handleKugouLikeToggle,
-  handleKugouPlaylistAddSong,
-  getKugouLoginInfo,
-  normalizeKugouCookieInput,
-  clearKugouSessionCaches,
-  kugouCookieHasPlayback,
-  extractKugouAuth,
-  kugouAudioReferer,
-} = require('./kugou-api');
-const {
-  getQishuiStatus,
-  handleQishuiStatus,
-  normalizeQishuiCookieInput,
-  qishuiCookieHasLogin,
-  clearQishuiAccessToken,
-  handleQishuiSearch,
-  handleQishuiFeed,
-  handleQishuiUserPlaylists,
-  handleQishuiPlaylistTracks,
-  handleQishuiCheckTracksLiked,
-  handleQishuiSetTrackLiked,
-  handleQishuiSetPlaylistCollected,
-  handleQishuiPlaylistAddSong,
-  handleQishuiSetAlbumCollected,
-  handleQishuiReportRecentlyPlayed,
-  handleQishuiComments,
-  handleQishuiCreateComment,
-  handleQishuiLyric,
-} = require('./qishui-api');
-const qishuiQrLogin = require('./qishui-qr-login');
-const {
-  getSpotifyConfig,
-  clearSpotifyToken,
-  saveSpotifyConfig,
-  handleSpotifyStatus,
-  handleSpotifySearch,
-  handleSpotifyRecommendations,
-  handleSpotifyUserPlaylists,
-  handleSpotifyPlaylistTracks,
-  handleSpotifyAlbumDetail,
-  handleSpotifyLibraryCheck,
-  handleSpotifyLibrarySet,
-  handleSpotifyPlaylistAddSong,
-  handleSpotifyCreatePlaylist,
-  handleSpotifyLyric,
-} = require('./spotify-api');
 const {
   appendCuefieldFeedback,
   readCuefieldFeedbackStats,
@@ -492,37 +389,11 @@ const LX_SOURCE_TERMINAL_CODES = Object.freeze({
   '没有可用于这首歌的音源': 'LX_SOURCE_NO_RESOLVER',
 });
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const DEFAULT_COOKIE_FILE = path.join(__dirname, '.cookie');
-const DEFAULT_QQ_COOKIE_FILE = path.join(__dirname, '.qq-cookie');
-const DEFAULT_KUGOU_COOKIE_FILE = path.join(__dirname, '.kugou-cookie');
-const DEFAULT_QISHUI_COOKIE_FILE = path.join(__dirname, '.qishui-cookie');
 const BEATMAP_CACHE_DIR = process.env.STELLAFLIX_BEAT_CACHE_DIR || 'D:\\StellaflixCache\\beatmaps';
 const CUEFIELD_FEEDBACK_FILE = process.env.CUEFIELD_FEEDBACK_FILE || path.join(__dirname, 'data', 'cuefield-feedback.jsonl');
-const LISTEN_SYNC_JOURNAL_FILE = process.env.STELLAFLIX_LISTEN_SYNC_FILE || path.join(__dirname, 'data', 'listen-sync-journal.json');
-const LISTEN_SYNC_JOURNAL_LIMIT = 600;
 const APP_PACKAGE = readPackageInfo();
 const APP_VERSION = process.env.STELLAFLIX_VERSION || APP_PACKAGE.version || '0.1.0';
 const UPDATE_CONFIG = readUpdateConfig(APP_PACKAGE);
-let qishuiAudioDecryptor = null; // B2 惰性单例：首次汽水解密时才构造，缺件不阻塞启动
-function ensureQishuiAudioDecryptor() {
-  if (!qishuiAudioDecryptor) {
-    const TrackDecryptorClass = loadTrackDecryptor();
-    if (!TrackDecryptorClass) return null;
-    try { qishuiAudioDecryptor = new TrackDecryptorClass(); }
-    catch (e) {
-      console.warn('[Qishui] decryptor init failed; falls back to direct proxy:', e.message);
-      return null;
-    }
-  }
-  return qishuiAudioDecryptor;
-}
-const qishuiAudioDecryptCache = new Map();
-// 48MB keeps a couple of recent tracks without letting long DJ sets pin ~100MB.
-const QISHUI_AUDIO_DECRYPT_CACHE_MAX_BYTES = 48 * 1024 * 1024;
-const QISHUI_AUDIO_DECRYPT_SKIP_CACHE_BYTES = 16 * 1024 * 1024;
-const QISHUI_AUDIO_DECRYPT_MAX_SOURCE_BYTES = 64 * 1024 * 1024;
-const qishuiAudioDecryptInflight = new Map();
-let qishuiAudioDecryptCacheBytes = 0;
 const UPDATE_FALLBACK_NOTES = [
   '修复多行歌词与 3D 歌单架的显示层级',
   '优化更新入口与安装包获取流程',
@@ -537,53 +408,6 @@ const WEATHER_DEFAULT_LOCATION = {
   longitude: 121.4737,
   timezone: 'Asia/Shanghai',
 };
-
-function loadListenSyncJournal() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(LISTEN_SYNC_JOURNAL_FILE, 'utf8'));
-    const entries = parsed && parsed.entries && typeof parsed.entries === 'object' ? parsed.entries : {};
-    return { version: 1, entries };
-  } catch (_) {
-    return { version: 1, entries: {} };
-  }
-}
-
-let listenSyncJournal = loadListenSyncJournal();
-
-function listenSyncAccountKey(provider, credential) {
-  return String(provider || '') + ':' + crypto.createHash('sha256').update(String(credential || '')).digest('hex').slice(0, 16);
-}
-
-function listenSyncJournalKey(provider, credential, sessionId) {
-  return listenSyncAccountKey(provider, credential) + ':' + String(sessionId || '');
-}
-
-function persistListenSyncJournal() {
-  const entries = Object.entries(listenSyncJournal.entries || {})
-    .sort((a, b) => Number(b[1] && b[1].submittedAt || 0) - Number(a[1] && a[1].submittedAt || 0))
-    .slice(0, LISTEN_SYNC_JOURNAL_LIMIT);
-  listenSyncJournal.entries = Object.fromEntries(entries);
-  const dir = path.dirname(LISTEN_SYNC_JOURNAL_FILE);
-  const temp = LISTEN_SYNC_JOURNAL_FILE + '.tmp-' + process.pid;
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(temp, JSON.stringify(listenSyncJournal, null, 2), 'utf8');
-  fs.renameSync(temp, LISTEN_SYNC_JOURNAL_FILE);
-}
-
-function rememberListenSyncSubmission(key, result) {
-  listenSyncJournal.entries[key] = {
-    provider: result.provider,
-    songId: String(result.songId || ''),
-    submittedAt: Date.now(),
-    accountDurationSync: result.accountDurationSync || 'unsupported',
-    historySynced: !!result.historySynced,
-  };
-  try {
-    persistListenSyncJournal();
-  } catch (err) {
-    console.warn('[ListenSyncJournal]', err.message);
-  }
-}
 
 function applySystemCertificateAuthorities() {
   try {
@@ -791,157 +615,26 @@ function extractUpstreamErrorDetail(text) {
 }
 
 // ---------- Cookie 持久化 ----------
-const COOKIE_ATTRIBUTE_NAMES = new Set(['path', 'domain', 'expires', 'max-age', 'samesite', 'secure', 'httponly']);
-function collectCookiePair(picked, key, value) {
-  key = String(key || '').trim();
-  if (!key || COOKIE_ATTRIBUTE_NAMES.has(key.toLowerCase())) return;
-  if (value === null || value === undefined) return;
-  picked.set(key, String(value).trim());
-}
-function collectCookieInput(input, picked) {
-  if (input === null || input === undefined) return;
-  if (Array.isArray(input)) {
-    input.forEach(item => collectCookieInput(item, picked));
-    return;
-  }
-  if (typeof input === 'object') {
-    if (input.name && Object.prototype.hasOwnProperty.call(input, 'value')) {
-      collectCookiePair(picked, input.name, input.value);
-      return;
-    }
-    Object.keys(input).forEach(key => {
-      const value = input[key];
-      if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
-        collectCookiePair(picked, key, value.value);
-      } else if (typeof value !== 'object') {
-        collectCookiePair(picked, key, value);
-      }
-    });
-    return;
-  }
-  String(input).split(/\r?\n/).forEach(line => {
-    line.split(';').forEach(part => {
-      const raw = String(part || '').trim();
-      const idx = raw.indexOf('=');
-      if (idx <= 0) return;
-      collectCookiePair(picked, raw.slice(0, idx), raw.slice(idx + 1));
-    });
-  });
-}
-function normalizeCookieHeader(input) {
-  const picked = new Map();
-  collectCookieInput(input, picked);
-  return Array.from(picked.entries())
-    .filter(([key, value]) => key && value != null && String(value) !== '')
-    .map(([key, value]) => `${key}=${value}`)
-    .join('; ');
-}
-function rawCookieFallback(input) {
-  if (typeof input === 'string') return input.trim();
-  if (Array.isArray(input) && input.every(item => typeof item === 'string')) return input.join('; ').trim();
-  return '';
-}
-function getCookieFile() {
-  return process.env.COOKIE_FILE || DEFAULT_COOKIE_FILE;
-}
-function getQQCookieFile() {
-  return process.env.QQ_COOKIE_FILE || DEFAULT_QQ_COOKIE_FILE;
-}
-function getKugouCookieFile() {
-  return process.env.KUGOU_COOKIE_FILE || DEFAULT_KUGOU_COOKIE_FILE;
-}
-function getQishuiCookieFile() {
-  return process.env.QISHUI_COOKIE_FILE || DEFAULT_QISHUI_COOKIE_FILE;
-}
-function readConfiguredCookieFile(file) {
-  try {
-    if (file && fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
-  } catch (_) {}
-  return '';
-}
-function writeConfiguredCookieFile(file, value) {
-  try {
-    if (!file) return;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, String(value || ''), 'utf8');
-  } catch (_) {}
-}
-const configuredCookieStores = {
-  netease: { file: '', value: '', getFile: getCookieFile },
-  qq: { file: '', value: '', getFile: getQQCookieFile },
-  kugou: { file: '', value: '', getFile: getKugouCookieFile },
-  qishui: { file: '', value: '', getFile: getQishuiCookieFile },
-};
-function refreshConfiguredCookieStore(store, force) {
-  const file = store.getFile();
-  if (force || store.file !== file) {
-    store.file = file;
-    store.value = readConfiguredCookieFile(file);
-  }
-  return store.value;
-}
-function saveConfiguredCookieStore(store, value) {
-  const file = store.getFile();
-  store.file = file;
-  store.value = String(value || '');
-  writeConfiguredCookieFile(file, store.value);
-  return store.value;
-}
-let userCookie = '';
-function saveCookie(c) {
-  userCookie = saveConfiguredCookieStore(configuredCookieStores.netease, normalizeCookieHeader(c) || rawCookieFallback(c));
-  clearNeteaseLoginInfoCache();
-}
-
-let qqCookie = '';
-function saveQQCookie(c) {
-  qqCookie = saveConfiguredCookieStore(configuredCookieStores.qq, normalizeCookieHeader(c) || rawCookieFallback(c));
-  qqVipInfoCache.clear();
-  clearQQLikedPlaylistCoverCache();
-}
-
-let kugouCookie = '';
-function saveKugouCookie(c) {
-  kugouCookie = saveConfiguredCookieStore(configuredCookieStores.kugou, normalizeCookieHeader(c) || rawCookieFallback(c));
-  clearKugouSessionCaches();
-}
-
-let qishuiCookie = '';
-function saveQishuiCookie(c) {
-  qishuiCookie = saveConfiguredCookieStore(configuredCookieStores.qishui, normalizeQishuiCookieInput(c) || normalizeCookieHeader(c) || rawCookieFallback(c));
-}
-function refreshConfiguredCookieStores(force) {
-  userCookie = refreshConfiguredCookieStore(configuredCookieStores.netease, force);
-  qqCookie = refreshConfiguredCookieStore(configuredCookieStores.qq, force);
-  kugouCookie = refreshConfiguredCookieStore(configuredCookieStores.kugou, force);
-  qishuiCookie = refreshConfiguredCookieStore(configuredCookieStores.qishui, force);
-}
-function refreshQQConfiguredCookieStore(force) {
-  qqCookie = refreshConfiguredCookieStore(configuredCookieStores.qq, force);
-  return qqCookie;
-}
-refreshConfiguredCookieStores(true);
-
+// ---------- 历史凭证清理（批 T16d） ----------
+// LX 世界观不再持有任何平台 cookie 登录态；此钩子只负责清掉旧版本落盘的凭证文件，
+// 供桌面端「清除登录状态」入口（16e）复用。公开分发口径：包内不落任何凭证。
+const LEGACY_COOKIE_FILES = [
+  process.env.COOKIE_FILE || path.join(__dirname, '.cookie'),
+  process.env.QQ_COOKIE_FILE || path.join(__dirname, '.qq-cookie'),
+  process.env.KUGOU_COOKIE_FILE || path.join(__dirname, '.kugou-cookie'),
+  process.env.QISHUI_COOKIE_FILE || path.join(__dirname, '.qishui-cookie'),
+];
 function clearAllRuntimeLoginCredentials(reason) {
-  userCookie = '';
-  qqCookie = '';
-  kugouCookie = '';
-  qishuiCookie = '';
-  Object.keys(configuredCookieStores).forEach((key) => {
-    configuredCookieStores[key].value = '';
-  });
-  clearNeteaseLoginInfoCache();
-  qqVipInfoCache.clear();
-  clearQQLikedPlaylistCoverCache();
-  clearKugouSessionCaches();
-  const qishui = clearQishuiAccessToken();
-  const spotify = clearSpotifyToken();
-  return {
-    ok: true,
-    reason: String(reason || 'login-reset'),
-    qishui: !qishui || qishui.ok !== false,
-    spotify: !spotify || spotify.ok !== false,
-  };
+  const removed = [];
+  for (const file of LEGACY_COOKIE_FILES) {
+    try {
+      if (file && fs.existsSync(file)) {
+        fs.unlinkSync(file);
+        removed.push(file);
+      }
+    } catch (_) {}
+  }
+  return { ok: true, reason: String(reason || 'login-reset'), removed };
 }
 
 // ---------- 工具 ----------
@@ -1659,140 +1352,6 @@ function normalizeApiMessage(payload) {
   const body = payload && (payload.body || payload);
   return (body && (body.message || body.msg || body.error)) || (body && body.body && (body.body.message || body.body.msg || body.body.error)) || '';
 }
-function parseCookieString(cookieText) {
-  const out = {};
-  String(cookieText || '').split(';').forEach(part => {
-    const raw = String(part || '').trim();
-    if (!raw) return;
-    const idx = raw.indexOf('=');
-    if (idx <= 0) return;
-    const key = raw.slice(0, idx).trim();
-    const value = raw.slice(idx + 1).trim();
-    if (key) out[key] = value;
-  });
-  return out;
-}
-function serializeCookieObject(obj) {
-  return Object.keys(obj || {})
-    .filter(k => obj[k] != null && String(obj[k]) !== '')
-    .map(k => k + '=' + String(obj[k]))
-    .join('; ');
-}
-function qqCookieObject() {
-  return parseCookieString(qqCookie);
-}
-function normalizeQQUin(raw) {
-  const digits = String(raw || '').replace(/\D/g, '');
-  return digits.replace(/^0+/, '') || digits;
-}
-function qqCookieUin(obj) {
-  obj = obj || qqCookieObject();
-  const isWechat = !!obj.wxopenid || Number(obj.login_type) === 2;
-  const raw = isWechat ? (obj.wxuin || obj.uin || obj.p_uin) : (obj.uin || obj.qqmusic_uin || obj.wxuin || obj.p_uin);
-  return normalizeQQUin(raw);
-}
-function qqCookieMusicKey(obj) {
-  obj = obj || qqCookieObject();
-  return obj.qm_keyst || obj.qqmusic_key || obj.music_key || obj.p_skey || obj.skey ||
-    obj.psrf_qqaccess_token || obj.psrf_qqrefresh_token || obj.wxrefresh_token || obj.wxskey || '';
-}
-function qqCookiePlaybackKey(obj) {
-  obj = obj || qqCookieObject();
-  return obj.qm_keyst || obj.qqmusic_key || obj.music_key || obj.wxskey || '';
-}
-function decodeQQCookieValue(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const candidates = [raw];
-  if (/^(?:[0-9a-fA-F]{2}){2,}$/.test(raw)) {
-    try {
-      const decodedHex = Buffer.from(raw, 'hex').toString('utf8').trim();
-      if (decodedHex && /[^\x20-\x7e]/.test(decodedHex)) candidates.push(decodedHex);
-    } catch (e) {}
-  }
-  const plusSafe = raw.replace(/\+/g, '%20');
-  try { candidates.push(decodeURIComponent(plusSafe).trim()); } catch (e) {}
-  const percentBytes = [];
-  let hasPercentBytes = false;
-  for (let i = 0; i < plusSafe.length; i += 1) {
-    const ch = plusSafe[i];
-    const hex = plusSafe.slice(i + 1, i + 3);
-    if (ch === '%' && /^[0-9a-fA-F]{2}$/.test(hex)) {
-      percentBytes.push(parseInt(hex, 16));
-      hasPercentBytes = true;
-      i += 2;
-    } else {
-      const text = ch === '+' ? ' ' : ch;
-      for (const byte of Buffer.from(text, 'utf8')) percentBytes.push(byte);
-    }
-  }
-  if (hasPercentBytes && percentBytes.length) {
-    const buf = Buffer.from(percentBytes);
-    try { candidates.push(new TextDecoder('gb18030').decode(buf).trim()); } catch (e) {}
-    try { candidates.push(buf.toString('utf8').trim()); } catch (e) {}
-  }
-  for (const item of candidates.slice()) {
-    if (!item) continue;
-    if (/\\u[0-9a-fA-F]{4}/.test(item)) {
-      try { candidates.push(JSON.parse('"' + item.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\\\\u/g, '\\u') + '"').trim()); } catch (e) {}
-    }
-    if (/[ÃÂ]|[\u00c0-\u00ff][\u0080-\u00bf]/.test(item)) {
-      try { candidates.push(Buffer.from(item, 'latin1').toString('utf8').trim()); } catch (e) {}
-    }
-  }
-  function score(text) {
-    text = String(text || '').trim();
-    if (!text) return 1e9;
-    let s = 0;
-    s += (text.match(/\uFFFD/g) || []).length * 80;
-    s += (text.match(/%[0-9a-fA-F]{2}/g) || []).length * 10;
-    s += (text.match(/\\u[0-9a-fA-F]{4}/g) || []).length * 8;
-    s += (text.match(/[ÃÂ]/g) || []).length * 34;
-    s += (text.match(/[\u0080-\u009f]/g) || []).length * 42;
-    s += (text.match(/[\x00-\x08\x0e-\x1f\x7f]/g) || []).length * 50;
-    s -= (text.match(/[\u4e00-\u9fff]/g) || []).length * 2;
-    return s + Math.min(text.length, 80) * 0.02;
-  }
-  return candidates
-    .filter(Boolean)
-    .sort((a, b) => score(a) - score(b))[0]
-    .trim();
-}
-function qqCookieNickname(obj, uin) {
-  obj = obj || qqCookieObject();
-  uin = normalizeQQUin(uin || qqCookieUin(obj));
-  const padded = uin ? '0' + uin : '';
-  const keys = [
-    uin && ('ptnick_' + uin),
-    padded && ('ptnick_' + padded),
-    'ptnick',
-    'nick',
-    'nickname',
-    'qq_nickname'
-  ].filter(Boolean);
-  for (const key of keys) {
-    if (obj[key]) {
-      const nick = decodeQQCookieValue(obj[key]);
-      if (nick) return nick;
-    }
-  }
-  const ptnickKey = Object.keys(obj).find(key => /^ptnick_/i.test(key) && obj[key]);
-  return ptnickKey ? decodeQQCookieValue(obj[ptnickKey]) : '';
-}
-function qqCookieAvatar(obj, uin) {
-  obj = obj || qqCookieObject();
-  const direct = obj.qqmusic_avatar || obj.avatar || obj.avatarUrl || obj.headpic || '';
-  if (direct) return decodeQQCookieValue(direct);
-  uin = normalizeQQUin(uin || qqCookieUin(obj));
-  return uin ? `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(uin)}&s=100` : '';
-}
-function normalizeQQCookieInput(cookieText) {
-  const obj = parseCookieString(cookieText);
-  if ((obj.wxopenid || Number(obj.login_type) === 2) && obj.wxuin) obj.uin = obj.wxuin;
-  if (!obj.uin && (obj.qqmusic_uin || obj.p_uin)) obj.uin = obj.qqmusic_uin || obj.p_uin;
-  if (obj.uin) obj.uin = normalizeQQUin(obj.uin);
-  return serializeCookieObject(obj);
-}
 function playbackRestriction(provider, category, message, action, extra) {
   return {
     provider,
@@ -1831,29 +1390,6 @@ function classifyNeteasePlaybackRestriction(lastData, loginInfo) {
   }
   return playbackRestriction('netease', 'url_unavailable', '网易云没有返回可播放地址，可能是版权、会员或地区限制', loggedIn ? 'switch_source' : 'login', { code, fee });
 }
-function classifyQQPlaybackRestriction(info, session) {
-  const hasSession = typeof session === 'object' ? !!session.hasSession : !!session;
-  const hasPlaybackKey = typeof session === 'object' ? !!session.hasPlaybackKey : hasSession;
-  const rawMsg = String((info && (info.msg || info.tips || info.errmsg || info.message)) || '').trim();
-  const code = Number((info && (info.result || info.code || info.errtype)) || 0);
-  const lower = rawMsg.toLowerCase();
-  if (!hasSession) {
-    return playbackRestriction('qq', 'login_required', 'QQ 音乐需要登录或授权后才能获取播放地址', 'login', { code, rawMessage: rawMsg });
-  }
-  if (!hasPlaybackKey && code === 104003) {
-    return playbackRestriction('qq', 'login_required', 'QQ 音乐当前只拿到了网页登录状态，还缺少播放授权，请重新打开官方 QQ 音乐登录窗口完成授权', 'login', { code, rawMessage: rawMsg, missingPlaybackKey: true });
-  }
-  if (code === 104003) {
-    return playbackRestriction('qq', 'copyright_unavailable', 'QQ 音乐没有给当前版本返回播放地址，通常是版权、会员或官方版本限制，可以换一个搜索结果或切到网易云源', 'switch_source', { code, rawMessage: rawMsg });
-  }
-  if (/vip|会员|付费|购买|数字专辑|专辑|pay/.test(lower + rawMsg)) {
-    return playbackRestriction('qq', 'paid_required', 'QQ 音乐歌曲需要会员、购买或数字专辑权限', 'upgrade', { code, rawMessage: rawMsg });
-  }
-  if (code && code !== 0) {
-    return playbackRestriction('qq', 'copyright_unavailable', rawMsg || 'QQ 音乐版权暂不可播或仅官方客户端可播', 'switch_source', { code, rawMessage: rawMsg });
-  }
-  return playbackRestriction('qq', 'url_unavailable', 'QQ 音乐没有返回播放地址，可能受版权、会员或官方客户端限制', 'switch_source', { code, rawMessage: rawMsg });
-}
 const NETEASE_QUALITY_CANDIDATES = [
   { level: 'jymaster', br: 1999000, label: '超清母带', svip: true },
   { level: 'hires',    br: 1999000, label: '高清臻音' },
@@ -1865,13 +1401,6 @@ const NETEASE_DIRECT_RESOLVE_BUDGET_MS = 4800;
 const NETEASE_SOURCE_MATCH_TOTAL_BUDGET_MS = 8000;
 const NETEASE_SOURCE_MATCH_LOOKUP_BUDGET_MS = 4800;
 const NETEASE_SONG_URL_TOTAL_BUDGET_MS = 12000;
-const QQ_QUALITY_CANDIDATE_TEMPLATES = [
-  { prefix: 'RS01', ext: '.flac', level: 'hires', label: 'Hi-Res FLAC' },
-  { prefix: 'F000', ext: '.flac', level: 'lossless', label: '无损 FLAC' },
-  { prefix: 'M800', ext: '.mp3', level: 'exhigh', label: '320k MP3' },
-  { prefix: 'M500', ext: '.mp3', level: 'standard', label: '128k MP3' },
-  { prefix: 'C400', ext: '.m4a', level: 'aac', label: 'AAC/M4A' },
-];
 function normalizeQualityPreference(value) {
   const raw = String(value || '').toLowerCase().trim();
   if (['jymaster', 'master', 'studio', 'svip'].includes(raw)) return 'jymaster';
@@ -1937,66 +1466,6 @@ function mapDiscoverPlaylist(pl, tag) {
   };
 }
 
-const QQ_LIKED_PLAYLIST_ID = 'liked';
-const QQ_LIKED_DIRID = 201;
-const QQ_LIKED_PLAYLIST_NAME = 'QQ 音乐·我的喜欢';
-const QQ_LIKED_PLAYLIST_COVER = 'https://y.gtimg.cn/mediastyle/global/img/cover_like.png';
-const QQ_LIKED_AUTH_MESSAGE = 'QQ 音乐“我的喜欢”需要完整 QQ 音乐授权。请重新打开官方 QQ 音乐登录窗口，等待进入播放器页后再关闭。';
-const qqLikedPlaylistCoverByUser = new Map();
-
-function qqLikedPlaylistUserKey(info) {
-  return String(info && (info.userId || info.uin) || '').trim();
-}
-
-function getCachedQQLikedPlaylistCover(info) {
-  const key = qqLikedPlaylistUserKey(info);
-  return key ? String(qqLikedPlaylistCoverByUser.get(key) || '') : '';
-}
-
-function rememberQQLikedPlaylistCover(info, cover) {
-  const key = qqLikedPlaylistUserKey(info);
-  cover = String(cover || '').trim();
-  if (key && cover) qqLikedPlaylistCoverByUser.set(key, cover);
-  else if (key) qqLikedPlaylistCoverByUser.delete(key);
-  return cover;
-}
-
-function clearQQLikedPlaylistCoverCache() {
-  qqLikedPlaylistCoverByUser.clear();
-}
-
-function isQQLikedPlaylistId(id) {
-  const value = String(id || '').trim().toLowerCase();
-  return value === QQ_LIKED_PLAYLIST_ID || value === 'qq-liked' || value === String(QQ_LIKED_DIRID);
-}
-
-function isQQFavoritePlaylist(pl) {
-  if (pl && (isQQLikedPlaylistId(pl.id) || Number(pl.dirid || 0) === QQ_LIKED_DIRID)) return true;
-  const name = String(pl && pl.name || pl && pl.diss_name || '').trim();
-  const normalizedName = name.replace(/[·•・_\-\s]+/g, '').toLowerCase();
-  return [
-    '我喜欢',
-    '我的喜欢',
-    '喜欢的音乐',
-    'qq音乐我喜欢',
-    'qq音乐我的喜欢',
-    'qq音乐喜欢的音乐',
-  ].includes(normalizedName);
-}
-
-function isQzoneBackgroundPlaylist(pl) {
-  const text = String((pl && pl.name || '') + ' ' + (pl && pl.creator || '')).toLowerCase();
-  return /qzone|空间|背景音乐/i.test(text);
-}
-async function requireLogin(res) {
-  const info = await getLoginInfo();
-  if (!info.loggedIn || !info.userId) {
-    sendJSON(res, { error: 'LOGIN_REQUIRED', loggedIn: false }, 401);
-    return null;
-  }
-  return info;
-}
-
 // ---------- 业务: 搜索 ----------
 //   优先用 cloudsearch (新接口, 字段更全, picUrl 更稳定)
 //   对于仍然缺失封面的歌曲, 用 song_detail 批量补齐
@@ -2004,7 +1473,7 @@ async function handleSearch(keywords, limit, offset) {
   limit = Math.max(1, Math.min(50, Number(limit) || 20));
   offset = Math.max(0, Number(offset) || 0);
   console.log('[Search]', keywords, 'limit:', limit, 'offset:', offset);
-  const result = await cloudsearch({ keywords, limit, offset, cookie: userCookie });
+  const result = await cloudsearch({ keywords, limit, offset });
   const songs = result.body && result.body.result && result.body.result.songs ? result.body.result.songs : [];
 
   let mapped = songs.map(s => {
@@ -2016,7 +1485,7 @@ async function handleSearch(keywords, limit, offset) {
   if (missing.length) {
     try {
       console.log('[Search] backfilling covers for', missing.length, 'songs');
-      const dd = await song_detail({ ids: missing.join(','), cookie: userCookie });
+      const dd = await song_detail({ ids: missing.join(',') });
       const songsArr = (dd.body && dd.body.songs) || [];
       const idToPic = {};
       songsArr.forEach(s => {
@@ -2287,7 +1756,7 @@ async function findNeteaseSameTrackCandidatesInner(id, hints, lookupDeadline) {
   let searchSongs = [];
   try {
     const searchBudget = Math.min(3000, Math.max(500, deadline - Date.now()));
-    const result = await promiseWithTimeout(cloudsearch({ keywords: query, type: 1, limit: 16, cookie: userCookie }), searchBudget, 'NETEASE_SOURCE_SEARCH_TIMEOUT');
+    const result = await promiseWithTimeout(cloudsearch({ keywords: query, type: 1, limit: 16 }), searchBudget, 'NETEASE_SOURCE_SEARCH_TIMEOUT');
     searchSongs = result.body && result.body.result && Array.isArray(result.body.result.songs) ? result.body.result.songs : [];
   } catch (err) {
     console.warn('[NeteaseSourceMatch] search failed:', err.code || err.message);
@@ -2299,7 +1768,7 @@ async function findNeteaseSameTrackCandidatesInner(id, hints, lookupDeadline) {
   let privileges = [];
   try {
     const detailBudget = Math.min(2000, Math.max(500, deadline - Date.now()));
-    const detail = await promiseWithTimeout(song_detail({ ids: [...new Set(detailIds)].join(','), cookie: userCookie }), detailBudget, 'NETEASE_SOURCE_DETAIL_TIMEOUT');
+    const detail = await promiseWithTimeout(song_detail({ ids: [...new Set(detailIds)].join(',') }), detailBudget, 'NETEASE_SOURCE_DETAIL_TIMEOUT');
     detailSongs = detail.body && Array.isArray(detail.body.songs) ? detail.body.songs : [];
     privileges = detail.body && Array.isArray(detail.body.privileges) ? detail.body.privileges : [];
   } catch (err) {
@@ -2311,7 +1780,7 @@ async function findNeteaseSameTrackCandidatesInner(id, hints, lookupDeadline) {
   const officialRecommendationId = String(sourceDetail && sourceDetail.noCopyrightRcmd && sourceDetail.noCopyrightRcmd.songId || '');
   if (officialRecommendationId && !detailById.has(officialRecommendationId) && !searchById.has(officialRecommendationId) && deadline - Date.now() >= 500) {
     try {
-      const officialDetail = await promiseWithTimeout(song_detail({ ids: officialRecommendationId, cookie: userCookie }), Math.min(1000, Math.max(500, deadline - Date.now())), 'NETEASE_OFFICIAL_MATCH_DETAIL_TIMEOUT');
+      const officialDetail = await promiseWithTimeout(song_detail({ ids: officialRecommendationId }), Math.min(1000, Math.max(500, deadline - Date.now())), 'NETEASE_OFFICIAL_MATCH_DETAIL_TIMEOUT');
       const officialSongs = officialDetail.body && Array.isArray(officialDetail.body.songs) ? officialDetail.body.songs : [];
       const officialPrivileges = officialDetail.body && Array.isArray(officialDetail.body.privileges) ? officialDetail.body.privileges : [];
       officialSongs.forEach(song => detailById.set(String(song && song.id || ''), song));
@@ -2358,7 +1827,7 @@ async function handleNeteaseAlbumDetail(id, limit) {
   const albumId = String(id || '').trim();
   const num = Math.max(10, Math.min(120, parseInt(limit || '80', 10) || 80));
   if (!albumId) return { provider: 'netease', error: 'MISSING_ALBUM_ID', album: null, songs: [] };
-  const result = await album({ id: albumId, cookie: userCookie, timestamp: Date.now() });
+  const result = await album({ id: albumId, timestamp: Date.now() });
   const body = result.body || result || {};
   const info = body.album || body.data && (body.data.album || body.data) || {};
   const rawSongs = Array.isArray(body.songs) ? body.songs : (Array.isArray(info.songs) ? info.songs : []);
@@ -2392,86 +1861,19 @@ function mapDailyRecommendationSongs(raw) {
 }
 
 // Homepage pulls three Netease recommend APIs; cache briefly per cookie fingerprint.
-const DISCOVER_HOME_CACHE_TTL_MS = 3 * 60 * 1000;
-let discoverHomeCache = { key: '', at: 0, payload: null };
-
-function discoverHomeCacheKey() {
-  const cookie = String(userCookie || '').slice(0, 64);
-  return cookie;
-}
-
+// ---------- 首页发现（批 T16d：登录态退役后只回 starter） ----------
 async function handleDiscoverHome() {
-  const cacheKey = discoverHomeCacheKey();
-  if (discoverHomeCache.key === cacheKey
-    && discoverHomeCache.payload
-    && Date.now() - discoverHomeCache.at < DISCOVER_HOME_CACHE_TTL_MS) {
-    return discoverHomeCache.payload;
-  }
-  const info = await getLoginInfo();
-  const loggedIn = !!(info && info.loggedIn);
-  if (!loggedIn) {
-    return {
-      loggedIn: false,
-      user: null,
-      dailySongs: [],
-      dailySongTotal: 0,
-      dailySongsComplete: true,
-      playlists: [],
-      mode: 'starter',
-      updatedAt: Date.now(),
-    };
-  }
-  const tasks = [
-    personalized({ limit: 8, cookie: userCookie, timestamp: Date.now() }),
-    recommend_resource({ cookie: userCookie, timestamp: Date.now() }),
-    recommend_songs({ cookie: userCookie, timestamp: Date.now() }),
-  ];
-  const result = await Promise.allSettled(tasks);
-
-  const personalizedBody = result[0].status === 'fulfilled' && result[0].value && result[0].value.body || {};
-  const publicPlaylists = (personalizedBody.result || personalizedBody.data || [])
-    .map(pl => mapDiscoverPlaylist(pl, '推荐歌单'))
-    .filter(pl => pl.id && pl.name)
-    .slice(0, 8);
-
-  let privatePlaylists = [];
-  if (result[1].status === 'fulfilled' && result[1].value) {
-    const body = result[1].value.body || {};
-    const raw = body.recommend || body.data || [];
-    privatePlaylists = (Array.isArray(raw) ? raw : [])
-      .map(pl => mapDiscoverPlaylist(pl, '私人推荐'))
-      .filter(pl => pl.id && pl.name)
-      .slice(0, 6);
-  }
-
-  let dailySongs = [];
-  if (result[2].status === 'fulfilled' && result[2].value) {
-    const body = result[2].value.body || {};
-    const raw = body.data && (body.data.dailySongs || body.data.recommend) || body.recommend || [];
-    dailySongs = mapDailyRecommendationSongs(raw);
-  }
-
-  const payload = {
-    loggedIn,
-    user: loggedIn ? { userId: info.userId, nickname: info.nickname || '', avatar: info.avatar || '' } : null,
-    dailySongs,
-    dailySongTotal: dailySongs.length,
+  return {
+    loggedIn: false,
+    user: null,
+    dailySongs: [],
+    dailySongTotal: 0,
     dailySongsComplete: true,
-    playlists: privatePlaylists.concat(publicPlaylists).slice(0, 10),
+    playlists: [],
+    mode: 'starter',
     updatedAt: Date.now(),
   };
-  discoverHomeCache = { key: cacheKey, at: Date.now(), payload };
-  return payload;
 }
-
-const QQ_MUSICU_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
-const QQ_SMARTBOX_URL = 'https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg';
-const QQ_HEADERS = {
-  Referer: 'https://y.qq.com/',
-  'User-Agent': UA,
-};
-const QQ_VIP_INFO_CACHE_TTL_MS = 2 * 60 * 1000;
-const qqVipInfoCache = new Map();
 
 const REQUEST_TEXT_MAX_BYTES = 4 * 1024 * 1024;
 const sharedHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8 });
@@ -2840,7 +2242,7 @@ async function fetchWeatherPlaylistSongs(playlist, limit) {
   let rawTracks = [];
   try {
     if (typeof playlist_track_all === 'function') {
-      const all = await playlist_track_all({ id, limit: limit || 36, offset: 0, cookie: userCookie, timestamp: Date.now() });
+      const all = await playlist_track_all({ id, limit: limit || 36, offset: 0, timestamp: Date.now() });
       rawTracks = (all.body && (all.body.songs || all.body.tracks)) || [];
     }
   } catch (e) {
@@ -2848,7 +2250,7 @@ async function fetchWeatherPlaylistSongs(playlist, limit) {
   }
   if (!rawTracks.length && typeof playlist_detail === 'function') {
     try {
-      const detail = await playlist_detail({ id, s: 0, cookie: userCookie, timestamp: Date.now() });
+      const detail = await playlist_detail({ id, s: 0, timestamp: Date.now() });
       const pl = (detail.body && detail.body.playlist) || {};
       rawTracks = pl.tracks || [];
     } catch (e) {
@@ -2901,7 +2303,6 @@ async function fetchAllNeteaseUserPlaylists(uid, maxItems) {
       uid,
       limit: NETEASE_PLAYLIST_SYNC_PAGE_SIZE,
       offset,
-      cookie: userCookie,
       timestamp: Date.now(),
     });
     const body = r.body || r || {};
@@ -2923,7 +2324,6 @@ async function fetchNeteaseUserPlaylistsPage(uid, limit, offset) {
     uid,
     limit,
     offset,
-    cookie: userCookie,
     timestamp: Date.now(),
   });
   const body = r.body || r || {};
@@ -2967,7 +2367,7 @@ function mergeUniqueNeteaseTracks(target, incoming, seen) {
 
 async function fetchNeteasePlaylistDetailMeta(id) {
   if (typeof playlist_detail !== 'function') return { playlistMeta: { id, name: '', cover: '', trackCount: 0 }, tracks: [] };
-  const detail = await playlist_detail({ id, s: 0, cookie: userCookie, timestamp: Date.now() });
+  const detail = await playlist_detail({ id, s: 0, timestamp: Date.now() });
   const pl = (detail.body && detail.body.playlist) || {};
   return { playlistMeta: mapNeteasePlaylistMeta(pl, id), tracks: Array.isArray(pl.tracks) ? pl.tracks : [] };
 }
@@ -3003,7 +2403,7 @@ async function fetchNeteasePlaylistTrackIndex(id) {
   }
   if (neteasePlaylistTrackIndexInflight.has(key)) return neteasePlaylistTrackIndexInflight.get(key);
   const pending = (async () => {
-    const detail = await playlist_detail({ id, s: 0, cookie: userCookie, timestamp: Date.now() });
+    const detail = await playlist_detail({ id, s: 0, timestamp: Date.now() });
     const pl = (detail.body && detail.body.playlist) || {};
     const rawIds = Array.isArray(pl.trackIds) && pl.trackIds.length ? pl.trackIds : (pl.tracks || []);
     const trackIds = rawIds.map(item => item && (item.id || item.songId || item.trackId)).filter(Boolean);
@@ -3046,7 +2446,6 @@ async function fetchAllNeteasePlaylistTracks(id) {
           id,
           limit: NETEASE_TRACK_SYNC_PAGE_SIZE,
           offset,
-          cookie: userCookie,
           timestamp: Date.now(),
         });
         const body = all.body || all || {};
@@ -3085,7 +2484,7 @@ async function fetchNeteasePlaylistTracksPage(id, limit, offset) {
       const pageIds = index.trackIds.slice(offset, offset + limit);
       requestedCount = pageIds.length;
       if (pageIds.length) {
-        const detail = await song_detail({ ids: pageIds.join(','), cookie: userCookie, timestamp: Date.now() });
+        const detail = await song_detail({ ids: pageIds.join(','), timestamp: Date.now() });
         const body = detail.body || detail || {};
         const rows = body.songs || body.tracks || [];
         const byId = new Map(rows.map(track => [String(track && track.id || ''), track]));
@@ -3096,7 +2495,7 @@ async function fetchNeteasePlaylistTracksPage(id, limit, offset) {
     console.warn('[PlaylistTracks] cached track index failed:', id, offset, err.message);
   }
   if (!requestedCount && !rawTracks.length && typeof playlist_track_all === 'function') {
-    const page = await playlist_track_all({ id, limit, offset, cookie: userCookie, timestamp: Date.now() });
+    const page = await playlist_track_all({ id, limit, offset, timestamp: Date.now() });
     const body = page.body || page || {};
     rawTracks = body.songs || body.tracks || [];
     requestedCount = rawTracks.length;
@@ -3134,7 +2533,7 @@ async function filterLikelyPlayableWeatherSongs(songs) {
   for (let i = 0; i < source.length; i += 4) {
     const chunk = source.slice(i, i + 4);
     const settled = await Promise.allSettled(chunk.map(async song => {
-      const info = await handleSongUrl(song.id, { loggedIn: !!userCookie }, 'standard');
+      const info = await handleSongUrl(song.id, { loggedIn: false }, 'standard');
       return info && info.url ? song : null;
     }));
     settled.forEach((result, idx) => {
@@ -3261,310 +2660,14 @@ async function buildWeatherRadio(params) {
   };
 }
 
-function parseJSONText(text) {
-  const raw = String(text || '').trim();
-  const json = raw.replace(/^callback\(([\s\S]*)\);?$/, '$1');
-  return JSON.parse(json);
-}
-
-async function qqMusicRequest(payload, opts) {
-  opts = opts || {};
-  const body = JSON.stringify(payload);
-  const headers = {
-    ...QQ_HEADERS,
-    'Content-Type': 'application/json;charset=UTF-8',
-    'Content-Length': Buffer.byteLength(body),
-  };
-  if (opts.cookie && qqCookie) headers.Cookie = qqCookie;
-  const text = await requestText(QQ_MUSICU_URL, {
-    method: 'POST',
-    headers,
-    timeoutMs: opts.timeoutMs,
-  }, body);
-  return parseJSONText(text);
-}
-
-function qqVipObjectLooksExpired(obj) {
-  return qqVipObjectLooksExpiredStrict(obj);
-}
-
-function normalizeQQVipPayload(payload, fallback) {
-  return normalizeQQVipPayloadStrict(payload, fallback || {});
-}
-
-function withQQVipSyncState(info, probeAvailable) {
-  info = info || {};
-  const authIncomplete = !!(info.loggedIn && !info.playbackKeyReady);
-  const membershipUnknown = !!(info.loggedIn && info.membershipKnown !== true);
-  const stalePositive = !!(info.loggedIn && info.membershipStale && info.isVip);
-  const membershipStale = !!(info.loggedIn && (
-    authIncomplete
-    || membershipUnknown
-    || stalePositive
-    || (info.profileUnavailable && !probeAvailable)
-  ));
-  const normalized = {
-    ...info,
-    membershipStale,
-    authorizationIncomplete: authIncomplete,
-    vipSyncState: authIncomplete
-      ? 'authorization_incomplete'
-      : (stalePositive ? 'stale_positive' : (membershipUnknown ? 'unknown' : (probeAvailable ? 'checked' : (membershipStale ? 'stale' : 'profile')))),
-  };
-  return {
-    ...normalized,
-    membershipRights: qqVipEntitlementRights(normalized),
-  };
-}
-
-function mergeQQVipStatus(info, vip, source) {
-  info = info || {};
-  const profilePositive = !!(
-    info.isVip ||
-    info.isSvip ||
-    info.vipLevel === 'vip' ||
-    info.vipLevel === 'svip' ||
-    Number(info.vipType || 0) > 0 ||
-    Number(info.svipType || 0) > 0
-  );
-  const probeKnown = !!(vip && vip.resolved && vip.membershipKnown !== false);
-  if (!probeKnown) {
-    return withQQVipSyncState({
-      ...info,
-      vipCheckedAt: Date.now(),
-      vipProbeAvailable: false,
-      vipSource: info.vipSource || 'profile',
-    }, false);
-  }
-  // A profile positive only survives an incomplete/conflicting probe. A
-  // current-account negative quorum is authoritative and must downgrade now.
-  if (profilePositive && !vip.isVip && vip.authoritativeNegative !== true) {
-    return withQQVipSyncState({
-      ...info,
-      membershipKnown: true,
-      vipCheckedAt: Date.now(),
-      vipProbeAvailable: true,
-      vipEvidenceConflict: true,
-      vipSource: info.vipSource || 'qq-profile-vip',
-    }, true);
-  }
-  if (info.loggedIn && info.playbackKeyReady === false && !vip.isVip) {
-    return withQQVipSyncState({
-      ...info,
-      vipCheckedAt: Date.now(),
-      vipProbeAvailable: false,
-      vipSource: source || vip.vipSource || info.vipSource || 'qq-vip-probe-untrusted',
-    }, false);
-  }
-  return withQQVipSyncState({
-    ...info,
-    vipType: vip.vipType || 0,
-    svipType: vip.svipType || 0,
-    vipLevel: vip.vipLevel || 'none',
-    isVip: !!vip.isVip,
-    isSvip: !!vip.isSvip,
-    vipLabel: vip.vipLabel || (vip.isVip ? 'VIP' : '无VIP'),
-    membershipKnown: true,
-    membershipStale: !!vip.membershipStale,
-    vipEvidenceConflict: !!vip.vipEvidenceConflict,
-    probeDecision: vip.probeDecision || '',
-    authoritativeNegative: vip.authoritativeNegative === true,
-    probeIncomplete: vip.probeIncomplete === true,
-    negativeProbeCount: Math.max(0, Number(vip.negativeProbeCount) || 0),
-    negativeQuorum: Math.max(0, Number(vip.negativeQuorum) || 0),
-    staleUntil: Number(vip.staleUntil) || 0,
-    expiresAt: Number(vip.expiresAt) || 0,
-    vipCheckedAt: Date.now(),
-    vipProbeAvailable: true,
-    vipSource: source || vip.vipSource || 'qq-vip-probe',
-  }, true);
-}
-
-async function fetchQQVipStatus(cookieObj, opts) {
-  opts = opts || {};
-  cookieObj = cookieObj || qqCookieObject();
-  const uin = qqCookieUin(cookieObj);
-  const musicKey = qqCookiePlaybackKey(cookieObj);
-  if (!uin || !musicKey) return null;
-  const cacheKey = qqVipSessionCacheKey(uin, musicKey, cookieObj);
-  const cached = cacheKey ? qqVipInfoCache.get(cacheKey) : null;
-  if (!opts.force && cached && Date.now() < cached.expiresAt) return cached.value;
-  const comm = { uin, format: 'json', ct: 24, cv: 0 };
-  if (musicKey) comm.authst = musicKey;
-  const probes = [
-    {
-      source: 'qq-vip-query-v2-list',
-      responseKey: 'req_1',
-      uin: String(uin),
-      body: {
-        comm,
-        req_1: {
-          module: 'userInfo.VipQueryServer',
-          method: 'SRFVipQuery_V2',
-          param: { uin_list: [String(uin)] },
-        },
-      },
-    },
-    {
-      source: 'qq-vip-query-v1-list',
-      responseKey: 'req_1',
-      uin: String(uin),
-      body: {
-        comm,
-        req_1: {
-          module: 'userInfo.VipQueryServer',
-          method: 'SRFVipQuery',
-          param: { uin_list: [String(uin)] },
-        },
-      },
-    },
-    {
-      source: 'qq-vip-query-v2-single',
-      responseKey: 'vip',
-      uin: String(uin),
-      body: {
-        comm,
-        vip: {
-          module: 'userInfo.VipQueryServer',
-          method: 'SRFVipQuery_V2',
-          param: { uin: String(uin), uin_list: [String(uin)] },
-        },
-      },
-    },
-  ];
-  const value = await resolveQQVipFromProbes(probes, async probe => {
-    return qqMusicRequest(probe.body, { cookie: true, timeoutMs: 4200 });
-  });
-  const now = Date.now();
-  const stableValue = preserveQQVipStalePositive(cached, value, { now });
-  if (stableValue && stableValue.membershipStale) {
-    return stableValue;
-  }
-  if (value && value.resolved) {
-    const ttlMs = qqVipCacheTtlMs(value, {
-      positiveTtlMs: QQ_VIP_INFO_CACHE_TTL_MS,
-      negativeTtlMs: 30 * 1000,
-    });
-    if (cacheKey && ttlMs > 0) {
-      qqVipInfoCache.set(cacheKey, {
-        expiresAt: now + ttlMs,
-        staleUntil: value.isVip
-          ? Math.min(
-            now + ttlMs + 10 * 60 * 1000,
-            Number(value.expiresAt) > 0 ? Number(value.expiresAt) : Number.MAX_SAFE_INTEGER
-          )
-          : 0,
-        value,
-      });
-    }
-    return value;
-  }
-  if (opts.force && value && value.errorCount) {
-    console.warn('[QQLogin] VIP probe incomplete:', value.errorCount + '/' + probes.length);
-  }
-  return null;
-}
-
-function normalizeQQProfile(body, cookieObj) {
-  cookieObj = cookieObj || qqCookieObject();
-  const uin = qqCookieUin(cookieObj);
-  const data = (body && (body.data || body.profile || body.creator || body.result)) || {};
-  const creator = (data.creator || data.user || data.profile || data) || {};
-  const vipInfo = data.vipInfo || data.vipinfo || data.vip || creator.vipInfo || creator.vipinfo || {};
-  const profileNick = decodeQQCookieValue(creator.nick || creator.nickname || creator.name || creator.hostname || creator.title || '');
-  const profileAvatar = creator.headpic || creator.avatar || creator.avatarUrl || creator.logo || '';
-  const cookieNick = qqCookieNickname(cookieObj, uin);
-  const nick = profileNick || cookieNick || '';
-  const avatar = profileAvatar || qqCookieAvatar(cookieObj, uin);
-  // Cookie labels may survive a membership downgrade, so only current
-  // official profile fields are allowed to become profile membership proof.
-  const profileVip = normalizeQQVipPayload({ data, creator, vipInfo }, {});
-  return {
-    provider: 'qq',
-    loggedIn: !!(uin && qqCookieMusicKey(cookieObj)),
-    preview: false,
-    userId: uin,
-    nickname: nick || (uin ? ('QQ ' + uin) : 'QQ 音乐'),
-    avatar,
-    vipType: profileVip.vipType || 0,
-    svipType: profileVip.svipType || 0,
-    vipLevel: profileVip.vipLevel || 'none',
-    isVip: !!profileVip.isVip,
-    isSvip: !!profileVip.isSvip,
-    vipLabel: profileVip.vipLabel || '无VIP',
-    membershipKnown: !!profileVip.membershipKnown,
-    expiresAt: Number(profileVip.expiresAt) || 0,
-    hasCookie: !!qqCookie,
-    playbackKeyReady: !!qqCookiePlaybackKey(cookieObj),
-    profileSource: profileNick || profileAvatar ? 'qq-profile' : (cookieNick || avatar ? 'cookie' : 'fallback'),
-    vipSource: profileVip.resolved ? 'qq-profile-vip' : 'profile',
-  };
-}
-
-async function getQQLoginInfo(options) {
-  options = options || {};
-  if (options.forceCookie) refreshQQConfiguredCookieStore(true);
-  const cookieObj = qqCookieObject();
-  const uin = qqCookieUin(cookieObj);
-  const musicKey = qqCookieMusicKey(cookieObj);
-  if (!uin || !musicKey) return { provider: 'qq', loggedIn: false, hasCookie: !!qqCookie };
-  const fallback = normalizeQQProfile(null, cookieObj);
-  const vipProbePromise = fetchQQVipStatus(cookieObj, { force: !!options.forceVip }).catch(e => {
-    if (options.forceVip) console.warn('[QQLogin] VIP probe skipped:', e.message);
-    return null;
-  });
-  try {
-    const u = new URL('https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg');
-    u.searchParams.set('cid', '205360838');
-    u.searchParams.set('userid', uin);
-    u.searchParams.set('reqfrom', '1');
-    u.searchParams.set('g_tk', '5381');
-    u.searchParams.set('loginUin', uin);
-    u.searchParams.set('hostUin', '0');
-    u.searchParams.set('format', 'json');
-    u.searchParams.set('inCharset', 'utf8');
-    u.searchParams.set('outCharset', 'utf-8');
-    u.searchParams.set('notice', '0');
-    u.searchParams.set('platform', 'yqq.json');
-    u.searchParams.set('needNewCode', '0');
-    const text = await requestText(u.toString(), {
-      headers: { ...QQ_HEADERS, Cookie: qqCookie },
-      timeoutMs: options.forceVip ? 6500 : 10000,
-    });
-    const body = parseJSONText(text);
-    const info = normalizeQQProfile(body, cookieObj);
-    const vipProbe = await vipProbePromise;
-    if (body && (body.code === 1000 || body.result === 301)) {
-      return mergeQQVipStatus({ ...fallback, profileUnavailable: true }, vipProbe, vipProbe && vipProbe.vipSource);
-    }
-    return mergeQQVipStatus(info, vipProbe, vipProbe && vipProbe.vipSource);
-  } catch (e) {
-    console.warn('[QQLogin] profile check failed:', e.message);
-    const vipProbe = await vipProbePromise;
-    return mergeQQVipStatus({ ...fallback, profileUnavailable: true }, vipProbe, vipProbe && vipProbe.vipSource);
-  }
-}
-
-async function qqGetJSON(targetUrl, params, opts) {
-  opts = opts || {};
-  const u = new URL(targetUrl);
-  Object.keys(params || {}).forEach(k => {
-    if (params[k] != null) u.searchParams.set(k, String(params[k]));
-  });
-  const headers = { ...QQ_HEADERS, ...(opts.headers || {}) };
-  if (opts.cookie !== false && qqCookie) headers.Cookie = qqCookie;
-  const text = await requestText(u.toString(), { headers });
-  return parseJSONText(text);
-}
-
 function audioProxyHeadersFor(audioUrl, range) {
   const headers = { 'User-Agent': UA, Referer: 'https://music.163.com/' };
   try {
     const host = new URL(audioUrl).hostname.toLowerCase();
     if (host.includes('qq.com') || host.includes('qpic.cn')) headers.Referer = 'https://y.qq.com/';
     if (host.includes('qishui.com') || host.includes('byteimg.com') || host.includes('douyin')) headers.Referer = 'https://www.qishui.com/';
-    const kugouReferer = kugouAudioReferer(audioUrl);
-    if (kugouReferer) headers.Referer = kugouReferer;
+    // Kugou 播放页 Referer（原 kugou-api.kugouAudioReferer 内联，见缺口台账）
+    if (host.includes('kugou.com')) headers.Referer = 'https://www.kugou.com/';
   } catch (e) {}
   if (range) headers.Range = range;
   return headers;
@@ -3615,137 +2718,6 @@ function mergeAudioProxyRequestHeaders(base, overrides) {
   return out;
 }
 
-function qishuiAudioAuthFromUrl(audioUrl) {
-  const text = String(audioUrl || '');
-  const idx = text.indexOf('#auth=');
-  if (idx < 0) return { cleanUrl: text, auth: '' };
-  const authRaw = text.slice(idx + 6);
-  let auth = authRaw;
-  try { auth = decodeURIComponent(authRaw); } catch (_) {}
-  return { cleanUrl: text.slice(0, idx), auth };
-}
-
-function qishuiAudioCacheKey(cleanUrl, auth) {
-  return crypto.createHash('sha1').update(String(cleanUrl || '') + '\n' + String(auth || '')).digest('hex');
-}
-
-function rememberQishuiDecryptedAudio(key, payload) {
-  if (!payload || !Buffer.isBuffer(payload.buffer)) return;
-  // Oversized tracks stay playable but are not pinned in the process heap.
-  if (payload.buffer.length > QISHUI_AUDIO_DECRYPT_SKIP_CACHE_BYTES) return;
-  const existing = qishuiAudioDecryptCache.get(key);
-  if (existing && existing.buffer) {
-    qishuiAudioDecryptCacheBytes -= existing.buffer.length;
-    qishuiAudioDecryptCache.delete(key);
-  }
-  qishuiAudioDecryptCache.set(key, Object.assign({ at: Date.now() }, payload));
-  qishuiAudioDecryptCacheBytes += payload.buffer.length;
-  while (qishuiAudioDecryptCacheBytes > QISHUI_AUDIO_DECRYPT_CACHE_MAX_BYTES && qishuiAudioDecryptCache.size > 1) {
-    let oldestKey = null;
-    let oldestAt = Infinity;
-    for (const [k, v] of qishuiAudioDecryptCache) {
-      const at = Number(v && v.at) || 0;
-      if (at < oldestAt) {
-        oldestAt = at;
-        oldestKey = k;
-      }
-    }
-    if (!oldestKey) break;
-    const oldest = qishuiAudioDecryptCache.get(oldestKey);
-    qishuiAudioDecryptCache.delete(oldestKey);
-    if (oldest && oldest.buffer) qishuiAudioDecryptCacheBytes -= oldest.buffer.length;
-  }
-  if (qishuiAudioDecryptCacheBytes < 0) qishuiAudioDecryptCacheBytes = 0;
-}
-
-async function getQishuiDecryptedAudio(audioUrl) {
-  const decryptor = ensureQishuiAudioDecryptor(); // B2 缺件降级：返回 null，调用方走普通代理
-  if (!decryptor) return null;
-  const parsed = qishuiAudioAuthFromUrl(audioUrl);
-  if (!parsed.auth) return null;
-  const key = qishuiAudioCacheKey(parsed.cleanUrl, parsed.auth);
-  const cached = qishuiAudioDecryptCache.get(key);
-  if (cached) {
-    cached.at = Date.now();
-    return cached;
-  }
-  if (qishuiAudioDecryptInflight.has(key)) return qishuiAudioDecryptInflight.get(key);
-
-  const work = (async () => {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 20000);
-      let up;
-      try {
-        up = await fetch(parsed.cleanUrl, {
-          headers: audioProxyHeadersFor(parsed.cleanUrl, ''),
-          signal: ctrl.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-      if (!up.ok) throw new Error('Qishui encrypted audio fetch failed: HTTP ' + up.status);
-      const declared = Number(up.headers.get('content-length') || 0);
-      if (declared > QISHUI_AUDIO_DECRYPT_MAX_SOURCE_BYTES) {
-        throw new Error('Qishui encrypted audio too large: ' + declared + ' bytes');
-      }
-      const encryptedBuffer = Buffer.from(await up.arrayBuffer());
-      if (encryptedBuffer.length > QISHUI_AUDIO_DECRYPT_MAX_SOURCE_BYTES) {
-        throw new Error('Qishui encrypted audio too large: ' + encryptedBuffer.length + ' bytes');
-      }
-      const result = decryptor.decrypt({ encryptedBuffer, spadeA: parsed.auth });
-      // Drop the ciphertext as soon as plaintext is ready when they are distinct buffers.
-      if (result.buffer !== encryptedBuffer) {
-        encryptedBuffer.fill?.(0);
-      }
-      const payload = {
-        buffer: result.buffer,
-        contentType: result.extension === '.flac' ? 'audio/flac' : 'audio/mp4',
-        extension: result.extension,
-      };
-      rememberQishuiDecryptedAudio(key, payload);
-      return payload;
-    } finally {
-      if (qishuiAudioDecryptInflight.get(key) === work) qishuiAudioDecryptInflight.delete(key);
-    }
-  })();
-
-  qishuiAudioDecryptInflight.set(key, work);
-  return work;
-}
-
-function sendAudioBuffer(res, buffer, contentType, range) {
-  const total = buffer.length;
-  const match = /^bytes=(\d*)-(\d*)$/i.exec(String(range || ''));
-  if (match) {
-    let start = match[1] ? Number(match[1]) : 0;
-    let end = match[2] ? Number(match[2]) : total - 1;
-    if (!Number.isFinite(start) || start < 0) start = 0;
-    if (!Number.isFinite(end) || end >= total) end = total - 1;
-    if (start > end || start >= total) {
-      res.writeHead(416, { 'Content-Range': 'bytes */' + total });
-      res.end();
-      return;
-    }
-    res.writeHead(206, {
-      'Content-Type': contentType || 'audio/mp4',
-      ...(res._cors || {}),
-      'Accept-Ranges': 'bytes',
-      'Content-Length': end - start + 1,
-      'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
-    });
-    res.end(buffer.subarray(start, end + 1));
-    return;
-  }
-  res.writeHead(200, {
-    'Content-Type': contentType || 'audio/mp4',
-    ...(res._cors || {}),
-    'Accept-Ranges': 'bytes',
-    'Content-Length': total,
-  });
-  res.end(buffer);
-}
-
 function audioContentTypeForUrl(audioUrl, upstreamType) {
   let pathname = '';
   try { pathname = new URL(audioUrl).pathname.toLowerCase(); } catch (e) {}
@@ -3757,996 +2729,30 @@ function audioContentTypeForUrl(audioUrl, upstreamType) {
   return upstreamType || 'audio/mpeg';
 }
 
-function mapQQPlaylist(pl, kind) {
-  pl = pl || {};
-  const dirid = pl.dirid || pl.dir_id || '';
-  const liked = Number(dirid || 0) === QQ_LIKED_DIRID || isQQFavoritePlaylist(pl);
-  const id = liked ? QQ_LIKED_PLAYLIST_ID : (pl.dissid || pl.tid || dirid || pl.id || pl.diss_id);
-  const rawName = pl.diss_name || pl.name || pl.title || '';
-  return {
-    provider: 'qq',
-    source: 'qq',
-    id: id ? String(id) : '',
-    dirid: dirid ? String(dirid) : '',
-    virtual: liked,
-    name: liked ? QQ_LIKED_PLAYLIST_NAME : (decodeQQCookieValue(rawName) || rawName),
-    cover: liked ? QQ_LIKED_PLAYLIST_COVER : (pl.diss_cover || pl.logo || pl.picurl || pl.cover || ''),
-    trackCount: pl.song_cnt || pl.songnum || pl.total_song_num || pl.song_count || 0,
-    playCount: pl.listen_num || pl.visitnum || pl.play_count || 0,
-    creator: pl.hostname || pl.nick || pl.creator || 'QQ 音乐',
-    subscribed: kind === 'collect',
-    specialType: liked ? 5 : 0,
-    requiresPlaybackKey: false,
-  };
-}
-
-function mapQQPlaylistTrack(raw) {
-  raw = raw || {};
-  const track = raw.songid || raw.songmid || raw.mid || raw.name ? raw : (raw.track_info || raw.songInfo || raw.songinfo || raw.song || {});
-  const album = track.album || {};
-  const artists = mapQQArtists(track.singer || track.singers || []);
-  const mid = track.mid || track.songmid || raw.mid || raw.songmid || '';
-  const albumMid = album.mid || track.albummid || raw.albummid || '';
-  return {
-    provider: 'qq',
-    source: 'qq',
-    type: 'qq',
-    id: mid || String(track.id || track.songid || raw.id || raw.songid || ''),
-    qqId: track.id || track.songid || raw.id || raw.songid || '',
-    mid,
-    songmid: mid,
-    mediaMid: (track.file && track.file.media_mid) || track.strMediaMid || track.media_mid || raw.strMediaMid || '',
-    name: track.name || track.songname || raw.songname || '',
-    artist: artists.map(a => a.name).join(' / ') || track.singername || raw.singername || '',
-    artists,
-    artistId: artists[0] && (artists[0].id || artists[0].mid),
-    artistMid: artists[0] && artists[0].mid,
-    album: album.name || album.title || track.albumname || raw.albumname || '',
-    albumMid,
-    cover: qqAlbumCover(albumMid, 300),
-    duration: (Number(track.interval || raw.interval) || 0) * 1000,
-    fee: track.pay && Number(track.pay.pay_play) ? 1 : 0,
-    playable: false,
-  };
-}
-
-const QQ_PLAYLIST_SYNC_PAGE_SIZE = 200;
-const QQ_PLAYLIST_SYNC_MAX_PAGES = 25;
-
-async function fetchQQCreatedPlaylists(uin) {
-  const out = [];
-  for (let page = 0; page < QQ_PLAYLIST_SYNC_MAX_PAGES; page += 1) {
-    const sin = page * QQ_PLAYLIST_SYNC_PAGE_SIZE;
-    const body = await qqGetJSON('https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss', {
-      hostUin: 0,
-      hostuin: uin,
-      sin,
-      size: QQ_PLAYLIST_SYNC_PAGE_SIZE,
-      g_tk: 5381,
-      loginUin: uin,
-      format: 'json',
-      inCharset: 'utf8',
-      outCharset: 'utf-8',
-      notice: 0,
-      platform: 'yqq.json',
-      needNewCode: 0,
-    }, { headers: { Referer: 'https://y.qq.com/portal/profile.html' } });
-    const rows = body && body.data && Array.isArray(body.data.disslist) ? body.data.disslist : [];
-    out.push.apply(out, rows);
-    if (rows.length < QQ_PLAYLIST_SYNC_PAGE_SIZE) break;
-  }
-  return out;
-}
-
-async function fetchQQCollectedPlaylists(uin) {
-  const out = [];
-  for (let page = 0; page < QQ_PLAYLIST_SYNC_MAX_PAGES; page += 1) {
-    const sin = page * QQ_PLAYLIST_SYNC_PAGE_SIZE;
-    const body = await qqGetJSON('https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg', {
-      ct: 20,
-      cid: 205360956,
-      userid: uin,
-      reqtype: 3,
-      sin,
-      ein: sin + QQ_PLAYLIST_SYNC_PAGE_SIZE - 1,
-    }, { headers: { Referer: 'https://y.qq.com/portal/profile.html' } });
-    const rows = body && body.data && Array.isArray(body.data.cdlist) ? body.data.cdlist : [];
-    out.push.apply(out, rows);
-    if (rows.length < QQ_PLAYLIST_SYNC_PAGE_SIZE) break;
-  }
-  return out;
-}
-
-async function fetchQQLikedPlaylistPage(opts) {
-  opts = opts || {};
-  const limit = Math.max(1, Math.min(100, parseInt(opts.limit || '48', 10) || 48));
-  const offset = Math.max(0, parseInt(opts.offset || '0', 10) || 0);
-  const body = await qqMusicRequest({
-    comm: { ct: 24, cv: 0 },
-    req_0: {
-      module: 'music.srfDissInfo.DissInfo',
-      method: 'CgiGetDiss',
-      param: {
-        disstid: 0,
-        dirid: QQ_LIKED_DIRID,
-        tag: 1,
-        song_begin: offset,
-        song_num: limit,
-        userinfo: 1,
-        orderlist: 1,
-      },
-    },
-  }, { cookie: true, timeoutMs: 10000 });
-  const block = body && body.req_0;
-  const data = block && block.data || {};
-  const code = Number(body && body.code) || Number(block && block.code) || Number(data.code) || Number(data.subcode) || 0;
-  if (!block || code !== 0) {
-    const err = new Error('QQ_LIKED_SYNC_FAILED_' + code);
-    err.code = [1000, 10004, 104003, 301, -100008].includes(code)
-      ? 'QQ_LIKED_REQUIRES_PLAYBACK_LOGIN'
-      : 'QQ_LIKED_SYNC_FAILED';
-    err.qqCode = code;
-    throw err;
-  }
-  const rawTracks = Array.isArray(data.songlist) ? data.songlist : [];
-  const tracks = rawTracks.map(mapQQPlaylistTrack).filter(song => song.name && (song.mid || song.id));
-  const pageSpan = Math.max(Number(data.songlist_size) || 0, rawTracks.length);
-  const upstreamTotal = Math.max(0, Number(data.total_song_num) || 0);
-  const total = upstreamTotal || offset + pageSpan;
-  const nextOffset = offset + pageSpan;
-  return {
-    tracks,
-    total,
-    offset,
-    limit,
-    pageSpan,
-    nextOffset,
-    hasMore: !!Number(data.hasmore) || nextOffset < total,
-    dirinfo: data.dirinfo || {},
-  };
-}
-
-function buildQQLikedPlaylistCard(info, likedPage, warning) {
-  const tracks = likedPage && likedPage.tracks || [];
-  const firstTrack = tracks[0] || null;
-  const pageOffset = Math.max(0, Number(likedPage && likedPage.offset) || 0);
-  if (likedPage && pageOffset === 0) rememberQQLikedPlaylistCover(info, firstTrack && firstTrack.cover);
-  const stableCover = getCachedQQLikedPlaylistCover(info);
-  const count = Number(likedPage && likedPage.total) || tracks.length || 0;
-  return {
-    provider: 'qq',
-    source: 'qq',
-    id: QQ_LIKED_PLAYLIST_ID,
-    dirid: String(QQ_LIKED_DIRID),
-    virtual: true,
-    name: QQ_LIKED_PLAYLIST_NAME,
-    cover: stableCover || (pageOffset === 0 && firstTrack && firstTrack.cover) || QQ_LIKED_PLAYLIST_COVER,
-    trackCount: count,
-    playCount: 0,
-    creator: info && (info.nickname || info.userId) || 'QQ 音乐',
-    subscribed: false,
-    specialType: 5,
-    requiresPlaybackKey: warning === 'QQ_LIKED_REQUIRES_PLAYBACK_LOGIN',
-    warning: warning || '',
-  };
-}
-
-async function getQQLikedPlaylistCard(info) {
-  if (!info || !info.playbackKeyReady) {
-    return buildQQLikedPlaylistCard(info, null, 'QQ_LIKED_REQUIRES_PLAYBACK_LOGIN');
-  }
-  try {
-    const likedPage = await fetchQQLikedPlaylistPage({ limit: 1, offset: 0 });
-    return buildQQLikedPlaylistCard(info, likedPage, '');
-  } catch (err) {
-    return buildQQLikedPlaylistCard(info, null, err.code || err.message || 'QQ_LIKED_UNAVAILABLE');
-  }
-}
-
-async function handleQQLikedPlaylistTracks(info, opts) {
-  const pageLimit = Math.max(0, Math.min(500, parseInt(opts && opts.limit || '0', 10) || 0));
-  const pageOffset = Math.max(0, parseInt(opts && opts.offset || '0', 10) || 0);
-  if (!info || !info.playbackKeyReady) {
-    return {
-      loggedIn: true,
-      provider: 'qq',
-      playlist: buildQQLikedPlaylistCard(info, null, 'QQ_LIKED_REQUIRES_PLAYBACK_LOGIN'),
-      tracks: [],
-      error: 'QQ_LIKED_REQUIRES_PLAYBACK_LOGIN',
-      message: QQ_LIKED_AUTH_MESSAGE,
-      requiresPlaybackKey: true,
-    };
-  }
-  let likedPage = null;
-  const coverWarmup = pageOffset > 0 && !getCachedQQLikedPlaylistCover(info)
-    ? getQQLikedPlaylistCard(info)
-    : null;
-  try {
-    likedPage = await fetchQQLikedPlaylistPage({ limit: pageLimit || 48, offset: pageOffset });
-    if (coverWarmup) await coverWarmup;
-  } catch (err) {
-    const requiresPlaybackKey = err && err.code === 'QQ_LIKED_REQUIRES_PLAYBACK_LOGIN';
-    return {
-      loggedIn: true,
-      provider: 'qq',
-      playlist: buildQQLikedPlaylistCard(info, null, err.code || err.message || 'QQ_LIKED_UNAVAILABLE'),
-      tracks: [],
-      error: err.code || err.message || 'QQ_LIKED_UNAVAILABLE',
-      message: requiresPlaybackKey ? QQ_LIKED_AUTH_MESSAGE : 'QQ 音乐“我的喜欢”同步失败，请稍后刷新重试。',
-      requiresPlaybackKey,
-    };
-  }
-  return {
-    loggedIn: true,
-    provider: 'qq',
-    playlist: buildQQLikedPlaylistCard(info, likedPage, ''),
-    tracks: likedPage.tracks,
-    total: likedPage.total,
-    offset: pageOffset,
-    limit: likedPage.limit,
-    nextOffset: likedPage.nextOffset,
-    hasMore: likedPage.hasMore,
-    partial: !!pageLimit,
-  };
-}
-
-async function handleQQUserPlaylists() {
-  const info = await getQQLoginInfo();
-  if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'qq', playlists: [] };
-  const uin = info.userId;
-  const createdReq = fetchQQCreatedPlaylists(uin);
-  const collectReq = fetchQQCollectedPlaylists(uin);
-  const likedReq = getQQLikedPlaylistCard(info);
-  const [createdRaw, collectRaw, likedRaw] = await Promise.allSettled([createdReq, collectReq, likedReq]);
-  const created = createdRaw.status === 'fulfilled' && Array.isArray(createdRaw.value)
-    ? createdRaw.value.map(pl => mapQQPlaylist(pl, 'created')) : [];
-  const collected = collectRaw.status === 'fulfilled' && Array.isArray(collectRaw.value)
-    ? collectRaw.value.map(pl => mapQQPlaylist(pl, 'collect')) : [];
-  const likedCard = likedRaw.status === 'fulfilled' ? likedRaw.value : buildQQLikedPlaylistCard(info, null, 'QQ_LIKED_UNAVAILABLE');
-  const seen = new Set();
-  const base = created.concat(collected).filter(pl => !isQQFavoritePlaylist(pl));
-  base.unshift(likedCard);
-  const playlists = base.filter(pl => {
-    if (!pl.id || !pl.name || seen.has(pl.id)) return false;
-    if (isQzoneBackgroundPlaylist(pl)) return false;
-    seen.add(pl.id);
-    return true;
-  }).sort((a, b) => Number(isQQFavoritePlaylist(b)) - Number(isQQFavoritePlaylist(a)));
-  return { loggedIn: true, provider: 'qq', userId: uin, playlists };
-}
-
-async function handleQQPlaylistTracks(id, opts) {
-  opts = opts || {};
-  const info = await getQQLoginInfo();
-  if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'qq', tracks: [] };
-  const pid = String(id || '').trim();
-  if (!pid) return { loggedIn: true, provider: 'qq', error: 'Missing QQ playlist id', tracks: [] };
-  if (isQQLikedPlaylistId(pid)) return handleQQLikedPlaylistTracks(info, opts);
-  const pageLimit = Math.max(0, Math.min(500, parseInt(opts.limit || '0', 10) || 0));
-  const pageOffset = Math.max(0, parseInt(opts.offset || '0', 10) || 0);
-  const result = await qqGetJSON('https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg', {
-    type: 1,
-    utf8: 1,
-    disstid: pid,
-    song_begin: pageOffset,
-    song_num: pageLimit || undefined,
-    loginUin: info.userId,
-    format: 'json',
-    inCharset: 'utf8',
-    outCharset: 'utf-8',
-    notice: 0,
-    platform: 'yqq.json',
-    needNewCode: 0,
-  }, { headers: { Referer: 'https://y.qq.com/n/yqq/playlist' } });
-  const detail = result && result.cdlist && result.cdlist[0] ? result.cdlist[0] : {};
-  let rawTracks = Array.isArray(detail.songlist) ? detail.songlist : [];
-  const totalHint = Number(detail.total_song_num || detail.songnum || detail.song_cnt || detail.song_count || 0) || 0;
-  if (pageLimit && rawTracks.length > pageLimit) {
-    rawTracks = totalHint && rawTracks.length < totalHint
-      ? rawTracks.slice(0, pageLimit)
-      : rawTracks.slice(pageOffset, pageOffset + pageLimit);
-  }
-  const tracks = rawTracks.map(mapQQPlaylistTrack).filter(s => s.name && (s.mid || s.id));
-  const total = totalHint || tracks.length;
-  const playlist = {
-    provider: 'qq',
-    id: pid,
-    name: detail.dissname || detail.diss_name || detail.name || '',
-    cover: detail.logo || detail.diss_cover || '',
-    trackCount: total,
-  };
-  return {
-    loggedIn: true,
-    provider: 'qq',
-    playlist,
-    tracks,
-    offset: pageOffset,
-    limit: pageLimit || tracks.length,
-    nextOffset: pageOffset + tracks.length,
-    hasMore: pageLimit ? (pageOffset + tracks.length < total || tracks.length >= pageLimit) : false,
-    partial: !!pageLimit,
-    total,
-  };
-}
-
-function qqAlbumCover(albumMid, size) {
-  if (!albumMid) return '';
-  const px = size || 300;
-  return 'https://y.qq.com/music/photo_new/T002R' + px + 'x' + px + 'M000' + albumMid + '.jpg?max_age=2592000';
-}
-
-function qqSingerAvatar(singerMid, size) {
-  if (!singerMid) return '';
-  const px = size || 300;
-  return 'https://y.qq.com/music/photo_new/T001R' + px + 'x' + px + 'M000' + singerMid + '.jpg?max_age=2592000';
-}
-
-function mapQQArtists(raw) {
-  return (raw || [])
-    .map(a => ({
-      id: a && a.id,
-      mid: a && a.mid,
-      name: (a && (a.name || a.title)) || '',
-    }))
-    .filter(a => a.name);
-}
-
-function mapQQSmartSong(item) {
-  item = item || {};
-  const mid = item.mid || item.songmid || item.id || '';
-  return {
-    provider: 'qq',
-    source: 'qq',
-    type: 'qq',
-    id: mid,
-    qqId: item.id || item.docid || '',
-    mid,
-    songmid: mid,
-    name: item.name || item.title || '',
-    artist: item.singer || '',
-    artists: item.singer ? [{ name: item.singer }] : [],
-    album: '',
-    cover: '',
-    duration: 0,
-    fee: 0,
-    playable: false,
-  };
-}
-
-function mapQQTrack(track, fallback) {
-  track = track || {};
-  fallback = fallback || {};
-  const album = track.album || {};
-  const artists = mapQQArtists(track.singer || []);
-  const mid = track.mid || fallback.mid || fallback.songmid || '';
-  const albumMid = album.mid || album.pmid || '';
-  return {
-    provider: 'qq',
-    source: 'qq',
-    type: 'qq',
-    id: mid,
-    qqId: track.id || fallback.qqId || fallback.id || '',
-    mid,
-    songmid: mid,
-    mediaMid: track.file && track.file.media_mid,
-    name: track.name || track.title || fallback.name || '',
-    artist: artists.map(a => a.name).join(' / ') || fallback.artist || '',
-    artists: artists.length ? artists : (fallback.artists || []),
-    artistId: artists[0] && (artists[0].id || artists[0].mid),
-    artistMid: artists[0] && artists[0].mid,
-    album: album.name || album.title || fallback.album || '',
-    albumMid,
-    cover: qqAlbumCover(albumMid, 300) || fallback.cover || '',
-    duration: (Number(track.interval) || 0) * 1000,
-    fee: track.pay && Number(track.pay.pay_play) ? 1 : 0,
-    playable: false,
-  };
-}
-
-async function qqSmartboxSearch(keywords, limit) {
-  const u = new URL(QQ_SMARTBOX_URL);
-  u.searchParams.set('format', 'json');
-  u.searchParams.set('key', keywords);
-  u.searchParams.set('g_tk', '5381');
-  u.searchParams.set('loginUin', '0');
-  u.searchParams.set('hostUin', '0');
-  u.searchParams.set('inCharset', 'utf8');
-  u.searchParams.set('outCharset', 'utf-8');
-  u.searchParams.set('notice', '0');
-  u.searchParams.set('platform', 'yqq.json');
-  u.searchParams.set('needNewCode', '0');
-  const text = await requestText(u.toString(), { headers: QQ_HEADERS });
-  const json = parseJSONText(text);
-  const items = json && json.data && json.data.song && json.data.song.itemlist;
-  return (Array.isArray(items) ? items : []).slice(0, Math.max(1, Math.min(limit || 6, 10))).map(mapQQSmartSong);
-}
-
-function qqSearchSign(text) {
-  const hash = crypto.createHash('sha1').update(text).digest('hex');
-  const part1 = [23, 14, 6, 36, 16, 40, 7, 19].map(index => hash[index]).join('');
-  const part2 = [16, 1, 32, 12, 19, 27, 8, 5].map(index => hash[index]).join('');
-  const scramble = [89, 39, 179, 150, 218, 82, 58, 252, 177, 52, 186, 123, 120, 64, 242, 133, 143, 161, 121, 179];
-  const bytes = scramble.map((value, index) => value ^ parseInt(hash.slice(index * 2, index * 2 + 2), 16));
-  const middle = Buffer.from(bytes).toString('base64').replace(/[\\/+=]/g, '');
-  return `zzc${part1}${middle}${part2}`.toLowerCase();
-}
-
-async function qqFullSongSearch(keywords, limit, offset) {
-  limit = Math.max(1, Math.min(30, Number(limit) || 12));
-  offset = Math.max(0, Number(offset) || 0);
-  const pageNumber = Math.floor(offset / limit) + 1;
-  const payload = {
-    comm: {
-      ct: '11', cv: '14090508', v: '14090508', tmeAppID: 'qqmusic',
-      phonetype: 'EBG-AN10', os_ver: '12', OpenUDID: '0', QIMEI36: '0',
-      udid: '0', chid: '0', aid: '0', oaid: '0', taid: '0', tid: '0',
-      wid: '0', uid: '0', sid: '0', modeSwitch: '6', teenMode: '0',
-      ui_mode: '2', nettype: '1020',
-    },
-    req: {
-      module: 'music.search.SearchCgiService',
-      method: 'DoSearchForQQMusicMobile',
-      param: {
-        search_type: 0,
-        searchid: String(Date.now()) + String(Math.random()).slice(2, 8),
-        query: keywords,
-        page_num: pageNumber,
-        num_per_page: limit,
-        highlight: 0,
-        nqc_flag: 0,
-        multi_zhida: 0,
-        cat: 2,
-        grp: 1,
-        sin: offset,
-        sem: 0,
-      },
-    },
-  };
-  const bodyText = JSON.stringify(payload);
-  const json = await requestJson(
-    'https://u.y.qq.com/cgi-bin/musics.fcg?sign=' + qqSearchSign(bodyText),
-    {
-      method: 'POST',
-      timeoutMs: 10000,
-      headers: {
-        'User-Agent': 'QQMusic 14090508(android 12)',
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(bodyText),
-      },
-    },
-    bodyText
-  );
-  const data = json && json.req && json.req.data;
-  const body = data && (data.body || data);
-  const items = body && (body.item_song || body.song && body.song.list || body.list);
-  return (Array.isArray(items) ? items : [])
-    .map(item => mapQQTrack(item && (item.track_info || item.songInfo || item.songinfo || item.song) || item, {}))
-    .filter(song => song && song.name && (song.mid || song.id));
-}
-
-async function qqSongDetail(mid, fallback) {
-  if (!mid) return fallback;
-  const json = await qqMusicRequest({
-    comm: { ct: 24, cv: 0 },
-    songinfo: {
-      module: 'music.pf_song_detail_svr',
-      method: 'get_song_detail_yqq',
-      param: { song_mid: mid },
-    },
-  });
-  const data = json && json.songinfo && json.songinfo.data;
-  return mapQQTrack(data && data.track_info, fallback);
-}
-
-async function handleQQArtistDetail(mid, limit) {
-  const singerMid = String(mid || '').trim();
-  const num = Math.max(10, Math.min(80, parseInt(limit || '36', 10) || 36));
-  if (!singerMid) return { provider: 'qq', error: 'MISSING_SINGER_MID', artist: null, songs: [] };
-  const json = await qqMusicRequest({
-    comm: { ct: 24, cv: 0 },
-    singer: {
-      module: 'music.web_singer_info_svr',
-      method: 'get_singer_detail_info',
-      param: { sort: 5, singermid: singerMid, sin: 0, num },
-    },
-  }, { cookie: true });
-  const block = json && json.singer;
-  if (!block || Number(block.code || 0) !== 0) {
-    return { provider: 'qq', error: block && (block.message || block.msg || block.code) || 'QQ_ARTIST_DETAIL_FAILED', artist: null, songs: [] };
-  }
-  const data = block.data || {};
-  const info = data.singer_info || data.singerInfo || {};
-  const rawSongs = Array.isArray(data.songlist) ? data.songlist : [];
-  const songs = rawSongs
-    .map(raw => mapQQTrack(raw && (raw.track_info || raw.songInfo || raw.songinfo || raw.song) || raw, {}))
-    .filter(song => song && song.name && (song.mid || song.id));
-  const matchedSongArtist = songs[0] && (songs[0].artists || []).find(a => a && a.mid === singerMid);
-  const artistMid = info.mid || singerMid;
-  const artistName = info.name || info.title || (matchedSongArtist && matchedSongArtist.name) || '';
-  const totalSong = Number(data.total_song || data.song_count || 0) || songs.length;
-  return {
-    provider: 'qq',
-    artist: {
-      provider: 'qq',
-      id: info.id || '',
-      mid: artistMid,
-      name: artistName,
-      avatar: info.pic || info.avatar || qqSingerAvatar(artistMid, 300),
-      fans: Number(info.fans || 0) || 0,
-      musicSize: totalSong,
-      albumSize: Number(data.total_album || 0) || 0,
-      mvSize: Number(data.total_mv || 0) || 0,
-    },
-    total: totalSong,
-    songs,
-  };
-}
-
-async function handleQQAlbumDetail(mid, limit) {
-  const albumMid = String(mid || '').trim();
-  const num = Math.max(10, Math.min(120, parseInt(limit || '80', 10) || 80));
-  if (!albumMid) return { provider: 'qq', error: 'MISSING_ALBUM_MID', album: null, songs: [] };
-  const body = await qqGetJSON('https://c.y.qq.com/v8/fcg-bin/fcg_v8_album_info_cp.fcg', {
-    albummid: albumMid,
-    g_tk: 5381,
-    loginUin: '0',
-    hostUin: '0',
-    format: 'json',
-    inCharset: 'utf8',
-    outCharset: 'utf-8',
-    notice: 0,
-    platform: 'yqq.json',
-    needNewCode: 0,
-  }, { headers: { Referer: 'https://y.qq.com/n/ryqq/albumDetail/' + encodeURIComponent(albumMid) } });
-  const data = body && body.data || {};
-  const rawSongs = Array.isArray(data.list) ? data.list : (Array.isArray(data.songlist) ? data.songlist : []);
-  const songs = rawSongs
-    .slice(0, num)
-    .map(raw => {
-      const song = mapQQPlaylistTrack(Object.assign({}, raw, {
-        albummid: raw.albummid || albumMid,
-        albumname: raw.albumname || data.name || data.title || data.albumname || '',
-      }));
-      if (song && !song.cover) song.cover = qqAlbumCover(albumMid, 300);
-      if (song && !song.albumMid) song.albumMid = albumMid;
-      return song;
-    })
-    .filter(song => song && song.name && (song.mid || song.id));
-  const singerName = data.singername || data.singerName || data.singer_name || (songs[0] && songs[0].artist) || '';
-  return {
-    provider: 'qq',
-    album: {
-      provider: 'qq',
-      mid: albumMid,
-      albumMid,
-      id: data.id || data.albumid || '',
-      name: data.name || data.title || data.albumname || '',
-      artist: singerName,
-      cover: qqAlbumCover(albumMid, 300),
-      releaseDate: data.aDate || data.publictime || data.pub_time || '',
-      trackCount: Number(data.total_song_num || data.total || data.songnum || rawSongs.length) || songs.length,
-    },
-    songs,
-    total: Number(data.total_song_num || data.total || data.songnum || rawSongs.length) || songs.length,
-  };
-}
-
-async function handleQQSearch(keywords, limit, offset) {
-  const kw = String(keywords || '').trim();
-  if (!kw) return [];
-  limit = Math.max(1, Math.min(30, Number(limit) || 12));
-  offset = Math.max(0, Number(offset) || 0);
-  console.log('[QQSearch]', kw, 'limit:', limit, 'offset:', offset);
-  let base = [];
-  try {
-    base = await qqFullSongSearch(kw, limit, offset);
-  } catch (err) {
-    console.warn('[QQSearch] full search failed:', err.message);
-  }
-  if (!base.length && offset === 0) base = await qqSmartboxSearch(kw, limit);
-  const detailed = await Promise.all(base.map(async item => {
-    try { return await qqSongDetail(item.mid, item); }
-    catch (e) {
-      console.warn('[QQSearch] detail failed:', item.mid, e.message);
-      return item;
-    }
-  }));
-  const seen = new Set();
-  return detailed.filter(song => {
-    const key = song && (song.mid || song.id || (song.name + '|' + song.artist));
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return !!song.name;
-  });
-}
-
-function truthyQQPlaybackHint(value) {
-  const text = String(value == null ? '' : value).trim().toLowerCase();
-  return value === true || text === '1' || text === 'true' || text === 'yes' || text === 'vip';
-}
-
-function qqPlaybackMemberHints(hints) {
-  hints = hints || {};
-  const fee = Number(hints.fee || hints.Fee || 0) || 0;
-  const privilege = Number(hints.privilege || hints.Privilege || hints.mediaPrivilege || hints.media_privilege || 0) || 0;
-  return !!(
-    truthyQQPlaybackHint(hints.vipRequired) ||
-    truthyQQPlaybackHint(hints.needVip) ||
-    truthyQQPlaybackHint(hints.onlyVipPlayable) ||
-    truthyQQPlaybackHint(hints.only_vip_playable) ||
-    fee > 0 ||
-    privilege >= 9
-  );
-}
-
-// Keep the complete vkey + media verification path below the renderer's
-// 15-second QQ request deadline (6.0s + 6.2s, with ~2.8s response margin).
-const QQ_VKEY_REQUEST_TIMEOUT_MS = 6000;
-const QQ_AUDIO_PROBE_TOTAL_MS = 6200;
-const QQ_AUDIO_PROBE_ATTEMPT_MS = 2000;
-const AUDIO_URL_PROBE_BYTES = 8192;
-function audioProbeMagic(buffer) {
-  if (!buffer || !buffer.length) return '';
-  if (buffer.length >= 3 && buffer.subarray(0, 3).toString('ascii') === 'ID3') return 'mp3-id3';
-  if (buffer.length >= 4 && buffer.subarray(0, 4).toString('ascii') === 'fLaC') return 'flac';
-  if (buffer.length >= 4 && buffer.subarray(0, 4).toString('ascii') === 'OggS') return 'ogg';
-  if (buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WAVE') return 'wave';
-  if (buffer.length >= 12 && buffer.subarray(4, 8).toString('ascii') === 'ftyp') return 'mp4';
-  const scan = Math.min(buffer.length - 1, 2048);
-  for (let i = 0; i < scan; i++) {
-    if (buffer[i] === 0xff && (buffer[i + 1] & 0xe0) === 0xe0) return 'mpeg-frame';
-  }
-  return '';
-}
-async function probePlaybackAudioUrl(audioUrl, timeoutMs) {
-  try {
-    const probeStartedAt = Date.now();
-    const probeBudgetMs = Math.max(800, Number(timeoutMs) || QQ_AUDIO_PROBE_ATTEMPT_MS);
-    const resp = await fetchWithTimeout(audioUrl, {
-      headers: audioProxyHeadersFor(audioUrl, 'bytes=0-' + (AUDIO_URL_PROBE_BYTES - 1)),
-    }, probeBudgetMs);
-    const status = Number(resp.status) || 0;
-    const contentType = String(resp.headers.get('content-type') || '').toLowerCase();
-    const chunks = [];
-    let bytes = 0;
-    if (resp.body && (status === 200 || status === 206)) {
-      const reader = resp.body.getReader();
-      const deadline = probeStartedAt + probeBudgetMs;
-      try {
-        while (bytes < AUDIO_URL_PROBE_BYTES && Date.now() < deadline) {
-          const chunk = await readStreamChunkWithTimeout(reader, Math.max(50, deadline - Date.now()));
-          if (chunk.done) break;
-          const buf = Buffer.from(chunk.value || []);
-          if (!buf.length) continue;
-          chunks.push(buf);
-          bytes += buf.length;
-        }
-      } finally {
-        try { await reader.cancel(); } catch (_) {}
-      }
-    } else {
-      try { if (resp.body && typeof resp.body.cancel === 'function') await resp.body.cancel(); } catch (_) {}
-    }
-    const sample = chunks.length ? Buffer.concat(chunks, bytes).subarray(0, AUDIO_URL_PROBE_BYTES) : Buffer.alloc(0);
-    const magic = audioProbeMagic(sample);
-    const contentLooksText = /text\/html|application\/(json|xml)|text\/plain/.test(contentType);
-    return {
-      ok: (status === 200 || status === 206) && sample.length >= 512 && !contentLooksText && !!magic,
-      status,
-      bytes: sample.length,
-      contentType,
-      magic,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      status: 0,
-      reason: err && err.name === 'AbortError' ? 'timeout' : 'network',
-    };
-  }
-}
-async function probeQQAudioUrl(audioUrl, timeoutMs) {
-  return probePlaybackAudioUrl(audioUrl, timeoutMs || QQ_AUDIO_PROBE_ATTEMPT_MS);
-}
-
-async function handleQQSongUrl(mid, mediaMid, qualityPreference, playbackHints) {
-  const songmid = String(mid || '').trim();
-  if (!songmid) return { provider: 'qq', url: '', error: 'MISSING_MID', message: 'Missing QQ song mid' };
-  const cookieObj = qqCookieObject();
-  const uin = qqCookieUin(cookieObj) || '0';
-  const playbackKey = qqCookiePlaybackKey(cookieObj);
-  const qualityKey = String(qualityPreference && typeof qualityPreference === 'object'
-    ? JSON.stringify(qualityPreference)
-    : (qualityPreference || 'auto'));
-  const cacheKey = songmid + '|' + String(mediaMid || '') + '|' + qualityKey + '|' + uin + '|' + String(playbackKey || '').slice(0, 32);
-  return qqSongUrlCache.wrap(cacheKey, 60 * 1000, () =>
-    handleQQSongUrlInner(mid, mediaMid, qualityPreference, playbackHints));
-}
-
-async function handleQQSongUrlInner(mid, mediaMid, qualityPreference, playbackHints) {
-  const songmid = String(mid || '').trim();
-  if (!songmid) return { provider: 'qq', url: '', error: 'MISSING_MID', message: 'Missing QQ song mid' };
-  const guid = String(10000000 + Math.floor(Math.random() * 90000000));
-  const cookieObj = qqCookieObject();
-  const uin = qqCookieUin(cookieObj) || '0';
-  const playbackKey = qqCookiePlaybackKey(cookieObj);
-  const musicKey = playbackKey;
-  const fileMediaMid = String(mediaMid || '').trim();
-  const requestedQuality = normalizeQualityPreference(qualityPreference);
-  const memberTrackHint = qqPlaybackMemberHints(playbackHints);
-  const hasQQPlaybackSession = !!(uin && uin !== '0' && musicKey);
-  const mediaIds = [];
-  if (fileMediaMid) mediaIds.push(fileMediaMid);
-  if (songmid && !mediaIds.includes(songmid)) mediaIds.push(songmid);
-  const fileCandidates = mediaIds.flatMap(mediaId =>
-    qualityCandidatesFrom(requestedQuality, QQ_QUALITY_CANDIDATE_TEMPLATES)
-      .map(item => ({ ...item, mediaId, filename: item.prefix + mediaId + item.ext }))
-  );
-  const filenames = fileCandidates.map(item => item.filename);
-  const param = {
-    guid,
-    songmid: filenames.length ? filenames.map(() => songmid) : [songmid],
-    songtype: filenames.length ? filenames.map(() => 0) : [0],
-    uin,
-    loginflag: 1,
-    platform: '20',
-  };
-  if (filenames.length) param.filename = filenames;
-  const comm = { uin, format: 'json', ct: musicKey ? 19 : 24, cv: 0 };
-  if (musicKey) comm.authst = musicKey;
-  const json = await qqMusicRequest({
-    comm,
-    req_0: {
-      module: 'vkey.GetVkeyServer',
-      method: 'CgiGetVkey',
-      param,
-    },
-  }, { cookie: true, timeoutMs: QQ_VKEY_REQUEST_TIMEOUT_MS });
-  const data = json && json.req_0 && json.req_0.data;
-  const infos = (data && Array.isArray(data.midurlinfo)) ? data.midurlinfo : [];
-  const purlInfos = infos.filter(item => item && item.purl);
-  const sips = (data && Array.isArray(data.sip) && data.sip.length ? data.sip : ['https://ws.stream.qqmusic.qq.com/']).filter(Boolean);
-  const probeDeadline = Date.now() + QQ_AUDIO_PROBE_TOTAL_MS;
-  const probeFailures = [];
-  let playableInfo = null;
-  let playableUrl = '';
-  for (let infoIndex = 0; infoIndex < purlInfos.length && !playableUrl; infoIndex++) {
-    const candidateInfo = purlInfos[infoIndex];
-    for (let sipIndex = 0; sipIndex < sips.length && !playableUrl; sipIndex++) {
-      const remainingMs = probeDeadline - Date.now();
-      if (remainingMs < 300) break;
-      const candidateUrl = String(sips[sipIndex] || '') + String(candidateInfo.purl || '');
-      const probe = await probeQQAudioUrl(candidateUrl, Math.min(QQ_AUDIO_PROBE_ATTEMPT_MS, remainingMs));
-      if (probe.ok) {
-        playableInfo = candidateInfo;
-        playableUrl = candidateUrl;
-        break;
-      }
-      const probeMeta = fileCandidates.find(item => item.filename === candidateInfo.filename) || {};
-      probeFailures.push((probeMeta.label || candidateInfo.filename || 'unknown') + ':' + (probe.status || probe.reason || 'failed'));
-    }
-  }
-  const info = playableInfo || purlInfos[0] || infos[0];
-  if (playableUrl && playableInfo) {
-    const info = playableInfo;
-    const fileMeta = fileCandidates.find(item => item.filename === info.filename) || {};
-    return {
-      provider: 'qq',
-      url: playableUrl,
-      trial: false,
-      playable: true,
-      playbackReady: true,
-      loggedIn: hasQQPlaybackSession,
-      userId: hasQQPlaybackSession ? uin : '',
-      playbackKeyReady: !!(uin && playbackKey),
-      vipRequired: memberTrackHint,
-      level: fileMeta.level || info.filename || '',
-      quality: fileMeta.label || info.filename || '',
-      filename: info.filename || '',
-      probeFailures: probeFailures.slice(0, 12),
-      requestedQuality,
-    };
-  }
-  const restriction = classifyQQPlaybackRestriction(info, {
-    hasSession: !!(uin && musicKey),
-    hasPlaybackKey: !!(uin && playbackKey),
-  });
-  return {
-    provider: 'qq',
-    url: '',
-    playable: false,
-    error: 'QQ_URL_UNAVAILABLE',
-    loggedIn: hasQQPlaybackSession,
-    playbackKeyReady: !!(uin && playbackKey),
-    userId: hasQQPlaybackSession ? uin : '',
-    vipRequired: memberTrackHint,
-    restriction,
-    reason: restriction.category,
-    message: restriction.message,
-    qqCode: info && (info.result || info.code || info.errtype),
-    rawMessage: info && (info.msg || info.tips || info.errmsg || ''),
-    tried: fileCandidates.map(item => item.label + ' · ' + item.filename),
-    probeFailures: probeFailures.slice(0, 12),
-    requestedQuality,
-  };
-}
-
-function mapQQComment(raw) {
-  raw = raw || {};
-  const user = raw.user || raw.uin || {};
-  const nickname = raw.nick || raw.nickname || raw.encrypt_uin || user.nick || user.nickname || user.name || 'QQ 音乐用户';
-  const avatar = raw.avatarurl || raw.avatar || user.avatarurl || user.avatar || '';
-  const timeRaw = Number(raw.time || raw.commenttime || raw.createTime || 0) || 0;
-  return {
-    id: raw.commentid || raw.commentId || raw.id || '',
-    content: raw.rootcommentcontent || raw.content || raw.comment || '',
-    likedCount: Number(raw.praisenum || raw.praise_num || raw.likedCount || 0) || 0,
-    time: timeRaw && timeRaw < 10000000000 ? timeRaw * 1000 : timeRaw,
-    user: {
-      id: raw.encrypt_uin || raw.uin || user.uin || '',
-      nickname,
-      avatar,
-    },
-  };
-}
-
-async function handleQQSongComments(id, mid, limit, offset) {
-  let topid = String(id || '').replace(/\D/g, '');
-  if (!topid && mid) {
-    try {
-      const detail = await qqSongDetail(mid, { mid });
-      topid = String((detail && (detail.qqId || detail.id)) || '').replace(/\D/g, '');
-    } catch (e) {
-      console.warn('[QQComments] detail fallback failed:', e.message);
-    }
-  }
-  if (!topid) return { provider: 'qq', error: 'Missing QQ song id', comments: [] };
-  const page = Math.max(0, Math.floor((offset || 0) / Math.max(1, limit || 20)));
-  const uin = qqCookieUin() || '0';
-  const body = await qqGetJSON('https://c.y.qq.com/base/fcgi-bin/fcg_global_comment_h5.fcg', {
-    g_tk: '5381',
-    loginUin: uin,
-    hostUin: '0',
-    format: 'json',
-    inCharset: 'utf8',
-    outCharset: 'utf-8',
-    notice: '0',
-    platform: 'yqq.json',
-    needNewCode: '0',
-    cid: '205360772',
-    reqtype: '2',
-    biztype: '1',
-    topid,
-    cmd: '8',
-    needmusiccrit: '0',
-    pagenum: String(page),
-    pagesize: String(limit || 20),
-  }, { headers: { Referer: 'https://y.qq.com/n/ryqq/songDetail/' + encodeURIComponent(mid || topid) } });
-  const hotList = body && body.hot_comment && body.hot_comment.commentlist;
-  const normalList = body && body.comment && body.comment.commentlist;
-  const raw = (offset === 0 && Array.isArray(hotList) && hotList.length) ? hotList : (normalList || []);
-  const comments = (raw || []).map(mapQQComment).filter(c => c.content);
-  const total = Number(body && body.comment && (body.comment.commenttotal || body.comment.comment_total)) || comments.length;
-  return { provider: 'qq', id: topid, total, comments, hot: !!(offset === 0 && Array.isArray(hotList) && hotList.length) };
-}
-
-function decodeHtmlEntities(text) {
-  return String(text || '')
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&nbsp;/g, ' ');
-}
-
-function decodeQQLyricText(text) {
-  let raw = decodeHtmlEntities(String(text || '').trim());
-  if (!raw) return '';
-  const compact = raw.replace(/\s+/g, '');
-  const looksBase64 = compact.length >= 8 && compact.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact);
-  if (looksBase64 && !/^\s*\[/.test(raw)) {
-    try {
-      const decoded = Buffer.from(compact, 'base64').toString('utf8').replace(/^\uFEFF/, '');
-      if (decoded && (decoded.includes('[') || /[\u4e00-\u9fa5]/.test(decoded))) raw = decoded;
-    } catch (e) {
-      console.warn('[QQLyric] base64 decode failed:', e.message);
-    }
-  }
-  return decodeHtmlEntities(raw).replace(/\r\n/g, '\n').trim();
-}
-
-function normalizeQQSongId(id) {
-  const n = String(id || '').replace(/\D/g, '');
-  return n ? Number(n) : 0;
-}
-
-async function handleQQLyric(mid, id) {
-  const songMID = String(mid || '').trim();
-  const songID = normalizeQQSongId(id);
-  if (!songMID && !songID) return { provider: 'qq', error: 'Missing QQ song mid or id', lyric: '' };
-
-  let lyricText = '';
-  let transText = '';
-  let qrcText = '';
-  let romaText = '';
-  let source = 'qq-musicu';
-
-  try {
-    const param = {};
-    if (songMID) param.songMID = songMID;
-    if (songID) param.songID = songID;
-    const json = await qqMusicRequest({
-      comm: { ct: 24, cv: 0 },
-      lyric: {
-        module: 'music.musichallSong.PlayLyricInfo',
-        method: 'GetPlayLyricInfo',
-        param,
-      },
-    }, { cookie: true });
-    const data = json && json.lyric && json.lyric.data;
-    lyricText = decodeQQLyricText(data && data.lyric);
-    transText = decodeQQLyricText(data && data.trans);
-    qrcText = decodeQQLyricText(data && data.qrc);
-    romaText = decodeQQLyricText(data && data.roma);
-  } catch (e) {
-    console.warn('[QQLyric] musicu failed:', e.message);
-  }
-
-  if (!lyricText && songMID) {
-    try {
-      const body = await qqGetJSON('https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg', {
-        songmid: songMID,
-        songtype: '0',
-        format: 'json',
-        nobase64: '1',
-        g_tk: '5381',
-        loginUin: qqCookieUin() || '0',
-        hostUin: '0',
-        inCharset: 'utf8',
-        outCharset: 'utf-8',
-        notice: '0',
-        platform: 'yqq.json',
-        needNewCode: '0',
-      }, { headers: { Referer: 'https://y.qq.com/portal/player.html' } });
-      lyricText = decodeQQLyricText(body && body.lyric);
-      transText = decodeQQLyricText(body && (body.trans || body.tlyric)) || transText;
-      source = 'qq-legacy';
-    } catch (e) {
-      console.warn('[QQLyric] legacy failed:', e.message);
-    }
-  }
-
-  return {
-    provider: 'qq',
-    id: songID || '',
-    mid: songMID,
-    lyric: lyricText,
-    tlyric: transText,
-    yrc: '',
-    qrc: qrcText,
-    roma: romaText,
-    source: lyricText ? source : 'qq-empty',
-  };
-}
-
 //   返回 { url, trial, level, br }
 //   trial=true 表示这是试听片段 (freeTrialInfo 非空)
+// 批 T16d：/api/song/url 保留为无凭证公开端点（本地歌联网匹配重试仍在用）。
+const ANONYMOUS_PLAYBACK_LOGIN = Object.freeze({
+  loggedIn: false,
+  hasCookie: false,
+  vipType: 0,
+  vipLevel: 'none',
+  isVip: false,
+  isSvip: false,
+  vipLabel: '无VIP',
+});
 async function resolveNeteaseDirectSongUrl(id, loginInfo, qualityPreference) {
   const songId = String(id || '').trim();
   if (!songId) return resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference);
   const qualityKey = String(qualityPreference && typeof qualityPreference === 'object'
     ? JSON.stringify(qualityPreference)
     : (qualityPreference || 'auto'));
-  const cookieKey = String(userCookie || '').slice(0, 64);
-  const cacheKey = songId + '|' + qualityKey + '|' + cookieKey;
+  const cacheKey = songId + '|' + qualityKey;
   return neteaseSongUrlCache.wrap(cacheKey, 3 * 60 * 1000, () =>
     resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference));
 }
 async function resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference) {
-  console.log('[SongUrl] id:', id, 'logged-in:', !!userCookie);
+  console.log('[SongUrl] id:', id);
   const resolveDeadline = Date.now() + NETEASE_DIRECT_RESOLVE_BUDGET_MS;
   const requestedQuality = normalizeQualityPreference(qualityPreference);
   const svipReady = hasNeteaseSvip(loginInfo);
@@ -4766,7 +2772,7 @@ async function resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference
       let result;
       try {
         result = await promiseWithTimeout(
-          song_url_v1({ id, level: q.level, cookie: userCookie }),
+          song_url_v1({ id, level: q.level }),
           Math.min(2600, Math.max(500, resolveDeadline - Date.now())),
           'NETEASE_DIRECT_URL_TIMEOUT'
         );
@@ -4774,7 +2780,7 @@ async function resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference
         lastError = e;
         if (resolveDeadline - Date.now() < 500) throw e;
         result = await promiseWithTimeout(
-          song_url({ id, br: q.br, cookie: userCookie }),
+          song_url({ id, br: q.br }),
           Math.min(2200, Math.max(500, resolveDeadline - Date.now())),
           'NETEASE_LEGACY_URL_TIMEOUT'
         );
@@ -4959,227 +2965,6 @@ async function handleSongUrl(id, loginInfo, qualityPreference, matchHints) {
   };
 }
 
-// ---------- 业务: 登录态/用户信息 ----------
-function readCookieFromResponse(resp) {
-  const candidates = [
-    resp && resp.cookie,
-    resp && resp.body && resp.body.cookie,
-    resp && resp.body && resp.body.data && resp.body.data.cookie,
-    resp && resp.body && resp.body.data && resp.body.data.cookies,
-  ];
-  for (const candidate of candidates) {
-    const cookie = normalizeCookieHeader(candidate);
-    if (cookie) return cookie;
-  }
-  return '';
-}
-function firstPositiveNumberFrom(objects, keys) {
-  for (const obj of objects) {
-    if (!obj || typeof obj !== 'object') continue;
-    for (const key of keys) {
-      const value = Number(obj[key]);
-      if (Number.isFinite(value) && value > 0) return value;
-    }
-  }
-  return 0;
-}
-function collectStringValues(value, out, depth) {
-  if (depth > 4 || value == null) return out;
-  if (typeof value === 'string') {
-    if (value) out.push(value);
-    return out;
-  }
-  if (Array.isArray(value)) {
-    value.forEach(item => collectStringValues(item, out, depth + 1));
-    return out;
-  }
-  if (typeof value === 'object') {
-    Object.keys(value).forEach(key => collectStringValues(value[key], out, depth + 1));
-  }
-  return out;
-}
-function collectVipStringValues(value, out, depth) {
-  if (depth > 4 || value == null) return out;
-  if (Array.isArray(value)) {
-    value.forEach(item => collectVipStringValues(item, out, depth + 1));
-    return out;
-  }
-  if (typeof value !== 'object') return out;
-  Object.keys(value).forEach(key => {
-    const child = value[key];
-    if (/vip|svip|member|associator|privilege|right|level|package|label|title|type/i.test(key)) {
-      collectStringValues(child, out, depth + 1);
-    } else if (child && typeof child === 'object') {
-      collectVipStringValues(child, out, depth + 1);
-    }
-  });
-  return out;
-}
-const neteaseVipInfoCache = new Map();
-function activeNeteaseVipPackage(pkg) {
-  if (!pkg || typeof pkg !== 'object') return false;
-  const expire = Number(pkg.expireTime || pkg.expire_time || pkg.expire || pkg.endTime || 0) || 0;
-  if (expire && expire < Date.now()) return false;
-  return firstPositiveNumberFrom([pkg], ['vipLevel', 'vip_level', 'level', 'vipType', 'vip_type', 'vipCode', 'vip_code', 'status']) > 0;
-}
-async function fetchNeteaseVipInfo(userId) {
-  userId = String(userId || '').trim();
-  if (!userId || !userCookie) return null;
-  const cached = neteaseVipInfoCache.get(userId);
-  if (cached && Date.now() - cached.at < 5 * 60 * 1000) return cached.value;
-  let body = null;
-  try {
-    const r = await vip_info_v2({ uid: userId, cookie: userCookie, timestamp: Date.now() });
-    body = r && r.body ? r.body : r;
-  } catch (e) {
-    try {
-      const r = await vip_info({ uid: userId, cookie: userCookie, timestamp: Date.now() });
-      body = r && r.body ? r.body : r;
-    } catch (err) {
-      console.warn('[Login] vip_info failed:', err.message);
-    }
-  }
-  if (body) neteaseVipInfoCache.set(userId, { at: Date.now(), value: body });
-  return body;
-}
-function normalizeNeteaseVip(profile, account, extra) {
-  profile = profile || {};
-  account = account || {};
-  extra = extra || {};
-  const vipInfo = profile.vipInfo || profile.vipinfo || account.vipInfo || account.vipinfo || extra.vipInfo || extra.vipinfo || {};
-  const vipExtra = extra.vipExtra || extra.vip_info || extra.vipInfoV2 || {};
-  const vipData = vipExtra.data || vipExtra;
-  const objects = [account, profile, vipInfo, extra, vipData];
-  const vipType = firstPositiveNumberFrom(objects, [
-    'vipType', 'vip_type', 'viptype', 'musicVipType', 'music_vip_type',
-    'musicVipLevel', 'music_vip_level', 'redVipLevel', 'red_vip_level',
-    'blackVipLevel', 'black_vip_level', 'luxuryVipLevel', 'luxury_vip_level',
-  ]);
-  const text = collectVipStringValues({ account, profile, vipInfo, extra, vipData }, [], 0).join(' ').toLowerCase();
-  const redplus = vipData.redplus || vipData.redPlus || vipInfo.redplus || vipInfo.redPlus || extra.redplus || extra.redPlus;
-  const associator = vipData.associator || vipInfo.associator || extra.associator;
-  const musicPackage = vipData.musicPackage || vipData.music_package || vipInfo.musicPackage || vipInfo.music_package || extra.musicPackage || extra.music_package;
-  const svipType = firstPositiveNumberFrom(objects, [
-    'svipType', 'svip_type', 'superVipLevel', 'super_vip_level', 'superVipType', 'super_vip_type',
-  ]);
-  const svipFlag = objects.some(obj => obj && (
-    obj.isSvip === true || obj.is_svip === true || obj.svip === true ||
-    Number(obj.isSvip || obj.is_svip || obj.svip || obj.svipType || obj.svip_type || obj.superVipLevel || obj.super_vip_level || 0) > 0
-  )) || /svip|supervip|super_vip|黑胶svip|超级会员/.test(text);
-  const vipFlag = objects.some(obj => obj && (
-    obj.isVip === true || obj.is_vip === true || obj.vip === true ||
-    Number(obj.isVip || obj.is_vip || obj.vip || obj.vipFlag || obj.vipflag || 0) > 0
-  )) || /vip|黑胶|会员/.test(text);
-  const svipResolved = svipFlag || svipType > 0 || activeNeteaseVipPackage(redplus);
-  const vipResolved = vipFlag || activeNeteaseVipPackage(associator) || activeNeteaseVipPackage(musicPackage);
-  const isSvip = svipResolved;
-  const isVip = isSvip || vipResolved || vipType > 0;
-  const vipLevel = isSvip ? 'svip' : (isVip ? 'vip' : 'none');
-  return {
-    vipType,
-    vipLevel,
-    isVip,
-    isSvip,
-    vipLabel: vipLevel === 'svip' ? 'SVIP' : (vipLevel === 'vip' ? 'VIP' : '无VIP'),
-  };
-}
-function normalizeLoginInfo(profile, account, extra) {
-  profile = profile || {};
-  account = account || {};
-  const userId = profile.userId || profile.user_id || profile.id || account.userId || account.id || '';
-  if (!(userId || userId === 0)) return { loggedIn: false };
-  const vip = normalizeNeteaseVip(profile, account, extra);
-  return {
-    loggedIn: true,
-    userId,
-    nickname: profile.nickname || profile.userName || '网易云用户',
-    avatar: profile.avatarUrl || profile.avatar || '',
-    ...vip,
-  };
-}
-async function enrichNeteaseLoginInfo(info, profile, account, extra) {
-  if (!info || !info.loggedIn || !info.userId) return info;
-  let vipExtra = null;
-  try {
-    vipExtra = await promiseWithTimeout(fetchNeteaseVipInfo(info.userId), 1800, 'NETEASE_VIP_INFO_TIMEOUT');
-  } catch (err) {
-    console.warn('[Login] vip info timeout:', err.code || err.message);
-  }
-  if (!vipExtra) return info;
-  const vip = normalizeNeteaseVip(profile, account, { ...(extra || {}), vipExtra });
-  return { ...info, ...vip };
-}
-function isNeteaseAuthInvalidPayload(payload) {
-  const code = normalizeApiCode(payload);
-  if (code === 301 || code === 401) return true;
-  const msg = normalizeApiMessage(payload);
-  return /未登录|需要登录|请先登录|login/i.test(msg) && code >= 300;
-}
-async function fetchNeteaseLoginInfo() {
-  if (!userCookie) return { loggedIn: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP' };
-
-  // login_status 对二维码 cookie 的资料刷新通常更及时；失败时再降级到 user_account。
-  try {
-    const st = await promiseWithTimeout(login_status({ cookie: userCookie, timestamp: Date.now() }), 2400, 'NETEASE_LOGIN_STATUS_TIMEOUT');
-    const body = st.body || {};
-    const data = body.data || body;
-    const profile = data.profile || body.profile;
-    const account = data.account || body.account;
-    const info = normalizeLoginInfo(profile, account, data);
-    if (info.loggedIn) return await enrichNeteaseLoginInfo(info, profile, account, data);
-  } catch (e) {
-    console.warn('[Login] login_status failed:', e.message);
-  }
-
-  try {
-    const acc = await promiseWithTimeout(user_account({ cookie: userCookie, timestamp: Date.now() }), 2400, 'NETEASE_ACCOUNT_STATUS_TIMEOUT');
-    const body = acc.body || {};
-    const info = normalizeLoginInfo(body.profile, body.account, body);
-    if (info.loggedIn) return await enrichNeteaseLoginInfo(info, body.profile, body.account, body);
-    if (isNeteaseAuthInvalidPayload(acc)) saveCookie('');
-    return { loggedIn: false, hasCookie: !!userCookie, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP' };
-  } catch (e) {
-    console.warn('[Login] account check failed:', e.message);
-    return { loggedIn: false, hasCookie: !!userCookie, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP' };
-  }
-}
-const NETEASE_LOGIN_INFO_CACHE_TTL_MS = 30 * 1000;
-let neteaseLoginInfoCache = { cookie: '', at: 0, value: null, promise: null };
-function clearNeteaseLoginInfoCache() {
-  neteaseLoginInfoCache = { cookie: '', at: 0, value: null, promise: null };
-}
-async function getLoginInfo() {
-  if (!userCookie) return { loggedIn: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP' };
-  const cookieKey = userCookie;
-  if (neteaseLoginInfoCache.cookie === cookieKey && neteaseLoginInfoCache.value && Date.now() - neteaseLoginInfoCache.at < NETEASE_LOGIN_INFO_CACHE_TTL_MS) {
-    return neteaseLoginInfoCache.value;
-  }
-  if (neteaseLoginInfoCache.cookie === cookieKey && neteaseLoginInfoCache.promise) return neteaseLoginInfoCache.promise;
-  const request = fetchNeteaseLoginInfo().then(info => {
-    // 只端正结果：负缓存会把刚恢复的登录态挡在 30s 外，堵死 pendingProfile 自愈窗口
-    if (info.loggedIn && userCookie === cookieKey) {
-      neteaseLoginInfoCache.cookie = cookieKey;
-      neteaseLoginInfoCache.at = Date.now();
-      neteaseLoginInfoCache.value = info;
-    }
-    return info;
-  }).finally(() => {
-    if (neteaseLoginInfoCache.cookie === cookieKey) neteaseLoginInfoCache.promise = null;
-  });
-  neteaseLoginInfoCache.cookie = cookieKey;
-  neteaseLoginInfoCache.promise = request;
-  return request;
-}
-async function getPlaybackLoginInfo() {
-  try {
-    return await promiseWithTimeout(getLoginInfo(), 800, 'NETEASE_PLAYBACK_LOGIN_INFO_TIMEOUT');
-  } catch (err) {
-    const stale = neteaseLoginInfoCache.cookie === userCookie && neteaseLoginInfoCache.value;
-    if (stale) return stale;
-    return { loggedIn: !!userCookie, hasCookie: !!userCookie, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP', statusPending: true };
-  }
-}
-
 function normalizeListenReportProvider(value) {
   value = String(value || '').trim().toLowerCase();
   if (value === 'qq' || value === 'kugou' || value === 'qishui' || value === 'spotify') return value;
@@ -5230,101 +3015,58 @@ function validateListenReport(body) {
   };
 }
 
-async function handlePlatformListenReport(body) {
+async function handleLocalListenReport(body) {
   const report = validateListenReport(body);
-  const base = {
+  return {
     provider: report.provider || 'unknown',
     songId: report.songId,
     sessionId: report.sessionId,
     listenMs: report.listenMs,
     durationMs: report.durationMs,
     eligible: report.eligible,
+    accepted: true,
     localRecorded: true,
     platformSubmitted: false,
     historySynced: false,
     accountDurationSync: 'unsupported',
   };
-  if (!report.eligible) {
-    return Object.assign(base, {
-      accepted: false,
-      reason: 'LISTEN_REPORT_NOT_ELIGIBLE',
-      requiredMs: report.requiredMs,
-    });
-  }
-
-  let credential = '';
-  if (report.provider === 'netease') credential = userCookie;
-  else if (report.provider === 'qishui') credential = qishuiCookie;
-  const journalKey = listenSyncJournalKey(report.provider, credential, report.sessionId);
-  const previous = listenSyncJournal.entries[journalKey];
-  if (previous) {
-    return Object.assign(base, previous, {
-      accepted: true,
-      duplicate: true,
-      platformSubmitted: true,
-    });
-  }
-
-  if (report.provider === 'netease') {
-    const info = await getLoginInfo();
-    if (!info.loggedIn || !userCookie) {
-      return Object.assign(base, { accepted: true, reason: 'NETEASE_LOGIN_REQUIRED' });
-    }
-    const rawSourceId = report.context.playlistId || report.context.id || report.context.sourceId || 0;
-    const sourceId = /^\d+$/.test(String(rawSourceId || '')) ? String(rawSourceId) : 0;
-    const result = await scrobble({
-      id: report.songId,
-      sourceid: sourceId,
-      time: Math.max(1, Math.floor(report.listenMs / 1000)),
-      cookie: userCookie,
-      timestamp: Date.now(),
-    });
-    const code = normalizeApiCode(result);
-    if (code !== 200) {
-      const err = new Error(normalizeApiMessage(result) || 'NETEASE_SCROBBLE_FAILED');
-      err.code = 'NETEASE_SCROBBLE_FAILED';
-      err.statusCode = code;
-      throw err;
-    }
-    const submitted = Object.assign(base, {
-      accepted: true,
-      platformSubmitted: true,
-      accountDurationSync: 'submitted_unverified',
-      platformCode: code,
-    });
-    rememberListenSyncSubmission(journalKey, submitted);
-    return submitted;
-  }
-
-  if (report.provider === 'qishui') {
-    if (!qishuiCookieHasLogin(qishuiCookie)) {
-      return Object.assign(base, { accepted: true, reason: 'QISHUI_LOGIN_REQUIRED' });
-    }
-    await handleQishuiReportRecentlyPlayed(report.songId, qishuiCookie);
-    const submitted = Object.assign(base, {
-      accepted: true,
-      platformSubmitted: true,
-      historySynced: true,
-      accountDurationSync: 'unsupported',
-      note: 'Qishui accepted a recent-play item, but its PC endpoint carries no listening duration.',
-    });
-    rememberListenSyncSubmission(journalKey, submitted);
-    return submitted;
-  }
-
-  return Object.assign(base, {
-    accepted: true,
-    reason: 'PLATFORM_DURATION_WRITE_UNAVAILABLE',
-  });
 }
 
-// ====================================================================
-//  HTTP Server
-// ====================================================================
 const server = http.createServer(async (req, res) => {
-  refreshConfiguredCookieStores(false);
   const url = new URL(req.url, 'http://localhost:' + PORT);
   const pn = url.pathname;
+
+  // ---------- 平台登录族 + 五平台官方 API 统一收口（批 T16d） ----------
+  // 主人裁定：LX 世界观不持有平台 cookie 登录态，官方 API 连根退役。
+  // 保留面：/api/song/url、/api/playlist/tracks、/api/album/detail、/api/artist/detail、
+  // /api/lyric、/api/search、/api/discover/home（网易云公开元数据），不在此列。
+  if (
+    pn === '/api/platform/capabilities'
+    || pn === '/api/listen/total'
+    || pn === '/api/login/cookie'
+    || pn === '/api/login/qr/key'
+    || pn === '/api/login/qr/create'
+    || pn === '/api/login/qr/check'
+    || pn === '/api/login/status'
+    || pn === '/api/logout'
+    || pn === '/api/user/playlists'
+    || pn === '/api/album/subscribe'
+    || pn === '/api/album/subscribe/check'
+    || pn === '/api/playlist/subscribe'
+    || pn === '/api/song/like/check'
+    || pn === '/api/song/like'
+    || pn === '/api/playlist/create'
+    || pn === '/api/playlist/add-song'
+    || pn === '/api/song/comments'
+    || pn === '/api/song/comments/like'
+    || pn.startsWith('/api/qq/')
+    || pn.startsWith('/api/kugou/')
+    || pn.startsWith('/api/qishui/')
+    || pn.startsWith('/api/spotify/')
+  ) {
+    sendJSON(res, { ok: false, error: 'REMOVED' }, 404);
+    return;
+  }
   res._cors = corsHeadersFor(req);
   if (pn.startsWith('/api/') && isCrossSiteWrite(req)) {
     console.warn('[Origin-Guard] blocked', req.method, pn, 'origin=' + (req.headers.origin || '-'), 'sec-fetch-site=' + (req.headers['sec-fetch-site'] || '-'));
@@ -5419,43 +3161,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pn === '/api/platform/capabilities') {
-    const spotifyStatus = await handleSpotifyStatus().catch(() => ({ loggedIn: false, capabilities: {} }));
-    sendJSON(res, {
-      netease: {
-        playlists: true, likeRead: true, likeWrite: true, albumRead: true,
-        albumCollect: true, commentsRead: true, commentsWrite: true,
-        listenReport: 'experimental-unverified',
-      },
-      qq: {
-        playlists: true, likeRead: true, likeWrite: false, albumRead: true,
-        albumCollect: false, commentsRead: true, commentsWrite: false,
-        listenReport: false,
-      },
-      kugou: {
-        playlists: true, likeRead: true, likeWrite: true, albumRead: false,
-        albumCollect: false, commentsRead: false, commentsWrite: false,
-        listenReport: false,
-      },
-      qishui: {
-        playlists: true, likeRead: true, likeWrite: qishuiCookieHasLogin(qishuiCookie),
-        albumRead: false, albumCollect: qishuiCookieHasLogin(qishuiCookie),
-        commentsRead: qishuiCookieHasLogin(qishuiCookie), commentsWrite: qishuiCookieHasLogin(qishuiCookie),
-        recentPlayReport: qishuiCookieHasLogin(qishuiCookie), listenReport: false,
-      },
-      spotify: {
-        playlists: true, likeRead: true,
-        likeWrite: !!(spotifyStatus.capabilities && spotifyStatus.capabilities.likeWrite),
-        playlistWrite: !!(spotifyStatus.capabilities && spotifyStatus.capabilities.playlistWrite),
-        albumRead: true,
-        albumCollect: !!(spotifyStatus.capabilities && spotifyStatus.capabilities.likeWrite),
-        commentsRead: false, commentsWrite: false, listenReport: false,
-        missingWriteScopes: spotifyStatus.missingWriteScopes || [],
-      },
-    });
-    return;
-  }
-
   if (pn === '/api/listen/report') {
     try {
       if (req.method !== 'POST') {
@@ -5463,7 +3168,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const body = await readRequestBody(req);
-      sendJSON(res, await handlePlatformListenReport(body));
+      sendJSON(res, await handleLocalListenReport(body));
     } catch (err) {
       console.error('[ListenReport]', err);
       sendJSON(res, {
@@ -5472,29 +3177,6 @@ const server = http.createServer(async (req, res) => {
         error: err.code || err.message,
         message: err.message,
       }, Number(err.statusCode) === 401 ? 401 : 502);
-    }
-    return;
-  }
-
-  if (pn === '/api/listen/total') {
-    try {
-      const provider = normalizeListenReportProvider(url.searchParams.get('provider') || 'netease');
-      if (provider !== 'netease') {
-        sendJSON(res, { provider, supported: false, accountDurationSync: 'unsupported' });
-        return;
-      }
-      const info = await requireLogin(res);
-      if (!info) return;
-      const result = await listen_data_total({ cookie: userCookie, timestamp: Date.now() });
-      sendJSON(res, {
-        provider: 'netease',
-        supported: true,
-        readOnly: true,
-        body: result.body || result,
-      });
-    } catch (err) {
-      console.error('[ListenTotal]', err);
-      sendJSON(res, { provider: 'netease', supported: true, error: err.message }, 500);
     }
     return;
   }
@@ -5723,829 +3405,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pn === '/api/qq/search') {
-    try {
-      const kw = url.searchParams.get('keywords') || '';
-      const limit = Math.max(4, Math.min(30, parseInt(url.searchParams.get('limit') || '12', 10) || 12));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      const songs = await handleQQSearch(kw, limit, offset);
-      sendJSON(res, { provider: 'qq', songs, offset, limit, nextOffset: offset + songs.length, hasMore: songs.length >= limit });
-    } catch (err) {
-      console.error('[QQSearch]', err);
-      sendJSON(res, { provider: 'qq', error: err.message, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/search') {
-    try {
-      const kw = url.searchParams.get('keywords') || '';
-      const limit = Math.max(4, Math.min(20, parseInt(url.searchParams.get('limit') || '12', 10) || 12));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      const songs = await handleKugouSearch(kw, limit, kugouCookie, offset);
-      sendJSON(res, { provider: 'kugou', songs, offset, limit, nextOffset: offset + songs.length, hasMore: songs.length >= limit });
-    } catch (err) {
-      console.error('[KugouSearch]', err);
-      sendJSON(res, { provider: 'kugou', error: err.message, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/recommendations') {
-    try {
-      const limit = Math.max(4, Math.min(20, parseInt(url.searchParams.get('limit') || '12', 10) || 12));
-      sendJSON(res, await handleKugouGuessLike(kugouCookie, limit));
-    } catch (err) {
-      console.error('[KugouRecommendations]', err);
-      sendJSON(res, { provider: 'kugou', error: err.message, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/status') {
-    try {
-      sendJSON(res, await handleSpotifyStatus());
-    } catch (err) {
-      console.error('[SpotifyStatus]', err);
-      sendJSON(res, { provider: 'spotify', configured: false, loggedIn: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/config') {
-    try {
-      if (req.method !== 'POST') {
-        sendJSON(res, { provider: 'spotify', ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-        return;
-      }
-      const body = await readRequestBody(req);
-      const saved = saveSpotifyConfig(body);
-      const status = await handleSpotifyStatus();
-      sendJSON(res, Object.assign({}, status, saved, {
-        ok: true,
-        configured: true,
-        oauthConfigured: true,
-        message: status.loggedIn
-          ? status.message
-          : 'Spotify Client ID 已保存，可打开官方 OAuth 授权。'
-      }));
-    } catch (err) {
-      console.error('[SpotifyConfig]', err);
-      const missing = err && err.missing || [];
-      sendJSON(res, {
-        provider: 'spotify',
-        ok: false,
-        configured: getSpotifyConfig().configured,
-        loggedIn: false,
-        error: err.code || err.message,
-        message: err.code === 'SPOTIFY_CLIENT_ID_REQUIRED' || err.message === 'SPOTIFY_CLIENT_ID_REQUIRED'
-          ? '请先粘贴 Spotify Client ID。'
-          : err.message,
-        missing,
-      }, err && err.code === 'SPOTIFY_CLIENT_ID_REQUIRED' ? 400 : 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/logout') {
-    try {
-      sendJSON(res, clearSpotifyToken());
-    } catch (err) {
-      console.error('[SpotifyLogout]', err);
-      sendJSON(res, { provider: 'spotify', ok: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/user/playlists') {
-    try {
-      const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '300', 10) || 300));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      sendJSON(res, await handleSpotifyUserPlaylists({ limit, offset }));
-    } catch (err) {
-      console.error('[SpotifyUserPlaylists]', err);
-      sendJSON(res, { provider: 'spotify', loggedIn: false, error: err.message, playlists: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/song/like/check') {
-    try {
-      const ids = String(url.searchParams.get('ids') || url.searchParams.get('id') || '')
-        .split(',').map(value => value.trim()).filter(Boolean);
-      sendJSON(res, await handleSpotifyLibraryCheck('track', ids));
-    } catch (err) {
-      console.error('[SpotifyLikeCheck]', err);
-      sendJSON(res, { provider: 'spotify', liked: {}, error: err.code || err.message, message: err.message }, Number(err.statusCode) || 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/song/like') {
-    try {
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const song = body.song || {
-        id: body.id || url.searchParams.get('id') || '',
-        spotifyId: body.spotifyId || url.searchParams.get('spotifyId') || '',
-        spotifyUri: body.spotifyUri || body.uri || url.searchParams.get('uri') || '',
-      };
-      const liked = String(body.like != null ? body.like : (url.searchParams.get('like') || 'true')) !== 'false';
-      sendJSON(res, await handleSpotifyLibrarySet('track', song, liked));
-    } catch (err) {
-      console.error('[SpotifyLike]', err);
-      sendJSON(res, {
-        provider: 'spotify',
-        success: false,
-        error: err.code || err.message,
-        message: err.code === 'SPOTIFY_WRITE_SCOPE_REQUIRED'
-          ? '请在账号面板重新连接 Spotify，授予资料库写入权限。'
-          : err.message,
-        missingScopes: err.missingScopes || [],
-      }, Number(err.statusCode) || 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/album/like/check') {
-    try {
-      const ids = String(url.searchParams.get('ids') || url.searchParams.get('id') || '')
-        .split(',').map(value => value.trim()).filter(Boolean);
-      sendJSON(res, await handleSpotifyLibraryCheck('album', ids));
-    } catch (err) {
-      console.error('[SpotifyAlbumLikeCheck]', err);
-      sendJSON(res, { provider: 'spotify', liked: {}, error: err.code || err.message, message: err.message }, Number(err.statusCode) || 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/album/like') {
-    try {
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const album = body.album || {
-        id: body.id || body.albumId || url.searchParams.get('id') || '',
-        albumId: body.albumId || '',
-        spotifyUri: body.spotifyUri || body.uri || '',
-      };
-      const liked = String(body.like != null ? body.like : (url.searchParams.get('like') || 'true')) !== 'false';
-      sendJSON(res, await handleSpotifyLibrarySet('album', album, liked));
-    } catch (err) {
-      console.error('[SpotifyAlbumLike]', err);
-      sendJSON(res, { provider: 'spotify', success: false, error: err.code || err.message, message: err.message, missingScopes: err.missingScopes || [] }, Number(err.statusCode) || 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/playlist/add-song') {
-    try {
-      if (req.method !== 'POST') {
-        sendJSON(res, { provider: 'spotify', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-        return;
-      }
-      const body = await readRequestBody(req);
-      sendJSON(res, await handleSpotifyPlaylistAddSong(body.pid || body.playlistId || '', body.song || body));
-    } catch (err) {
-      console.error('[SpotifyPlaylistAddSong]', err);
-      sendJSON(res, {
-        provider: 'spotify',
-        success: false,
-        error: err.code || err.message,
-        message: err.code === 'SPOTIFY_WRITE_SCOPE_REQUIRED'
-          ? '请重新连接 Spotify，授予歌单写入权限。'
-          : err.message,
-        missingScopes: err.missingScopes || [],
-      }, Number(err.statusCode) || 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/playlist/create') {
-    try {
-      if (req.method !== 'POST') {
-        sendJSON(res, { provider: 'spotify', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-        return;
-      }
-      const body = await readRequestBody(req);
-      sendJSON(res, await handleSpotifyCreatePlaylist(body.name || '', {
-        public: body.public === true,
-        description: body.description || '',
-      }));
-    } catch (err) {
-      console.error('[SpotifyPlaylistCreate]', err);
-      sendJSON(res, { provider: 'spotify', success: false, error: err.code || err.message, message: err.message, missingScopes: err.missingScopes || [] }, Number(err.statusCode) || 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/playlist/collect') {
-    try {
-      if (req.method !== 'POST') {
-        sendJSON(res, { provider: 'spotify', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-        return;
-      }
-      const body = await readRequestBody(req);
-      const collected = String(body.collected != null ? body.collected : 'true') !== 'false';
-      const result = await handleSpotifyLibrarySet('playlist', {
-        id: body.id || body.playlistId || '',
-        spotifyUri: body.spotifyUri || body.uri || '',
-      }, collected);
-      sendJSON(res, Object.assign({ collected, success: true }, result));
-    } catch (err) {
-      console.error('[SpotifyPlaylistCollect]', err);
-      sendJSON(res, { provider: 'spotify', success: false, error: err.code || err.message, message: err.message, missingScopes: err.missingScopes || [] }, Number(err.statusCode) || 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/playlist/tracks') {
-    try {
-      const id = url.searchParams.get('id') || url.searchParams.get('playlistId') || '';
-      const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get('limit') || '48', 10) || 48));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      sendJSON(res, await handleSpotifyPlaylistTracks(id, { limit, offset, market: url.searchParams.get('market') || '' }));
-    } catch (err) {
-      console.error('[SpotifyPlaylistTracks]', err);
-      sendJSON(res, { provider: 'spotify', error: err.message, tracks: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/album/detail') {
-    try {
-      const id = url.searchParams.get('id') || url.searchParams.get('albumId') || '';
-      const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get('limit') || '80', 10) || 80));
-      sendJSON(res, await handleSpotifyAlbumDetail(id, { limit, market: url.searchParams.get('market') || '' }));
-    } catch (err) {
-      console.error('[SpotifyAlbumDetail]', err);
-      sendJSON(res, { provider: 'spotify', error: err.message, album: null, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/search') {
-    try {
-      const kw = url.searchParams.get('keywords') || '';
-      const limit = Math.max(4, Math.min(20, parseInt(url.searchParams.get('limit') || '10', 10) || 10));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      sendJSON(res, await handleSpotifySearch(kw, limit, offset));
-    } catch (err) {
-      console.error('[SpotifySearch]', err);
-      sendJSON(res, { provider: 'spotify', configured: getSpotifyConfig().configured, error: err.message, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/recommendations') {
-    try {
-      const limit = Math.max(4, Math.min(10, parseInt(url.searchParams.get('limit') || '10', 10) || 10));
-      sendJSON(res, await handleSpotifyRecommendations(limit));
-    } catch (err) {
-      console.error('[SpotifyRecommendations]', err);
-      sendJSON(res, { provider: 'spotify', error: err.message, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/spotify/lyric') {
-    try {
-      const id = url.searchParams.get('id') || '';
-      sendJSON(res, await handleSpotifyLyric(id));
-    } catch (err) {
-      console.error('[SpotifyLyric]', err);
-      sendJSON(res, { provider: 'spotify', error: err.message, lyric: '', tlyric: '', yrc: '', ytlrc: '' }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/login/qrcode') {
-    try {
-      const result = await qishuiQrLogin.createQrCode();
-      const data = result && result.data || {};
-      sendJSON(res, {
-        provider: 'qishui',
-        token: String(data.token || ''),
-        qrcode: String(data.qrcode || ''),
-        qrcodeIndexUrl: String(data.qrcode_index_url || ''),
-        expireTime: Number(data.expire_time || 0),
-        message: '请使用抖音 App 扫码并确认登录',
-      });
-    } catch (err) {
-      console.error('[QishuiQRCode]', err);
-      sendJSON(res, {
-        provider: 'qishui',
-        token: '',
-        qrcode: '',
-        error: err && err.code || 'QISHUI_QR_CREATE_FAILED',
-        message: err && err.message || '汽水音乐二维码生成失败',
-      }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/login/check') {
-    try {
-      const token = String(url.searchParams.get('token') || '').trim();
-      if (!token) {
-        sendJSON(res, {
-          provider: 'qishui',
-          loggedIn: false,
-          status: 'missing_token',
-          error: 'QISHUI_QR_TOKEN_REQUIRED',
-          message: '二维码登录 token 缺失',
-        }, 400);
-        return;
-      }
-      const result = await qishuiQrLogin.checkQrConnect(token);
-      const data = result && result.data || {};
-      const errorCode = Number(data.error_code || 0);
-      const bridgeStatus = qishuiQrLogin.getStatus();
-      if (bridgeStatus.loggedIn) {
-        const cookie = qishuiQrLogin.getCookie();
-        if (!qishuiCookieHasLogin(cookie)) throw new Error('QISHUI_QR_SESSION_COOKIE_MISSING');
-        saveQishuiCookie(cookie);
-        const status = await handleQishuiStatus(qishuiCookie);
-        sendJSON(res, {
-          ...status,
-          provider: 'qishui',
-          ok: true,
-          loggedIn: true,
-          webSession: true,
-          cookieReady: true,
-          status: 'confirmed',
-          errorCode: 0,
-          error_code: 0,
-          message: '登录成功',
-        });
-        return;
-      }
-      let status = String(data.status || '').trim();
-      if (errorCode === 2) status = 'expired';
-      else if (errorCode === 7) status = 'rate_limited';
-      else if (status === '2') status = 'scanned';
-      else if (!status || status === '1') status = 'waiting';
-      sendJSON(res, {
-        provider: 'qishui',
-        loggedIn: false,
-        status,
-        errorCode,
-        error_code: errorCode,
-        retryAfterMs: errorCode === 7 ? 60000 : 0,
-        message: result && result.message || data.description || '',
-      });
-    } catch (err) {
-      console.error('[QishuiLoginCheck]', err);
-      const cancelled = err && err.code === 'QISHUI_MFA_CANCELLED';
-      sendJSON(res, {
-        provider: 'qishui',
-        loggedIn: false,
-        status: cancelled ? 'mfa_cancelled' : 'error',
-        error: err && err.code || 'QISHUI_QR_CHECK_FAILED',
-        message: err && err.message || '汽水音乐登录状态检查失败',
-      }, cancelled ? 409 : 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/status' || pn === '/api/qishui/login/status') {
-    try {
-      sendJSON(res, await handleQishuiStatus(qishuiCookie));
-    } catch (err) {
-      console.error('[QishuiStatus]', err);
-      sendJSON(res, { provider: 'qishui', configured: false, loggedIn: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/logout') {
-    try {
-      await qishuiQrLogin.clear();
-      saveQishuiCookie('');
-      sendJSON(res, { ...clearQishuiAccessToken(), webSession: false, cookieReady: false, configured: getQishuiStatus('').configured, loggedIn: getQishuiStatus('').loggedIn });
-    } catch (err) {
-      console.error('[QishuiLogout]', err);
-      sendJSON(res, { provider: 'qishui', ok: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/search') {
-    try {
-      const kw = url.searchParams.get('keywords') || '';
-      const limit = Math.max(4, Math.min(20, parseInt(url.searchParams.get('limit') || '12', 10) || 12));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      sendJSON(res, await handleQishuiSearch(kw, limit, qishuiCookie, offset));
-    } catch (err) {
-      console.error('[QishuiSearch]', err);
-      sendJSON(res, { provider: 'qishui', configured: getQishuiStatus(qishuiCookie).configured, error: err.message, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/feed') {
-    try {
-      const limit = Math.max(4, Math.min(12, parseInt(url.searchParams.get('limit') || '8', 10) || 8));
-      sendJSON(res, await handleQishuiFeed(limit, qishuiCookie));
-    } catch (err) {
-      console.error('[QishuiFeed]', err);
-      sendJSON(res, { provider: 'qishui', configured: getQishuiStatus(qishuiCookie).configured, error: err.message, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/user/playlists') {
-    try {
-      sendJSON(res, await handleQishuiUserPlaylists(qishuiCookie));
-    } catch (err) {
-      console.error('[QishuiUserPlaylists]', err);
-      sendJSON(res, { provider: 'qishui', loggedIn: getQishuiStatus(qishuiCookie).configured, configured: getQishuiStatus(qishuiCookie).configured, error: err.message, playlists: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/playlist/tracks') {
-    try {
-      const id = url.searchParams.get('id') || 'qishui-feed';
-      const limit = parseInt(url.searchParams.get('limit') || '0', 10) || 0;
-      const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
-      sendJSON(res, await handleQishuiPlaylistTracks(id, limit || offset ? { limit: limit || 50, offset } : {}, qishuiCookie));
-    } catch (err) {
-      console.error('[QishuiPlaylistTracks]', err);
-      sendJSON(res, { provider: 'qishui', configured: getQishuiStatus(qishuiCookie).configured, error: err.message, tracks: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/song/like/check') {
-    try {
-      const ids = String(url.searchParams.get('ids') || url.searchParams.get('id') || '')
-        .split(',').map(value => value.trim()).filter(Boolean);
-      sendJSON(res, await handleQishuiCheckTracksLiked(ids, qishuiCookie));
-    } catch (err) {
-      console.error('[QishuiLikeCheck]', err);
-      sendJSON(res, { provider: 'qishui', liked: {}, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/song/like') {
-    try {
-      if (req.method !== 'POST') {
-        sendJSON(res, { provider: 'qishui', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-        return;
-      }
-      const body = await readRequestBody(req);
-      const song = body.song || body;
-      const id = song.providerSongId || song.trackId || song.id || '';
-      const liked = String(body.like != null ? body.like : 'true') !== 'false';
-      const result = await handleQishuiSetTrackLiked(id, liked, qishuiCookie);
-      sendJSON(res, Object.assign({ success: true }, result));
-    } catch (err) {
-      console.error('[QishuiLike]', err);
-      sendJSON(res, { provider: 'qishui', success: false, error: err.message }, /COOKIE_REQUIRED|login/i.test(String(err.message)) ? 401 : 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/playlist/collect') {
-    try {
-      if (req.method !== 'POST') {
-        sendJSON(res, { provider: 'qishui', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-        return;
-      }
-      const body = await readRequestBody(req);
-      const collected = String(body.collected != null ? body.collected : 'true') !== 'false';
-      const result = await handleQishuiSetPlaylistCollected(body.id || body.playlistId || '', collected, qishuiCookie);
-      sendJSON(res, Object.assign({ success: true }, result));
-    } catch (err) {
-      console.error('[QishuiPlaylistCollect]', err);
-      sendJSON(res, { provider: 'qishui', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/playlist/add-song') {
-    try {
-      if (req.method !== 'POST') {
-        sendJSON(res, { provider: 'qishui', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-        return;
-      }
-      const body = await readRequestBody(req);
-      sendJSON(res, await handleQishuiPlaylistAddSong(body.pid || body.playlistId || '', body.song || body, qishuiCookie));
-    } catch (err) {
-      console.error('[QishuiPlaylistAddSong]', err);
-      sendJSON(res, { provider: 'qishui', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/album/collect') {
-    try {
-      if (req.method !== 'POST') {
-        sendJSON(res, { provider: 'qishui', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-        return;
-      }
-      const body = await readRequestBody(req);
-      const collected = String(body.collected != null ? body.collected : 'true') !== 'false';
-      const result = await handleQishuiSetAlbumCollected(body.id || body.albumId || '', collected, qishuiCookie);
-      sendJSON(res, Object.assign({ success: true }, result));
-    } catch (err) {
-      console.error('[QishuiAlbumCollect]', err);
-      sendJSON(res, { provider: 'qishui', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/song/comments') {
-    try {
-      const id = url.searchParams.get('id') || url.searchParams.get('trackId') || '';
-      if (req.method === 'POST') {
-        const body = await readRequestBody(req);
-        sendJSON(res, await handleQishuiCreateComment(id || body.id || body.trackId || '', body.content || body.text || '', qishuiCookie));
-      } else {
-        const limit = Math.max(1, Math.min(50, parseInt(url.searchParams.get('limit') || '18', 10) || 18));
-        sendJSON(res, await handleQishuiComments(id, {
-          limit,
-          cursor: url.searchParams.get('cursor') || '',
-        }, qishuiCookie));
-      }
-    } catch (err) {
-      console.error('[QishuiComments]', err);
-      sendJSON(res, { provider: 'qishui', comments: [], error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qishui/lyric') {
-    try {
-      const id = url.searchParams.get('id') || url.searchParams.get('trackId') || '';
-      sendJSON(res, await handleQishuiLyric(id, qishuiCookie));
-    } catch (err) {
-      console.error('[QishuiLyric]', err);
-      sendJSON(res, { provider: 'qishui', error: err.message, lyric: '', tlyric: '' }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/lyric') {
-    try {
-      const hash = url.searchParams.get('hash') || url.searchParams.get('id') || '';
-      const albumAudioId = url.searchParams.get('albumAudioId') || url.searchParams.get('album_audio_id') || '';
-      const duration = url.searchParams.get('duration') || '';
-      if (!hash) { sendJSON(res, { provider: 'kugou', error: 'Missing Kugou hash', lyric: '' }, 400); return; }
-      const data = await handleKugouLyric(hash, albumAudioId, duration);
-      sendJSON(res, data);
-    } catch (err) {
-      console.error('[KugouLyric]', err);
-      sendJSON(res, { provider: 'kugou', error: err.message, lyric: '' }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/login/status') {
-    try {
-      sendJSON(res, await getKugouLoginInfo(kugouCookie));
-    } catch (err) {
-      console.error('[KugouLoginStatus]', err);
-      sendJSON(res, { provider: 'kugou', loggedIn: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/login/cookie') {
-    try {
-      const body = await readRequestBody(req);
-      const raw = body.cookie || body.data || body.text || '';
-      const normalized = normalizeKugouCookieInput(raw);
-      const auth = extractKugouAuth(normalized);
-      if (!auth.loggedIn && !parseCookieString(normalized).kg_mid) {
-        sendJSON(res, { provider: 'kugou', loggedIn: false, error: 'INVALID_KUGOU_COOKIE', message: '酷狗 cookie 无效或缺少登录标识' }, 400);
-        return;
-      }
-      saveKugouCookie(normalized);
-      const info = await getKugouLoginInfo(kugouCookie);
-      sendJSON(res, { ...info, saved: true, partial: auth.loggedIn && !auth.playbackReady });
-    } catch (err) {
-      console.error('[KugouLoginCookie]', err);
-      sendJSON(res, { provider: 'kugou', loggedIn: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/logout') {
-    saveKugouCookie('');
-    sendJSON(res, { provider: 'kugou', loggedIn: false, ok: true });
-    return;
-  }
-
-  if (pn === '/api/kugou/user/playlists') {
-    try {
-      sendJSON(res, await handleKugouUserPlaylists(kugouCookie));
-    } catch (err) {
-      console.error('[KugouUserPlaylists]', err);
-      sendJSON(res, { provider: 'kugou', loggedIn: false, error: err.message, playlists: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/playlist/tracks') {
-    try {
-      const id = url.searchParams.get('id') || url.searchParams.get('global_collection_id') || '';
-      const paged = url.searchParams.has('limit') || url.searchParams.has('offset');
-      const limit = Math.max(10, Math.min(50, parseInt(url.searchParams.get('limit') || '50', 10) || 50));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      sendJSON(res, await handleKugouPlaylistTracks(id, kugouCookie, paged ? { limit, offset, paged: true } : {}));
-    } catch (err) {
-      console.error('[KugouPlaylistTracks]', err);
-      sendJSON(res, { provider: 'kugou', error: err.message, tracks: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/song/like/check') {
-    try {
-      if (!kugouCookieHasPlayback(kugouCookie)) {
-        sendJSON(res, { provider: 'kugou', loggedIn: false, liked: {}, error: 'KUGOU_AUTH_REQUIRED' });
-        return;
-      }
-      const hashes = url.searchParams.get('hashes') || url.searchParams.get('hash') || '';
-      sendJSON(res, await handleKugouLikeCheck({ hashes }, kugouCookie));
-    } catch (err) {
-      console.error('[KugouLikeCheck]', err);
-      sendJSON(res, { provider: 'kugou', liked: {}, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/song/like') {
-    try {
-      if (!kugouCookieHasPlayback(kugouCookie)) {
-        sendJSON(res, { provider: 'kugou', success: false, error: 'KUGOU_AUTH_REQUIRED' }, 401);
-        return;
-      }
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const song = body.song || {};
-      const like = String(body.like != null ? body.like : (url.searchParams.get('like') || 'true')) !== 'false';
-      sendJSON(res, await handleKugouLikeToggle(song, like, kugouCookie));
-    } catch (err) {
-      console.error('[KugouLike]', err);
-      sendJSON(res, { provider: 'kugou', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/kugou/playlist/add-song') {
-    try {
-      if (!kugouCookieHasPlayback(kugouCookie)) {
-        sendJSON(res, { provider: 'kugou', success: false, error: 'KUGOU_AUTH_REQUIRED' }, 401);
-        return;
-      }
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const pid = body.pid || url.searchParams.get('pid') || '';
-      const song = body.song || body;
-      if (!pid) { sendJSON(res, { provider: 'kugou', success: false, error: 'Missing playlist id' }, 400); return; }
-      sendJSON(res, await handleKugouPlaylistAddSong(pid, song, kugouCookie));
-    } catch (err) {
-      console.error('[KugouPlaylistAddSong]', err);
-      sendJSON(res, { provider: 'kugou', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qq/lyric') {
-    try {
-      const mid = url.searchParams.get('mid') || url.searchParams.get('songmid') || '';
-      const id = url.searchParams.get('id') || url.searchParams.get('qqId') || '';
-      if (!mid && !id) { sendJSON(res, { provider: 'qq', error: 'Missing QQ song mid or id', lyric: '' }, 400); return; }
-      const data = await handleQQLyric(mid, id);
-      sendJSON(res, data);
-    } catch (err) {
-      console.error('[QQLyric]', err);
-      sendJSON(res, { provider: 'qq', error: err.message, lyric: '' }, 500);
-    }
-    return;
-  }
-
-  // ---------- 歌曲URL ----------
-  if (pn === '/api/qq/login/status') {
-    try {
-      const forceVip = /^(1|true|yes)$/i.test(String(url.searchParams.get('forceVip') || url.searchParams.get('force') || ''));
-      const info = await getQQLoginInfo({ forceVip, forceCookie: forceVip });
-      sendJSON(res, info);
-    } catch (err) {
-      console.error('[QQLoginStatus]', err);
-      sendJSON(res, { provider: 'qq', loggedIn: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qq/login/cookie') {
-    try {
-      const body = await readRequestBody(req);
-      const raw = body.cookie || body.data || body.text || '';
-      const normalized = normalizeQQCookieInput(raw);
-      const obj = parseCookieString(normalized);
-      if (!qqCookieUin(obj) || !qqCookiePlaybackKey(obj)) {
-        const hasWebSession = !!(qqCookieUin(obj) && qqCookieMusicKey(obj));
-        sendJSON(res, {
-          provider: 'qq',
-          loggedIn: false,
-          partial: hasWebSession,
-          error: hasWebSession ? 'QQ_PLAYBACK_AUTH_INCOMPLETE' : 'INVALID_QQ_COOKIE',
-          message: hasWebSession
-            ? 'QQ 账号验证已完成，但 QQ 音乐播放授权尚未生成，请重新打开官方登录窗口完成授权'
-            : 'QQ cookie 缺少 uin 或有效 QQ 音乐播放票据',
-        }, 400);
-        return;
-      }
-      saveQQCookie(normalized);
-      const info = await getQQLoginInfo({ forceVip: true, forceCookie: true });
-      sendJSON(res, { ...info, saved: true });
-    } catch (err) {
-      console.error('[QQLoginCookie]', err);
-      sendJSON(res, { provider: 'qq', loggedIn: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qq/logout') {
-    saveQQCookie('');
-    sendJSON(res, { provider: 'qq', ok: true, loggedIn: false });
-    return;
-  }
-
-  if (pn === '/api/qq/user/playlists') {
-    try {
-      const data = await handleQQUserPlaylists();
-      sendJSON(res, data);
-    } catch (err) {
-      console.error('[QQUserPlaylists]', err);
-      sendJSON(res, { provider: 'qq', loggedIn: false, error: err.message, playlists: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qq/playlist/tracks') {
-    try {
-      const id = url.searchParams.get('id') || url.searchParams.get('disstid') || '';
-      const data = await handleQQPlaylistTracks(id, {
-        limit: url.searchParams.get('limit') || '',
-        offset: url.searchParams.get('offset') || '0',
-      });
-      sendJSON(res, data);
-    } catch (err) {
-      console.error('[QQPlaylistTracks]', err);
-      sendJSON(res, { provider: 'qq', error: err.message, tracks: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qq/artist/detail') {
-    try {
-      const mid = url.searchParams.get('mid') || url.searchParams.get('singermid') || '';
-      const limit = Math.max(10, Math.min(80, parseInt(url.searchParams.get('limit') || '36', 10) || 36));
-      if (!mid) {
-        sendJSON(res, { provider: 'qq', error: 'MISSING_SINGER_MID', artist: null, songs: [] }, 400);
-        return;
-      }
-      const data = await handleQQArtistDetail(mid, limit);
-      sendJSON(res, data);
-    } catch (err) {
-      console.error('[QQArtistDetail]', err);
-      sendJSON(res, { provider: 'qq', error: err.message, artist: null, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qq/album/detail') {
-    try {
-      const mid = url.searchParams.get('mid') || url.searchParams.get('albummid') || url.searchParams.get('albumMid') || '';
-      const limit = Math.max(10, Math.min(120, parseInt(url.searchParams.get('limit') || '80', 10) || 80));
-      if (!mid) {
-        sendJSON(res, { provider: 'qq', error: 'MISSING_ALBUM_MID', album: null, songs: [] }, 400);
-        return;
-      }
-      sendJSON(res, await handleQQAlbumDetail(mid, limit));
-    } catch (err) {
-      console.error('[QQAlbumDetail]', err);
-      sendJSON(res, { provider: 'qq', error: err.message, album: null, songs: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/qq/song/comments') {
-    try {
-      const id = url.searchParams.get('id') || url.searchParams.get('qqId') || '';
-      const mid = url.searchParams.get('mid') || url.searchParams.get('songmid') || '';
-      const limit = Math.max(6, Math.min(50, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      const data = await handleQQSongComments(id, mid, limit, offset);
-      sendJSON(res, data);
-    } catch (err) {
-      console.error('[QQSongComments]', err);
-      sendJSON(res, { provider: 'qq', error: err.message, comments: [] }, 500);
-    }
-    return;
-  }
-
   // ---------- 播客（podcast）整条下线（批 T16c） ----------
   // 主人裁定：在线音乐对齐 LX 世界观后，播客不再由官方平台 cookie 供给，整套退役
   // （不是隐藏、不是加开关）。原 /api/podcast/{search,hot,detail,programs,my,my/items,
@@ -6573,73 +3432,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pn === '/api/album/subscribe') {
-    try {
-      const info = await requireLogin(res);
-      if (!info) return;
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const id = body.id || body.albumId || url.searchParams.get('id') || '';
-      const subscribed = String(body.subscribed != null ? body.subscribed : (url.searchParams.get('subscribed') || 'true')) !== 'false';
-      if (!id) { sendJSON(res, { success: false, error: 'Missing album id' }, 400); return; }
-      const result = await album_sub({ id, t: subscribed ? 1 : 0, cookie: userCookie, timestamp: Date.now() });
-      const code = normalizeApiCode(result);
-      sendJSON(res, { provider: 'netease', id, subscribed, success: code === 200, code, body: result.body || result });
-    } catch (err) {
-      console.error('[AlbumSubscribe]', err);
-      sendJSON(res, { provider: 'netease', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/album/subscribe/check') {
-    try {
-      const info = await requireLogin(res);
-      if (!info) return;
-      const ids = String(url.searchParams.get('ids') || url.searchParams.get('id') || '')
-        .split(',').map(value => value.trim()).filter(Boolean);
-      if (!ids.length) { sendJSON(res, { provider: 'netease', subscribed: {} }); return; }
-      const wanted = new Set(ids);
-      const found = new Set();
-      let offset = 0;
-      for (let page = 0; page < 8 && found.size < wanted.size; page++) {
-        const result = await album_sublist({ limit: 50, offset, cookie: userCookie, timestamp: Date.now() });
-        const body = result.body || result || {};
-        const rows = Array.isArray(body.data) ? body.data : (body.albums || []);
-        rows.forEach(item => {
-          const id = String(item && item.id || '');
-          if (wanted.has(id)) found.add(id);
-        });
-        if (!body.hasMore || rows.length < 50) break;
-        offset += rows.length;
-      }
-      const subscribed = {};
-      ids.forEach(id => { subscribed[id] = found.has(id); });
-      sendJSON(res, { provider: 'netease', ids, subscribed });
-    } catch (err) {
-      console.error('[AlbumSubscribeCheck]', err);
-      sendJSON(res, { provider: 'netease', subscribed: {}, error: err.message }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/playlist/subscribe') {
-    try {
-      const info = await requireLogin(res);
-      if (!info) return;
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const id = body.id || body.playlistId || url.searchParams.get('id') || '';
-      const subscribed = String(body.subscribed != null ? body.subscribed : (url.searchParams.get('subscribed') || 'true')) !== 'false';
-      if (!id) { sendJSON(res, { success: false, error: 'Missing playlist id' }, 400); return; }
-      const result = await playlist_subscribe({ id, t: subscribed ? 1 : 0, cookie: userCookie, timestamp: Date.now() });
-      const code = normalizeApiCode(result);
-      sendJSON(res, { provider: 'netease', id, subscribed, success: code === 200, code, body: result.body || result });
-    } catch (err) {
-      console.error('[PlaylistSubscribe]', err);
-      sendJSON(res, { provider: 'netease', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
   if (pn === '/api/song/url') {
     try {
       const sid = url.searchParams.get('id');
@@ -6655,328 +3447,9 @@ const server = http.createServer(async (req, res) => {
         excludeIds: url.searchParams.get('excludeIds') || '',
         skipDirect: url.searchParams.get('skipDirect') === '1',
       };
-      const loginInfo = await getPlaybackLoginInfo();
-      const info = await handleSongUrl(sid, loginInfo, quality, matchHints);
-      sendJSON(res, {
-        ...info,
-        loggedIn: loginInfo.loggedIn,
-        vipType: loginInfo.vipType || 0,
-        vipLevel: loginInfo.vipLevel || 'none',
-        isVip: !!loginInfo.isVip,
-        isSvip: !!loginInfo.isSvip,
-        vipLabel: loginInfo.vipLabel || '无VIP',
-      });
+      sendJSON(res, await handleSongUrl(sid, ANONYMOUS_PLAYBACK_LOGIN, quality, matchHints));
     } catch (err) { console.error('[SongUrl]', err); sendJSON(res, { error: err.message }, 500); }
     return;
-  }
-
-  if (pn === '/api/login/cookie') {
-    try {
-      const body = await readRequestBody(req);
-      const raw = body.cookie || body.data || body.text || '';
-      const normalized = normalizeCookieHeader(raw);
-      const obj = parseCookieString(normalized);
-      if (!obj.MUSIC_U) {
-        sendJSON(res, { loggedIn: false, error: 'INVALID_NETEASE_COOKIE', message: '网易云 cookie 缺少 MUSIC_U' }, 400);
-        return;
-      }
-      saveCookie(normalized);
-      let info = await getLoginInfo();
-      if (!info.loggedIn && userCookie) {
-        info = {
-          loggedIn: true,
-          pendingProfile: true,
-          nickname: '网易云用户',
-          avatar: '',
-          vipType: 0,
-          vipLevel: 'none',
-          isVip: false,
-          isSvip: false,
-          vipLabel: '无VIP',
-        };
-      }
-      sendJSON(res, { ...info, saved: true, hasCookie: !!userCookie });
-    } catch (err) {
-      console.error('[LoginCookie]', err);
-      sendJSON(res, { loggedIn: false, error: err.message }, 500);
-    }
-    return;
-  }
-
-  // ---------- 登录: QR Key ----------
-  if (pn === '/api/login/qr/key') {
-    try {
-      const r = await login_qr_key({ timestamp: Date.now() });
-      const key = r.body && r.body.data && r.body.data.unikey;
-      sendJSON(res, { key });
-    } catch (err) { sendJSON(res, { error: err.message }, 500); }
-    return;
-  }
-
-  // ---------- 登录: QR 二维码图片 ----------
-  if (pn === '/api/login/qr/create') {
-    try {
-      const key = url.searchParams.get('key');
-      const r = await login_qr_create({ key, qrimg: true, timestamp: Date.now() });
-      const d = r.body && r.body.data;
-      sendJSON(res, { img: d && d.qrimg, url: d && d.qrurl });
-    } catch (err) { sendJSON(res, { error: err.message }, 500); }
-    return;
-  }
-
-  // ---------- 登录: 轮询扫码状态 ----------
-  if (pn === '/api/login/qr/check') {
-    try {
-      const key = url.searchParams.get('key');
-      let r = await login_qr_check({ key, noCookie: true, timestamp: Date.now() });
-      let body = r.body || {};
-      let code = Number(body.code || r.code);
-      let msg  = body.message || r.message || '';
-      let cookie = readCookieFromResponse(r);
-      if (code === 803 && !cookie) {
-        try {
-          const retry = await login_qr_check({ key, timestamp: Date.now() });
-          const retryCookie = readCookieFromResponse(retry);
-          if (retryCookie) {
-            r = retry;
-            body = retry.body || body;
-            code = Number(body.code || retry.code || code);
-            msg = body.message || retry.message || msg;
-            cookie = retryCookie;
-          }
-        } catch (retryErr) {
-          console.warn('[Login] qr cookie retry failed:', retryErr.message);
-        }
-      }
-      // 803 = 授权成功, 802 = 已扫待确认, 801 = 等待扫码, 800 = 二维码过期
-      if (code === 803) {
-        if (cookie) saveCookie(cookie);
-        let info = await getLoginInfo();
-        if (!info.loggedIn) {
-          const profile = body.profile || (body.data && body.data.profile) || {};
-          const account = body.account || (body.data && body.data.account);
-          const extra = body.data || body;
-          info = normalizeLoginInfo(profile, account, extra);
-          if (info.loggedIn) info = await enrichNeteaseLoginInfo(info, profile, account, extra);
-        }
-        if (!info.loggedIn && cookie) {
-          info = {
-            loggedIn: true,
-            pendingProfile: true,
-            nickname: (body.nickname || (body.profile && body.profile.nickname) || '网易云用户'),
-            avatar: body.avatarUrl || (body.profile && body.profile.avatarUrl) || '',
-            vipType: 0,
-            vipLevel: 'none',
-            isVip: false,
-            isSvip: false,
-            vipLabel: '无VIP',
-          };
-        }
-        sendJSON(res, { code, message: msg, ...info, hasCookie: !!cookie });
-        return;
-      }
-      sendJSON(res, { code, message: msg, nickname: body.nickname, avatar: body.avatarUrl });
-    } catch (err) { sendJSON(res, { error: err.message }, 500); }
-    return;
-  }
-
-  // ---------- 登录态查询 ----------
-  if (pn === '/api/login/status') {
-    const info = await getLoginInfo();
-    sendJSON(res, info);
-    return;
-  }
-
-  // ---------- 登出 ----------
-  if (pn === '/api/logout') {
-    try { await logout({ cookie: userCookie }); } catch (e) {}
-    saveCookie('');
-    sendJSON(res, { ok: true });
-    return;
-  }
-
-  // ---------- 用户歌单 ----------
-  if (pn === '/api/user/playlists') {
-    try {
-      const info = await getLoginInfo();
-      if (!info.loggedIn || !info.userId) { sendJSON(res, { loggedIn: false, playlists: [] }); return; }
-      const requestedLimit = Math.max(0, parseInt(url.searchParams.get('limit') || '0', 10) || 0);
-      const requestedOffset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      if (requestedLimit || requestedOffset || url.searchParams.has('paged')) {
-        const pageData = await fetchNeteaseUserPlaylistsPage(info.userId, requestedLimit || 48, requestedOffset);
-        const pageList = pageData.playlists.map(pl => mapNeteasePlaylistMeta(pl, pl && pl.id));
-        sendJSON(res, {
-          loggedIn: true,
-          userId: info.userId,
-          playlists: pageList,
-          total: pageData.total,
-          offset: pageData.offset,
-          limit: pageData.limit,
-          nextOffset: pageData.nextOffset,
-          hasMore: pageData.hasMore,
-          partial: true,
-        });
-        return;
-      }
-      const rawPlaylists = await fetchAllNeteaseUserPlaylists(info.userId, requestedLimit);
-      const list = rawPlaylists.map(pl => mapNeteasePlaylistMeta(pl, pl && pl.id));
-      sendJSON(res, { loggedIn: true, userId: info.userId, playlists: list });
-    } catch (err) {
-      console.error('[UserPlaylists]', err);
-      sendJSON(res, { error: err.message, loggedIn: false, playlists: [] }, 500);
-    }
-    return;
-  }
-
-  // ---------- 红心状态 ----------
-  if (pn === '/api/song/like/check') {
-    try {
-      const info = await requireLogin(res);
-      if (!info) return;
-      const ids = String(url.searchParams.get('ids') || url.searchParams.get('id') || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
-      if (!ids.length) { sendJSON(res, { error: 'Missing song id', liked: {}, ids: [] }, 400); return; }
-      let likedIds = [];
-      try {
-        if (typeof song_like_check === 'function') {
-          const checked = await song_like_check({ ids: JSON.stringify(ids.map(Number).filter(Boolean)), cookie: userCookie, timestamp: Date.now() });
-          const data = (checked.body && (checked.body.data || checked.body.ids)) || checked.body || {};
-          if (Array.isArray(data)) likedIds = data.map(String);
-          else if (data && typeof data === 'object') {
-            ids.forEach(id => {
-              if (data[id] || data[String(id)] || data[Number(id)]) likedIds.push(String(id));
-            });
-          }
-        }
-      } catch (e) {
-        console.warn('[LikeCheck] direct check failed:', e.message);
-      }
-      if (!likedIds.length) {
-        const r = await likelist({ uid: info.userId, cookie: userCookie, timestamp: Date.now() });
-        likedIds = ((r.body && r.body.ids) || []).map(String);
-      }
-      const set = new Set(likedIds);
-      const liked = {};
-      ids.forEach(id => { liked[id] = set.has(String(id)); });
-      sendJSON(res, { loggedIn: true, ids, liked });
-    } catch (err) {
-      console.error('[LikeCheck]', err);
-      sendJSON(res, { error: err.message }, 500);
-    }
-    return;
-  }
-
-  // ---------- 红心/取消红心 ----------
-  if (pn === '/api/song/like') {
-    try {
-      const info = await requireLogin(res);
-      if (!info) return;
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const id = body.id || url.searchParams.get('id');
-      const nextLike = String(body.like != null ? body.like : (url.searchParams.get('like') || 'true')) !== 'false';
-      if (!id) { sendJSON(res, { error: 'Missing song id' }, 400); return; }
-      const r = await like_song({ id, like: String(nextLike), cookie: userCookie, timestamp: Date.now() });
-      const code = (r.body && r.body.code) || r.code || 200;
-      sendJSON(res, { loggedIn: true, id, liked: nextLike, code, body: r.body || r });
-    } catch (err) {
-      console.error('[Like]', err);
-      sendJSON(res, { error: err.message }, 500);
-    }
-    return;
-  }
-
-  // ---------- 创建歌单 ----------
-  if (pn === '/api/playlist/create') {
-    try {
-      const info = await requireLogin(res);
-      if (!info) return;
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const name = String(body.name || url.searchParams.get('name') || '').trim();
-      const privacy = String(body.privacy || url.searchParams.get('privacy') || '0');
-      if (!name) { sendJSON(res, { error: 'Missing playlist name' }, 400); return; }
-      const r = await playlist_create({ name, privacy, cookie: userCookie, timestamp: Date.now() });
-      const created = (r.body && (r.body.playlist || r.body.data)) || {};
-      sendJSON(res, { loggedIn: true, playlist: created, body: r.body || r });
-    } catch (err) {
-      console.error('[PlaylistCreate]', err);
-      sendJSON(res, { error: err.message }, 500);
-    }
-    return;
-  }
-
-  // ---------- 收藏歌曲到歌单 ----------
-  if (pn === '/api/playlist/add-song') {
-    try {
-      const info = await requireLogin(res);
-      if (!info) return;
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const pid = body.pid || url.searchParams.get('pid');
-      const id = body.id || body.ids || url.searchParams.get('id') || url.searchParams.get('ids');
-      if (!pid || !id) { sendJSON(res, { error: 'Missing playlist id or song id' }, 400); return; }
-      const attempts = [];
-      let finalBody = null;
-      let finalCode = 0;
-      let finalMessage = '';
-      let success = false;
-
-      const primary = await playlist_tracks({ op: 'add', pid, tracks: String(id), cookie: userCookie, timestamp: Date.now() });
-      finalBody = primary.body || primary;
-      finalCode = normalizeApiCode(primary);
-      finalMessage = normalizeApiMessage(primary);
-      success = finalCode === 200 && !(finalBody && finalBody.error);
-      attempts.push({ api: 'playlist_tracks', code: finalCode, message: finalMessage, body: finalBody });
-
-      if (!success && typeof playlist_track_add === 'function') {
-        try {
-          const fallback = await playlist_track_add({ pid, ids: String(id), cookie: userCookie, timestamp: Date.now() });
-          finalBody = fallback.body || fallback;
-          finalCode = normalizeApiCode(fallback);
-          finalMessage = normalizeApiMessage(fallback);
-          success = finalCode === 200 && !(finalBody && finalBody.error);
-          attempts.push({ api: 'playlist_track_add', code: finalCode, message: finalMessage, body: finalBody });
-        } catch (fallbackErr) {
-          const errBody = fallbackErr.body || fallbackErr.response || {};
-          finalBody = errBody;
-          finalCode = normalizeApiCode(errBody);
-          finalMessage = normalizeApiMessage(errBody) || fallbackErr.message || '';
-          attempts.push({ api: 'playlist_track_add', code: finalCode, message: finalMessage, body: errBody });
-        }
-      }
-
-      if (!success) {
-        sendJSON(res, { loggedIn: true, pid, id, success: false, code: finalCode, error: finalMessage || 'PLAYLIST_ADD_FAILED', attempts }, finalCode === 401 ? 401 : 409);
-        return;
-      }
-      invalidateNeteasePlaylistTrackIndex(pid);
-      sendJSON(res, { loggedIn: true, pid, id, success: true, code: finalCode, body: finalBody, attempts });
-    } catch (err) {
-      console.error('[PlaylistAddSong]', err);
-      sendJSON(res, { error: err.message }, 500);
-    }
-    return;
-  }
-
-  // ---------- 歌词 ----------
-  function lyricNodeText(body, key) {
-    return body && body[key] && typeof body[key].lyric === 'string' ? body[key].lyric : '';
-  }
-
-  function lyricBodyHasPrimary(body) {
-    return !!(lyricNodeText(body, 'lrc') || lyricNodeText(body, 'yrc'));
-  }
-
-  function lyricBodyHasTranslation(body) {
-    return !!(lyricNodeText(body, 'tlyric') || lyricNodeText(body, 'ytlrc'));
-  }
-
-  function mergeLyricBodies(primary, fallback) {
-    const merged = Object.assign({}, fallback || {}, primary || {});
-    ['lrc', 'tlyric', 'yrc', 'ytlrc', 'romalrc', 'yromalrc', 'klyric'].forEach((key) => {
-      if (!lyricNodeText(merged, key) && fallback && fallback[key]) merged[key] = fallback[key];
-    });
-    return merged;
   }
 
   if (pn === '/api/lyric') {
@@ -6987,7 +3460,7 @@ const server = http.createServer(async (req, res) => {
       let source = 'lyric';
       try {
         if (typeof lyric_new === 'function') {
-          const nr = await lyric_new({ id, cookie: userCookie, timestamp: Date.now() });
+          const nr = await lyric_new({ id, timestamp: Date.now() });
           body = nr.body || {};
           source = 'lyric_new';
         }
@@ -6995,7 +3468,7 @@ const server = http.createServer(async (req, res) => {
         console.warn('[LyricNew]', errNew.message);
       }
       if (!lyricBodyHasPrimary(body) || !lyricBodyHasTranslation(body)) {
-        const r = await lyric({ id, cookie: userCookie, timestamp: Date.now() });
+        const r = await lyric({ id, timestamp: Date.now() });
         body = mergeLyricBodies(body, r.body || {});
         source = source === 'lyric_new' ? 'lyric_new+lyric' : 'lyric';
       }
@@ -7016,68 +3489,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---------- 歌曲评论 ----------
-  if (pn === '/api/song/comments') {
-    try {
-      const requestBody = req.method === 'POST' ? await readRequestBody(req) : {};
-      const id = requestBody.id || url.searchParams.get('id');
-      if (req.method === 'POST') {
-        const info = await requireLogin(res);
-        if (!info) return;
-        const content = String(requestBody.content || requestBody.text || '').trim();
-        if (!id || !content) { sendJSON(res, { created: false, error: 'Missing song id or comment content' }, 400); return; }
-        const result = await comment({
-          t: requestBody.replyTo ? 2 : 1,
-          type: 0,
-          id,
-          commentId: requestBody.replyTo || '',
-          content,
-          cookie: userCookie,
-          timestamp: Date.now(),
-        });
-        const code = normalizeApiCode(result);
-        sendJSON(res, { provider: 'netease', id, created: code === 200, success: code === 200, code, body: result.body || result });
-        return;
-      }
-      const limit = Math.max(6, Math.min(50, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
-      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      if (!id) { sendJSON(res, { error: 'Missing song id', comments: [] }, 400); return; }
-      const r = await comment_music({ id, limit, offset, cookie: userCookie, timestamp: Date.now() });
-      const body = r.body || r || {};
-      const raw = body.hotComments && offset === 0 ? body.hotComments : (body.comments || []);
-      const comments = (raw || []).map(c => ({
-        id: c.commentId,
-        content: c.content || '',
-        likedCount: c.likedCount || 0,
-        time: c.time || 0,
-        user: c.user ? { id: c.user.userId, nickname: c.user.nickname || '', avatar: c.user.avatarUrl || '' } : null,
-      })).filter(c => c.content);
-      sendJSON(res, { id, total: body.total || 0, comments, hot: !!(body.hotComments && offset === 0), body });
-    } catch (err) {
-      console.error('[SongComments]', err);
-      sendJSON(res, { error: err.message, comments: [] }, 500);
-    }
-    return;
-  }
-
-  if (pn === '/api/song/comments/like') {
-    try {
-      const info = await requireLogin(res);
-      if (!info) return;
-      const body = req.method === 'POST' ? await readRequestBody(req) : {};
-      const id = body.id || url.searchParams.get('id') || '';
-      const cid = body.commentId || body.cid || url.searchParams.get('commentId') || '';
-      const liked = String(body.liked != null ? body.liked : (url.searchParams.get('liked') || 'true')) !== 'false';
-      if (!id || !cid) { sendJSON(res, { success: false, error: 'Missing song id or comment id' }, 400); return; }
-      const result = await comment_like({ type: 0, id, cid, t: liked ? 1 : 0, cookie: userCookie, timestamp: Date.now() });
-      const code = normalizeApiCode(result);
-      sendJSON(res, { provider: 'netease', id, commentId: cid, liked, success: code === 200, code, body: result.body || result });
-    } catch (err) {
-      console.error('[SongCommentLike]', err);
-      sendJSON(res, { provider: 'netease', success: false, error: err.message }, 500);
-    }
-    return;
-  }
-
   // ---------- 歌手主页 / 热门歌曲 ----------
   if (pn === '/api/artist/detail') {
     try {
@@ -7086,21 +3497,21 @@ const server = http.createServer(async (req, res) => {
       if (!id) { sendJSON(res, { error: 'Missing artist id', songs: [] }, 400); return; }
       let detailBody = {};
       try {
-        const detail = await artist_detail({ id, cookie: userCookie, timestamp: Date.now() });
+        const detail = await artist_detail({ id, timestamp: Date.now() });
         detailBody = detail.body || detail || {};
       } catch (e) {
         console.warn('[ArtistDetail] detail failed:', e.message);
       }
       let rawSongs = [];
       try {
-        const list = await artist_songs({ id, order: 'hot', limit, offset: 0, cookie: userCookie, timestamp: Date.now() });
+        const list = await artist_songs({ id, order: 'hot', limit, offset: 0, timestamp: Date.now() });
         const b = list.body || list || {};
         rawSongs = (b.songs || (b.data && b.data.songs) || []);
       } catch (e) {
         console.warn('[ArtistSongs] hot failed:', e.message);
       }
       if (!rawSongs.length) {
-        const top = await artist_top_song({ id, cookie: userCookie, timestamp: Date.now() });
+        const top = await artist_top_song({ id, timestamp: Date.now() });
         const b = top.body || top || {};
         rawSongs = b.songs || [];
       }
@@ -7855,13 +4266,6 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const range = req.headers.range || '';
-      if (audioUrl.includes('#auth=')) {
-        const decrypted = await getQishuiDecryptedAudio(audioUrl);
-        if (decrypted && decrypted.buffer) {
-          sendAudioBuffer(res, decrypted.buffer, decrypted.contentType, range);
-          return;
-        }
-      }
       // 批 T8 合并序（上游 :3169-3179）：宿主逐站默认 → h 白名单播放头覆盖 → 客户端 Range/If-Range。
       const hdr = mergeAudioProxyRequestHeaders(
         audioProxyHeadersFor(audioUrl, range),
@@ -8098,7 +4502,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log('======================================================');
   console.log(' 粒子音乐可视化 v2  →  http://localhost:' + PORT);
-  console.log(' 登录态: ' + (userCookie ? '已登录(cookie已加载)' : '未登录'));
   console.log('======================================================');
 });
 

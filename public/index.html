@@ -1583,12 +1583,8 @@
       <div class="spinner"></div>
     </div>
 
-    <canvas id="login-guide-canvas" aria-hidden="true"></canvas>
-
-    <!-- 16a：平台登录弹窗（#login-modal：五平台行 / 音源关系图谱 node-graph / 二维码 / Cookie
-         粘贴 / 退出登录）整套退役，右上角入口改本地档案页（#user-modal + 07-local-profile.js）；
-         收听统计卡（usage-total-time/usage-today-time）已并入档案页。
-         旧 01-05 登录 JS 的物理删除与官方路由退役属 16b/16c。 -->
+    <!-- 16a/16d：平台登录弹窗（#login-modal）、登录引导 canvas 与 cookie 导出提示整套退役，
+         右上角入口改本地档案页（#user-modal + 07-local-profile.js）；08-account 登录族 JS 已物理删除。 -->
 
     <!-- 音频路由牵线面板 -->
     <div id="audio-output-workflow-modal" class="modal-mask">
@@ -1853,17 +1849,6 @@
         <button type="button" onclick="submitCuefieldFeedback(1)">顺滑</button>
         <button type="button" onclick="submitCuefieldFeedback(2)">生硬</button>
         <button type="button" onclick="submitCuefieldFeedback(3)">不确定</button>
-      </div>
-    </div>
-    <div id="cookie-export-prompt" class="cookie-export-prompt" aria-live="polite">
-      <div class="cookie-export-card">
-        <div class="cookie-export-kicker">LOGIN COOKIE</div>
-        <div id="cookie-export-title" class="cookie-export-title">是否导出登录 cookie 到桌面？</div>
-        <div id="cookie-export-desc" class="cookie-export-desc">导出的文件会用于备份当前平台登录态。</div>
-        <div class="cookie-export-actions">
-          <button type="button" onclick="dismissCookieExportPrompt(false)">暂不导出</button>
-          <button class="primary" type="button" onclick="confirmCookieExportPrompt()">导出到桌面</button>
-        </div>
       </div>
     </div>
     <div id="source-fallback-notice" aria-live="polite">

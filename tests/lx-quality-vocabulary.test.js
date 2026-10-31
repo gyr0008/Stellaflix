@@ -30,7 +30,6 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 const P_00 = 'public/js/modules/05-playback/00-api-quality-output.js';
 const P_STORES = 'public/js/modules/00-state/00-core-stores.js';
-const P_LOGIN = 'public/js/modules/08-account/01-login-modal-utils.js';
 const P_13 = 'public/js/modules/05-playback/13-playback-start-audio.js';
 
 const LX_TIERS = ['master', 'flac24bit', 'flac', '320k', '128k'];
@@ -67,7 +66,7 @@ function makeSandbox(overrides) {
     if (!els[id]) els[id] = makeEl(id);
     return els[id];
   }
-  const calls = { toasts: [], notices: [], playQueueAt: [], loginOpens: [], prefSaves: [] };
+  const calls = { toasts: [], notices: [], playQueueAt: [], prefSaves: [] };
   const sandbox = Object.assign({
     console, JSON, Math, Date, String, Number, Array, Object, Boolean, Promise, setTimeout, clearTimeout, encodeURIComponent, AbortController,
     calls,
@@ -84,7 +83,6 @@ function makeSandbox(overrides) {
     forcePlaybackControlsInteractive: () => {},
     hasProviderSvip: () => false,
     hasPlatformLogin: () => false,
-    openProviderLogin: (p) => { calls.loginOpens.push(String(p)); },
     songProviderKey: (song) => (song && (song.provider || song.source)) || 'netease',
     playQueueAt: async (idx, opts) => { calls.playQueueAt.push({ idx, opts }); return true; },
     invalidateLxResolvedAudioCache: () => {},
@@ -220,26 +218,12 @@ test('T12①：PLAYBACK_QUALITY_OPTIONS 重写为 LX 五档（求值 00-core-sto
 
 // ---------- ② provider-VIP 门槛恒通过 ----------
 
-test('T12②：hasProviderSvip 门槛函数恒通过（cookie/VIP 判定退役，签名保留供调用点编译）', () => {
-  const loginSource = read(P_LOGIN);
-  const fnText = sliceBetween(loginSource, 'function hasProviderSvip(', '\nfunction hasPlatformLogin', P_LOGIN);
-  assert.ok(!/providerVipLevel/.test(fnText), '门槛函数体不再按 VIP 等级判定');
-  const sb = vm.runInNewContext(fnText + '\n;({ hasProviderSvip });', {
-    providerVipLevel: () => 'none',
-    platformStatus: () => ({ loggedIn: false }),
-  });
-  assert.equal(sb.hasProviderSvip('netease', {}), true, '未登录也必须通过（降级交给 probeWarning/服务端链）');
-  assert.equal(sb.hasProviderSvip('netease', { netease: { vipType: 'svip' } }), true);
-  assert.equal(sb.hasProviderSvip('qq', null), true);
-});
-
 test('T12②：setPlaybackQuality("master") 不再被 SVIP 门槛拦截、不开登录弹窗', () => {
   const sb = makeSandbox({
     playQueue: [{ provider: 'netease', id: 1, name: 'x', artist: 'y' }],
     currentIdx: 0,
   });
   sb.setPlaybackQuality('master');
-  assert.equal(sb.calls.loginOpens.length, 0, '无 SVIP 也不得打开登录');
   assert.equal(sb.playbackQualityPrefs.netease, 'master', '母带档直接落偏好');
   assert.ok(!sb.calls.toasts.some((t) => t.includes('SVIP')), '不得出现 SVIP 拦截 toast: ' + sb.calls.toasts.join(' / '));
 });

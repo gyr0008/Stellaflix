@@ -1,7 +1,7 @@
 // 本地 API 跨站请求防护回放测试：
 // 模拟"播放器自身窗口"与"陌生人浏览器里的恶意网页"两类请求，
 // 验证恶意来源读不到响应（无通配 CORS 头）、写不进状态（403），
-// 同时确认四条登录流依赖的同源/无头请求不被误伤。
+// 同时确认同源/无头写请求不被误伤。
 const test = require('node:test');
 const { after } = require('node:test');
 const assert = require('node:assert');
@@ -50,12 +50,12 @@ test('GET API：白名单 Origin 得到回显 + Vary: Origin', async () => {
   }
 });
 
-test('POST /api/login/cookie：恶意 Origin 被 403 拦截（登录态不可被网页替换）', async () => {
+test('POST /api/listen/report：恶意 Origin 被 403 拦截（本地状态不可被网页替换）', async () => {
   await waitListening();
-  const res = await fetch(BASE + '/api/login/cookie', {
+  const res = await fetch(BASE + '/api/listen/report', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: EVIL_ORIGIN },
-    body: JSON.stringify({ cookie: 'MUSIC_U=fake' }),
+    body: JSON.stringify({}),
   });
   assert.equal(res.status, 403);
   const data = await res.json();
@@ -64,7 +64,7 @@ test('POST /api/login/cookie：恶意 Origin 被 403 拦截（登录态不可被
 
 test('POST：无 Origin 但 Sec-Fetch-Site: cross-site 也被 403', async () => {
   await waitListening();
-  const res = await fetch(BASE + '/api/qq/login/cookie', {
+  const res = await fetch(BASE + '/api/listen/report', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' },
     body: '{}',
@@ -72,28 +72,28 @@ test('POST：无 Origin 但 Sec-Fetch-Site: cross-site 也被 403', async () => 
   assert.equal(res.status, 403);
 });
 
-test('POST：同源窗口提交空 cookie → 走到业务校验 400，未被误伤', async () => {
+test('POST：同源窗口提交空记录 → 走到业务处理 200，未被误伤', async () => {
   await waitListening();
   for (const origin of OK_ORIGINS) {
-    const res = await fetch(BASE + '/api/login/cookie', {
+    const res = await fetch(BASE + '/api/listen/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: origin },
       body: JSON.stringify({}),
     });
-    assert.notEqual(res.status, 403);
+    assert.equal(res.status, 200);
     const data = await res.json();
-    assert.equal(data.error, 'INVALID_NETEASE_COOKIE'); // 缺 MUSIC_U，进到了原逻辑
+    assert.equal(data.accepted, true);
   }
 });
 
 test('POST：本机无头流量（Electron 主进程 / curl 等价）不被误伤', async () => {
   await waitListening();
-  const res = await fetch(BASE + '/api/login/cookie', {
+  const res = await fetch(BASE + '/api/listen/report', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
   });
-  assert.notEqual(res.status, 403);
+  assert.equal(res.status, 200);
 });
 
 test('SSRF 私网拦截保持：GET /api/proxy 指向内网仍被拒', async () => {

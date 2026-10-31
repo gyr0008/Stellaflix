@@ -2020,12 +2020,6 @@ function playHomeNextFromDock() {
 }
 
 function openHomeDashboardLibrary() {
-  var loggedIn = typeof hasAnyPlatformLogin === 'function' && hasAnyPlatformLogin()
-    || homeDiscoverState && homeDiscoverState.loggedIn;
-  if (loggedIn && typeof openHomeLibrary === 'function') {
-    openHomeLibrary();
-    return;
-  }
   homeForcedOpen = false;
   homeSuppressed = false;
   if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false);
@@ -2050,7 +2044,7 @@ function homePlatformRecommendationSourceLabel(source) {
 function homePlatformRecommendationFeedConfig(source) {
   // 批 T15.5b：平台推荐卡内容源改指 lx cookie-less 元数据路由（T15.5a §6）——
   // platform-charts 出该平台可选榜单，daily-hot?platform=&chart= 出榜单歌曲；
-  // 官方 /api/qishui/feed、/api/kugou/recommendations、/api/spotify/recommendations
+  // 官方汽水 feed、酷狗 recommendations、Spotify recommendations
   // 三处消费点在此退役（路由删除归 T16，页签本身也随平台登录一并退役）。
   // lx 世界只有五家音源（tx/wy/kw/kg/mg）：汽水/Spotify 不是 lx 源，无榜单可给，
   // 返回 null 走「暂无平台推荐接口」空态（零网络请求，不做关键词搜索补位）。
@@ -2232,9 +2226,8 @@ function renderHomePlatformRecommendations() {
     } else {
       status.textContent = homeDiscoverState.error ? '网易云推荐读取失败' : '网易云暂未返回推荐内容';
       status.classList.toggle('is-error', !!homeDiscoverState.error);
-      list.innerHTML = homePlatformRecommendationEmptyHtml('netease', homeDiscoverState.loggedIn
-        ? '平台本次没有返回推荐内容，未使用搜索结果补位。'
-        : '登录网易云后可读取推荐歌单与每日推荐，未使用关键词搜索替代。');
+      list.innerHTML = homePlatformRecommendationEmptyHtml('netease',
+        '平台本次没有返回推荐内容，未使用关键词搜索替代。');
     }
     return;
   }
@@ -2464,14 +2457,8 @@ function openHomePlatformRecommendations(preferredSource) {
   mask.classList.add('show');
   mask.setAttribute('aria-hidden', 'false');
   // 15.5b：汽水/Spotify 在 lx 世界没有对应榜单源（feedConfig 为空），
-  // 登录态派生的默认页签改落到有 cookie-less 榜单的 QQ（tx）卡，避免一开面板就是空态。
-  var defaultSource = loginStatus && loginStatus.loggedIn
-    ? 'netease'
-    : (qishuiLoginStatus && (qishuiLoginStatus.loggedIn || qishuiLoginStatus.configured)
-      ? 'qq'
-      : (kugouLoginStatus && kugouLoginStatus.loggedIn
-        ? 'kugou'
-        : (spotifyLoginStatus && (spotifyLoginStatus.loggedIn || spotifyLoginStatus.configured) ? 'qq' : 'netease')));
+  // 无凭证状态下默认页签固定落网易云榜单卡。
+  var defaultSource = 'netease';
   var source = /^(netease|qishui|qq|kugou|spotify)$/.test(String(preferredSource || '')) ? preferredSource : defaultSource;
   loadHomePlatformRecommendations(source, false);
   setTimeout(function () {

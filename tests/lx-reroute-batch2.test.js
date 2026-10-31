@@ -133,7 +133,7 @@ function load(source, globals, exportExpr, filename) {
 // ── ① 红心本地桩 ──────────────────────────────────────────────────────────────
 
 const LIKE_SEGMENT = () => sliceBetween(read(P_DETAIL),
-  'var QISHUI_LIKE_ACCOUNT_ACTIONS_ENABLED', 'function toggleLikeCurrent', '06-track-detail');
+  'function songAccountProvider(song)', 'function toggleLikeCurrent', '06-track-detail');
 
 function loadLikeSandbox(options) {
   const storage = options.storage || makeStorage();
@@ -145,7 +145,6 @@ function loadLikeSandbox(options) {
     toasts,
     likedSongMap: Object.create(null),
     likeBusyMap: Object.create(null),
-    likeStatusToken: 0,
     collectBusy: false,
     miniQueueOpen: false,
     playlist: [],
@@ -156,13 +155,11 @@ function loadLikeSandbox(options) {
     showToast: (msg) => { toasts.push(String(msg)); },
     apiJson: async (url) => { httpCalls.push(String(url)); return { liked: {} }; },
     ensureLoggedInForAction: () => true,
-    showLoginModal() {},
     playlistAccountProvider: (pl) => (pl && pl.provider) || 'netease',
     userPlaylists: [],
-    loginStatus: {}, qqLoginStatus: {}, kugouLoginStatus: {}, qishuiLoginStatus: {}, spotifyLoginStatus: {},
   };
   return load(LIKE_SEGMENT(), globals,
-    'window.__exports = { SONG_ACCOUNT_ACTION_ADAPTERS, toggleLikeSong, restoreLocalLikedSongs, markSongsLiked,' +
+    'window.__exports = { toggleLikeSong, restoreLocalLikedSongs, markSongsLiked,' +
     ' isSongLiked, updateLikeButtons, syncLikeStatusForSongs, syncLikeStatusForSong, songAccountStateKey };',
     'lx-reroute-batch2.like.js');
 }
@@ -208,23 +205,14 @@ test('红心③：无稳定标识时隐藏 #heart-btn（上游 :28895 同款，�
   assert.equal(heart.style.display, '', '有标识恢复显示');
 });
 
-test('红心④：adapter 的 like/collect 写回端点字符串清零（官方路由只留 server 侧待 T16）', () => {
-  const { exports } = loadLikeSandbox({});
-  const adapters = exports.SONG_ACCOUNT_ACTION_ADAPTERS;
-  ['netease', 'kugou', 'spotify', 'qishui'].forEach((provider) => {
-    const adapter = adapters[provider];
-    assert.equal(adapter.like, false, `${provider} 在线红心须关`);
-    assert.equal(adapter.likeUrl, '', `${provider} likeUrl 须清空`);
-    assert.equal(adapter.likeCheckUrl, '', `${provider} likeCheckUrl 须清空`);
-  });
-  ['kugou', 'spotify', 'qishui'].forEach((provider) => {
-    assert.equal(adapters[provider].playlistTracksUrl, '', `${provider} 平台歌单写回 URL 须清空`);
-    assert.equal(adapters[provider].playlistAddUrl, '', `${provider} 平台歌单加歌 URL 须清空`);
-  });
+test('红心④：账号 adapter 整套退役，官方红心/歌单写回端点字符串清零', () => {
   const text = read(P_DETAIL);
+  assert.ok(!/SONG_ACCOUNT_ACTION_ADAPTERS/.test(text), '五平台账号 adapter 表须随 16d 物理删除');
   assert.ok(!/'\/api\/(song\/like|kugou\/song\/like|spotify\/song\/like|qishui\/song\/like)/.test(text),
     '06-track-detail 内官方红心端点字符串须清零');
   assert.ok(!/apiJson\(adapter\.likeUrl/.test(text), '在线红心请求链必须整体删除');
+  const likeSegment = LIKE_SEGMENT();
+  assert.ok(!/likeUrl|likeCheckUrl|playlistTracksUrl|playlistAddUrl/.test(likeSegment), '适配器字段在本段内零残留');
 });
 
 // ── ② 评论：不加载 + 文案 ─────────────────────────────────────────────────────
@@ -416,19 +404,11 @@ test('歌单③：导入失败/空歌单不落缓存，下次读取重新出网'
   assert.equal(post.opts.signal, signal, '调用方的 AbortController signal 须透传');
 });
 
-test('歌单④：写回收藏只剩网易云（官方 playlist/collect 消费点清零）', () => {
+test('歌单④：平台歌单收藏/写回整簇退役（LX 世界观无账号写回）', () => {
   const source = read(P_PLAYLIST_DETAIL);
-  assert.ok(!/\/api\/(qishui|spotify)\/playlist\/collect/.test(source), '官方歌单收藏写回须退役');
-  assert.match(source, /\/api\/playlist\/subscribe/);
-  assert.match(source, /canUncollect[\s\S]{0,140}provider === 'netease'/);
-  const { exports } = load(namedFunctionSource(source, 'togglePlaylistPanelCollection'), {
-    showToast() {},
-    playlistPanelDetailState: { key: 'qishui:9', loading: false },
-    normalizePlaylistProvider: (p) => (['qq', 'kugou', 'qishui', 'spotify', 'local'].indexOf(p) >= 0 ? p : 'netease'),
-    playlistProviderName: (p) => p,
-    apiJson: async () => { throw new Error('不应出网'); },
-  }, 'window.__exports = { togglePlaylistPanelCollection };', 'lx-reroute-batch2.collect.js');
-  return exports.togglePlaylistPanelCollection(true);
+  assert.ok(!/\/api\/(qishui|spotify|playlist)\/(playlist\/collect|subscribe)/.test(source), '官方歌单收藏写回须退役');
+  assert.ok(!/togglePlaylistPanelCollection|canUncollect/.test(source), '收藏按钮与判定函数须随 16d 退役');
+  assert.match(source, /pl-detail-play/);
 });
 
 // ── ④b 3D 货架曲目读取 / ④c 队列灌页：共用 lx 导入契约 ───────────────────────

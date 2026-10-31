@@ -149,7 +149,6 @@ function handleStartupAutoplayUnavailable(reason) {
   startupAutoplayJobId += 1;
   startupAutoplayAttemptCount = 0;
   startupAutoplayHomeFallbackTried = false;
-  if ((reason === 'local-missing' || reason === 'queue-empty') && tryStartupAutoplayHomeFallback(startupAutoplayJobId)) return;
   restoreHomeAfterStartupAutoplayFallback();
 }
 function startupAutoplayUnavailableReason() {
@@ -182,45 +181,6 @@ function scheduleStartupAutoplayRetry(jobId, reason, delay) {
   }, delay == null ? startupAutoplayRetryDelay(startupAutoplayAttemptCount) : delay);
   return true;
 }
-function tryStartupAutoplayHomeFallback(jobId) {
-  if (startupAutoplayHomeFallbackTried) return false;
-  if (!hasAnyPlatformLogin()) return false;
-  startupAutoplayHomeFallbackTried = true;
-  Promise.resolve().then(async function () {
-    try {
-      await waitForHomeDiscoverIdle(1800);
-      if (!homeDiscoverState.loaded || (!homeDiscoverState.songs.length && !homeDiscoverState.loading)) {
-        await loadHomeDiscover(true);
-      }
-      if (jobId !== startupAutoplayJobId || !startupAutoplayPreference || isStartupAutoplayPlaying()) return;
-      if (!homeDiscoverState.songs.length) {
-        restoreHomeAfterStartupAutoplayFallback();
-        return;
-      }
-      playQueue = homeDiscoverState.songs.map(cloneSong);
-      currentIdx = 0;
-      currentLocalSong = null;
-      pendingPlaybackResumeAt = 0;
-      startupRestoreHomePending = false;
-      startupAutoplayAttemptCount = 0;
-      safeRenderQueuePanel('startup-autoplay-home-fallback', { scrollCurrent: miniQueueOpen });
-      safeShelfRebuild('startup-autoplay-home-fallback', true);
-      forcePlaybackControlsInteractive();
-      await playQueueAt(0, { manual: false, startupAutoplay: true });
-      setTimeout(function () {
-        if (jobId !== startupAutoplayJobId || !startupAutoplayPreference) return;
-        if (isStartupAutoplayPlaying()) finishStartupAutoplayJob(true);
-        else scheduleStartupAutoplayRetry(jobId, 'home-fallback-retry', 420);
-      }, 360);
-    } catch (e) {
-      console.warn('[StartupAutoplayHomeFallback]', e);
-      if (jobId === startupAutoplayJobId && startupAutoplayPreference && !isStartupAutoplayPlaying()) {
-        restoreHomeAfterStartupAutoplayFallback();
-      }
-    }
-  });
-  return true;
-}
 function finishStartupAutoplayJob(success) {
   clearStartupAutoplayRetryTimer();
   if (success) {
@@ -228,7 +188,6 @@ function finishStartupAutoplayJob(success) {
     forcePlaybackControlsInteractive();
     return;
   }
-  if (tryStartupAutoplayHomeFallback(startupAutoplayJobId)) return;
   restoreHomeAfterStartupAutoplayFallback();
 }
 function runStartupAutoplayAttempt(jobId, reason) {

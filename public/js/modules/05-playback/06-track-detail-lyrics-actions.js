@@ -32,7 +32,6 @@ var detailAlbumSongs = [];
 var detailAlbumContext = null;
 var detailAlbumGaplessEnabled = true;
 var detailAlbumGaplessUserTouched = false;
-var detailAlbumCollectionState = Object.create(null);
 var detailCommentSong = null;
 var detailCommentSubmitBusy = false;
 function normalizeArtistNameForMatch(name) {
@@ -99,7 +98,7 @@ function currentAlbumKey(song) {
 // ── 批 T15.5b：专辑/歌手资料改由 lx 聚合搜索派生 ────────────────────────────
 // 上游 index.html:28261-28395（loadOnlineArtistDetail）形态：一次
 // /api/lx-source/search?q=<关键词>&limit=60&sources=wy,tx,kw,kg,mg → 逐字段过滤 → 铺曲目。
-// 官方 /api/qq/album/detail、/api/spotify/album/detail、/api/qq/artist/detail 的消费点在此退役
+// 官方 QQ/Spotify 专辑详情、QQ 歌手详情 的消费点在此退役
 // （路由删除归 T16）。网易云 /api/album/detail、/api/artist/detail 不是平台前缀路由，
 // 属 cookie 区，不属本批目标，原样保留待 T16 处置。
 var LX_DETAIL_SEARCH_SOURCES = 'wy,tx,kw,kg,mg';
@@ -164,81 +163,6 @@ function albumDetailMissingText(song) {
   if (provider === 'kugou') return '当前酷狗歌曲缺少专辑名，无法在 lx 音源中派生同专辑曲目。';
   if (provider === 'qishui') return '当前汽水歌曲缺少专辑名，无法在 lx 音源中派生同专辑曲目。';
   return '当前歌曲缺少可用专辑名称，重新搜索或播放新版结果后再打开专辑。';
-}
-function albumCollectionConfig(song) {
-  var provider = songProviderKey(song);
-  var albumId = song && (song.albumId || song.album_id || song.spotifyAlbumId || '');
-  if (!albumId) return null;
-  // 批 T15.5b：官方 /api/spotify/album/like、/api/qishui/album/collect 写回消费点退役
-  // （上游同款：lx 无平台账号写回）；网易云 cookie 路由非本批目标，保留待 T16。
-  if (provider === 'netease') return { provider: provider, id: String(albumId), endpoint: '/api/album/subscribe', field: 'subscribed', label: '网易云' };
-  return null;
-}
-function albumCollectionKey(song) {
-  var config = albumCollectionConfig(song);
-  return config ? (config.provider + ':' + config.id) : '';
-}
-function renderAlbumCollectionButton(song) {
-  var config = albumCollectionConfig(song);
-  if (!config) return '';
-  var key = albumCollectionKey(song);
-  var collected = !!detailAlbumCollectionState[key];
-  return '<button id="album-collection-toggle" class="detail-action-toggle' + (collected ? ' on' : '') + '" type="button" onclick="toggleAlbumCollection()">' +
-    (collected ? '已收藏专辑' : '收藏专辑') +
-    '</button>';
-}
-function syncAlbumCollectionButton(song) {
-  song = song || detailCommentSong || currentCoverSong();
-  var btn = document.getElementById('album-collection-toggle');
-  if (!btn) return;
-  var collected = !!detailAlbumCollectionState[albumCollectionKey(song)];
-  btn.classList.toggle('on', collected);
-  btn.textContent = collected ? '已收藏专辑' : '收藏专辑';
-}
-function syncAlbumCollectionState(song) {
-  var config = albumCollectionConfig(song);
-  if (!config || !isSongAccountLoggedIn(config.provider)) return;
-  var url = '';
-  var responseField = '';
-  if (config.provider === 'netease') {
-    url = '/api/album/subscribe/check?ids=' + encodeURIComponent(config.id);
-    responseField = 'subscribed';
-  }
-  if (!url) return;
-  apiJson(url).then(function (result) {
-    if (!result || result.error || !result[responseField]) return;
-    detailAlbumCollectionState[albumCollectionKey(song)] = !!result[responseField][config.id];
-    syncAlbumCollectionButton(song);
-  }).catch(function () {});
-}
-async function toggleAlbumCollection() {
-  var song = detailCommentSong || currentCoverSong();
-  var config = albumCollectionConfig(song);
-  if (!config) { showToast('当前平台暂不支持收藏专辑'); return; }
-  if (!ensureLoggedInForAction(config.provider)) return;
-  var key = albumCollectionKey(song);
-  var next = !detailAlbumCollectionState[key];
-  var payload = { id: config.id, albumId: config.id };
-  payload[config.field] = next;
-  var btn = document.getElementById('album-collection-toggle');
-  if (btn) btn.classList.add('busy');
-  try {
-    var result = await apiJson(config.endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!result || result.error || result.success === false) throw new Error(result && (result.message || result.error) || 'ALBUM_COLLECTION_FAILED');
-    detailAlbumCollectionState[key] = next;
-    syncAlbumCollectionButton(song);
-    showToast(next ? '专辑已收藏到' + config.label : '已取消收藏专辑');
-  } catch (err) {
-    showToast(/SCOPE|PERMISSION/i.test(String(err && err.message || ''))
-      ? '请重新授权后再收藏专辑'
-      : '专辑收藏操作失败');
-  } finally {
-    if (btn) btn.classList.remove('busy');
-  }
 }
 function renderAlbumGaplessButton() {
   return '<button id="album-gapless-toggle" class="detail-action-toggle' + (detailAlbumGaplessEnabled ? ' on' : '') + '" type="button" onclick="toggleAlbumGaplessPlayback()">' +
@@ -335,7 +259,7 @@ function renderDetailComments(comments) {
 }
 // 批 T15.5b：在线评论按上游删除——上游 index.html:28354-28390 的「歌曲详情」形态是
 // `detailCanLoadComments = false` + 一句说明文案，评论既不读取也不写入。
-// 官方 /api/song/comments、/api/{qq,qishui}/song/comments 消费点在此整体退役（路由删除归 T16）。
+// 官方网易云评论、QQ/汽水评论 消费点在此整体退役（路由删除归 T16）。
 // 保留函数本身：详情页仍按「无评论接口」渲染空态，写评论入口（composer）随之不出现。
 function detailCommentsConfig(song) {
   return null;
@@ -367,39 +291,6 @@ function loadDetailComments(song, seq) {
     if (seq === trackDetailSeq && nextTarget) nextTarget.innerHTML = '<div class="detail-empty">评论加载失败</div>';
     bindTrackDetailScrollers();
   });
-}
-async function submitDetailComment() {
-  if (detailCommentSubmitBusy || !detailCommentSong) return;
-  var config = detailCommentsConfig(detailCommentSong);
-  if (!config || !config.canWrite || !config.writeUrl) {
-    showToast('当前平台评论只读');
-    return;
-  }
-  if (!ensureLoggedInForAction(config.provider)) return;
-  var input = document.getElementById('detail-comment-input');
-  var content = String(input && input.value || '').trim();
-  if (!content) { showToast('先输入评论内容'); return; }
-  detailCommentSubmitBusy = true;
-  var button = document.getElementById('detail-comment-submit');
-  if (button) { button.disabled = true; button.textContent = '发送中'; }
-  try {
-    var result = await apiJson(config.writeUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: config.id, content: content })
-    });
-    if (!result || result.error || result.success === false || result.created === false) {
-      throw new Error(result && (result.message || result.error) || 'COMMENT_CREATE_FAILED');
-    }
-    if (input) input.value = '';
-    showToast('评论已发布');
-    await loadDetailComments(detailCommentSong, trackDetailSeq);
-  } catch (err) {
-    showToast('评论发布失败' + (err && err.message ? ': ' + err.message : ''));
-  } finally {
-    detailCommentSubmitBusy = false;
-    if (button) { button.disabled = false; button.textContent = '发送'; }
-  }
 }
 function renderArtistSongList(songs) {
   detailArtistSongs = (songs || []).map(cloneSong);
@@ -510,10 +401,9 @@ function openTrackDetailModal(type, songOverride) {
       '<span class="detail-chip">' + escHtml(songSourceLabel(song)) + '</span>' +
       '<span class="detail-chip">按专辑顺序播放</span>' +
       '</div>' +
-      '<div class="detail-section"><div class="detail-section-head"><div class="detail-section-title">专辑曲目</div><div class="detail-section-actions">' + renderAlbumCollectionButton(song) + renderAlbumGaplessButton() + '</div></div><div id="album-song-list">' +
+      '<div class="detail-section"><div class="detail-section-head"><div class="detail-section-title">专辑曲目</div><div class="detail-section-actions">' + renderAlbumGaplessButton() + '</div></div><div id="album-song-list">' +
       (albumUrl ? '<div class="detail-loading">正在载入专辑曲目...</div>' : '<div class="detail-empty">' + escHtml(albumDetailMissingText(song)) + '</div>') +
       '</div></div>';
-    syncAlbumCollectionState(song);
     if (albumUrl) {
       apiJson(albumUrl).then(function (r) {
         if (seq !== trackDetailSeq) return;
@@ -575,7 +465,7 @@ function openTrackDetailModal(type, songOverride) {
   } else if (type === 'artist') {
     var artistId = currentArtistId(song);
     var artistName = artists.join(' / ') || song.artist || '未知歌手';
-    // 批 T15.5b：官方 /api/qq/artist/detail 消费点退役——QQ/酷狗/汽水/Spotify/lx 源歌手
+    // 批 T15.5b：官方 QQ 歌手详情消费点退役——QQ/酷狗/汽水/Spotify/lx 源歌手
     // 一律改由 lx 聚合搜索派生（上游 index.html:28261 loadOnlineArtistDetail 同款）。
     var artistDetailUrl = artistId
       ? ('/api/artist/detail?id=' + encodeURIComponent(artistId) + '&limit=36')
@@ -726,7 +616,7 @@ function openArtistDetailForSong(song) {
   }
 }
 function resolveArtistSongForDetail(song, artist) {
-  // 批 T15.5b：官方 /api/qq/search、/api/search 消费点退役——改由 lx 聚合搜索派生，
+  // 批 T15.5b：官方 QQ 搜索、网易云搜索 消费点退役——改由 lx 聚合搜索派生，
   // 取第一首「歌手名精确匹配且带任一稳定标识」的结果（上游 loadOnlineArtistDetail 同源）。
   var url = lxDetailSearchUrl(artist, 20);
   if (!url) return Promise.resolve(null);
@@ -1190,84 +1080,8 @@ function deleteCustomLyricForCurrent() {
   setCustomLyricStatus('已删除，恢复原歌词', 'good');
   showToast('已恢复原歌词');
 }
-// 批 T15.5b：红心在线同步整体退役（上游 index.html:28893-28894 toggleLikeSong 本地桩 +
-// :28861 syncLikeStatusForSongs 直接 return）——like/likeCheckUrl/likeUrl 全部置空，
-// 官方 /api/song/like、/api/{kugou,spotify,qishui}/song/like 及平台歌单写回的消费点清零。
-// 红心状态改由本地 localStorage 桩承担（见下方 LOCAL_LIKED_SONGS_KEY）。
-// 平台前缀的 playlistAddUrl/playlistTracksUrl/playlistCreateUrl 一并置空（collect 关闭）；
-// 网易云 cookie 路由（/api/playlist/add-song 等）不是本批改道目标，原样保留待 T16。
-var QISHUI_LIKE_ACCOUNT_ACTIONS_ENABLED = false;
-var QISHUI_PLAYLIST_WRITE_ACTIONS_ENABLED = false;
-var SONG_ACCOUNT_ACTION_ADAPTERS = {
-  netease: {
-    provider: 'netease',
-    label: '网易云音乐',
-    like: false,
-    collect: true,
-    createPlaylist: true,
-    likeCheckUrl: '',
-    likeCheckParam: 'ids',
-    likeUrl: '',
-    playlistAddUrl: '/api/playlist/add-song',
-    playlistCreateUrl: '/api/playlist/create',
-    playlistTracksUrl: '/api/playlist/tracks'
-  },
-  kugou: {
-    provider: 'kugou',
-    label: '酷狗音乐',
-    like: false,
-    collect: false,
-    createPlaylist: false,
-    likeCheckUrl: '',
-    likeCheckParam: 'hashes',
-    likeUrl: '',
-    playlistAddUrl: '',
-    playlistCreateUrl: '',
-    playlistTracksUrl: ''
-  },
-  spotify: {
-    provider: 'spotify',
-    label: 'Spotify',
-    like: false,
-    collect: false,
-    createPlaylist: false,
-    likeCheckUrl: '',
-    likeCheckParam: 'ids',
-    likeUrl: '',
-    playlistAddUrl: '',
-    playlistCreateUrl: '',
-    playlistTracksUrl: ''
-  },
-  qishui: {
-    provider: 'qishui',
-    label: '汽水音乐',
-    like: QISHUI_LIKE_ACCOUNT_ACTIONS_ENABLED,
-    collect: QISHUI_PLAYLIST_WRITE_ACTIONS_ENABLED,
-    createPlaylist: false,
-    likeCheckUrl: '',
-    likeCheckParam: 'ids',
-    likeUrl: '',
-    playlistAddUrl: '',
-    playlistCreateUrl: '',
-    playlistTracksUrl: ''
-  },
-  qq: {
-    provider: 'qq',
-    label: 'QQ 音乐',
-    like: false,
-    collect: false,
-    createPlaylist: false,
-    readOnly: true
-  },
-  local: {
-    provider: 'local',
-    label: '本地歌单',
-    like: false,
-    collect: true,
-    createPlaylist: true,
-    localOnly: true
-  }
-};
+// 批 T16d：LX 世界观没有平台账号写回；红心沿用本地 localStorage 桩（15.5b 形态），
+// 收藏弹窗只服务本地歌单（localPlaylistStore），平台写回/登录闸整簇退役。
 function songAccountProvider(song) {
   if (!song || song.type === 'local') return 'local';
   if (typeof songProviderKey === 'function') return songProviderKey(song);
@@ -1276,10 +1090,6 @@ function songAccountProvider(song) {
   if (song.provider === 'qishui' || song.source === 'qishui' || song.type === 'qishui') return 'qishui';
   if (song.provider === 'kugou' || song.source === 'kugou' || song.type === 'kugou' || song.hash || song.audioHash) return 'kugou';
   return 'netease';
-}
-function songAccountAdapter(songOrProvider) {
-  var provider = typeof songOrProvider === 'string' ? songOrProvider : songAccountProvider(songOrProvider);
-  return SONG_ACCOUNT_ACTION_ADAPTERS[provider] || null;
 }
 function songAccountIdentityValues(song, provider) {
   song = song || {};
@@ -1318,26 +1128,6 @@ function playlistAccountProvider(playlist) {
   var provider = String(playlist && (playlist.provider || playlist.source) || '').toLowerCase();
   return /^(netease|qq|kugou|qishui|spotify)$/.test(provider) ? provider : 'netease';
 }
-function songAccountLoginStatus(provider) {
-  if (provider === 'spotify') return spotifyLoginStatus || {};
-  if (provider === 'qishui') return qishuiLoginStatus || {};
-  if (provider === 'kugou') return kugouLoginStatus || {};
-  if (provider === 'qq') return qqLoginStatus || {};
-  return loginStatus || {};
-}
-function isSongAccountLoggedIn(provider) {
-  var status = songAccountLoginStatus(provider);
-  if (provider === 'kugou') return !!(status.loggedIn && status.playbackKeyReady);
-  if (provider === 'qishui') return !!(status.loggedIn && (status.webSession || status.cookieReady));
-  return !!status.loggedIn;
-}
-function songAccountUnsupportedMessage(provider, action) {
-  var adapter = songAccountAdapter(provider);
-  if (adapter && adapter.readOnly) return adapter.label + '当前仅支持读取账号收藏，暂不支持写回';
-  if (provider === 'qishui') return '汽水音乐当前会话暂不支持此账号操作';
-  if (provider === 'local') return '本地文件暂不支持同步' + (action === 'collect' ? '到歌单' : '红心');
-  return (adapter && adapter.label || '当前平台') + '暂不支持此操作';
-}
 function isCloudSong(song) {
   return !!(song && song.id && songAccountProvider(song) === 'netease');
 }
@@ -1365,14 +1155,6 @@ function restoreLocalLikedSongs() {
 function isSongLiked(song) {
   var key = songAccountStateKey(song);
   return !!(key && likedSongMap[key]);
-}
-function ensureLoggedInForAction(provider) {
-  provider = provider || 'netease';
-  if (isSongAccountLoggedIn(provider)) return true;
-  var adapter = songAccountAdapter(provider);
-  showToast('登录' + (adapter && adapter.label || '对应平台') + '后可同步账号收藏');
-  showLoginModal({ provider: provider });
-  return false;
 }
 function updateLikeButtons(song) {
   song = song || currentCoverSong();
@@ -1412,7 +1194,7 @@ function songActionHtml(kind, source, index, song) {
 function syncLikeStatusForSongs(songs) {
   // 批 T15.5b：在线红心状态批量核查退役（上游 index.html:28861-28863 同款——直接 return）。
   // 红心状态只来自本地 localStorage 桩，因此没有任何需要回填的在线态；
-  // 官方 /api/song/like/check 与 /api/{kugou,spotify,qishui}/song/like/check 消费点清零。
+  // 官方网易云红心核查与酷狗/Spotify/汽水红心核查 消费点清零。
   return;
 }
 function syncLikeStatusForSong(song) {
@@ -1457,7 +1239,7 @@ function refreshSearchResultActionStates() {
 }
 async function toggleLikeSong(song) {
   // 批 T15.5b：红心本地桩——不打任何账号接口（上游 index.html:28893-28894 toggleLikeSong
-  // 只留本地状态+提示的形态）。官方 /api/song/like、/api/{kugou,spotify,qishui}/song/like
+  // 只留本地状态+提示的形态）。官方网易云红心、酷狗/Spotify/汽水红心
   // 消费点清零，SCOPE/LOGIN_REQUIRED 等在线失败链一并退役。
   var stateKey = songAccountStateKey(song);
   if (!stateKey) {
@@ -1477,26 +1259,14 @@ function toggleLikeSearchResult(i) { if (playlist[i]) toggleLikeSong(playlist[i]
 function toggleLikeQueueIndex(i) { if (playQueue[i]) toggleLikeSong(playQueue[i]); }
 function toggleLikeDetailSong(song) { toggleLikeSong(song); }
 function openCollectModal(song) {
-  var provider = songAccountProvider(song);
-  var adapter = songAccountAdapter(provider);
-  var isLocalCollect = provider === 'local';
-  if (isLocalCollect) {
-    if (typeof localPlaylistStore === 'undefined' || !localPlaylistStore) {
-      showToast('本地歌单尚未初始化');
-      return;
-    }
-    if (typeof ensureLocalUserPlaylistsLoaded === 'function') ensureLocalUserPlaylistsLoaded();
-  } else if (!adapter || !adapter.collect || !adapter.playlistAddUrl) {
-    showToast(songAccountUnsupportedMessage(provider, 'collect'));
+  if (typeof localPlaylistStore === 'undefined' || !localPlaylistStore) {
+    showToast('本地歌单尚未初始化');
     return;
   }
-  if (!isLocalCollect && !ensureLoggedInForAction(provider)) return;
+  if (typeof ensureLocalUserPlaylistsLoaded === 'function') ensureLocalUserPlaylistsLoaded();
   collectTargetSong = song;
   renderCollectModal();
   openGsapModal(document.getElementById('collect-modal'));
-  if (!isLocalCollect) {
-    refreshUserPlaylists(true).then(function () { renderCollectModal(); }).catch(function () { renderCollectModal(); });
-  }
 }
 function openCollectModalForCurrent() { openCollectModal(currentCoverSong()); }
 function collectSearchResult(i) { if (playlist[i]) openCollectModal(playlist[i]); }
@@ -1517,206 +1287,54 @@ function renderCollectModal() {
   var cover = songCoverSrc(song, 80);
   current.innerHTML = (cover ? '<img src="' + cover + '" alt="">' : '<div class="cover-placeholder"></div>') +
     '<div style="min-width:0"><div class="collect-title">' + escHtml(song.name || '当前歌曲') + '</div><div class="collect-sub">' + escHtml(song.artist || '') + '</div></div>';
-  var provider = songAccountProvider(song);
-  var adapter = songAccountAdapter(provider);
-  if (!adapter || !adapter.collect) {
-    list.innerHTML = '<div class="collect-empty">' + escHtml(songAccountUnsupportedMessage(provider, 'collect')) + '</div>';
+  var locals = (typeof localPlaylistStore !== 'undefined' && localPlaylistStore) ? localPlaylistStore.list() : [];
+  if (!locals.length) {
+    list.innerHTML = '<div class="collect-empty">还没有本地歌单，输入名称先建一个</div>';
     return;
   }
-  if (provider === 'local') {
-    var locals = (typeof localPlaylistStore !== 'undefined' && localPlaylistStore) ? localPlaylistStore.list() : [];
-    if (!locals.length) {
-      list.innerHTML = '<div class="collect-empty">还没有本地歌单，输入名称先建一个</div>';
-      return;
-    }
-    list.innerHTML = locals.map(function (pl) {
-      var thumb = pl.cover ? coverUrlWithSize(pl.cover, 80) : '';
-      return '<div class="collect-item" data-collect-pid="' + escHtml(String(pl.id || '')) + '" onclick="addCollectTargetToPlaylist(this.getAttribute(\'data-collect-pid\'))">' +
-        (thumb ? '<img src="' + thumb + '" alt="">' : '<div class="cover-placeholder"></div>') +
-        '<div style="min-width:0"><div class="collect-title">' + escHtml(pl.name || '') + '</div><div class="collect-sub">' + (Array.isArray(pl.songs) ? pl.songs.length : (pl.trackCount || 0)) + ' 首 · 本地</div></div>' +
-        '</div>';
-    }).join('');
-    if (window.gsap) animateListItems(list, '.collect-item', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 18 });
-    return;
-  }
-  if (!isSongAccountLoggedIn(provider)) {
-    list.innerHTML = '<div class="collect-empty">登录' + escHtml(adapter.label) + '后显示你的歌单</div>';
-    return;
-  }
-  if (!userPlaylists.length) {
-    list.innerHTML = miniQueueSkeleton();
-    return;
-  }
-  var mine = userPlaylists.filter(function (pl) {
-    return playlistAccountProvider(pl) === provider && !pl.subscribed && !pl.virtual;
-  });
-  if (!mine.length) {
-    list.innerHTML = '<div class="collect-empty">还没有可写入的歌单，可以先新建一个</div>';
-    return;
-  }
-  list.innerHTML = mine.map(function (pl) {
+  list.innerHTML = locals.map(function (pl) {
     var thumb = pl.cover ? coverUrlWithSize(pl.cover, 80) : '';
     return '<div class="collect-item" data-collect-pid="' + escHtml(String(pl.id || '')) + '" onclick="addCollectTargetToPlaylist(this.getAttribute(\'data-collect-pid\'))">' +
       (thumb ? '<img src="' + thumb + '" alt="">' : '<div class="cover-placeholder"></div>') +
-      '<div style="min-width:0"><div class="collect-title">' + escHtml(pl.name || '') + '</div><div class="collect-sub">' + (pl.trackCount || 0) + ' 首</div></div>' +
+      '<div style="min-width:0"><div class="collect-title">' + escHtml(pl.name || '') + '</div><div class="collect-sub">' + (Array.isArray(pl.songs) ? pl.songs.length : (pl.trackCount || 0)) + ' 首 · 本地</div></div>' +
       '</div>';
   }).join('');
   if (window.gsap) animateListItems(list, '.collect-item', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 18 });
 }
-function setCollectBusyPid(pid, busy) {
-  var list = document.getElementById('collect-list');
-  if (!list) return;
-  list.querySelectorAll('.collect-item').forEach(function (item) {
-    item.classList.toggle('busy', !!busy && item.getAttribute('data-collect-pid') === String(pid));
-  });
-}
 async function createPlaylistFromCollect() {
-  var provider = songAccountProvider(collectTargetSong);
-  var adapter = songAccountAdapter(provider);
-  if (provider === 'local') {
-    if (typeof localPlaylistStore === 'undefined' || !localPlaylistStore) {
-      showToast('本地歌单尚未初始化');
-      return;
-    }
-    var localInput = document.getElementById('collect-new-name');
-    var localName = localInput ? localInput.value.trim() : '';
-    if (!localName) { showToast('先输入歌单名称'); return; }
-    var localCreate = localPlaylistStore.create(localName);
-    if (!localCreate || !localCreate.ok) {
-      showToast((localCreate && localCreate.message) || '新建歌单失败');
-      return;
-    }
-    if (localInput) localInput.value = '';
-    if (collectTargetSong && typeof addCollectTargetToPlaylist === 'function') {
-      await addCollectTargetToPlaylist(localCreate.playlist.id);
-    } else {
-      showToast('歌单已创建');
-    }
+  if (typeof localPlaylistStore === 'undefined' || !localPlaylistStore) {
+    showToast('本地歌单尚未初始化');
     return;
   }
-  if (!adapter || !adapter.createPlaylist || !adapter.playlistCreateUrl) {
-    showToast((adapter && adapter.label || '当前平台') + '暂不支持在 Stellaflix 内新建歌单');
-    return;
-  }
-  if (!ensureLoggedInForAction(provider)) return;
   var input = document.getElementById('collect-new-name');
   var name = input ? input.value.trim() : '';
   if (!name) { showToast('先输入歌单名称'); return; }
-  try {
-    var r = await apiJson(adapter.playlistCreateUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name })
-    });
-    if (r && (r.error || r.success === false)) throw new Error(r.error || r.message || 'PLAYLIST_CREATE_FAILED');
-    if (input) input.value = '';
+  var created = localPlaylistStore.create(name);
+  if (!created || !created.ok) {
+    showToast((created && created.message) || '新建歌单失败');
+    return;
+  }
+  if (input) input.value = '';
+  if (collectTargetSong && typeof addCollectTargetToPlaylist === 'function') {
+    await addCollectTargetToPlaylist(created.playlist.id);
+  } else {
     showToast('歌单已创建');
-    await refreshUserPlaylists(true);
-    renderCollectModal();
-    var created = r && r.playlist;
-    var pid = created && created.id;
-    if (pid && collectTargetSong) addCollectTargetToPlaylist(pid);
-  } catch (err) {
-    showToast('创建歌单失败');
   }
-}
-function collectResultMessage(r) {
-  if (!r) return '收藏失败';
-  var msg = r.error || r.message || r.msg || '';
-  if (/LOGIN_REQUIRED|AUTH_REQUIRED/i.test(String(msg))) return '平台登录状态已失效，请重新登录';
-  if (/SCOPE|PERMISSION/i.test(String(msg))) return '当前授权缺少收藏写入权限，请重新授权';
-  if (/exist|重复|已存在|already/i.test(String(msg))) return '歌曲已在歌单中';
-  return msg ? ('收藏失败: ' + msg) : '收藏失败';
-}
-function playlistTracksPageUrl(adapter, pid, offset, limit) {
-  var url = adapter.playlistTracksUrl + '?id=' + encodeURIComponent(pid);
-  if (limit) url += '&limit=' + encodeURIComponent(String(limit));
-  if (offset) url += '&offset=' + encodeURIComponent(String(offset));
-  return url;
-}
-function playlistContainsAccountSong(tracks, song, provider) {
-  var expected = songAccountIdentityValues(song, provider);
-  if (!expected.length) return false;
-  var expectedSet = Object.create(null);
-  expected.forEach(function (id) { expectedSet[id] = true; });
-  return (tracks || []).some(function (track) {
-    return songAccountIdentityValues(track, provider).some(function (id) { return !!expectedSet[id]; });
-  });
-}
-async function verifySongInPlaylist(pid, song) {
-  var provider = songAccountProvider(song);
-  var adapter = songAccountAdapter(provider);
-  if (!pid || !adapter || !adapter.playlistTracksUrl || !songAccountId(song, provider)) return false;
-  var pageLimit = provider === 'spotify' || provider === 'qishui' ? 50 : 200;
-  for (var attempt = 0; attempt < 3; attempt++) {
-    if (attempt) {
-      await new Promise(function (resolve) { setTimeout(resolve, attempt === 1 ? 360 : 820); });
-    }
-    try {
-      var detail = await apiJson(playlistTracksPageUrl(adapter, pid, 0, pageLimit));
-      var tracks = (detail && detail.tracks) || [];
-      if (playlistContainsAccountSong(tracks, song, provider)) return true;
-      var total = Math.max(0, Number(detail && (detail.total || (detail.playlist && detail.playlist.trackCount))) || 0);
-      var lastOffset = total > pageLimit ? Math.max(0, total - pageLimit) : 0;
-      if (lastOffset) {
-        var lastPage = await apiJson(playlistTracksPageUrl(adapter, pid, lastOffset, pageLimit));
-        if (playlistContainsAccountSong((lastPage && lastPage.tracks) || [], song, provider)) return true;
-      }
-    } catch (e) {
-      console.warn(provider + ' collect verify failed:', e);
-    }
-  }
-  return false;
 }
 async function addCollectTargetToPlaylist(pid) {
-  if (collectBusy || !collectTargetSong || !pid) return;
+  if (!collectTargetSong || !pid) return;
   var targetSong = collectTargetSong;
-  var provider = songAccountProvider(targetSong);
-  var localPl = (typeof localPlaylistStore !== 'undefined' && localPlaylistStore && localPlaylistStore.get) ? localPlaylistStore.get(pid) : null;
-  if (localPl) {
-    var localResult = localPlaylistStore.addSong(pid, targetSong);
-    if (localResult && localResult.ok) {
-      showToast(localResult.duplicate ? '歌曲已在歌单中' : '已收藏到本地歌单');
-      if (!localResult.duplicate && typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
-      closeCollectModal();
-    } else {
-      showToast((localResult && localResult.message) || '收藏失败');
-    }
+  if (typeof localPlaylistStore === 'undefined' || !localPlaylistStore) {
+    showToast('本地歌单尚未初始化');
     return;
   }
-  var adapter = songAccountAdapter(provider);
-  if (!adapter || !adapter.collect || !adapter.playlistAddUrl) {
-    showToast(songAccountUnsupportedMessage(provider, 'collect'));
-    return;
-  }
-  if (!ensureLoggedInForAction(provider)) return;
-  collectBusy = true;
-  setCollectBusyPid(pid, true);
-  updateLikeButtons();
-  showToast('正在收藏到歌单...');
-  try {
-    var songId = songAccountId(targetSong, provider);
-    if (!songId) throw new Error('当前歌曲缺少' + adapter.label + '歌曲标识');
-    var r = await apiJson(adapter.playlistAddUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pid: pid, id: songId, song: targetSong })
-    });
-    if (!r || r.error || r.success === false) throw new Error(collectResultMessage(r));
-    showToast('已收藏到歌单');
+  var result = localPlaylistStore.addSong(pid, targetSong);
+  if (result && result.ok) {
+    showToast(result.duplicate ? '歌曲已在歌单中' : '已收藏到本地歌单');
+    if (!result.duplicate && typeof refreshHomeDashboardLocalMusic === 'function') refreshHomeDashboardLocalMusic(true);
     closeCollectModal();
-    refreshUserPlaylists(true);
-    setTimeout(function () {
-      verifySongInPlaylist(pid, targetSong).then(function (ok) {
-        if (!ok) console.warn(provider + ' collect submitted but verify did not find song yet:', pid, songId);
-      });
-    }, 900);
-  } catch (err) {
-    showToast(err && err.message ? err.message : '收藏失败');
-  } finally {
-    collectBusy = false;
-    setCollectBusyPid(pid, false);
-    updateLikeButtons();
+  } else {
+    showToast((result && result.message) || '收藏失败');
   }
 }
 function cloneSong(song) { return hydrateCustomCover(Object.assign({}, song)); }
@@ -1730,8 +1348,6 @@ function avatarSrc(url) {
 // 内联 onclick 引用的 async 函数必须显式挂载（与 window.apiJson 同理）。
 window.createPlaylistFromCollect = createPlaylistFromCollect;
 window.addCollectTargetToPlaylist = addCollectTargetToPlaylist;
-window.toggleAlbumCollection = toggleAlbumCollection;
-window.submitDetailComment = submitDetailComment;
 
 // ============================================================
 //  搜索

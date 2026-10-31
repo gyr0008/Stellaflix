@@ -112,7 +112,6 @@ function makeCanvasStub(recorder) {
 function loadProfileModule(options) {
   options = options || {};
   const recorder = { drawCalls: [], toDataURLCalls: [], fillRectCalls: [], fillStyle: '' };
-  const loginModalOpens = [];
   const gsapOpens = [];
   const toasts = [];
   const els = new Map();
@@ -157,9 +156,6 @@ function loadProfileModule(options) {
     localStorage: makeStorage(options.storageSeed),
     FileReader: FileReaderStub,
     Image: ImageStub,
-    // 旧登录链桩：新入口绝不允许再触碰它们。
-    showLoginModal: (opts) => { loginModalOpens.push(opts || {}); },
-    hasAnyPlatformLogin: () => !!options.anyPlatformLogin,
     openGsapModal: (mask) => { gsapOpens.push(mask); },
     showToast: (msg) => { toasts.push(String(msg)); },
   });
@@ -185,7 +181,7 @@ function loadProfileModule(options) {
     sandbox,
     els,
     recorder,
-    calls: { loginModalOpens, gsapOpens, toasts },
+    calls: { gsapOpens, toasts },
   };
 }
 
@@ -255,7 +251,7 @@ test('16a-4 昵称展示 HTML 转义：胶囊 innerHTML 注入 <script> 必须�
 // ---------- 胶囊常驻渲染（覆盖 renderUserBtn） ----------
 
 test('16a-5 胶囊常驻：未登录任何平台也显示头像+「未设置昵称」', () => {
-  const ctx = loadProfileModule({ anyPlatformLogin: false });
+  const ctx = loadProfileModule({});
   ctx.exports.renderUserBtn();
   const btn = ctx.els.get('user-btn');
   assert.ok(btn.innerHTML.includes('top-account-pill'), '胶囊应复用 top-account-pill 结构: ' + btn.innerHTML);
@@ -263,19 +259,15 @@ test('16a-5 胶囊常驻：未登录任何平台也显示头像+「未设置昵�
   assert.ok(btn.innerHTML.includes('<img'), '常驻结构必须含头像 img');
   assert.ok(!btn.classList.contains('logged-out'), '不再有 logged-out 登录态');
   assert.ok(!btn.classList.contains('login-eye-avatar'), '不再有登录眼睛态');
-  assert.equal(ctx.calls.loginModalOpens.length, 0, '胶囊渲染不得触发平台登录链');
 });
 
-test('16a-6 胶囊：已设置档案时显示档案头像与昵称；平台登录态不改变输出', () => {
+test('16a-6 胶囊：已设置档案时显示档案头像与昵称', () => {
   const seed = { 'stellaflix-local-profile-v1': JSON.stringify({ nickname: '小星', avatar: 'data:image/jpeg;base64,AAA' }) };
-  const loggedOut = loadProfileModule({ storageSeed: seed, anyPlatformLogin: false });
-  loggedOut.exports.renderUserBtn();
-  const loggedIn = loadProfileModule({ storageSeed: seed, anyPlatformLogin: true });
-  loggedIn.exports.renderUserBtn();
-  const html = loggedOut.els.get('user-btn').innerHTML;
+  const ctx = loadProfileModule({ storageSeed: seed });
+  ctx.exports.renderUserBtn();
+  const html = ctx.els.get('user-btn').innerHTML;
   assert.ok(html.includes('data:image/jpeg;base64,AAA'));
   assert.ok(html.includes('小星'));
-  assert.equal(html, loggedIn.els.get('user-btn').innerHTML, '胶囊与五平台登录态解耦');
 });
 
 test('16a-7 默认头像：未设置档案时头像是内联 data:image 占位，不是空 src', () => {
@@ -286,12 +278,11 @@ test('16a-7 默认头像：未设置档案时头像是内联 data:image 占位�
 
 // ---------- 入口：点开即本地档案页 ----------
 
-test('16a-8 onUserBtnClick/showUserModal 打开本地档案页，绝不拉起平台登录弹窗', () => {
-  const ctx = loadProfileModule({ anyPlatformLogin: false });
+test('16a-8 onUserBtnClick/showUserModal 打开本地档案页', () => {
+  const ctx = loadProfileModule({});
   ctx.exports.onUserBtnClick();
   assert.equal(ctx.calls.gsapOpens.length, 1, '应经 openGsapModal 打开 user-modal');
   assert.equal(ctx.calls.gsapOpens[0], ctx.els.get('user-modal'));
-  assert.equal(ctx.calls.loginModalOpens.length, 0, '不得再调用 showLoginModal');
 });
 
 test('16a-9 弹窗填充：头像/昵称行/输入框来自本地档案，昵称经 textContent 原样写入', () => {
@@ -362,7 +353,7 @@ test('16a-13 index.html：#login-modal 整套（五平台行/node-graph/二维�
   for (const marker of [
     'id="login-modal"', 'id="login-node-graph"', 'id="login-platform-tabs"',
     'id="login-provider-qq"', 'id="qr-img"', 'id="qq-cookie-input"',
-    'id="login-reset-all-btn"', 'logoutAllAccountsAndResetEasterEgg()',
+    'id="login-reset-all-btn"',
   ]) {
     assert.ok(!html.includes(marker), '登录弹窗残留: ' + marker);
   }
@@ -372,7 +363,7 @@ test('16a-14 index.html：#user-modal 改本地档案页——五平台 tab/补�
   const html = read(P_HTML);
   const region = htmlRegion(html, 'id="user-modal"', 'id="cover-crop-modal"');
   for (const marker of [
-    'openProviderLogin', 'logoutActiveAccount', 'setActiveAccountProvider',
+    'setActiveAccountProvider',
     'enableDualAccountView', 'account-add-', 'user-provider-',
     'account-provider-chip', 'user-modal-vip', 'account-logout-btn',
   ]) {
@@ -405,40 +396,5 @@ test('16a-17 index-loader：07-local-profile.js 登记在 08-account 连续段�
   const paths = [...loader.matchAll(/'(js\/modules\/08-account\/[^']+)'/g)].map((m) => m[1]);
   assert.ok(paths.includes('js/modules/08-account/07-local-profile.js'), '新模块必须进 modulePaths');
   const idx = paths.indexOf('js/modules/08-account/07-local-profile.js');
-  assert.ok(idx > paths.indexOf('js/modules/08-account/04-user-modal-logout.js'), '覆盖声明必须排在被覆盖的旧入口之后');
   assert.ok(idx > paths.indexOf('js/modules/08-account/06-usage-tracker.js'), '06 统计卡之后');
-});
-
-// ---------- ⑱ 拼接序集成：真·bundle 语义（单脚本内同名 function 声明最后一条生效） ----------
-
-test('16a-18 拼接 01+02+04+07（08-account 段真实顺序）后，入口全局必须解析到本地档案版本', () => {
-  // bundle 把 08-account 连续段拼进同一启动 <script>：function 声明整体提升、
-  // 后声明覆盖前声明。这里按 manifest 真实顺序拼接装载，钉死覆盖语义。
-  const ctx = loadProfileModule({ anyPlatformLogin: true });
-  const oldSources = [
-    'public/js/modules/08-account/01-login-modal-utils.js',
-    'public/js/modules/08-account/02-login-status.js',
-    'public/js/modules/08-account/04-user-modal-logout.js',
-  ].map(read).join('\n');
-  const sandbox = ctx.sandbox;
-  // 旧 02/04 顶层引用的运行时全局最小桩（只为可拼接装载，不代表旧入口生效）。
-  vm.runInContext('var loginStatus={},qqLoginStatus={},kugouLoginStatus={},qishuiLoginStatus={},spotifyLoginStatus={};' +
-    'var PROVIDER_VIP_AUDIT_STORE_KEY="audit",QQ_PLAYBACK_VIP_EVIDENCE_STORE_KEY="evv";' +
-    'window.updatePlaybackQualityUi=function(){};window.avatarSrc=function(u){return String(u||"");};', sandbox);
-  vm.runInContext(
-    'try {\n' + oldSources + '\n' + read(P_PROFILE) +
-    '\n; window.__wiring = { renderUserBtn: renderUserBtn, onUserBtnClick: onUserBtnClick };\n' +
-    '} catch (e) { window.__loadError = e; }\n',
-    sandbox,
-    { filename: 'local-profile-entry.08-account-concat.js' },
-  );
-  assert.ok(!sandbox.__loadError, '拼接装载不得报错: ' + (sandbox.__loadError && sandbox.__loadError.stack));
-  sandbox.__wiring.renderUserBtn();
-  const html = ctx.els.get('user-btn').innerHTML;
-  assert.ok(html.includes('data-account-provider="local"'), '胶囊必须来自 07 本地档案实现: ' + html);
-  assert.ok(!/data-account-provider="(netease|qq|kugou|qishui|spotify)"/.test(html), '不得再渲染五平台胶囊');
-  // 拼接后 01 的真 openGsapModal 接管沙箱全局，断 DOM 态而非桩调用数。
-  sandbox.__wiring.onUserBtnClick();
-  assert.ok(ctx.els.get('user-modal').classList.contains('show'), '入口点击直达本地档案页（mask 进入 show 态）');
-  assert.equal(ctx.calls.loginModalOpens.length, 0, '拼接后 onUserBtnClick 仍不得拉起平台登录');
 });

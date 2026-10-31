@@ -66,7 +66,7 @@ function makeShelfManager() {
     // update() 中 group.visible 自然为 false，不渲染任何内容；切回音乐态后自动恢复。
     var __sfv = (typeof window !== 'undefined' && window.StellaflixVideo);
     if (__sfv && __sfv.state && __sfv.state.isVideo && __sfv.state.isVideo()) return [];
-    if (hasAnyPlatformLogin() && userPlaylists.length) {
+    if (userPlaylists.length) {
       var source = activePlaylists();
       var items = source.map(function (pl) {
         var provider = pl.provider === 'qq' ? 'qq' : (pl.provider === 'kugou' ? 'kugou' : (pl.provider === 'qishui' ? 'qishui' : (pl.provider === 'spotify' ? 'spotify' : 'netease')));
@@ -596,7 +596,7 @@ void main(){ vec4 t = texture2D(uDotTex, gl_PointCoord); if (t.a < 0.02) discard
   }
 
   function sig(items) {
-    if (hasAnyPlatformLogin() && userPlaylists.length) {
+    if (userPlaylists.length) {
       var source = activePlaylists();
       var sampleItems = source.slice(0, 3).concat(source.slice(Math.max(3, source.length - 3)));
       return [
@@ -652,12 +652,12 @@ void main(){ vec4 t = texture2D(uDotTex, gl_PointCoord); if (t.a < 0.02) discard
     var atEnd = centerTarget >= allItems.length - 1 && direction > 0;
     var atStart = centerTarget <= 0 && direction < 0;
     if (!shelfMergesCollections()) {
-      if (hasAnyPlatformLogin() && userPlaylists.length && shelfPane === 'mine' && atEnd && panes.fav.length) {
+      if (userPlaylists.length && shelfPane === 'mine' && atEnd && panes.fav.length) {
         collectionReveal += Math.min(1.5, Math.abs(direction));
         if (collectionReveal >= 3) switchPane('fav');
         return;
       }
-      if (hasAnyPlatformLogin() && userPlaylists.length && shelfPane === 'fav' && atStart && panes.mine.length) {
+      if (userPlaylists.length && shelfPane === 'fav' && atStart && panes.mine.length) {
         collectionReveal += Math.min(1.5, Math.abs(direction));
         if (collectionReveal >= 3) switchPane('mine');
         return;

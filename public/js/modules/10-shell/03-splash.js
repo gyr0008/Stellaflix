@@ -587,8 +587,6 @@ function finishSplashReveal(forceLoad, opts) {
     }
     requestAnimationFrame(function () {
       markStartupHomeReadyForAutoplay(opts.reason || 'splash', opts.fastSkip ? 240 : 100);
-      if (!hasAnyPlatformLogin()) maybeRunStartupLoginGuide('splash');
-      else if (!homeShown) maybeRunStartupLoginGuide('splash');
       setTimeout(maybeShowUploadTipOnce, 5200);
     });
   });

@@ -273,17 +273,14 @@ test('④ quick-check.js 的播客断言随真实删除反证，不留假绿', (
   assert.match(src, /function runSearchHistory\(q\)/);
 });
 
-// ---------- 16a 边界钉桩：只留声明、不留消费 ----------
-test('边界：00-core-stores 播客复位声明暂留（08-account 仍写），且无任何读取方幸存', () => {
+// ---------- 16a 边界钉桩：16d 后连声明也清零 ----------
+test('边界：00-core-stores 播客声明随 08-account 退役清零，全仓无读写方', () => {
   const core = read('public/js/modules/00-state/00-core-stores.js');
-  assert.match(core, /myPodcastCollections/, '16a 边界：myPodcastCollections 声明暂留（08-account 退出登录复位写它）');
-  assert.match(core, /myPodcastItems/, '16a 边界：myPodcastItems 声明暂留（同上）');
-  assert.match(core, /podcasts:\s*\[\]/, '16a 边界：homeDiscoverState.podcasts 字段暂留（08-account logout 复位写它）');
+  assert.doesNotMatch(core, /myPodcastCollections|myPodcastItems/, '16d：播客旧声明（原为 08-account 复位而留）须整行退役');
+  assert.doesNotMatch(core, /podcasts:\s*\[\]/, '16d：homeDiscoverState.podcasts 字段须整行退役');
   assert.doesNotMatch(core, /podcastResults|podcastPrograms|podcastCurrentRadio/, '07-search 播客态存储须整行退役');
-  // 除 08-account（只写）与 00-core-stores（声明）外，全模块不得再出现这些符号名。
   const readers = [];
   for (const rel of listModuleSources()) {
-    if (rel.includes('/08-account/') || rel.endsWith('00-core-stores.js')) continue;
     if (/myPodcastCollections|myPodcastItems|podcastResults|podcastPrograms|podcastCurrentRadio/.test(read(rel))) readers.push(rel);
   }
   assert.deepEqual(readers, [], '仍有模块读写播客态变量: ' + readers.join(', '));

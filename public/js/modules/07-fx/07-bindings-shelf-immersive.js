@@ -667,7 +667,6 @@ function closeImmersiveInterference() {
   closeMiniQueue();
   toggleFxPanel(false);
   closeUploadTip(false);
-  closeLoginModal();
   closeUserModal();
   closeCollectModal();
   closeCoverCropModal();

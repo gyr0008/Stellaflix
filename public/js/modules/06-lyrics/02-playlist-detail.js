@@ -349,10 +349,7 @@ function playlistPanelDetailHtml(pl, provider, detailWindow) {
   var img = cover ? '<img class="pl-detail-cover" src="' + escHtml(cover) + '" alt="" decoding="async" onerror="this.style.opacity=0.2">' : '<div class="pl-detail-cover"></div>';
   var expectedTotal = Math.max(tracks.length, Number(playlistPanelDetailState.total) || Number(pl.trackCount) || 0);
   var rows = playlistPanelDetailRowsHtml(detailWindow);
-  var canUncollect = !!(pl && pl.subscribed && !pl.virtual && provider === 'netease');
-  var collectionButton = canUncollect
-    ? '<button class="fx-mini-btn ghost pl-detail-top-btn" type="button" data-pl-detail-collection="0">取消收藏</button>'
-    : '';
+  var collectionButton = '';
   return '<div class="pl-inline-detail" data-pl-detail="' + escHtml(key) + '" style="height:' + playlistPanelDetailShellHeight() + 'px">' +
     '<div class="pl-detail-sticky">' +
     '<div class="pl-detail-head">' + img + '<div style="flex:1;min-width:0"><div class="pl-detail-title">' + escHtml(pl.name || '歌单详情') + '</div><div class="pl-detail-sub">' + escHtml((expectedTotal || tracks.length || 0) + ' 首 · ' + (pl.creator || playlistProviderName(provider))) + '</div></div><div class="pl-detail-count">' + (loading && !tracks.length ? '载入中' : (tracks.length + (expectedTotal > tracks.length ? '/' + expectedTotal : ''))) + '</div></div>' +
@@ -560,46 +557,6 @@ function playPlaylistPanelDetail() {
   }
   loadPlaylistIntoQueueById(playlistPanelProviderId(provider, pid), true, st.playlist && st.playlist.name || '');
 }
-async function togglePlaylistPanelCollection(collected) {
-  var state = playlistPanelDetailState;
-  if (!state || !state.key || !state.playlist) return;
-  var parts = state.key.split(':');
-  var provider = normalizePlaylistProvider(parts[0]);
-  var id = parts.slice(1).join(':');
-  // 批 T15.5b：官方 /api/{qishui,spotify}/playlist/collect 写回消费点退役——
-  // lx 世界没有平台账号写回（上游同款：收藏=本地歌单），无在线写回即不提供按钮/不写网络。
-  // 网易云 /api/playlist/subscribe 属 cookie 路由，非本批目标，随 T16 一并处置。
-  var endpoint = provider === 'netease' ? '/api/playlist/subscribe' : '';
-  if (!endpoint) {
-    showToast(playlistProviderName(provider) + '暂不支持写回歌单收藏');
-    return;
-  }
-  try {
-    var result = await apiJson(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: id,
-        playlistId: id,
-        subscribed: !!collected,
-        collected: !!collected,
-        spotifyUri: state.playlist.spotifyUri || '',
-      })
-    });
-    if (!result || result.error || result.success === false) throw new Error(result && (result.message || result.error) || 'PLAYLIST_COLLECTION_FAILED');
-    showToast(collected ? '歌单已收藏' : '已取消收藏歌单');
-    cancelPlaylistPanelDetailRequest();
-    playlistPanelDetailState.key = '';
-    playlistPanelDetailState.tracks = [];
-    playlistPanelDetailState.playlist = null;
-    await refreshUserPlaylists(true);
-    renderPlaylistPanelDetailState();
-  } catch (err) {
-    showToast(/SCOPE|PERMISSION/i.test(String(err && err.message || ''))
-      ? '请重新授权后再修改歌单收藏'
-      : '歌单收藏操作失败');
-  }
-}
 function playPlaylistPanelDetailTrack(index) {
   var tracks = playlistPanelDetailState.tracks || [];
   if (!tracks[index]) return;
@@ -703,22 +660,6 @@ function playlistPanelOffsetIndex(offsets, value) {
   }
   return Math.max(0, Math.min(offsets.length - 2, lo));
 }
-function playlistCatalogFooterHtml() {
-  var state = playlistCatalogSyncState || {};
-  var providerStates = state.providers || {};
-  var totals = Object.keys(providerStates).reduce(function (acc, key) {
-    var item = providerStates[key] || {};
-    acc.loaded += Number(item.loaded) || 0;
-    acc.total += Math.max(Number(item.total) || 0, Number(item.loaded) || 0);
-    if (item.hasMore || item.loading) acc.pending = true;
-    return acc;
-  }, { loaded: 0, total: 0, pending: !!state.loading });
-  if (!totals.pending && !state.error) return '';
-  var label = state.error
-    ? ('部分歌单载入失败 · 已显示 ' + userPlaylists.length + ' 个')
-    : ('正在后台载入歌单 · ' + totals.loaded + (totals.total ? '/' + totals.total : ''));
-  return '<div class="playlist-catalog-status"><span class="queue-hydration-spinner spinning"></span><span>' + label + '</span></div>';
-}
 function schedulePlaylistPanelVirtualRender() {
   if (playlistPanelVirtualCache.raf) return;
   playlistPanelVirtualCache.raf = requestAnimationFrame(function () {
@@ -748,9 +689,7 @@ function renderUserPlaylistsList(opts) {
   var $pl = document.getElementById('pl-list');
   var seq = ++playlistRenderSeq;
   if (!userPlaylists.length) {
-    $pl.innerHTML = playlistCatalogSyncState && playlistCatalogSyncState.loading
-      ? miniQueueSkeleton() + playlistCatalogFooterHtml()
-      : '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
+    $pl.innerHTML = '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
     return;
   }
   var panel = document.getElementById('playlist-panel');
@@ -788,11 +727,10 @@ function renderUserPlaylistsList(opts) {
       html += playlistPanelDetailHtml(entry.pl, entry.provider, { scrollTop: detailRowScrollTop, viewport: viewport });
     }
   }
-  html += '<div class="playlist-virtual-spacer" aria-hidden="true" style="height:' + Math.round(bottomHeight) + 'px"></div>' + playlistCatalogFooterHtml();
+  html += '<div class="playlist-virtual-spacer" aria-hidden="true" style="height:' + Math.round(bottomHeight) + 'px"></div>';
   $pl.innerHTML = html;
   if (panel && opts.preserveScroll) panel.scrollTop = keepTop;
   bindPlaylistPanelDetailScroller();
-  if (typeof requestNextPlaylistCatalogPage === 'function' && end >= cache.entries.length - 8) requestNextPlaylistCatalogPage('panel-near-end');
   if (opts.animate && seq === playlistRenderSeq) animateVisiblePanelList($pl, '.pl-card', document.getElementById('playlist-panel'));
 }
 // 批 T16c：「我的收藏播客」渲染簇整簇退役（播客收藏 tab 与 pane 已从 DOM 摘除）。
@@ -823,13 +761,6 @@ document.getElementById('pl-list').addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
     playPlaylistPanelDetail();
-    return;
-  }
-  var collection = e.target && e.target.closest ? e.target.closest('[data-pl-detail-collection]') : null;
-  if (collection) {
-    e.preventDefault();
-    e.stopPropagation();
-    togglePlaylistPanelCollection(collection.getAttribute('data-pl-detail-collection') === '1');
     return;
   }
   var artist = e.target && e.target.closest ? e.target.closest('[data-pl-detail-artist]') : null;

@@ -137,19 +137,13 @@ function updateEmptyHomeVisibility(opts) {
   else deactivateHomeWallpaperPreview(false);
   if (show) {
     setPeek(document.getElementById('search-area'), true, 'search');
+    homeDiscoverState.loading = false;
+    homeDiscoverState.loaded = true;
+    homeDiscoverState.loggedIn = false;
+    homeDiscoverState.mode = 'starter';
+    homeDiscoverState.songs = [];
+    homeDiscoverState.playlists = [];
     renderHomeDiscover();
-    if (!hasAnyPlatformLogin()) {
-      homeDiscoverState.loading = false;
-      homeDiscoverState.loaded = true;
-      homeDiscoverState.loggedIn = false;
-      homeDiscoverState.mode = 'starter';
-      homeDiscoverState.songs = [];
-      homeDiscoverState.playlists = [];
-      renderHomeDiscover();
-    } else {
-      renderHomeDiscover();
-      scheduleVisualApply(function () { loadHomeDiscover(!!opts.forceLoad); }, 220, 1200);
-    }
   }
   return show;
 }
@@ -168,10 +162,6 @@ function runHomeSearch(query, mode) {
   }
   if (q) doSearch(q);
   else renderSearchHistory();
-}
-function skipLoginAndFocusSearch() {
-  closeLoginModal();
-  setTimeout(function () { runHomeSearch(''); }, 180);
 }
 function openHomeLocalImport() {
   homeForcedOpen = false;
@@ -253,10 +243,6 @@ function openHomePlaylist(index) {
   homeForcedOpen = false;
   homeSuppressed = false;
   setHomeControlsLocked(false);
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    runHomeSearch('');
-    return;
-  }
   openPlaylistPanelTab('playlists', true);
   var item = homeDiscoverState.playlists[index];
   if (!item || !item.id) {

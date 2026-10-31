@@ -61,7 +61,6 @@ function makeSandbox(overrides) {
     forcePlaybackControlsInteractive: () => {},
     hasProviderSvip: () => true,
     hasPlatformLogin: () => true,
-    openProviderLogin: () => {},
     songProviderKey: (song) => (song && (song.provider || song.source)) || 'netease',
     playQueueAt: async (idx, opts) => { calls.playQueueAt.push({ idx, opts }); return true; },
     PLAYBACK_QUALITY_OPTIONS: {

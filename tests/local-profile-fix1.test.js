@@ -3,12 +3,12 @@
 /**
  * tests/local-profile-fix1.test.js — 16a scoped 复审回批（I-1 / I-2 / I-3）
  *
- *  I-1 「扫码登录」仍留在 DOM：#trial-login-btn + 13-playback 运行期重绑 openProviderLogin，
+ *  I-1 「扫码登录」仍留在 DOM：#trial-login-btn + 13-playback 运行期重绑平台登录入口，
  *      点进去是被 16a 摘掉的 #login-modal ⇒ 静默空转。主人定稿「二维码登录离开 DOM」，属违约。
  *  I-2 writeLocalProfile 吞掉 setItem 异常后仍弹「已保存本地档案」并按 storage 重绘
  *      ⇒ 配额满/隐私模式下输入内容静默回退 + 假成功。
- *  I-3 maybeRunStartupLoginGuide 每次未登录启动都放登录粒子，回调 showLoginModal({guided:true})
- *      指向已摘除的弹窗 ⇒ 承诺一个不存在的界面。
+ *  I-3 启动登录引导每次未登录启动都放登录粒子，回调登录弹窗（guided:true）
+ *      指向已摘除的弹窗 ⇒ 承诺一个不存在的界面。16d 起该引导整族随登录链物理退役。
  *
  * 手法：源码/静态面断言（I-1）+ vm 片段执行并覆写同名全局以观察真实调用链（I-2/I-3），
  * 沿用 tests/local-profile-entry.test.js 与 tests/lx-source-align-fix1.test.js 惯例。
@@ -142,63 +142,6 @@ test('I-2 头像写入同样按 writeLocalProfile 的回报决定成功文案', 
   const body = namedFunctionSource(source, 'onLocalProfileAvatarFile');
   assert.ok(/writeLocalProfile\(/.test(body), '头像链路要走统一落盘函数');
   assert.match(body, /ok|saved/, '头像成功文案须由落盘回报决定');
-});
-
-// ---------------------------------------------------------------- I-3
-
-function loadGuideSandbox(overrides) {
-  const text = read('public', 'js', 'modules', '08-account', '05-startup-login-guide.js');
-  const markerIndex = text.indexOf('// ============================================================\n//  空场待机引导');
-  assert.ok(markerIndex > 0, '切片标记「空场待机引导」必须存在，否则本工装会把整份文件当登录引导段加载');
-  const head = text.slice(0, markerIndex);
-  assert.ok(/function maybeRunStartupLoginGuide/.test(head) && markerIndex < text.length - 1, '登录引导段切片边界不正确');
-  const timers = [];
-  const sandbox = {
-    document: {
-      readyState: 'complete',
-      getElementById: () => null,
-      addEventListener() {},
-      querySelector: () => null,
-      body: { classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} } },
-    },
-    window: { devicePixelRatio: 1, addEventListener() {}, gsap: null },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
-    setTimeout: (fn, ms) => { timers.push([fn, ms]); return timers.length; },
-    clearTimeout() {},
-    requestAnimationFrame: () => 0,
-    cancelAnimationFrame() {},
-    Math,
-    console,
-    immersiveMode: false,
-    playing: false,
-    loginStatusChecked: true,
-    loginStatusCheckFailed: false,
-    loginStatus: { loggedIn: false },
-    reduceSplashMotion: false,
-    showLoginModal: function () { sandbox.showLoginModalCalls++; },
-    showLoginModalCalls: 0,
-  };
-  Object.assign(sandbox, overrides || {});
-  sandbox.globalThis = sandbox;
-  vm.createContext(sandbox);
-  vm.runInContext(head, sandbox, { filename: '05-startup-login-guide.js' });
-  return { sandbox, timers };
-}
-
-test('I-3 启动登录引导不再启动（弹窗已摘，粒子不得再放给不存在的界面）', () => {
-  const particles = [];
-  const { sandbox, timers } = loadGuideSandbox();
-  sandbox.runLoginGuideParticles = function (done) { particles.push(done); if (done) done(); };
-  sandbox.maybeRunStartupLoginGuide('status');
-  assert.equal(particles.length, 0, '不得再请求登录粒子动画');
-  assert.equal(timers.length, 0, '不得再排定「稍后弹登录框」的定时器');
-  assert.equal(sandbox.showLoginModalCalls, 0, '不得再唤起已摘除的登录弹窗');
-  assert.equal(sandbox.startupLoginGuideShown, false, '不得占用「已引导过」状态位');
-});
-
-test('I-3 空场待机引导不受影响：它不属于登录链路', () => {
-  const text = read('public', 'js', 'modules', '08-account', '05-startup-login-guide.js');
-  assert.ok(/空场待机引导/.test(text), '空场待机引导段落必须仍在（本回批只停登录引导）');
 });
 
 // ---------------------------------------------------------------- Minor 回批

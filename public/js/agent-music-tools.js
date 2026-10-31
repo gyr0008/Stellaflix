@@ -420,7 +420,7 @@
           }
           // 第三阶段 fallback：跨平台（QQ→tx / 酷狗→kg）搜索。网易云正版常缺热门歌手
           // （周杰伦/陈奕迅等）的原版，QQ/酷狗 有正版。批 T15.5b：改指 lx 聚合搜索单请求
-          // 双源（官方 /api/qq/search、/api/kugou/search 消费点退役，删除归 T16），
+          // 双源（官方 QQ/酷狗搜索消费点退役，删除归 T16），
           // 按相同严格歌手过滤筛候选，非空则替换 scored；失败或仍空则走 NO_MATCH。
           if (!scored.length) {
             try {

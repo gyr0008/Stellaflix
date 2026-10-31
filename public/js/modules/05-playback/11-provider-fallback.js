@@ -821,16 +821,7 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
 function handlePlaybackUnavailable(song, data) {
   hideLoading();
   forcePlaybackControlsInteractive();
-  var provider = playbackLoginProvider(song);
   var notice = playbackRestrictionNotice(song, data);
-  var category = notice.category;
   showToast(notice.toast || notice.title || playbackRestrictionMessage(song, data));
   showSourceFallbackNotice(notice.title, notice.body);
-  if (category === 'login_required') {
-    setTimeout(function () {
-      var modal = document.getElementById('login-modal');
-      if (!modal || modal.classList.contains('show')) return;
-      openProviderLogin(provider);
-    }, 520);
-  }
 }
