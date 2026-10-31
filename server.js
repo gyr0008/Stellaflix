@@ -1860,13 +1860,6 @@ async function handleNeteaseAlbumDetail(id, limit) {
   };
 }
 
-function mapDailyRecommendationSongs(raw) {
-  return (Array.isArray(raw) ? raw : [])
-    .map(mapSongRecord)
-    .filter(song => song && song.id && song.name);
-}
-
-// Homepage pulls three Netease recommend APIs; cache briefly per cookie fingerprint.
 // ---------- 首页发现（批 T16d：登录态退役后只回 starter） ----------
 async function handleDiscoverHome() {
   return {

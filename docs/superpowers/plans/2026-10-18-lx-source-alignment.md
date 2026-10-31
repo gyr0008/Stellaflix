@@ -398,16 +398,16 @@ test('非本地来源请求 /api/lx-source/search 被 isTrustedLocalApiRequest �
 - Modify: `public/js/modules/08-account/*`（音乐平台登录框/cookie 粘贴/VIP 探测展示下线；影视侧登录零波及）、`public/index.html` 对应 DOM
 - Test: `tests/` 内 podcast/account 相关既有用例随删清单
 
-- [ ] **Step 1: grep 消费方销号**（`podcast|djRadio` 全仓；`08-account` 对五平台登录路由的 fetch 点）。
-- [ ] **Step 2: 删除 + UI 收口**：音乐侧账号入口隐藏后确认设置页/首页无死链；`getLoginInfo` 等 10-17 双修代码若只剩影视消费方则保留（AI推理：须实测，别按记忆删）。
-- [ ] **Step 3: bundle + `npm test`** — [ ] **Step 4: 冒烟**：首页仪表盘、影视登录不受影响。
+- [x] **Step 1: grep 消费方销号**（`podcast|djRadio` 全仓；`08-account` 对五平台登录路由的 fetch 点）。
+- [x] **Step 2: 删除 + UI 收口**：音乐侧账号入口隐藏后确认设置页/首页无死链；`getLoginInfo` 等 10-17 双修代码若只剩影视消费方则保留（AI推理：须实测，别按记忆删）。
+- [x] **Step 3: bundle + `npm test`** — [x] **Step 4: 冒烟**：首页仪表盘、影视登录不受影响。
 
 ### Task 17: 终局回归 + 文档 + 台账
 
-- [ ] **Step 1: `npm run bundle:check` + `npm test` 全绿**。
+- [x] **Step 1: `npm run bundle:check` + `npm test` 全绿**（200/200，见 task-17-report.md）。
 - [ ] **Step 2: 真机冒烟清单**（主人执行）：搜索五源/播放/探音质降级提示/手动切源/源管理面板（导入文件+APIKEY+检查可用性+批量启停删）/重启后激活源保留/D 盘 `sources/` 持久化/未装脚本引导态。
-- [ ] **Step 3: README 功能段与 `docs/` 相关文档同步**（音源使用指引：脚本导入合规提示）。
-- [ ] **Step 4: 记忆台账更新**：`project-account-login-fixes`、`reference-music-library-apple-source`、`project-local-music-semantics`、`project-track-canonical-key` 等音乐侧结论标注架构变更；本 plan 完成态入库。
+- [x] **Step 3: README 功能段与 `docs/` 相关文档同步**（音源使用指引：脚本导入合规提示）。
+- [x] **Step 4: 记忆台账更新**：`project-account-login-fixes`、`reference-music-library-apple-source`、`project-local-music-semantics`、`project-track-canonical-key` 等音乐侧结论标注架构变更；本 plan 完成态入库。
 
 ---
 

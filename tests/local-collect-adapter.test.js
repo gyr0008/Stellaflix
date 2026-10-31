@@ -1,8 +1,11 @@
 'use strict';
 
 /**
- * 本地歌曲收藏到本地歌单（06-track-detail-lyrics-actions.js local 适配器）行为测试
+ * 本地歌曲收藏到本地歌单（06-track-detail-lyrics-actions.js）行为测试
  * 运行：node --test tests/local-collect-adapter.test.js
+ *
+ * 批 T16d：平台收藏写回适配器（songAccountAdapter 表）随平台登录退役删除，
+ * 收藏弹窗只服务本地歌单（localPlaylistStore）；本测试改钉该现状。
  */
 
 const test = require('node:test');
@@ -23,8 +26,6 @@ function sliceBetween(startMarker, endMarker) {
   return source.slice(s, e);
 }
 
-const ADAPTER_SEGMENT = sliceBetween('var QISHUI_LIKE_ACCOUNT_ACTIONS_ENABLED', 'function songAccountIdentityValues');
-
 function makeSandbox() {
   const calls = { apiJson: 0, toasts: [], ensureLoggedIn: 0 };
   const els = {};
@@ -40,8 +41,8 @@ function makeSandbox() {
     escHtml: (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     showToast: (msg) => { calls.toasts.push(String(msg)); },
     apiJson: async () => { calls.apiJson += 1; return {}; },
+    // 反证桩：平台登录闸已退役，收藏路径不得再调用它
     ensureLoggedInForAction: () => { calls.ensureLoggedIn += 1; return true; },
-    isSongAccountLoggedIn: () => true,
     playlistAccountProvider: (pl) => (pl && pl.provider) || 'netease',
     refreshUserPlaylists: async () => [],
     openGsapModal: (el) => { calls.openedModal = el && el.id; },
@@ -56,13 +57,11 @@ function makeSandbox() {
     miniQueueSkeleton: () => '<div class="skeleton"></div>',
     animateListItems: () => {},
     verifySongInPlaylist: async () => true,
-    songAccountUnsupportedMessage: (p, a) => ('unsupported ' + p + ' ' + a),
     currentCoverSong: () => null,
     hydrateCustomCover: (s) => s,
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(ADAPTER_SEGMENT, sandbox, { filename: 'adapter-segment.js' });
   return sandbox;
 }
 
@@ -90,12 +89,8 @@ function fakeStore(playlists) {
   };
 }
 
-test('local songs resolve to a collect-capable adapter', () => {
-  const sb = makeSandbox();
-  const adapter = vm.runInContext('songAccountAdapter(songAccountProvider(localSong()))', Object.assign(sb, { localSong }));
-  assert.ok(adapter, 'songAccountAdapter(local) must not be null');
-  assert.strictEqual(adapter.provider, 'local');
-  assert.strictEqual(adapter.collect, true);
+test('平台收藏写回适配器已随登录态退役，不再出现在源码里', () => {
+  assert.equal(source.indexOf('songAccountAdapter'), -1, 'songAccountAdapter 应随平台登录退役删除');
 });
 
 test('openCollectModal for a local song skips platform login', () => {
@@ -115,8 +110,7 @@ test('renderCollectModal lists local playlists for a local song', () => {
     { id: 'lp1', name: '民谣', songs: [], localUserPlaylist: true },
     { id: 'lp2', name: 'emo', songs: [], localUserPlaylist: true },
   ]);
-  vm.runInContext(ADAPTER_SEGMENT, sb, { filename: 'adapter2.js' });
-  vm.runInContext(sliceBetween('function renderCollectModal()', 'function setCollectBusyPid'), sb, { filename: 'renderCollectModal.js' });
+  vm.runInContext(sliceBetween('function renderCollectModal()', 'async function createPlaylistFromCollect'), sb, { filename: 'renderCollectModal.js' });
   vm.runInContext('renderCollectModal()', sb);
   const html = sb.document.getElementById('collect-list').innerHTML;
   assert.match(html, /民谣/);
@@ -143,7 +137,7 @@ test('createPlaylistFromCollect creates a local playlist for a local song', asyn
   sb.localPlaylistStore = store;
   sb.collectTargetSong = localSong();
   sb.document.getElementById('collect-new-name').value = '悲缓歌区';
-  vm.runInContext(sliceBetween('async function createPlaylistFromCollect', 'function collectResultMessage'), sb, { filename: 'createCollect.js' });
+  vm.runInContext(sliceBetween('async function createPlaylistFromCollect', 'async function addCollectTargetToPlaylist'), sb, { filename: 'createCollect.js' });
   await vm.runInContext('createPlaylistFromCollect()', sb);
   assert.strictEqual(sb.calls.apiJson, 0);
   const created = store.list().find((pl) => pl.name === '悲缓歌区');
