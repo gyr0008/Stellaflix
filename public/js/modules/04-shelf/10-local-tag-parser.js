@@ -10,6 +10,12 @@
 //   main=readAuthorizedLocalFileRange + preload=readLocalFileRange）。
 // 依赖 block2（11-local-track-map.js）的 localFullPath / desktopLocalMusicApi：
 //   模块拼接后同一全局作用域，函数声明提升，无需 import。
+// 我方自研段（参照库无对应实现，勿当移植产物核对）：
+//   coverWithinBudget / embeddedImageDimensions —— 内嵌封面像素预算，收口在
+//   blobBytesToCoverBlob；来源是退役前主进程曲库类 _deprecated/local-music-library.js.bak-202610252303，
+//   移植时被 ID3_MAX_PICTURE_BYTES(64MB) 顶掉，低配机超大封面守卫丢失，10-26 补回。
+//   parseId3v2SyncedLyricFrame / formatLrcTimestamp —— ID3v2 SYLT 同步歌词转 LRC；
+//   同样来自上述退役类（当时经 music-metadata 的 common.lyrics[].syncText），参照库不解析 SYLT。
 // 公开入口：extractLocalMetadataTags / extractEmbeddedCoverSource / extractEmbeddedLyricsText
 //   / readLocalLyricText（旁挂歌词解码入口，由批3-C 引擎 13-local-library-engine.js 调用）。
 // ============================================================================
@@ -840,6 +846,34 @@ function uint32LE(bytes, offset) {
  */
 function uint16LE(bytes, offset) {
   return (bytes[offset] || 0) + ((bytes[offset + 1] || 0) * 0x100);
+}
+/**
+ * 读取大端 16 位无符号整数（JPEG 段长与 SOF 宽高）。
+ * @param {Uint8Array} bytes 字节。
+ * @param {number} offset 起始偏移。
+ * @returns {number} 读取到的数值。
+ */
+function uint16BE(bytes, offset) {
+  return ((bytes[offset] || 0) * 0x100) + (bytes[offset + 1] || 0);
+}
+/**
+ * 读取小端 32 位有符号整数（BMP 宽高）。
+ * @param {Uint8Array} bytes 字节。
+ * @param {number} offset 起始偏移。
+ * @returns {number} 读取到的数值。
+ */
+function int32LE(bytes, offset) {
+  var value = uint32LE(bytes, offset);
+  return value >= 0x80000000 ? value - 0x100000000 : value;
+}
+/**
+ * 读取小端 24 位无符号整数（WebP VP8X 宽高）。
+ * @param {Uint8Array} bytes 字节。
+ * @param {number} offset 起始偏移。
+ * @returns {number} 读取到的数值。
+ */
+function uint24LE(bytes, offset) {
+  return (bytes[offset] || 0) + ((bytes[offset + 1] || 0) * 0x100) + ((bytes[offset + 2] || 0) * 0x10000);
 }
 /**
  * 读取小端 64 位无符号整数；超过 2^53 的值会损失精度，音频头部不会出现。
@@ -1695,7 +1729,39 @@ function parseId3v2Picture(bytes, start) {
   return found;
 }
 /**
- * 解析 ID3v2 内嵌歌词，USLT 与 TXXX(LYRICS) 共用既有优先级规则。
+ * 解析 ID3v2 SYLT 同步歌词帧，转成既有 LRC 时间标签文本。
+ * 帧布局（v2.3/v2.4 官方规范）：text encoding(1) + language(3) + time stamp format(1)
+ * + content type(1) + content descriptor(终止串)，随后重复「<终止文本><4 字节大端时间戳>」。
+ * 退役前的主进程曲库类经 music-metadata 的 common.lyrics[].syncText 拿到同样的数据，
+ * 参照库 Mineradio-2.5.1 不解析 SYLT，本节是补回我方自己丢掉的行为。
+ * @param {Uint8Array} bytes 标签字节。
+ * @param {number} frameStart 帧数据起点。
+ * @param {number} frameEnd 帧数据终点，不含该位置。
+ * @returns {string} LRC 文本；时间戳口径不可识别或帧损坏时返回空串。
+ */
+function parseId3v2SyncedLyricFrame(bytes, frameStart, frameEnd) {
+  if (frameEnd - frameStart < 7) return '';
+  var enc = bytes[frameStart] || 0;
+  var wide = (enc === 1 || enc === 2) ? 2 : 1;
+  // 时间戳格式只认 $02 毫秒；$01 是 MPEG 帧号，帧号换算毫秒要解码器上下文，宁缺毋滥不猜。
+  // 帧内偏移：encoding(+0) language(+1..3) timeStampFormat(+4) contentType(+5) descriptor(+6…)。
+  if (bytes[frameStart + 4] !== 2) return '';
+  var descEnd = findZero(bytes, frameStart + 6, frameEnd, wide);
+  if (descEnd < 0) return '';
+  var lines = [];
+  var pos = descEnd + wide;
+  while (pos + wide + 4 <= frameEnd && lines.length < LOCAL_LYRIC_MAX_SYNC_LINES) {
+    var textEnd = findZero(bytes, pos, frameEnd, wide);
+    if (textEnd < 0) break;
+    var text = decodeId3TextWithEncoding(bytes, pos, textEnd, enc).replace(/\u0000+$/, '').trim();
+    // 空文本块（纯时间标记）不产出空白行，但仍要跳过它的时间戳继续扫。
+    if (text) lines.push(formatLrcTimestamp(uint32BE(bytes, textEnd + wide)) + text);
+    pos = textEnd + wide + 4;
+  }
+  return lines.join('\n').slice(0, LOCAL_LYRIC_MAX_TEXT_CHARS);
+}
+/**
+ * 解析 ID3v2 内嵌歌词，USLT、TXXX(LYRICS) 与 SYLT 共用既有优先级规则。
  * @param {Uint8Array} bytes 标签字节。
  * @param {number} start 标签起始偏移。
  * @returns {string} 优先级最高的歌词文本。
@@ -1711,9 +1777,21 @@ function parseId3v2Lyrics(bytes, start) {
    * @returns {boolean} 是否结束遍历。
    */
   function handleId3LyricFrame(id, frameStart, frameEnd, version) {
+    // v2.2 的 SLT 头里没有 content type 字节，布局不同，暂不处理。
+    var isSylt = id === 'SYLT' && version >= 3;
     var isUslt = id === 'USLT' || (version === 2 && id === 'ULT');
     var isTxxx = id === 'TXXX' || (version === 2 && id === 'TXX');
-    if ((!isUslt && !isTxxx) || frameEnd - frameStart < 2) return false;
+    if ((!isSylt && !isUslt && !isTxxx) || frameEnd - frameStart < 2) return false;
+    if (isSylt) {
+      if (best.priority >= 95) return false;
+      var synced = normalizeEmbeddedLyricText(parseId3v2SyncedLyricFrame(bytes, frameStart, frameEnd));
+      var syncedPriority = embeddedLyricFieldPriority('SYNCEDLYRICS', synced);
+      if (synced && syncedPriority > best.priority) {
+        best.priority = syncedPriority;
+        best.text = synced;
+      }
+      return best.priority >= 100;
+    }
     var enc = bytes[frameStart] || 0;
     var wide = (enc === 1 || enc === 2) ? 2 : 1;
     // USLT 在编码字节后还有 3 字节语言码，之后才是描述符。
@@ -2801,6 +2879,22 @@ function findFlacMetadataStart(bytes) {
   }
   return -1;
 }
+// 内嵌歌词文本上限，沿用退役前主进程曲库类的 MAX_LYRIC_BYTES 口径（对字符串按字符切）。
+var LOCAL_LYRIC_MAX_TEXT_CHARS = 512 * 1024;
+var LOCAL_LYRIC_MAX_SYNC_LINES = 20000;
+/**
+ * 毫秒时间戳转 LRC 时间标签，格式与退役前一致：[mm:ss.mmm]。
+ * @param {number} timestamp 毫秒。
+ * @returns {string} 时间标签，含方括号。
+ */
+function formatLrcTimestamp(timestamp) {
+  var totalMs = Math.max(0, Math.round(Number(timestamp) || 0));
+  var minutes = Math.floor(totalMs / 60000);
+  var seconds = Math.floor((totalMs % 60000) / 1000);
+  var millis = totalMs % 1000;
+  return '[' + String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0') +
+    '.' + String(millis).padStart(3, '0') + ']';
+}
 function normalizeEmbeddedLyricText(text) {
   text = String(text || '').replace(/^\uFEFF/, '').trim();
   if (text && text.indexOf('\n') < 0 && /\\[nr]/.test(text)) {
@@ -2932,12 +3026,88 @@ function findZero(bytes, start, end, step) {
   return -1;
 }
 /**
+ * 内嵌封面的字节上限。退役前的主进程曲库类用同一组阈值挡过超大封面，
+ * 参照库 Mineradio-2.5.1 没有这层守卫，调参前先想清楚低配机的解码上限。
+ */
+var LOCAL_COVER_MAX_BYTES = 6 * 1024 * 1024;
+var LOCAL_COVER_UNKNOWN_DIMENSION_MAX_BYTES = 1024 * 1024;
+var LOCAL_COVER_MAX_DIMENSION = 4096;
+var LOCAL_COVER_MAX_PIXELS = 12 * 1024 * 1024;
+// JPEG SOF 段标记：只有这些段里带真实宽高，其余段直接按段长跳过。
+var JPEG_SOF_MARKERS = [0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf];
+/**
+ * 从图片头部字节读出像素宽高，认 PNG/GIF/BMP/JPEG(SOF)/WebP(VP8X|VP8L) 五类。
+ * @param {Uint8Array} bytes 图片字节。
+ * @param {string} mime 声明的 MIME；不认识的 MIME 会让宽高判为读不出。
+ * @returns {{width:number,height:number}|null} 宽高；读不出时返回 null。
+ */
+function embeddedImageDimensions(bytes, mime) {
+  if (!bytes || bytes.length < 10) return null;
+  var normalizedMime = String(mime || '').toLowerCase();
+  if (normalizedMime === 'image/png' && bytes.length >= 24 && asciiFromBytes(bytes, 1, 3) === 'PNG'
+    && asciiFromBytes(bytes, 12, 4) === 'IHDR') {
+    return { width: uint32BE(bytes, 16), height: uint32BE(bytes, 20) };
+  }
+  if (normalizedMime === 'image/gif') {
+    return { width: uint16LE(bytes, 6), height: uint16LE(bytes, 8) };
+  }
+  if (normalizedMime === 'image/bmp' && bytes.length >= 26) {
+    return { width: Math.abs(int32LE(bytes, 18)), height: Math.abs(int32LE(bytes, 22)) };
+  }
+  if ((normalizedMime === 'image/jpeg' || normalizedMime === 'image/jpg') && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    var offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      var marker = bytes[offset + 1];
+      if (marker === 0xd8 || marker === 0xd9) { offset += 2; continue; }
+      var segmentLength = uint16BE(bytes, offset + 2);
+      if (segmentLength < 2 || offset + 2 + segmentLength > bytes.length) break;
+      if (JPEG_SOF_MARKERS.indexOf(marker) >= 0) {
+        return { width: uint16BE(bytes, offset + 7), height: uint16BE(bytes, offset + 5) };
+      }
+      offset += 2 + segmentLength;
+    }
+  }
+  if (normalizedMime === 'image/webp' && bytes.length >= 30 && asciiFromBytes(bytes, 0, 4) === 'RIFF') {
+    var kind = asciiFromBytes(bytes, 12, 4);
+    if (kind === 'VP8X') return { width: 1 + uint24LE(bytes, 24), height: 1 + uint24LE(bytes, 27) };
+    if (kind === 'VP8L' && bytes[20] === 0x2f) {
+      var bits = uint32LE(bytes, 21);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+    }
+  }
+  return null;
+}
+/**
+ * 判断一张内嵌封面能不能安全交给解码器：先看字节总量，再看像素尺寸；
+ * 头部读不出宽高时按更小的字节上限放行，避免把合法但格式冷门的封面全杀掉。
+ * @param {Uint8Array} bytes 图片字节。
+ * @param {string} mime 声明的 MIME。
+ * @returns {boolean} 是否在预算内。
+ */
+function coverWithinBudget(bytes, mime) {
+  if (!bytes || !bytes.length || bytes.length > LOCAL_COVER_MAX_BYTES) return false;
+  // 各家 tagger 写的 MIME 可能是 'image/jpg'、空串甚至垃圾串，魔数嗅探兜底一次。
+  var dimensions = embeddedImageDimensions(bytes, mime) || embeddedImageDimensions(bytes, sniffImageMime(bytes));
+  if (!dimensions) return bytes.length <= LOCAL_COVER_UNKNOWN_DIMENSION_MAX_BYTES;
+  var width = Number(dimensions.width) || 0;
+  var height = Number(dimensions.height) || 0;
+  return width > 0
+    && height > 0
+    && width <= LOCAL_COVER_MAX_DIMENSION
+    && height <= LOCAL_COVER_MAX_DIMENSION
+    && width * height <= LOCAL_COVER_MAX_PIXELS;
+}
+/**
  * 把内嵌图片字节固化为独立 Blob，使完整标签范围可在解析后释放。
+ * 这里是全部封面来源（ID3/FLAC/M4A/Ogg/APE）唯一的收口，像素预算在这一处把关，
+ * 超预算返回 null，五个调用方都已按「没有封面」处理。
  * @param {Uint8Array} bytes 图片字节视图。
  * @param {string} mime 图片 MIME。
- * @returns {Blob} 只持有图片稳定快照的 Blob。
+ * @returns {Blob|null} 只持有图片稳定快照的 Blob；超出预算时返回 null。
  */
 function blobBytesToCoverBlob(bytes, mime) {
+  if (!coverWithinBudget(bytes, mime)) return null;
   return new Blob([bytes], { type: mime || 'image/jpeg' });
 }
 /**
