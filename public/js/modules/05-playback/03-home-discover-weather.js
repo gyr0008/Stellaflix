@@ -1,6 +1,6 @@
 function fallbackHomeTiles() {
+  // 批 T16b：「登录同步歌单」卡随平台登录门槛一并离场（其点击指向 16a 已摘除的 #login-modal）。
   return [
-    { kind: 'login', title: '登录同步歌单', sub: '网易云 / QQ / 酷狗 / 汽水' },
     { kind: 'search', title: '搜索一首歌', sub: '原唱优先', query: '' },
     { kind: 'local', title: '导入本地音乐', sub: '本地文件也能可视化' },
   ];
@@ -18,7 +18,6 @@ function homeToneForItem(item, index) {
   if (item.kind === 'song') return index % 2 ? 'search' : 'daily';
   if (item.kind === 'playlist') return 'playlist';
   if (item.kind === 'local') return 'local';
-  if (item.kind === 'login') return 'library';
   if (item.kind === 'search') return 'search';
   return ['daily', 'playlist', 'local', 'guide', 'search'][index % 5];
 }

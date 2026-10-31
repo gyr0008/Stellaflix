@@ -191,10 +191,8 @@ async function playHomeDaily() {
   homeForcedOpen = false;
   homeSuppressed = false;
   setHomeControlsLocked(false);
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    showLoginModal({ source: 'home-daily' });
-    return;
-  }
+  // 批 T16b：未登录门槛摘除（登录弹窗 DOM 已随 16a 离场，调用入口只剩空转=死点击）；
+  // 无登录态时由本函数既有兜底接管：推荐池为空 → runHomeSearch('每日推荐')。
   await waitForHomeDiscoverIdle();
   if (!homeDiscoverState.loaded || (!homeDiscoverState.songs.length && !homeDiscoverState.loading)) {
     await loadHomeDiscover(true);
@@ -214,10 +212,6 @@ async function playHomePrivateRadio() {
   homeForcedOpen = false;
   homeSuppressed = false;
   setHomeControlsLocked(false);
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    showLoginModal({ source: 'home-private' });
-    return;
-  }
   await waitForHomeDiscoverIdle();
   if (!homeDiscoverState.loaded || ((!homeDiscoverState.playlists.length && !homeDiscoverState.songs.length) && !homeDiscoverState.loading)) {
     await loadHomeDiscover(true);
@@ -272,10 +266,7 @@ function openHomePlaylist(index) {
   loadPlaylistIntoQueueById(item.id, true, item.name || '');
 }
 function openHomeLibrary() {
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    showLoginModal({ source: 'home-library' });
-    return;
-  }
+  // 批 T16b：「片库」消费的是本地/歌单面板，与平台登录无关，未登录直接进面板。
   homeSuppressed = false;
   setHomeControlsLocked(false);
   openPlaylistPanelTab('playlists', true);

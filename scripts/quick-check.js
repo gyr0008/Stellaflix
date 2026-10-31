@@ -1558,8 +1558,8 @@ function checkQishuiProviderGuard() {
   if (!/provider === 'qishui'/.test(shelfCoreText) || !/qishui:'/.test(shelfCoreText) || !/function contentPageFetch/.test(shelfContentText) || /\/api\/qishui\/playlist\/tracks/.test(shelfContentText)) {
     fail('T15.5b: 3D shelf must drill into Qishui playlists via contentPageFetch/playlistTracksPage, not the retired Qishui tracks endpoint');
   }
-  if (!/网易云 \/ QQ \/ 酷狗 \/ 汽水/.test(homeText) || !/hasAnyPlatformLogin\(\)/.test(homeText) || /网易云 \/ QQ 音乐/.test(homeText)) {
-    fail('Home discover must acknowledge Qishui/Kugou login playlists instead of only Netease/QQ');
+  if (/kind:\s*'login'/.test(homeText) || /网易云 \/ QQ \/ 酷狗 \/ 汽水/.test(homeText)) {
+    fail('T16b: 首页 starter 磁贴不得再挂平台登录卡（登录弹窗已随 16a 离场，16b 摘门槛）');
   }
   if (!/lyric-glow-enable-btn/.test(indexText) || !/lyric-glow-beat-btn/.test(indexText)) {
     fail('Lyric glow back-layer controls must stay visible in the lyric appearance panel');

@@ -51,10 +51,10 @@ test('② 孤儿扫描跳过 *_1.js 副本', () => {
     [
       'js/modules/00-state/00-core-stores.js',
       'js/modules/00-state/00-core-stores_1.js',
-      'js/modules/08-account/00-login-easter-egg.js',
+      'js/modules/00-state/99-unused-example.js',
     ]
   );
-  assert.deepStrictEqual(orphans, ['js/modules/08-account/00-login-easter-egg.js']);
+  assert.deepStrictEqual(orphans, ['js/modules/00-state/99-unused-example.js']);
 });
 
 // 批 T13：现场计数 111→113、15→17 段 —— 基线本身已双漂移（112≠111，且分段因 misc 散段
