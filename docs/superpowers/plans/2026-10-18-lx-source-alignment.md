@@ -419,10 +419,11 @@ test('非本地来源请求 /api/lx-source/search 被 isTrustedLocalApiRequest �
 - Test: `tests/official-playback-retirement.test.js`（新增 5 例：服务端符号反证、守卫唯一登记、前端残留反证、lx 主链与公开元数据保留、实服 404 REMOVED）
 
 - [x] **Step 1: RED 先行** — 新契约套件先跑成 4 红 1 控制绿（④）。
-- [x] **Step 2: server 侧删除**（−679/+12 行，`node --check` 通过）。
+- [x] **Step 2: server 侧删除**（+11/−678 行，`node --check` 通过）。
 - [x] **Step 3: 前端侧删除** + `npm run bundle` + `npm run bundle:check` 逐字节一致。
 - [x] **Step 4: 受影响契约套件**：platform-login-removal 99/99、lx-playback-chain 21/21、quality-preference-normalize 3/3、podcast-removal 18/18、local-profile-fix1 9/9、bundle-modules 9/9、official-playback-retirement 5/5；quick-check 播放相关守卫隔离全绿。
-- [ ] **Step 5: 全量 `npm test`（本会话后台执行）+ 真机冒烟（主人）**：验证点＝播放只出音源脚本、无「此歌曲需要 SVIP」横幅、失败走音源回退与跨平台换源。
+- [x] **Step 5a: 全量 `npm test`** — 201/201 全部通过，退出码 0。
+- [ ] **Step 5b: 真机冒烟（主人）**：验证点＝播放只出音源脚本、无「此歌曲需要 SVIP」横幅、失败走音源回退与跨平台换源。
 
 **取证补记（有来源）**：`resolveNeteaseDirectSongUrlInner` 调用的 `probePlaybackAudioUrl` 已在 T15 随音频探测改造删除，server.js 只剩调用点 —— 官方直链即便命中上游 URL 也会在校验一步抛 `ReferenceError` 被本地 catch 吞掉，支路本已断，从未真正产出可播地址。
 
