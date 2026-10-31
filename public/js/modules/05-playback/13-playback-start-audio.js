@@ -436,121 +436,6 @@ function albumGaplessQueueCanAdvance(idx) {
   return currentKey === albumGaplessState.albumKey && nextKey === albumGaplessState.albumKey;
 }
 
-function qqPlaybackEvidenceQuery(song) {
-  song = song || {};
-  var vipRequired = !!(song.vipRequired || song.needVip || song.need_vip || song.onlyVipPlayable || song.only_vip_playable);
-  if (!vipRequired && typeof songRequiresVip === 'function') {
-    try { vipRequired = songRequiresVip(song); } catch (e) { vipRequired = false; }
-  }
-  return '&vipRequired=' + encodeURIComponent(vipRequired ? '1' : '') +
-    '&needVip=' + encodeURIComponent(song.needVip || song.need_vip ? '1' : '') +
-    '&onlyVipPlayable=' + encodeURIComponent(song.onlyVipPlayable || song.only_vip_playable ? '1' : '') +
-    '&privilege=' + encodeURIComponent(song.privilege || song.Privilege || song.mediaPrivilege || song.media_privilege || '') +
-    '&fee=' + encodeURIComponent(song.fee || song.Fee || '');
-}
-
-function neteasePlaybackMatchQuery(song, opts) {
-  song = song || {};
-  opts = opts || {};
-  var excludeIds = Array.isArray(opts.excludeIds)
-    ? opts.excludeIds.join(',')
-    : String(opts.excludeIds || '');
-  var artistId = song.artistId || song.artist_id || '';
-  if (!artistId && Array.isArray(song.artists) && song.artists[0]) artistId = song.artists[0].id || '';
-  if (!artistId && Array.isArray(song.ar) && song.ar[0]) artistId = song.ar[0].id || '';
-  var artistRecords = Array.isArray(song.artists) && song.artists.length ? song.artists : (Array.isArray(song.ar) ? song.ar : []);
-  var artistIds = artistRecords.map(function (artist) { return artist && artist.id || ''; }).filter(Boolean);
-  var artistNames = artistRecords.map(function (artist) { return artist && artist.name || ''; }).filter(Boolean);
-  if (!artistIds.length && artistId) artistIds = [artistId];
-  if (!artistNames.length && (song.artist || song.artistName)) artistNames = [song.artist || song.artistName];
-  var albumName = song.album || song.albumName || '';
-  if (albumName && typeof albumName === 'object') albumName = albumName.name || '';
-  return '&name=' + encodeURIComponent(song.name || song.title || '') +
-    '&artist=' + encodeURIComponent(song.artist || song.artistName || '') +
-    '&artistId=' + encodeURIComponent(artistId) +
-    '&artistIds=' + encodeURIComponent(artistIds.join(',')) +
-    '&artistNames=' + encodeURIComponent(artistNames.join('\u001f')) +
-    '&album=' + encodeURIComponent(albumName) +
-    '&duration=' + encodeURIComponent(song.durationMs || song.dt || song.duration || 0) +
-    '&excludeIds=' + encodeURIComponent(excludeIds) +
-    '&skipDirect=' + (opts.skipDirect ? '1' : '');
-}
-
-function clearNeteaseSourceMatchMetadata(song) {
-  if (!song) return song;
-  song.neteaseSourceMatched = false;
-  song.resolvedNeteaseId = '';
-  song.neteaseSourceMatchKind = '';
-  song.neteaseSourceMatchScore = 0;
-  song.neteaseSourceMatchAlbum = '';
-  song.neteaseSourceMatchNotified = false;
-  return song;
-}
-
-function applyNeteaseSourceMatchMetadata(song, data) {
-  if (!song || !data || !data.sourceMatch) return song;
-  song.neteaseSourceMatched = true;
-  song.resolvedNeteaseId = data.resolvedNeteaseId || data.resolvedSongId || song.resolvedNeteaseId || '';
-  song.neteaseSourceMatchKind = data.matchKind || 'netease_same_track_metadata';
-  song.neteaseSourceMatchScore = Number(data.matchScore || 0) || 0;
-  song.neteaseSourceMatchAlbum = data.matchedSong && data.matchedSong.album || '';
-  song.playbackSource = data.source || 'netease-same-track';
-  return song;
-}
-
-function neteaseSourceMatchTriedIds(data) {
-  var tried = Array.isArray(data && data.sourceMatchTriedIds) ? data.sourceMatchTriedIds.slice() : [];
-  var resolved = data && (data.resolvedNeteaseId || data.resolvedSongId);
-  if (resolved && tried.map(String).indexOf(String(resolved)) < 0) tried.push(String(resolved));
-  return tried.filter(Boolean).slice(0, 4);
-}
-
-async function retryNeteaseSourceMatchPlayback(song, data, idx, token, opts, requestedQuality) {
-  if (!song || !data || !data.sourceMatch) return null;
-  opts = opts || {};
-  var sourceRecovery = typeof sourceFallbackRecoveryFromOptions === 'function'
-    ? sourceFallbackRecoveryFromOptions(opts)
-    : null;
-  if (sourceRecovery && !sourceFallbackRecoveryCanContinue(sourceRecovery)) return null;
-  var retryDepth = Math.max(0, Number(opts.neteaseSourceMatchRetryDepth) || 0);
-  var triedIds = neteaseSourceMatchTriedIds(data);
-  if (retryDepth >= 3 || triedIds.length >= 4) return null;
-  var nextData = null;
-  try {
-    var nextDataPromise = apiJson(
-      '/api/song/url?id=' + encodeURIComponent(song.id || '') +
-      neteasePlaybackMatchQuery(song, { excludeIds: triedIds, skipDirect: true }) +
-      '&quality=' + encodeURIComponent(requestedQuality),
-      { timeoutMs: 10000 }
-    );
-    nextData = sourceRecovery
-      ? await awaitSourceFallbackBudget(nextDataPromise, sourceRecovery)
-      : await nextDataPromise;
-  } catch (err) {
-    console.warn('[NeteaseSourceMatch] next candidate lookup failed:', err);
-    return token === trackSwitchToken ? null : false;
-  }
-  if (token !== trackSwitchToken) return false;
-  if (sourceRecovery && (nextData === sourceFallbackBudgetTimeoutResult || !sourceFallbackRecoveryCanContinue(sourceRecovery))) return null;
-  if (!nextData || !nextData.url || !nextData.sourceMatch) return null;
-  var retryOpts = Object.assign({}, opts, {
-    albumGaplessHandoff: false,
-    albumGaplessMixed: false,
-    preloadedAudio: null,
-    preloadedData: null,
-    preloadedProxyAudioUrl: '',
-    preResolvedPlaybackData: nextData,
-    neteaseSourceMatchRetryDepth: retryDepth + 1,
-    qualityOverride: requestedQuality,
-    suppressPlayFailureNotice: true,
-  });
-  var retryPromise = playQueueAt(idx, retryOpts);
-  var retryToken = trackSwitchToken;
-  var retryStarted = await retryPromise;
-  if (retryToken !== trackSwitchToken) return false;
-  return retryStarted === true;
-}
-
 async function resolveAlbumGaplessPlaybackData(song) {
   if (!song || song.type === 'local' || song.source === 'local' || song.localUrl) return null;
   var playbackProvider = normalizePlaybackProvider(songProviderKey(song));
@@ -1753,12 +1638,9 @@ async function playQueueAt(idx, opts) {
           song.resolvedPlaybackProvider = playbackProvider;
         }
         song.playbackLevel = data.level || song.playbackLevel || '';
-        if (!data.sourceMatch) song.playbackSource = data.source || data.provider || song.playbackSource || '';
-        if (playbackProvider === 'netease' && !data.sourceMatch) clearNeteaseSourceMatchMetadata(song);
-        song.trial = !!(song.trial || data.trial);
+        song.playbackSource = data.source || data.provider || song.playbackSource || '';
         song.vipRequired = !!(
           song.vipRequired ||
-          data.trial ||
           data.needVip ||
           data.need_vip ||
           data.vipRequired ||
@@ -1798,15 +1680,6 @@ async function playQueueAt(idx, opts) {
         showSourceFallbackNotice(data && data.lxSource ? '音源音质自动降级' : ((isKugouPlayback ? '酷狗' : (isQishuiPlayback ? '汽水' : '网易云')) + '音质自动降级'), '请求 ' + playbackQualityLabel(requestedQuality, playbackProvider) + '，实际播放 ' + resolvedQualityText + '。');
       } else if (!opts.startupAutoplay && opts.qualitySwitch) {
         showSourceFallbackNotice('音质已切换', '实际播放: ' + resolvedQualityText + '。');
-      }
-      if (data.trial) {
-        var txt;
-        if (data.loggedIn && data.vipLevel === 'svip') txt = '此歌曲需要单曲、专辑购买或更高权限';
-        else if (data.loggedIn && data.vipLevel === 'vip') txt = '此歌曲需要 SVIP 或购买 · 当前仅播放试听片段';
-        else if (data.loggedIn) txt = '此歌曲需 VIP · 当前仅播放试听片段';
-        else txt = '当前未登录 · 仅播放试听片段';
-        document.getElementById('trial-text').textContent = txt;
-        document.getElementById('trial-banner').classList.add('show');
       }
       markPlayPhase('audio-element');
       var proxyAudioUrl = opts.preloadedProxyAudioUrl || (data && data.proxyUrl ? String(data.proxyUrl) : '/api/audio?url=' + encodeURIComponent(data.url));
@@ -1988,12 +1861,6 @@ async function playQueueAt(idx, opts) {
           if (token !== trackSwitchToken) return lxStartRetry === true;
           return lxStartRetry === true;
         }
-        if (playbackProvider === 'netease' && data && data.sourceMatch) {
-          var sameSourceRetry = await retryNeteaseSourceMatchPlayback(song, data, idx, token, retryPlaybackOpts, requestedQuality);
-          if (sameSourceRetry !== null) return sameSourceRetry === true;
-          var matchedPlaybackFallback = await tryAutoPlaybackFallback(song, Object.assign({}, data, { url: null, reason: 'media_start_failed' }), idx, token, retryPlaybackOpts);
-          if (matchedPlaybackFallback !== null) return matchedPlaybackFallback === true;
-        }
         if (isQQPlayback) {
           var qqRetryStarted = await retryQQPlaybackWithCompatibleQuality(song, idx, token, retryPlaybackOpts, data, requestedQuality);
           if (token !== trackSwitchToken) return qqRetryStarted === true;
@@ -2034,14 +1901,6 @@ async function playQueueAt(idx, opts) {
         return false;
       }
       forcePlaybackControlsInteractive();
-      if (playbackProvider === 'netease' && data && data.sourceMatch) {
-        applyNeteaseSourceMatchMetadata(song, data);
-        if (typeof updateControlTrackInfo === 'function') updateControlTrackInfo(song);
-      }
-      if (!opts.startupAutoplay && !opts.qualitySwitch && data && data.sourceMatch && !song.neteaseSourceMatchNotified && typeof showSourceFallbackNotice === 'function') {
-        song.neteaseSourceMatchNotified = true;
-        showSourceFallbackNotice('网易云已匹配可播音源', '已在网易云内切换到同一首歌的可播版本；歌词、封面、专辑和队列仍保持原曲。');
-      }
       if (albumGaplessHandoff && albumGaplessMixed && typeof rampAudioOutputGain === 'function') {
         rampAudioOutputGain(targetVolume, ALBUM_GAPLESS_ADOPT_SLEW_MS);
       }

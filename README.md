@@ -45,7 +45,7 @@ Stellaflix 是一款「音乐 × 影视」双形态的 Windows 桌面沉浸式�
 - LX 兼容音源脚本运行时：Node.js `vm` 沙箱宿主（`lx-source-host.js`），支持链接 / 本地文件 / APIKEY 三种导入通道
 - 多脚本按优先级回退：音质探测与降级链，单脚本不可用时自动切到下一音源，并给出探测提示
 - 音源管理面板：检查可用性、单源激活、批量启停与删除，重启后保留激活源
-- 本地曲库管理、下载管理器、试听检测与全音质探测
+- 本地曲库管理与下载管理器；在线音质由音源脚本按平台能力自动降级并给出提示
 - 脚本导入合规提示：应用不内置、不分发任何平台音源脚本，请仅导入你有权使用的脚本并自行承担来源合规责任
 
 **视觉与歌词**
@@ -79,7 +79,7 @@ Stellaflix 是一款「音乐 × 影视」双形态的 Windows 桌面沉浸式�
 - `desktop/` — Electron 主进程：窗口/托盘/IPC、Wallpaper Engine 运行时、完整桌面模式、本地曲库与下载管理
 - `lx-source-host.js` — LX 兼容音源宿主：`vm` 沙箱执行用户脚本、音源路由族、音质降级链与探测
 - `lx-search.js` — 内置搜索爬虫与搜索熔断/缓存
-- `server.js` — 本地 API 服务：网易云公开元数据与音频代理、LX 音源路由、Agent 与更新接口；平台登录、播客接口已下线并显式返回 `REMOVED`
+- `server.js` — 本地 API 服务：网易云公开元数据与音频代理、LX 音源路由、Agent 与更新接口；平台登录、播客接口、官方直链取址已下线并显式返回 `REMOVED`
 - `agent-api.js` / `world-api.js` / `world-room-api.js` / `platform-playlist-import.js` — Agent 工具、世界页数据与平台歌单导入桥
 - `public/js/modules/` — 渲染层 11 个模块域（state / scene / visual / beat / shelf / playback / lyrics / fx / account / shell / main-loop），原生 JavaScript，无前端框架
 - `public/video/` — 影视态：播放器、源适配、番剧时间线、弹幕引擎、超分着色器

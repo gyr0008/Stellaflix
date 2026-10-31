@@ -1484,7 +1484,31 @@ async function checkProviderFallbackTerminalStateGuard() {
   if (!/function sourceFallbackProviderReady/.test(fallbackText) || !/status\.playbackKeyReady === true/.test(fallbackText) || !/function alternatePlaybackProviders/.test(fallbackText) || /if \(provider === 'netease'\) return 'qq'/.test(fallbackText)) {
     fail('automatic fallback must only select logged-in direct providers with complete playback authorization');
   }
-  if (!/LX_SOURCE_SEARCH_TIMEOUT_MS\s*=\s*22000/.test(fallbackText) || !/apiJson\(url, \{ timeoutMs: LX_SOURCE_SEARCH_TIMEOUT_MS \}\)/.test(fallbackText) || !/SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS\s*=\s*20000/.test(fallbackText) || !/function awaitSourceFallbackBudget/.test(fallbackText) || (playbackText.match(/timeoutMs:\s*\d{4,}/g) || []).length < 6 || (playbackText.match(/timeoutMs:\s*15000/g) || []).length < 1) {
+  function apiJsonCallExpressionAt(text, start) {
+    let depth = 0, quote = '', escaped = false;
+    for (let i = start + 7; i < text.length; i++) {
+      const c = text[i];
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (c === '\\') escaped = true;
+        else if (c === quote) quote = '';
+        continue;
+      }
+      if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+      if (c === '(') depth += 1;
+      else if (c === ')') {
+        depth -= 1;
+        if (!depth) return text.slice(start, i + 1);
+      }
+    }
+    return null;
+  }
+  let unboundedApiJsonCalls = 0;
+  for (let callAt = playbackText.indexOf('apiJson('); callAt >= 0; callAt = playbackText.indexOf('apiJson(', callAt + 8)) {
+    const callExpr = apiJsonCallExpressionAt(playbackText, callAt);
+    if (!callExpr || !/timeoutMs:/.test(callExpr)) unboundedApiJsonCalls += 1;
+  }
+  if (!/LX_SOURCE_SEARCH_TIMEOUT_MS\s*=\s*22000/.test(fallbackText) || !/apiJson\(url, \{ timeoutMs: LX_SOURCE_SEARCH_TIMEOUT_MS \}\)/.test(fallbackText) || !/SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS\s*=\s*20000/.test(fallbackText) || !/function awaitSourceFallbackBudget/.test(fallbackText) || unboundedApiJsonCalls !== 0 || (playbackText.match(/timeoutMs:\s*15000/g) || []).length < 1) {
     fail('fallback search, normal source resolution, and gapless source resolution must all be time-bounded (T15.5b: lx 预算取代官方 6500ms 档)');
   }
   if (!/alternateData[\s\S]{0,220}!alternateData\.url[\s\S]{0,320}playQueue\[idx\] = committedCandidate/.test(fallbackText) || !/fallbackStarted === true[\s\S]{0,180}已自动切换音源/.test(fallbackText) || !/function restoreSourceFallbackQueueItem/.test(fallbackText)) {
@@ -1499,186 +1523,18 @@ async function checkProviderFallbackTerminalStateGuard() {
   if (!/AUDIO_PLAY_REQUEST_TIMEOUT_MS\s*=\s*9000/.test(controlsText) || !/function awaitMediaPlayWithTimeout/.test(controlsText) || (controlsText.match(/awaitMediaPlayWithTimeout\(/g) || []).length < 5 || !/function playbackMediaMatchesCurrentQueueItem/.test(controlsText)) {
     fail('media.play promises must be time-bounded and manual resume must reject stale audio ownership');
   }
-  if (!/function probePlaybackAudioUrl/.test(serverText) || !/AUDIO_URL_PROBE_BYTES\s*=\s*8192/.test(serverText) || !/function audioProbeMagic/.test(serverText) || !/audioProxyHeadersFor\(audioUrl, 'bytes=0-'/.test(serverText) || !/&& !!magic/.test(serverText) || !/function probeQQAudioUrl/.test(serverText) || !/probe\.ok/.test(serverText) || !/function readStreamChunkWithTimeout/.test(serverText) || !/headers: hdr,[\s\S]{0,160}\}, 9000\)/.test(serverText) || !/fetchWithTimeout\(audioUrl,[\s\S]{0,200}\}, probeBudgetMs\)/.test(serverText)) {
-    fail('provider URL resolution and the audio proxy must verify real upstream bytes with bounded connection and stream waits');
-  }
-  const magicStart = serverText.indexOf('function audioProbeMagic');
-  const magicEnd = serverText.indexOf('async function probePlaybackAudioUrl', magicStart);
-  const magicSandbox = { Buffer };
-  vm.runInNewContext(serverText.slice(magicStart, magicEnd), magicSandbox, { filename: 'audio-probe-magic.js' });
-  if (magicSandbox.audioProbeMagic(Buffer.from('ID3\u0004\u0000\u0000', 'binary')) !== 'mp3-id3' || magicSandbox.audioProbeMagic(Buffer.from('fLaC0000', 'ascii')) !== 'flac' || magicSandbox.audioProbeMagic(Buffer.alloc(1024, 0x41)) !== '') {
-    fail('audio byte probe must accept known media headers and reject MIME-only garbage bytes');
-  }
-  const neteaseMatchNoticePos = playbackText.indexOf('data.sourceMatch && !song.neteaseSourceMatchNotified');
-  const networkPlaybackFailurePos = playbackText.lastIndexOf('if (!playbackStarted)');
-  const serverBudget = Number((serverText.match(/NETEASE_SONG_URL_TOTAL_BUDGET_MS\s*=\s*(\d+)/) || [])[1] || 0);
-  const playbackBudget = 14000;
-  if (
-    !/function neteasePlaybackMatchQuery/.test(playbackText)
-    || (playbackText.match(/neteasePlaybackMatchQuery\(song\)/g) || []).length < 1
-    || !/song\.resolvedNeteaseId\s*=/.test(playbackText)
-    || !/data && data\.sourceMatch/.test(playbackText)
-    || neteaseMatchNoticePos < 0
-    || neteaseMatchNoticePos < networkPlaybackFailurePos
-    || !/async function retryNeteaseSourceMatchPlayback/.test(playbackText)
-    || !/excludeIds: triedIds, skipDirect: true/.test(playbackText)
-    || !/matchedPlaybackFallback = await tryAutoPlaybackFallback/.test(playbackText)
-    || /neteasePlaybackMatchQuery\(song\)/.test(beatPrefetchText)
-    || !/fetchBeatPrefetchAudioUrl\(song\)/.test(beatPrefetchText)
-    || !/async function findNeteaseSameTrackCandidates/.test(serverText)
-    || !/cloudsearch\(\{ keywords: query, type: 1, limit: 16, cookie: userCookie \}\)/.test(serverText)
-    || !/song_detail\(\{ ids: \[\.\.\.new Set\(detailIds\)\]\.join\(','\), cookie: userCookie \}\)/.test(serverText)
-    || !/sourceVersions\.join\('\|'\) !== candidateVersions\.join\('\|'\)/.test(serverText)
-    || !/function neteaseSourceMatchArtistSetEqual/.test(serverText)
-    || !/function mergeNeteaseSourceMatchSong/.test(serverText)
-    || !/fingerprintMatches/.test(serverText)
-    || !/async function resolveNeteaseSameTrackPlayback/.test(serverText)
-    || !/source: 'netease-same-track'/.test(serverText)
-    || !/netease_same_recording/.test(serverText)
-    || !/netease_official_alternate/.test(serverText)
-    || !/netease_same_track_metadata/.test(serverText)
-    || !/noCopyrightRcmd/.test(serverText)
-    || !/sourceMatchTriedIds/.test(serverText)
-    || !/getPlaybackLoginInfo/.test(serverText)
-    || serverBudget <= 0
-    || serverBudget + 800 >= playbackBudget
-    || !/handleSongUrl\(sid, loginInfo, quality, matchHints\)/.test(serverText)
-  ) {
-    fail('Netease unavailable tracks must exhaust bounded same-track candidates while preserving the original queue item');
-  }
-  const matchQueryStart = playbackText.indexOf('function neteasePlaybackMatchQuery');
-  const matchQueryEnd = playbackText.indexOf('function clearNeteaseSourceMatchMetadata', matchQueryStart);
-  const matchQuerySandbox = { Array, String, encodeURIComponent };
-  vm.runInNewContext(playbackText.slice(matchQueryStart, matchQueryEnd), matchQuerySandbox, { filename: 'netease-playback-match-query.js' });
-  const querySong = { id: 'song-1', name: 'Fossils', artist: 'acloudyskye' };
-  const noOptsQuery = new URLSearchParams(matchQuerySandbox.neteasePlaybackMatchQuery(querySong).replace(/^&/, ''));
-  const arrayOptsQuery = new URLSearchParams(matchQuerySandbox.neteasePlaybackMatchQuery(querySong, { excludeIds: ['candidate-a', 'candidate-b'] }).replace(/^&/, ''));
-  const stringOptsQuery = new URLSearchParams(matchQuerySandbox.neteasePlaybackMatchQuery(querySong, { excludeIds: 'candidate-c,candidate-d' }).replace(/^&/, ''));
-  const sparseQuery = new URLSearchParams(matchQuerySandbox.neteasePlaybackMatchQuery({ id: 'sparse-song' }).replace(/^&/, ''));
-  if (
-    noOptsQuery.get('excludeIds') !== ''
-    || arrayOptsQuery.get('excludeIds') !== 'candidate-a,candidate-b'
-    || stringOptsQuery.get('excludeIds') !== 'candidate-c,candidate-d'
-    || sparseQuery.get('artist') !== ''
-    || sparseQuery.get('artistIds') !== ''
-    || sparseQuery.get('artistNames') !== ''
-    || sparseQuery.get('excludeIds') !== ''
-  ) {
-    fail('Netease playback match query must safely normalize missing, array, and string excludeIds values');
+  if (!/function readStreamChunkWithTimeout/.test(serverText) || !/function audioProxyHeadersFor/.test(serverText) || !/audioProxyHeadersFor\(audioUrl, range\)/.test(serverText) || !/readStreamChunkWithTimeout\(reader,/.test(serverText)) {
+    fail('the audio proxy must keep bounded upstream connection and stream reads');
   }
   if (/apis\.netstart\.cn|\/simi\/song|simi_song/.test([serverText, playbackText, fallbackText].join('\n'))) {
     fail('production playback must not depend on the public documentation host or use unrelated Netease recommendation results');
   }
-  const handleSongUrlStart = serverText.indexOf('async function handleSongUrl');
-  const handleSongUrlEnd = serverText.indexOf('\n}', handleSongUrlStart);
-  const handleSongUrlText = serverText.slice(handleSongUrlStart, handleSongUrlEnd);
-  const directResolvePos = handleSongUrlText.indexOf('resolveNeteaseDirectSongUrl');
-  const directReturnPos = handleSongUrlText.indexOf('if (direct && direct.url && !direct.trial) return direct');
-  const sameTrackResolvePos = handleSongUrlText.indexOf('resolveNeteaseSameTrackPlayback');
-  if (directResolvePos < 0 || directReturnPos <= directResolvePos || sameTrackResolvePos <= directReturnPos) {
-    fail('Netease direct playback must return before same-track search, and same-track search must finish before cross-provider fallback');
+  // 批 T18：官方直链取址与站内同曲匹配整条退役——钉桩防「把官方链又接回来」。
+  if (/handleSongUrl|resolveNeteaseDirectSongUrl|neteasePlaybackMatchQuery|retryNeteaseSourceMatchPlayback/.test(serverText + playbackText)
+    || /neteasePlaybackMatchQuery\(song\)/.test(beatPrefetchText)
+    || !/fetchBeatPrefetchAudioUrl\(song\)/.test(beatPrefetchText)) {
+    fail('official direct-link and Netease same-track playback must stay retired; beat prefetch must resolve through the lx audio URL helper');
   }
-  const matcherStart = serverText.indexOf('function neteaseSourceMatchText');
-  const matcherEnd = serverText.indexOf('function neteaseSourceMatchCacheKey', matcherStart);
-  if (matcherStart < 0 || matcherEnd <= matcherStart) fail('Netease same-recording matcher source is incomplete');
-  const matcherSandbox = {};
-  vm.runInNewContext(serverText.slice(matcherStart, matcherEnd), matcherSandbox, { filename: 'netease-source-match-helpers.js' });
-  const matchSource = {
-    id: 441102546,
-    name: 'I Was King',
-    dt: 238826,
-    ar: [{ id: 20878, name: 'ONE OK ROCK' }],
-    h: { br: 320000, size: 9555636, sr: 44100 },
-    m: { br: 192000, size: 5733399, sr: 44100 },
-    l: { br: 128000, size: 3822280, sr: 44100 },
-  };
-  const exactDuplicate = {
-    id: 1931495429,
-    name: 'I Was King',
-    dt: 238826,
-    ar: [{ id: 20878, name: 'ONE OK ROCK' }],
-    h: { br: 320000, size: 9555636, sr: 44100 },
-    m: { br: 192000, size: 5733399, sr: 44100 },
-    l: { br: 128000, size: 3822280, sr: 44100 },
-    __privilege: { pl: 320000, plLevel: 'exhigh' },
-  };
-  const liveVersion = Object.assign({}, exactDuplicate, { id: 9991, name: 'I Was King (Live)' });
-  const wrongArtist = Object.assign({}, exactDuplicate, { id: 9992, ar: [{ id: 1, name: 'Someone Else' }] });
-  const collaborationSource = { id: 2001, name: 'Same Song', dt: 200000, ar: [{ id: 11, name: 'A' }, { id: 12, name: 'B' }] };
-  const partialCollaboration = { id: 2002, name: 'Same Song', dt: 200180, ar: [{ id: 11, name: 'A' }, { id: 13, name: 'C' }] };
-  const taylorSource = { id: 3001, name: 'Love Story', dt: 235000, ar: [{ id: 44266, name: 'Taylor Swift' }] };
-  const taylorVersion = { id: 3002, name: "Love Story (Taylor's Version)", dt: 235200, ar: [{ id: 44266, name: 'Taylor Swift' }] };
-  const metadataReencode = { id: 3003, name: 'Love Story', dt: 235213, ar: [{ id: 44266, name: 'Taylor Swift' }] };
-  const popMix = { id: 3004, name: 'Love Story (Pop Mix)', dt: 235400, ar: [{ id: 44266, name: 'Taylor Swift' }] };
-  const officialAlternate = { id: 3005, name: 'Love Story', dt: 236067, ar: [{ id: 44266, name: 'Taylor Swift' }], __officialSourceMatch: true };
-  const unofficialLongDrift = Object.assign({}, officialAlternate, { id: 3006, __officialSourceMatch: false });
-  if (
-    matcherSandbox.neteaseSourceMatchFingerprintCount(matchSource, exactDuplicate) < 3
-    || matcherSandbox.neteaseSourceMatchCandidateScore(matchSource, exactDuplicate) <= 0
-    || matcherSandbox.neteaseSourceMatchCandidateScore(matchSource, liveVersion) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(matchSource, wrongArtist) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(collaborationSource, partialCollaboration) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, taylorVersion) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, metadataReencode) <= 0
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, popMix) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, officialAlternate) <= 0
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, unofficialLongDrift) !== -1
-  ) {
-    fail('Netease matching must accept exact/re-encoded tracks and reject live, re-recorded, wrong-artist, or partial-collaboration candidates');
-  }
-  const mergeStart = serverText.indexOf('function neteaseSourceMatchHintArtists');
-  const mergeEnd = serverText.indexOf('async function findNeteaseSameTrackCandidates', mergeStart);
-  vm.runInNewContext(serverText.slice(mergeStart, mergeEnd), matcherSandbox, { filename: 'netease-source-match-merge.js' });
-  const mergedGraySong = matcherSandbox.mergeNeteaseSourceMatchSong(
-    { id: 4001, name: '', ar: [], al: {}, dt: 238826 },
-    { id: 4001, name: 'I Was King', ar: [{ id: 20878, name: 'ONE OK ROCK' }], al: { name: 'Ambitions' }, dt: 238826 },
-    { artistIds: '20878', artistNames: 'ONE OK ROCK', album: 'Ambitions' }
-  );
-  if (mergedGraySong.name !== 'I Was King' || !mergedGraySong.ar.length || mergedGraySong.ar[0].id !== 20878 || mergedGraySong.al.name !== 'Ambitions') {
-    fail('gray Netease song details must be hydrated from search results and frontend metadata');
-  }
-  const applyStart = playbackText.indexOf('function clearNeteaseSourceMatchMetadata');
-  const applyEnd = playbackText.indexOf('function neteaseSourceMatchTriedIds', applyStart);
-  const applySandbox = { Number };
-  vm.runInNewContext(playbackText.slice(applyStart, applyEnd), applySandbox, { filename: 'netease-source-match-metadata.js' });
-  const originalQueueSong = { provider: 'netease', id: 'original-1', name: 'Original', artist: 'Artist', album: 'Album', cover: 'cover.jpg' };
-  const originalIdentity = JSON.stringify(originalQueueSong);
-  applySandbox.applyNeteaseSourceMatchMetadata(originalQueueSong, { sourceMatch: true, resolvedNeteaseId: 'playable-2', source: 'netease-same-track', matchKind: 'netease_same_recording', matchedSong: { album: 'Other Release' } });
-  if (originalQueueSong.id !== 'original-1' || originalQueueSong.provider !== 'netease' || originalQueueSong.name !== 'Original' || originalQueueSong.artist !== 'Artist' || originalQueueSong.album !== 'Album' || originalQueueSong.cover !== 'cover.jpg' || originalQueueSong.resolvedNeteaseId !== 'playable-2' || originalIdentity === JSON.stringify(originalQueueSong)) {
-    fail('Netease source-match metadata must annotate playback without replacing original queue identity, cover, lyrics context, or album');
-  }
-  const retryStart = playbackText.indexOf('function neteaseSourceMatchTriedIds');
-  const retryEnd = playbackText.indexOf('async function resolveAlbumGaplessPlaybackData', retryStart);
-  const retrySandbox = {
-    Array,
-    Object,
-    Math,
-    Number,
-    String,
-    console,
-    encodeURIComponent,
-    trackSwitchToken: 7,
-    neteasePlaybackMatchQuery(song, opts) {
-      retrySandbox.matchQuery = { song, opts };
-      return '&excludeIds=' + encodeURIComponent((opts.excludeIds || []).join(',')) + '&skipDirect=1';
-    },
-    async apiJson(url) {
-      retrySandbox.retryUrl = url;
-      return { sourceMatch: true, url: 'https://candidate-b.invalid/audio', resolvedNeteaseId: 'candidate-b', sourceMatchTriedIds: ['candidate-a', 'candidate-b'] };
-    },
-    async playQueueAt(idx, opts) {
-      retrySandbox.trackSwitchToken += 1;
-      retrySandbox.retryPlayback = { idx, opts };
-      return true;
-    },
-  };
-  vm.runInNewContext(playbackText.slice(retryStart, retryEnd), retrySandbox, { filename: 'netease-source-match-retry.js' });
-  const retrySong = { provider: 'netease', id: 'original-1', name: 'Original', artist: 'Artist' };
-  const retryResult = await retrySandbox.retryNeteaseSourceMatchPlayback(retrySong, { sourceMatch: true, resolvedNeteaseId: 'candidate-a', sourceMatchTriedIds: ['candidate-a'] }, 0, 7, {}, 'standard');
-  if (retryResult !== true || retrySong.id !== 'original-1' || !retrySandbox.matchQuery || retrySandbox.matchQuery.opts.excludeIds[0] !== 'candidate-a' || !retrySandbox.matchQuery.opts.skipDirect || !retrySandbox.retryPlayback || retrySandbox.retryPlayback.opts.preResolvedPlaybackData.resolvedNeteaseId !== 'candidate-b') {
-    fail('failed browser decode must exclude the first Netease candidate, retry the next candidate, and keep the original queue identity');
-  }
-
   const status = {
     netease: { loggedIn: true },
     qq: { loggedIn: false, playbackKeyReady: false },

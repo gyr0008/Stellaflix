@@ -4,12 +4,13 @@
  * tests/platform-login-removal.test.js — 平台登录族 + 五平台官方 API 整批退役钉桩（批 T16d）
  *
  * 主人裁定（2026-10-31）：
- *  ①1 /api/song/url 保留为无凭证公开端点（本地歌联网匹配重试仍在用）；
+ *  ①1 /api/song/url 当时保留为无凭证公开端点；批 T18（2026-11-01，主人选项2）改判
+ *      随官方直链一并退役——在线播放地址只来自用户音源脚本 /api/lx-source/resolve；
  *  ①2 各平台 user/playlists 族退役，前端歌单面板改 local-only；
  *  ①3 /api/album/detail + /api/artist/detail 保留；/api/album/subscribe(/check) 落 404；
  *  ①4 /api/discover/home + NeteaseCloudMusicApi 依赖保留（未登录回 starter）。
  *
- * 于是保留面 = 网易云公开元数据 7 条：/api/song/url、/api/playlist/tracks、
+ * 于是保留面 = 网易云公开元数据 6 条：/api/playlist/tracks、
  * /api/album/detail、/api/artist/detail、/api/lyric、/api/search、/api/discover/home。
  * 其余平台登录族（netease 18 条散点 + qq 10 + kugou 11 + qishui 15 + spotify 16）
  * 全部经一条统一守卫落 404 { ok:false, error:'REMOVED' }。
@@ -61,6 +62,7 @@ const RETIRED_ENDPOINTS = [
   '/api/playlist/add-song',
   '/api/song/comments?id=1',
   '/api/song/comments/like',
+  '/api/song/url?id=441102546',
   '/api/qq/search?keywords=test',
   '/api/qq/lyric?songmid=x',
   '/api/qq/login/status',
@@ -187,7 +189,6 @@ after(() => { server.close(); });
 
 // ---------- ② server.js 源码反证 ----------
 const KEPT_NETEASE_ROUTES = [
-  '/api/song/url',
   '/api/playlist/tracks',
   '/api/album/detail',
   '/api/artist/detail',
@@ -202,7 +203,7 @@ test('② server.js：保留的网易云公开元数据路由 handler 仍在，�
     assert.ok(src.includes("pn === '" + route + "'"), route + ' handler 必须保留');
     assert.ok(!src.includes("|| pn === '" + route + "'"), route + ' 不得被登记进 REMOVED 守卫');
   }
-  assert.match(src, /function handleSongUrl/, '/api/song/url 实现保留');
+  assert.ok(!src.includes('function handleSongUrl'), '官方直链取址实现必须已随 T18 退役');
   assert.match(src, /function handleNeteaseAlbumDetail/, 'album detail 实现保留');
 });
 
@@ -222,7 +223,7 @@ test('② server.js：五平台 require 与汽水解密运行时连根退役', (
 test('② server.js：NeteaseCloudMusicApi 依赖保留（裁定 ④），登录/写回绑定退役', () => {
   const src = read('server.js');
   assert.match(src, /require\('NeteaseCloudMusicApi'\)/, 'NCM 依赖必须保留（公开元数据 7 条的供给方）');
-  for (const keep of ['search', 'cloudsearch', 'song_detail', 'song_url', 'song_url_v1',
+  for (const keep of ['search', 'cloudsearch', 'song_detail',
     'album', 'artist_detail', 'artist_top_song', 'artist_songs', 'playlist_tracks',
     'playlist_detail', 'playlist_track_all', 'lyric', 'lyric_new']) {
     assert.ok(src.includes("neteaseApiFn('" + keep + "')"), '保留的 NCM 绑定 ' + keep + ' 不得误删');
@@ -231,7 +232,8 @@ test('② server.js：NeteaseCloudMusicApi 依赖保留（裁定 ④），登录
     'vip_info', 'vip_info_v2', 'logout', 'user_account', 'user_playlist', 'comment_music',
     'like', 'likelist', 'song_like_check', 'album_sub', 'album_sublist', 'playlist_subscribe',
     'comment', 'comment_like', 'scrobble', 'listen_data_total', 'playlist_track_add',
-    'playlist_create', 'personalized', 'recommend_resource', 'recommend_songs']) {
+    'playlist_create', 'personalized', 'recommend_resource', 'recommend_songs',
+    'song_url', 'song_url_v1']) {
     assert.ok(!src.includes("neteaseApiFn('" + dead + "')"), '退役的 NCM 绑定 ' + dead + ' 不得残存');
   }
 });

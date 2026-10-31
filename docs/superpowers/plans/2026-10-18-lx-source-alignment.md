@@ -409,6 +409,25 @@ test('非本地来源请求 /api/lx-source/search 被 isTrustedLocalApiRequest �
 - [x] **Step 3: README 功能段与 `docs/` 相关文档同步**（音源使用指引：脚本导入合规提示）。
 - [x] **Step 4: 记忆台账更新**：`project-account-login-fixes`、`reference-music-library-apple-source`、`project-local-music-semantics`、`project-track-canonical-key` 等音乐侧结论标注架构变更；本 plan 完成态入库。
 
+### Task 18: 官方直链取址与试听残留退役（合流前追加，主人 2026-11-01 裁定「2」）
+
+**Files:**
+- Modify: `server.js` — `/api/song/url` 路由 + 直链解析 + 站内同曲匹配全机（候选缓存/评分/合并/预算常量/受限分类/匿名登录常量/天气电台可播探测死码）退役，路由登记进统一 REMOVED 守卫
+- Modify: `public/js/modules/05-playback/13-playback-start-audio.js` — 同曲候选重试、`sourceMatch` 元数据读写、SVIP/试听横幅点亮支路删除（`#trial-banner` DOM 保留为惰性，由 `tests/local-profile-fix1.test.js` 钉住）
+- Modify: `scripts/quick-check.js` — 摘除已失效的官方同曲匹配与字节探测钉桩（`probePlaybackAudioUrl`/`audioProbeMagic` 早在 T15 已删，钉桩长期空挂），改钉「官方链不得接回」+ 每个 `apiJson(` 调用点必须限时
+- Modify: `tests/platform-login-removal.test.js` — `/api/song/url` 与 `song_url`/`song_url_v1` 绑定由保留面改判退役
+- Test: `tests/official-playback-retirement.test.js`（新增 5 例：服务端符号反证、守卫唯一登记、前端残留反证、lx 主链与公开元数据保留、实服 404 REMOVED）
+
+- [x] **Step 1: RED 先行** — 新契约套件先跑成 4 红 1 控制绿（④）。
+- [x] **Step 2: server 侧删除**（−679/+12 行，`node --check` 通过）。
+- [x] **Step 3: 前端侧删除** + `npm run bundle` + `npm run bundle:check` 逐字节一致。
+- [x] **Step 4: 受影响契约套件**：platform-login-removal 99/99、lx-playback-chain 21/21、quality-preference-normalize 3/3、podcast-removal 18/18、local-profile-fix1 9/9、bundle-modules 9/9、official-playback-retirement 5/5；quick-check 播放相关守卫隔离全绿。
+- [ ] **Step 5: 全量 `npm test`（本会话后台执行）+ 真机冒烟（主人）**：验证点＝播放只出音源脚本、无「此歌曲需要 SVIP」横幅、失败走音源回退与跨平台换源。
+
+**取证补记（有来源）**：`resolveNeteaseDirectSongUrlInner` 调用的 `probePlaybackAudioUrl` 已在 T15 随音频探测改造删除，server.js 只剩调用点 —— 官方直链即便命中上游 URL 也会在校验一步抛 `ReferenceError` 被本地 catch 吞掉，支路本已断，从未真正产出可播地址。
+
+**保留但已无消费方（待主人裁定）**：`normalizeQualityPreference` + `qualityCandidatesFrom`（仅由 `tests/quality-preference-normalize.test.js` 钉住，已在函数注释处标明退役来历）；前端 `song.vipRequired` 汇总块（服务底部标题 VIP 徽标，`data.trial` 项已摘）。
+
 ---
 
 ## Self-Review 记录

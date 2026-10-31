@@ -1,9 +1,8 @@
 // ====================================================================
 //  粒子音乐可视化播放器 — Server v2
-//  - 网易云搜索 / 歌曲URL / 封面/音频代理
-//  - 扫码登录 (login_qr_*) + cookie 持久化 (./.cookie)
-//  - 试听检测 (freeTrialInfo) + 全 quality 探测
-//  - 所有受保护 API 都会带上已登录用户的 cookie
+//  - 网易云公开元数据（搜索 / 歌单 / 专辑 / 歌手 / 歌词 / 首页）
+//  - 用户音源脚本解析（lx-source-host + /api/lx-source/*）与封面/音频代理
+//  - 平台登录、cookie 持久化、官方直链取址与试听检测已整批退役（批 T16d/T18）
 // ====================================================================
 // NeteaseCloudMusicApi (~8.7MB) is lazy-bound so cold start only pays for the
 // package when the first Netease route actually runs, not at server module load.
@@ -19,8 +18,6 @@ function neteaseApiFn(name) {
 const search = neteaseApiFn('search');
 const cloudsearch = neteaseApiFn('cloudsearch');
 const song_detail = neteaseApiFn('song_detail');
-const song_url = neteaseApiFn('song_url');
-const song_url_v1 = neteaseApiFn('song_url_v1');
 const album = neteaseApiFn('album');
 const artist_detail = neteaseApiFn('artist_detail');
 const artist_top_song = neteaseApiFn('artist_top_song');
@@ -1137,21 +1134,6 @@ async function fetchWithTimeout(url, opts, timeoutMs) {
     clearTimeout(timer);
   }
 }
-function promiseWithTimeout(promise, timeoutMs, code) {
-  let timer = null;
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        const err = new Error(code || 'PROVIDER_REQUEST_TIMEOUT');
-        err.code = code || 'PROVIDER_REQUEST_TIMEOUT';
-        reject(err);
-      }, Math.max(250, Number(timeoutMs) || 5000));
-    }),
-  ]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
 async function readStreamChunkWithTimeout(reader, timeoutMs) {
   let timer = null;
   try {
@@ -1358,60 +1340,12 @@ function normalizeApiMessage(payload) {
   const body = payload && (payload.body || payload);
   return (body && (body.message || body.msg || body.error)) || (body && body.body && (body.body.message || body.body.msg || body.body.error)) || '';
 }
-function playbackRestriction(provider, category, message, action, extra) {
-  return {
-    provider,
-    category,
-    action: action || '',
-    message,
-    ...(extra || {}),
-  };
-}
-function classifyNeteasePlaybackRestriction(lastData, loginInfo) {
-  const loggedIn = !!(loginInfo && loginInfo.loggedIn);
-  const vipReady = !!(loginInfo && (loginInfo.isVip || loginInfo.isSvip || loginInfo.vipLevel === 'vip' || loginInfo.vipLevel === 'svip' || Number(loginInfo.vipType || 0) > 0));
-  const fee = Number(lastData && lastData.fee);
-  const code = Number(lastData && lastData.code);
-  const freeTrial = lastData && lastData.freeTrialInfo;
-  if (!loggedIn) {
-    return playbackRestriction('netease', 'login_required', '网易云需要登录后尝试获取完整播放地址', 'login', { code, fee });
-  }
-  if (freeTrial) {
-    return playbackRestriction('netease', 'trial_only', '网易云仅返回试听片段，完整播放需要会员或购买', 'upgrade', { code, fee });
-  }
-  if (fee === 1) {
-    if (vipReady) {
-      return playbackRestriction('netease', 'copyright_unavailable', '当前会员状态下仍未取得可播放地址，已尝试在网易云内匹配同一录音版本', 'switch_source', { code, fee });
-    }
-    return playbackRestriction('netease', 'vip_required', '网易云歌曲需要 VIP 权限，当前无法获取完整播放地址', 'upgrade', { code, fee });
-  }
-  if (fee === 4) {
-    return playbackRestriction('netease', 'paid_required', '网易云歌曲需要单曲、专辑购买或更高权限', 'purchase', { code, fee });
-  }
-  if (fee === 8) {
-    return playbackRestriction('netease', 'copyright_unavailable', '当前网易云版本没有返回完整音源，已尝试匹配站内同一录音版本', 'switch_source', { code, fee });
-  }
-  if (code === 404 || code === 403) {
-    return playbackRestriction('netease', 'copyright_unavailable', '网易云版权暂不可播，换源或稍后重试会更稳', 'switch_source', { code, fee });
-  }
-  return playbackRestriction('netease', 'url_unavailable', '网易云没有返回可播放地址，可能是版权、会员或地区限制', loggedIn ? 'switch_source' : 'login', { code, fee });
-}
-const NETEASE_QUALITY_CANDIDATES = [
-  { level: 'jymaster', br: 1999000, label: '超清母带', svip: true },
-  { level: 'hires',    br: 1999000, label: '高清臻音' },
-  { level: 'lossless', br: 1411000, label: '无损' },
-  { level: 'exhigh',   br: 999000,  label: '极高' },
-  { level: 'standard', br: 128000,  label: '标准' },
-];
-const NETEASE_DIRECT_RESOLVE_BUDGET_MS = 4800;
-const NETEASE_SOURCE_MATCH_TOTAL_BUDGET_MS = 8000;
-const NETEASE_SOURCE_MATCH_LOOKUP_BUDGET_MS = 4800;
-const NETEASE_SONG_URL_TOTAL_BUDGET_MS = 12000;
 function normalizeQualityPreference(value) {
   const raw = String(value || '').toLowerCase().trim();
   if (['jymaster', 'master', 'studio', 'svip'].includes(raw)) return 'jymaster';
-  // T15（携 T12 minor）：LX 词汇 flac24bit 归 hires——本函数服务保留的 QQ 兼容
-  // vkey/推荐候选链（QQ_QUALITY_CANDIDATE_TEMPLATES），24bit FLAC 属最高解析档。
+  // T15（携 T12 minor）：LX 词汇 flac24bit 归 hires——24bit FLAC 属最高解析档。
+  // T18 注：本表原服务的官方 vkey/推荐候选链已随 /api/song/url 退役，档位别名表仍由
+  // tests/quality-preference-normalize.test.js 钉住（lx 链路自己在前端 00-api-quality-output.js 归一）。
   if (['hires', 'hi-res', 'highres', 'zhenyin', 'spatial', 'flac24bit'].includes(raw)) return 'hires';
   if (['lossless', 'flac', 'sq'].includes(raw)) return 'lossless';
   if (['exhigh', 'high', '320', '320k', 'hq'].includes(raw)) return 'exhigh';
@@ -1423,9 +1357,6 @@ function qualityCandidatesFrom(target, candidates) {
   let start = candidates.findIndex(item => item.level === target);
   if (start < 0) start = 0;
   return candidates.slice(start);
-}
-function hasNeteaseSvip(loginInfo) {
-  return !!(loginInfo && loginInfo.loggedIn && (loginInfo.vipLevel === 'svip' || loginInfo.isSvip));
 }
 function mapArtists(raw) {
   return (raw || [])
@@ -1503,330 +1434,6 @@ async function handleSearch(keywords, limit, offset) {
   }
 
   return mapped;
-}
-
-const NETEASE_SOURCE_MATCH_POSITIVE_TTL_MS = 12 * 60 * 60 * 1000;
-const NETEASE_SOURCE_MATCH_NEGATIVE_TTL_MS = 5 * 60 * 1000;
-const NETEASE_SOURCE_MATCH_MAX_CANDIDATES = 4;
-const neteaseSourceMatchCache = new Map();
-const neteaseSourceMatchInflight = new Map();
-
-// Lightweight TTL + inflight cache for hot playback-address resolution.
-function createPlaybackTtlCache(maxEntries, defaultTtlMs) {
-  const store = new Map();
-  const inflight = new Map();
-  return {
-    get(key) {
-      const hit = store.get(key);
-      if (!hit) return null;
-      if (Date.now() - hit.at > hit.ttl) {
-        store.delete(key);
-        return null;
-      }
-      return hit.value;
-    },
-    set(key, value, ttlMs) {
-      store.set(key, { at: Date.now(), ttl: ttlMs || defaultTtlMs, value });
-      while (store.size > maxEntries) store.delete(store.keys().next().value);
-    },
-    async wrap(key, ttlMs, fn) {
-      const cached = this.get(key);
-      if (cached !== null && cached !== undefined) return cached;
-      if (inflight.has(key)) return inflight.get(key);
-      const promise = (async () => {
-        try {
-          const value = await fn();
-          const resolvedTtl = typeof ttlMs === 'function' ? ttlMs(value) : ttlMs;
-          if (value && value.playable && value.url) this.set(key, value, resolvedTtl);
-          return value;
-        } finally {
-          if (inflight.get(key) === promise) inflight.delete(key);
-        }
-      })();
-      inflight.set(key, promise);
-      return promise;
-    },
-  };
-}
-
-const neteaseSongUrlCache = createPlaybackTtlCache(256, 3 * 60 * 1000);
-const qqSongUrlCache = createPlaybackTtlCache(256, 60 * 1000);
-
-function neteaseSourceMatchText(value) {
-  return String(value || '').normalize('NFKC').toLowerCase()
-    .replace(/[（(【\[].*?[）)】\]]/g, '')
-    .replace(/[\s·・\-—_.,，。:：'"“”‘’/\\|!?！？]+/g, '');
-}
-function neteaseSourceMatchDurationMs(value) {
-  let duration = Number(value) || 0;
-  if (duration > 0 && duration < 10000) duration *= 1000;
-  return Math.max(0, duration);
-}
-function neteaseSourceMatchArtists(song) {
-  const list = song && (song.ar || song.artists) || [];
-  return (Array.isArray(list) ? list : []).map(artist => ({
-    id: String(artist && artist.id || ''),
-    name: neteaseSourceMatchText(artist && artist.name || ''),
-  })).filter(artist => artist.id || artist.name);
-}
-// 版本 token 规则提升为共享常量：网易云同曲匹配与聚合解析（跨平台元数据匹配）共用同一套
-// Live/翻唱/Remix/伴奏等版本区分规则，避免两处规则漂移。
-const SOURCE_MATCH_VERSION_RULES = [
-  ['live', /\blive\b|现场|演唱会/],
-  ['cover', /\bcover\b|翻唱/],
-  ['remix', /\bremix\b|\b(?:pop |radio |club |digital dog )?mix\b|mix版/],
-  ['remaster', /\bremaster(?:ed)?\b|重制/],
-  ['rerecord', /\bre[ -]?record(?:ed|ing)?\b|重录/],
-  ['named-version', /taylor['’]?s version|\bversion\b|\bver\.?\b|版本/],
-  ['edit', /\bradio edit\b|\bedit\b|剪辑版/],
-  ['alternate-cut', /\bstripped\b|\bmono\b|\bstereo\b|\bcommentary\b/],
-  ['instrumental', /\binstrumental\b|伴奏|\bkaraoke\b/],
-  ['acoustic', /\bacoustic\b|不插电/],
-  ['speed', /\bnightcore\b|\bsped up\b|\bslowed(?: and reverb)?\b|加速|慢速|变速/],
-  ['dj', /\bdj\b|dj版/],
-  ['demo', /\bdemo\b|试听版/],
-];
-function sourceMatchVersionTokensFromText(text) {
-  const normalized = String(text || '').toLowerCase();
-  return SOURCE_MATCH_VERSION_RULES.filter(rule => rule[1].test(normalized)).map(rule => rule[0]);
-}
-function neteaseSourceMatchVersionTokens(song) {
-  const aliases = song && (song.alia || song.alias) || [];
-  const text = String((song && song.name || '') + ' ' + (Array.isArray(aliases) ? aliases.join(' ') : aliases || ''));
-  return sourceMatchVersionTokensFromText(text);
-}
-function neteaseSourceMatchMediaProfiles(song) {
-  const profiles = [];
-  ['h', 'm', 'l', 'sq', 'hr', 'hMusic', 'mMusic', 'lMusic', 'sqMusic', 'hrMusic'].forEach(key => {
-    const item = song && song[key];
-    if (!item) return;
-    const profile = {
-      br: Number(item.br || item.bitrate || 0) || 0,
-      size: Number(item.size || 0) || 0,
-      duration: Number(item.playTime || item.playtime || item.duration || 0) || 0,
-      sr: Number(item.sr || item.sampleRate || 0) || 0,
-    };
-    if (profile.br || profile.size) profiles.push(profile);
-  });
-  return profiles;
-}
-function neteaseSourceMatchFingerprintCount(source, candidate) {
-  const sourceProfiles = neteaseSourceMatchMediaProfiles(source);
-  const candidateProfiles = neteaseSourceMatchMediaProfiles(candidate);
-  let matches = 0;
-  sourceProfiles.forEach(left => {
-    if (candidateProfiles.some(right =>
-      left.br && left.br === right.br &&
-      left.size && left.size === right.size &&
-      (!left.duration || !right.duration || Math.abs(left.duration - right.duration) <= 10) &&
-      (!left.sr || !right.sr || left.sr === right.sr)
-    )) matches++;
-  });
-  return matches;
-}
-function neteaseSourceMatchArtistSetEqual(sourceArtists, candidateArtists) {
-  const sourceIds = [...new Set(sourceArtists.map(artist => artist.id).filter(Boolean))].sort();
-  const candidateIds = [...new Set(candidateArtists.map(artist => artist.id).filter(Boolean))].sort();
-  if (sourceIds.length && candidateIds.length) {
-    return sourceIds.length === candidateIds.length && sourceIds.every((id, index) => id === candidateIds[index]);
-  }
-  const sourceNames = [...new Set(sourceArtists.map(artist => artist.name).filter(Boolean))].sort();
-  const candidateNames = [...new Set(candidateArtists.map(artist => artist.name).filter(Boolean))].sort();
-  return sourceNames.length > 0 && sourceNames.length === candidateNames.length && sourceNames.every((name, index) => name === candidateNames[index]);
-}
-function neteaseSourceMatchCandidateScore(source, candidate) {
-  if (!source || !candidate || String(source.id || '') === String(candidate.id || '')) return -1;
-  if (neteaseSourceMatchText(source.name) !== neteaseSourceMatchText(candidate.name)) return -1;
-  const sourceVersions = neteaseSourceMatchVersionTokens(source);
-  const candidateVersions = neteaseSourceMatchVersionTokens(candidate);
-  if (sourceVersions.join('|') !== candidateVersions.join('|')) return -1;
-  const sourceArtists = neteaseSourceMatchArtists(source);
-  const candidateArtists = neteaseSourceMatchArtists(candidate);
-  const sourceIds = sourceArtists.map(artist => artist.id).filter(Boolean);
-  const candidateIds = candidateArtists.map(artist => artist.id).filter(Boolean);
-  const artistIdMatch = sourceIds.length && candidateIds.length && sourceIds.some(id => candidateIds.indexOf(id) >= 0);
-  const artistNameMatch = sourceArtists.some(left => candidateArtists.some(right => left.name && right.name && left.name === right.name));
-  const artistSetMatch = neteaseSourceMatchArtistSetEqual(sourceArtists, candidateArtists);
-  if (!artistIdMatch && !artistNameMatch) return -1;
-  const sourceDuration = neteaseSourceMatchDurationMs(source.dt || source.duration);
-  const candidateDuration = neteaseSourceMatchDurationMs(candidate.dt || candidate.duration);
-  const durationDiff = sourceDuration && candidateDuration ? Math.abs(sourceDuration - candidateDuration) : 0;
-  const durationLimit = sourceDuration ? Math.max(1800, sourceDuration * 0.012) : 0;
-  if (durationLimit && durationDiff > durationLimit) return -1;
-  const fingerprintMatches = neteaseSourceMatchFingerprintCount(source, candidate);
-  const officialRecommendation = !!candidate.__officialSourceMatch;
-  if (!fingerprintMatches && (!artistSetMatch || !sourceDuration || !candidateDuration || durationDiff > (officialRecommendation ? 1800 : 600))) return -1;
-  const privilege = candidate.__privilege || candidate.privilege || {};
-  let score = fingerprintMatches * 120;
-  if (artistIdMatch) score += 70;
-  else if (artistNameMatch) score += 42;
-  if (artistSetMatch) score += 18;
-  if (officialRecommendation) score += 240;
-  if (sourceDuration && candidateDuration) score += Math.max(0, 45 - durationDiff / 100);
-  if (Number(privilege.pl || 0) > 0 && String(privilege.plLevel || '').toLowerCase() !== 'none') score += 22;
-  score += Math.min(20, Number(candidate.pop || candidate.popularity || candidate.score || 0) / 5 || 0);
-  return score;
-}
-function neteaseSourceMatchCacheKey(id, hints) {
-  hints = hints || {};
-  return [
-    String(id || ''),
-    neteaseSourceMatchText(hints.name || hints.title),
-    neteaseSourceMatchText(hints.artist),
-    Math.round(neteaseSourceMatchDurationMs(hints.duration) / 1000),
-  ].join('|');
-}
-function readNeteaseSourceMatchCache(key) {
-  const entry = neteaseSourceMatchCache.get(key);
-  if (!entry) return null;
-  const ttl = entry.candidates && entry.candidates.length ? NETEASE_SOURCE_MATCH_POSITIVE_TTL_MS : NETEASE_SOURCE_MATCH_NEGATIVE_TTL_MS;
-  if (Date.now() - entry.at > ttl) {
-    neteaseSourceMatchCache.delete(key);
-    return null;
-  }
-  return entry.candidates;
-}
-function writeNeteaseSourceMatchCache(key, candidates) {
-  neteaseSourceMatchCache.set(key, { at: Date.now(), candidates: candidates || [] });
-  while (neteaseSourceMatchCache.size > 256) neteaseSourceMatchCache.delete(neteaseSourceMatchCache.keys().next().value);
-}
-function neteaseSourceMatchHintArtists(hints) {
-  hints = hints || {};
-  const ids = String(hints.artistIds || hints.artistId || '').split(',').map(value => value.trim()).filter(Boolean);
-  let names = String(hints.artistNames || '').split('\u001f').map(value => value.trim()).filter(Boolean);
-  if (!names.length && String(hints.artist || '').trim()) names = [String(hints.artist).trim()];
-  const count = Math.max(ids.length, names.length);
-  const artists = [];
-  for (let index = 0; index < count; index++) {
-    const id = ids[index] || '';
-    const name = names[index] || (count === 1 ? String(hints.artist || '').trim() : '');
-    if (id || name) artists.push({ id, name });
-  }
-  return artists;
-}
-function mergeNeteaseSourceMatchSong(detailSong, searchSong, hints) {
-  const detail = detailSong || {};
-  const searchItem = searchSong || {};
-  const merged = { ...searchItem, ...detail };
-  const rawDetailArtists = detail.ar || detail.artists || [];
-  const rawSearchArtists = searchItem.ar || searchItem.artists || [];
-  const detailArtists = (Array.isArray(rawDetailArtists) ? rawDetailArtists : []).filter(artist => artist && (artist.id || String(artist.name || '').trim()));
-  const searchArtists = (Array.isArray(rawSearchArtists) ? rawSearchArtists : []).filter(artist => artist && (artist.id || String(artist.name || '').trim()));
-  const hintArtists = neteaseSourceMatchHintArtists(hints);
-  const artists = (Array.isArray(detailArtists) && detailArtists.length)
-    ? detailArtists
-    : ((Array.isArray(searchArtists) && searchArtists.length) ? searchArtists : hintArtists);
-  const detailAlbum = detail.al || detail.album || {};
-  const searchAlbum = searchItem.al || searchItem.album || {};
-  const album = { ...searchAlbum, ...detailAlbum };
-  album.name = String(detailAlbum.name || '').trim() || String(searchAlbum.name || '').trim() || hints && hints.album || '';
-  merged.id = detail.id || searchItem.id || hints && hints.id || '';
-  merged.name = String(detail.name || '').trim() || String(searchItem.name || '').trim() || hints && (hints.name || hints.title) || '';
-  merged.ar = artists;
-  merged.artists = artists;
-  merged.al = album;
-  merged.album = album;
-  merged.dt = detail.dt || detail.duration || searchItem.dt || searchItem.duration || neteaseSourceMatchDurationMs(hints && hints.duration);
-  ['h', 'm', 'l', 'sq', 'hr', 'hMusic', 'mMusic', 'lMusic', 'sqMusic', 'hrMusic'].forEach(key => {
-    if (!merged[key] && searchItem[key]) merged[key] = searchItem[key];
-  });
-  return merged;
-}
-async function findNeteaseSameTrackCandidates(id, hints, lookupDeadline) {
-  hints = hints || {};
-  const sourceId = String(id || '').trim();
-  const title = String(hints.name || hints.title || '').trim();
-  const artist = String(hints.artist || '').trim();
-  if (!sourceId || !title || !artist) return [];
-  const cacheKey = neteaseSourceMatchCacheKey(sourceId, hints);
-  const cached = readNeteaseSourceMatchCache(cacheKey);
-  if (cached) return cached;
-  if (neteaseSourceMatchInflight.has(cacheKey)) return neteaseSourceMatchInflight.get(cacheKey);
-  const promise = findNeteaseSameTrackCandidatesInner(id, hints, lookupDeadline).finally(() => {
-    if (neteaseSourceMatchInflight.get(cacheKey) === promise) neteaseSourceMatchInflight.delete(cacheKey);
-  });
-  neteaseSourceMatchInflight.set(cacheKey, promise);
-  return promise;
-}
-async function findNeteaseSameTrackCandidatesInner(id, hints, lookupDeadline) {
-  hints = hints || {};
-  const deadline = Number(lookupDeadline) > 0 ? Number(lookupDeadline) : Date.now() + NETEASE_SOURCE_MATCH_LOOKUP_BUDGET_MS;
-  const sourceId = String(id || '').trim();
-  const title = String(hints.name || hints.title || '').trim();
-  const artist = String(hints.artist || '').trim();
-  if (!sourceId || !title || !artist) return [];
-  const cacheKey = neteaseSourceMatchCacheKey(sourceId, hints);
-  const cached = readNeteaseSourceMatchCache(cacheKey);
-  if (cached) return cached;
-  const query = [title, artist].filter(Boolean).join(' ');
-  let searchSongs = [];
-  try {
-    const searchBudget = Math.min(3000, Math.max(500, deadline - Date.now()));
-    const result = await promiseWithTimeout(cloudsearch({ keywords: query, type: 1, limit: 16 }), searchBudget, 'NETEASE_SOURCE_SEARCH_TIMEOUT');
-    searchSongs = result.body && result.body.result && Array.isArray(result.body.result.songs) ? result.body.result.songs : [];
-  } catch (err) {
-    console.warn('[NeteaseSourceMatch] search failed:', err.code || err.message);
-    return [];
-  }
-  const searchById = new Map(searchSongs.map(song => [String(song && song.id || ''), song]));
-  const detailIds = [sourceId].concat(searchSongs.slice(0, 12).map(song => String(song && song.id || '')).filter(Boolean));
-  let detailSongs = [];
-  let privileges = [];
-  try {
-    const detailBudget = Math.min(2000, Math.max(500, deadline - Date.now()));
-    const detail = await promiseWithTimeout(song_detail({ ids: [...new Set(detailIds)].join(',') }), detailBudget, 'NETEASE_SOURCE_DETAIL_TIMEOUT');
-    detailSongs = detail.body && Array.isArray(detail.body.songs) ? detail.body.songs : [];
-    privileges = detail.body && Array.isArray(detail.body.privileges) ? detail.body.privileges : [];
-  } catch (err) {
-    console.warn('[NeteaseSourceMatch] detail failed:', err.code || err.message);
-  }
-  const privilegeById = new Map(privileges.map(item => [String(item && item.id || ''), item]));
-  const detailById = new Map(detailSongs.map(song => [String(song && song.id || ''), song]));
-  const sourceDetail = detailById.get(sourceId) || searchById.get(sourceId) || null;
-  const officialRecommendationId = String(sourceDetail && sourceDetail.noCopyrightRcmd && sourceDetail.noCopyrightRcmd.songId || '');
-  if (officialRecommendationId && !detailById.has(officialRecommendationId) && !searchById.has(officialRecommendationId) && deadline - Date.now() >= 500) {
-    try {
-      const officialDetail = await promiseWithTimeout(song_detail({ ids: officialRecommendationId }), Math.min(1000, Math.max(500, deadline - Date.now())), 'NETEASE_OFFICIAL_MATCH_DETAIL_TIMEOUT');
-      const officialSongs = officialDetail.body && Array.isArray(officialDetail.body.songs) ? officialDetail.body.songs : [];
-      const officialPrivileges = officialDetail.body && Array.isArray(officialDetail.body.privileges) ? officialDetail.body.privileges : [];
-      officialSongs.forEach(song => detailById.set(String(song && song.id || ''), song));
-      officialPrivileges.forEach(item => privilegeById.set(String(item && item.id || ''), item));
-    } catch (err) {
-      console.warn('[NeteaseSourceMatch] official alternate detail failed:', err.code || err.message);
-    }
-  }
-  const source = mergeNeteaseSourceMatchSong(detailById.get(sourceId), searchById.get(sourceId), {
-    ...hints,
-    id: sourceId,
-    name: title,
-    artist,
-  });
-  const ranked = [];
-  const candidateSeeds = searchSongs.slice();
-  if (officialRecommendationId && !candidateSeeds.some(song => String(song && song.id || '') === officialRecommendationId)) {
-    const officialSeed = detailById.get(officialRecommendationId) || { id: officialRecommendationId, name: title, ar: neteaseSourceMatchHintArtists(hints), dt: neteaseSourceMatchDurationMs(hints.duration) };
-    candidateSeeds.unshift(officialSeed);
-  }
-  candidateSeeds.forEach(searchSong => {
-    const candidateId = String(searchSong && searchSong.id || '');
-    if (!candidateId || candidateId === sourceId) return;
-    const candidate = mergeNeteaseSourceMatchSong(detailById.get(candidateId), searchSong, {});
-    candidate.__privilege = privilegeById.get(candidateId) || searchSong.privilege || {};
-    candidate.__officialSourceMatch = !!(officialRecommendationId && candidateId === officialRecommendationId);
-    const score = neteaseSourceMatchCandidateScore(source, candidate);
-    if (score < 0) return;
-    ranked.push({
-      song: mapSongRecord(candidate),
-      score,
-      fingerprintMatches: neteaseSourceMatchFingerprintCount(source, candidate),
-      officialRecommendation: !!candidate.__officialSourceMatch,
-      durationDiff: Math.abs(neteaseSourceMatchDurationMs(source.dt || source.duration) - neteaseSourceMatchDurationMs(candidate.dt || candidate.duration)),
-    });
-  });
-  ranked.sort((a, b) => b.score - a.score || a.durationDiff - b.durationDiff || Number(b.song.popularity || 0) - Number(a.song.popularity || 0));
-  const candidates = ranked.slice(0, NETEASE_SOURCE_MATCH_MAX_CANDIDATES);
-  writeNeteaseSourceMatchCache(cacheKey, candidates);
-  return candidates;
 }
 
 async function handleNeteaseAlbumDetail(id, limit) {
@@ -2523,27 +2130,6 @@ async function fetchNeteasePlaylistTracksPage(id, limit, offset) {
   };
 }
 
-async function filterLikelyPlayableWeatherSongs(songs) {
-  const source = uniqueSongsByKey(songs)
-    .filter(song => song && song.name && song.id && !isLowSignalWeatherSong(song))
-    .slice(0, 24);
-  const playable = [];
-  const fallback = source.slice(0, 24);
-  for (let i = 0; i < source.length; i += 4) {
-    const chunk = source.slice(i, i + 4);
-    const settled = await Promise.allSettled(chunk.map(async song => {
-      const info = await handleSongUrl(song.id, { loggedIn: false }, 'standard');
-      return info && info.url ? song : null;
-    }));
-    settled.forEach((result, idx) => {
-      if (result.status === 'fulfilled' && result.value) playable.push(result.value);
-      else if (result.status === 'rejected') console.warn('[WeatherRadio] playable probe failed:', chunk[idx] && chunk[idx].name, result.reason && result.reason.message);
-    });
-    if (playable.length >= 12) break;
-  }
-  return (playable.length ? playable : fallback).slice(0, 24);
-}
-
 function isLowSignalWeatherSong(song) {
   const text = String([
     song && song.name,
@@ -2728,242 +2314,6 @@ function audioContentTypeForUrl(audioUrl, upstreamType) {
   return upstreamType || 'audio/mpeg';
 }
 
-//   返回 { url, trial, level, br }
-//   trial=true 表示这是试听片段 (freeTrialInfo 非空)
-// 批 T16d：/api/song/url 保留为无凭证公开端点（本地歌联网匹配重试仍在用）。
-const ANONYMOUS_PLAYBACK_LOGIN = Object.freeze({
-  loggedIn: false,
-  hasCookie: false,
-  vipType: 0,
-  vipLevel: 'none',
-  isVip: false,
-  isSvip: false,
-  vipLabel: '无VIP',
-});
-async function resolveNeteaseDirectSongUrl(id, loginInfo, qualityPreference) {
-  const songId = String(id || '').trim();
-  if (!songId) return resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference);
-  const qualityKey = String(qualityPreference && typeof qualityPreference === 'object'
-    ? JSON.stringify(qualityPreference)
-    : (qualityPreference || 'auto'));
-  const cacheKey = songId + '|' + qualityKey;
-  return neteaseSongUrlCache.wrap(cacheKey, 3 * 60 * 1000, () =>
-    resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference));
-}
-async function resolveNeteaseDirectSongUrlInner(id, loginInfo, qualityPreference) {
-  console.log('[SongUrl] id:', id);
-  const resolveDeadline = Date.now() + NETEASE_DIRECT_RESOLVE_BUDGET_MS;
-  const requestedQuality = normalizeQualityPreference(qualityPreference);
-  const svipReady = hasNeteaseSvip(loginInfo);
-  const qualities = qualityCandidatesFrom(requestedQuality, NETEASE_QUALITY_CANDIDATES)
-    .filter(q => !q.svip || svipReady);
-
-  let trialFallback = null; // 兜底: 即使是试听也要能播
-  let lastData = null;
-  let lastError = null;
-  const probeFailures = [];
-  const probeCache = new Map();
-
-  for (const q of qualities) {
-    if (resolveDeadline - Date.now() < 500) break;
-    try {
-      // 优先用 v1 接口 (支持更高音质 level 字段)
-      let result;
-      try {
-        result = await promiseWithTimeout(
-          song_url_v1({ id, level: q.level }),
-          Math.min(2600, Math.max(500, resolveDeadline - Date.now())),
-          'NETEASE_DIRECT_URL_TIMEOUT'
-        );
-      } catch (e) {
-        lastError = e;
-        if (resolveDeadline - Date.now() < 500) throw e;
-        result = await promiseWithTimeout(
-          song_url({ id, br: q.br }),
-          Math.min(2200, Math.max(500, resolveDeadline - Date.now())),
-          'NETEASE_LEGACY_URL_TIMEOUT'
-        );
-      }
-      const d = result.body && result.body.data && result.body.data[0];
-      if (d) lastData = d;
-      const url = d && d.url;
-      const freeTrial = d && d.freeTrialInfo;
-      console.log('[SongUrl]', q.level, '->', url ? 'OK' : 'no url', freeTrial ? '(TRIAL)' : '');
-      let probe = null;
-      if (url) {
-        probe = probeCache.get(url);
-        if (!probe) {
-          probe = await probePlaybackAudioUrl(url, Math.min(2500, Math.max(600, resolveDeadline - Date.now())));
-          probeCache.set(url, probe);
-        }
-        if (!probe.ok || !probe.magic) {
-          probeFailures.push(q.level + ':' + (probe.status || probe.reason || 'invalid-audio'));
-          continue;
-        }
-      }
-      if (url && !freeTrial && probe && probe.ok) {
-        return {
-          provider: 'netease',
-          source: 'netease',
-          url,
-          trial: false,
-          playable: true,
-          level: q.level,
-          quality: q.label,
-          br: d.br,
-          requestedQuality,
-          probeStatus: probe.status,
-          probeBytes: probe.bytes,
-          probeMagic: probe.magic,
-        };
-      }
-      if (url && freeTrial && probe && probe.ok && !trialFallback) {
-        trialFallback = {
-          provider: 'netease',
-          source: 'netease',
-          url,
-          trial: true,
-          playable: true,
-          level: q.level,
-          quality: q.label,
-          br: d.br,
-          requestedQuality,
-          trialInfo: freeTrial,
-          restriction: classifyNeteasePlaybackRestriction(d, loginInfo),
-          probeStatus: probe.status,
-          probeBytes: probe.bytes,
-          probeMagic: probe.magic,
-        };
-      }
-    } catch (err) {
-      lastError = err;
-      console.log('[SongUrl]', q.level, 'failed:', err.message);
-    }
-  }
-  if (trialFallback) return trialFallback;
-  const restriction = classifyNeteasePlaybackRestriction(lastData, loginInfo);
-  return {
-    provider: 'netease',
-    source: 'netease',
-    url: null,
-    trial: false,
-    playable: false,
-    reason: restriction.category,
-    message: restriction.message,
-    restriction,
-    lastCode: lastData && lastData.code,
-    fee: lastData && lastData.fee,
-    error: lastError && lastError.message,
-    probeFailures: probeFailures.slice(0, 12),
-    requestedQuality,
-  };
-}
-
-async function resolveNeteaseSameTrackPlayback(id, loginInfo, qualityPreference, matchHints, requestDeadline) {
-  const ownDeadline = Date.now() + NETEASE_SOURCE_MATCH_TOTAL_BUDGET_MS;
-  const deadline = Number(requestDeadline) > 0 ? Math.min(ownDeadline, Number(requestDeadline)) : ownDeadline;
-  let candidates = [];
-  try {
-    const lookupBudget = Math.min(NETEASE_SOURCE_MATCH_LOOKUP_BUDGET_MS, Math.max(500, deadline - Date.now()));
-    candidates = await promiseWithTimeout(
-      findNeteaseSameTrackCandidates(id, matchHints, Date.now() + lookupBudget),
-      lookupBudget,
-      'NETEASE_SOURCE_MATCH_LOOKUP_TIMEOUT'
-    );
-  } catch (err) {
-    console.warn('[NeteaseSourceMatch] lookup failed:', err.code || err.message);
-    return null;
-  }
-  const excludedIds = new Set(String(matchHints && matchHints.excludeIds || '')
-    .split(',')
-    .map(value => String(value || '').trim())
-    .filter(Boolean));
-  const attemptedIds = [...excludedIds];
-  for (let index = 0; index < candidates.length; index++) {
-    const candidate = candidates[index];
-    const candidateId = String(candidate && candidate.song && candidate.song.id || '');
-    if (!candidateId || excludedIds.has(candidateId)) continue;
-    attemptedIds.push(candidateId);
-    try {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs < 800) break;
-      const playback = await promiseWithTimeout(
-        resolveNeteaseDirectSongUrl(candidate.song.id, loginInfo, qualityPreference),
-        Math.min(NETEASE_DIRECT_RESOLVE_BUDGET_MS, remainingMs),
-        'NETEASE_SOURCE_MATCH_PLAYBACK_TIMEOUT'
-      );
-      if (!playback || !playback.url || playback.trial) continue;
-      return { candidate, playback, triedIds: attemptedIds.slice() };
-    } catch (err) {
-      console.warn('[NeteaseSourceMatch] candidate failed:', candidate.song && candidate.song.id, err.code || err.message);
-    }
-  }
-  return null;
-}
-
-async function handleSongUrl(id, loginInfo, qualityPreference, matchHints) {
-  const hints = matchHints || {};
-  const requestDeadline = Date.now() + NETEASE_SONG_URL_TOTAL_BUDGET_MS;
-  let direct = null;
-  if (!hints.skipDirect) {
-    try {
-      direct = await promiseWithTimeout(
-        resolveNeteaseDirectSongUrl(id, loginInfo, qualityPreference),
-        Math.min(NETEASE_DIRECT_RESOLVE_BUDGET_MS + 300, Math.max(500, requestDeadline - Date.now())),
-        'NETEASE_DIRECT_RESOLVE_TIMEOUT'
-      );
-    } catch (err) {
-      const restriction = playbackRestriction('netease', 'url_unavailable', '网易云音源请求超时，已继续尝试站内同一录音版本', 'retry', { code: err.code || 'NETEASE_DIRECT_RESOLVE_TIMEOUT' });
-      direct = {
-        provider: 'netease',
-        source: 'netease',
-        url: null,
-        trial: false,
-        playable: false,
-        reason: restriction.category,
-        message: restriction.message,
-        restriction,
-        error: err.code || err.message,
-      };
-    }
-  } else {
-    const restriction = playbackRestriction('netease', 'url_unavailable', '正在继续尝试网易云站内的其它同曲版本', 'retry', { code: 'NETEASE_DIRECT_SKIPPED_AFTER_MATCH_FAILURE' });
-    direct = {
-      provider: 'netease',
-      source: 'netease',
-      url: null,
-      trial: false,
-      playable: false,
-      reason: restriction.category,
-      message: restriction.message,
-      restriction,
-      error: 'NETEASE_DIRECT_SKIPPED_AFTER_MATCH_FAILURE',
-    };
-  }
-  if (direct && direct.url && !direct.trial) return direct;
-  const sourceMatchAttempted = !!(String(hints.name || hints.title || '').trim() && String(hints.artist || '').trim());
-  const matched = await resolveNeteaseSameTrackPlayback(id, loginInfo, qualityPreference, hints, requestDeadline);
-  if (!matched) return { ...direct, sourceMatchAttempted };
-  return {
-    ...matched.playback,
-    provider: 'netease',
-    source: 'netease-same-track',
-    sourceMatch: true,
-    matchKind: matched.candidate.fingerprintMatches > 0
-      ? 'netease_same_recording'
-      : (matched.candidate.officialRecommendation ? 'netease_official_alternate' : 'netease_same_track_metadata'),
-    matchedFromId: String(id || ''),
-    requestedSongId: String(id || ''),
-    resolvedNeteaseId: String(matched.candidate.song.id || ''),
-    resolvedSongId: String(matched.candidate.song.id || ''),
-    matchedSong: matched.candidate.song,
-    matchScore: Math.round(matched.candidate.score || 0),
-    fingerprintMatches: matched.candidate.fingerprintMatches || 0,
-    sourceMatchTriedIds: matched.triedIds || [String(matched.candidate.song.id || '')],
-    originalRestriction: direct && direct.restriction || null,
-  };
-}
-
 function normalizeListenReportProvider(value) {
   value = String(value || '').trim().toLowerCase();
   if (value === 'qq' || value === 'kugou' || value === 'qishui' || value === 'spotify') return value;
@@ -3037,8 +2387,10 @@ const server = http.createServer(async (req, res) => {
 
   // ---------- 平台登录族 + 五平台官方 API 统一收口（批 T16d） ----------
   // 主人裁定：LX 世界观不持有平台 cookie 登录态，官方 API 连根退役。
-  // 保留面：/api/song/url、/api/playlist/tracks、/api/album/detail、/api/artist/detail、
-  // /api/lyric、/api/search、/api/discover/home（网易云公开元数据），不在此列。
+  // 批 T18 追加：/api/song/url 官方直链（含站内同曲匹配）一并退役——在线播放地址只来自
+  // 用户音源脚本 /api/lx-source/resolve。
+  // 保留面：/api/playlist/tracks、/api/album/detail、/api/artist/detail、/api/lyric、
+  // /api/search、/api/discover/home（网易云公开元数据），不在此列。
   if (
     pn === '/api/platform/capabilities'
     || pn === '/api/listen/total'
@@ -3058,6 +2410,7 @@ const server = http.createServer(async (req, res) => {
     || pn === '/api/playlist/add-song'
     || pn === '/api/song/comments'
     || pn === '/api/song/comments/like'
+    || pn === '/api/song/url'
     || pn.startsWith('/api/qq/')
     || pn.startsWith('/api/kugou/')
     || pn.startsWith('/api/qishui/')
@@ -3428,26 +2781,6 @@ const server = http.createServer(async (req, res) => {
       console.error('[AlbumDetail]', err);
       sendJSON(res, { provider: 'netease', error: err.message, album: null, songs: [] }, 500);
     }
-    return;
-  }
-
-  if (pn === '/api/song/url') {
-    try {
-      const sid = url.searchParams.get('id');
-      const quality = url.searchParams.get('quality') || '';
-      const matchHints = {
-        name: url.searchParams.get('name') || '',
-        artist: url.searchParams.get('artist') || '',
-        artistId: url.searchParams.get('artistId') || '',
-        artistIds: url.searchParams.get('artistIds') || '',
-        artistNames: url.searchParams.get('artistNames') || '',
-        album: url.searchParams.get('album') || '',
-        duration: url.searchParams.get('duration') || '',
-        excludeIds: url.searchParams.get('excludeIds') || '',
-        skipDirect: url.searchParams.get('skipDirect') === '1',
-      };
-      sendJSON(res, await handleSongUrl(sid, ANONYMOUS_PLAYBACK_LOGIN, quality, matchHints));
-    } catch (err) { console.error('[SongUrl]', err); sendJSON(res, { error: err.message }, 500); }
     return;
   }
 
