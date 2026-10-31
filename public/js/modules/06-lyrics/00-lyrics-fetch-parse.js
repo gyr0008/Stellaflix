@@ -3,8 +3,6 @@ function hasUsableLyricLines(lines) {
     return line && !line.fallback && !isNoLyricText(line.text);
   });
 }
-var lyricTranslationFallbackCache = {};
-var lyricTranslationFallbackMissCache = {};
 var lyricQueuePrefetchTimer = 0;
 var lyricQueuePrefetchToken = 0;
 var lyricQueuePrefetchBusy = false;
@@ -13,27 +11,69 @@ function lyricTranslationTextFromAliases(source) {
   source = source || {};
   return source.tlyric || source.trans || source.translatedLyric || source.translation || source.translated_lyric || '';
 }
-function lyricEndpointForSong(songOrId) {
+// 批 T15.5b：歌词统一走 lx 音源——POST /api/lx-source/lyric {source, musicInfo}
+// → server.js:8118 → lxSourceHost.getLyric（上游 index.html:32107 同款消费形态）。
+// 官方五路歌词路由（网易云裸 id 路由 + qq/kugou/qishui/spotify 四路分派）的消费方在此
+// 整体退役，路由本体删除归 T16。
+// 无 lx 源映射（汽水/Spotify/本地/lx 自定义源）不发网络，直接落「暂无歌词」标题兜底；
+// 上游 platform-lyric 裸 HTTP 兜底链（index.html:32058-32135）按 YAGNI 未移植——无源即无线上歌词。
+var LX_LYRIC_SOURCES = { tx: 1, wy: 1, kw: 1, kg: 1, mg: 1 };
+var LX_LYRIC_PROVIDER_ALIAS = { qq: 'tx', netease: 'wy', kuwo: 'kw', kugou: 'kg', migu: 'mg' };
+
+function lxLyricSourceForSong(songOrId) {
   var song = (songOrId && typeof songOrId === 'object') ? songOrId : null;
-  var provider = song ? songProviderKey(song) : 'netease';
-  if (provider === 'qq') {
-    var mid = song.mid || song.songmid || song.id || '';
-    var qqId = song.qqId || (/^\d+$/.test(String(song.id || '')) ? song.id : '');
-    return '/api/qq/lyric?mid=' + encodeURIComponent(mid) + '&id=' + encodeURIComponent(qqId);
+  // 裸 id 调用沿用旧网易云数字 id 语义。
+  if (!song) return 'wy';
+  if (song.type === 'local' ||
+    song.source === 'local' || song.localUrl || song.localKey) return '';
+  var provider = typeof songProviderKey === 'function' ? songProviderKey(song) : String(song.source || song.provider || 'netease');
+  var raw = String(song.source || song.provider || provider || '').toLowerCase();
+  if (LX_LYRIC_SOURCES[raw]) return raw;
+  var alias = LX_LYRIC_PROVIDER_ALIAS[raw] || LX_LYRIC_PROVIDER_ALIAS[provider];
+  return alias && LX_LYRIC_SOURCES[alias] ? alias : '';
+}
+
+// musicInfo 即 lx 沙箱脚本 getLyric 的入参：逐源只带该源解析器真正需要的标识字段
+// （tx→mid、kw→songmid、kg→hash、wy/mg→数字 id），其余字段仅作匹配辅助。
+function lxLyricMusicInfo(songOrId) {
+  var song = (songOrId && typeof songOrId === 'object') ? songOrId : { id: songOrId };
+  var sourceName = lxLyricSourceForSong(songOrId);
+  var rawId = song.id != null && song.id !== '' ? String(song.id) : '';
+  var info = {
+    type: 'music',
+    source: sourceName,
+    name: song.name || song.title || '',
+    singer: song.singer || song.artist || song.author || ''
+  };
+  if (sourceName === 'tx') {
+    info.mid = song.mid || song.songmid || rawId;
+    if (/^\d+$/.test(rawId)) info.id = rawId;
+  } else if (sourceName === 'kw') {
+    info.songmid = song.songmid || song.mid || rawId;
+    if (rawId) info.id = rawId;
+  } else if (sourceName === 'kg') {
+    info.hash = song.hash || song.fileHash || song.audioHash || rawId;
+    info.albumId = song.albumId || song.album_audio_id || '';
+  } else {
+    info.id = rawId || song.copyrightId || song.sid || '';
+    if (sourceName === 'mg') info.copyrightId = song.copyrightId || rawId || '';
   }
-  if (provider === 'kugou') {
-    return '/api/kugou/lyric?hash=' + encodeURIComponent(song.hash || song.fileHash || song.audioHash || song.id || '') +
-      '&albumAudioId=' + encodeURIComponent(song.albumAudioId || song.album_audio_id || song.mixSongId || '') +
-      '&duration=' + encodeURIComponent(playbackDurationFromSong(song) || '');
-  }
-  if (provider === 'qishui') {
-    return '/api/qishui/lyric?id=' + encodeURIComponent(song.id || song.providerSongId || '');
-  }
-  if (provider === 'spotify') {
-    return '/api/spotify/lyric?id=' + encodeURIComponent(song.id || song.providerSongId || song.spotifyId || '');
-  }
-  var songId = song ? song.id : songOrId;
-  return '/api/lyric?id=' + encodeURIComponent(songId);
+  info.albumName = song.albumName || song.album || '';
+  info.interval = song.interval || song.duration || '';
+  info.img = song.picUrl || song.img || song.cover || song.coverUrl || '';
+  return info;
+}
+
+function fetchLxLyricPayload(songOrId, options) {
+  options = options || {};
+  var sourceName = lxLyricSourceForSong(songOrId);
+  if (!sourceName) return Promise.resolve(null);
+  return apiJson('/api/lx-source/lyric', Object.assign({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: sourceName, musicInfo: lxLyricMusicInfo(songOrId) }),
+    timeoutMs: 22000
+  }, options));
 }
 
 function persistentLyricCacheKey(song) {
@@ -57,7 +97,7 @@ function writePersistentLyricCache(song, payload) {
 }
 
 function lyricQueuePrefetchCandidate(song) {
-  if (!song || song.type === 'podcast' || song.type === 'local' || song.source === 'local' || song.localUrl) return false;
+  if (!song || song.type === 'local' || song.source === 'local' || song.localUrl) return false;
   return !!(song.id || song.mid || song.songmid || song.hash || song.name || song.title);
 }
 
@@ -101,8 +141,9 @@ async function runQueueLyricPrefetch(fromIndex, token) {
     var cached = await readPersistentLyricCache(candidate.song);
     if (token !== lyricQueuePrefetchToken) return false;
     if (cached) return true;
-    var response = await apiJson(lyricEndpointForSong(candidate.song));
+    var response = await fetchLxLyricPayload(candidate.song);
     if (token !== lyricQueuePrefetchToken) return false;
+    if (!response) return false;
     var merged = mergeInlineLyricResponseForSong(candidate.song, response || {});
     var state = parseLyricResponseToOriginalState(candidate.song, merged);
     if (!state || !state.usableLyric) return false;
@@ -123,13 +164,13 @@ function applyFetchedLyricResponse(song, token, response, options) {
   var state = parseLyricResponseToOriginalState(song, mergedResponse);
   setOriginalLyricsState(state.lines, state.hasNativeKaraoke, state.timingSource, state.translationLines, state.translationSource);
   applyPreferredLyricsForCurrent(true);
-  scheduleNeteaseLyricTranslationFallback(song, token, state);
   if (state.usableLyric && options.persist !== false) writePersistentLyricCache(song, mergedResponse);
   return state;
 }
 
 function refreshPersistentLyricCache(song) {
-  apiJson(lyricEndpointForSong(song)).then(function (response) {
+  fetchLxLyricPayload(song).then(function (response) {
+    if (!response) return;
     var mergedResponse = mergeInlineLyricResponseForSong(song, response || {});
     var state = parseLyricResponseToOriginalState(song, mergedResponse);
     if (state && state.usableLyric) writePersistentLyricCache(song, mergedResponse);
@@ -144,116 +185,6 @@ function mergeInlineLyricResponseForSong(song, response) {
   if (!response.yrc && (song.yrc || song.qrc)) response.yrc = song.yrc || song.qrc;
   if (!response.ytlrc && song.ytlrc) response.ytlrc = song.ytlrc;
   return response;
-}
-function lyricTranslationFallbackKey(song) {
-  song = song || {};
-  return [
-    simpleSearchNorm(song.name || song.title || ''),
-    simpleSearchNorm(song.artist || ''),
-    simpleSearchNorm(song.album || '')
-  ].join('|');
-}
-function shouldFetchNeteaseLyricTranslationFallback(song, state) {
-  if (!song || !state || !state.usableLyric) return false;
-  if (song.type === 'local' || song.source === 'local' || song.localUrl || song.type === 'podcast') return false;
-  if (songProviderKey(song) === 'netease') return false;
-  if (state.translationLines && state.translationLines.length) return false;
-  if (!String(song.name || song.title || '').trim()) return false;
-  var key = lyricTranslationFallbackKey(song);
-  var missedAt = lyricTranslationFallbackMissCache[key] || 0;
-  return !missedAt || Date.now() - missedAt > 10 * 60 * 1000;
-}
-function lyricNeteaseFallbackSearchQuery(song) {
-  song = song || {};
-  var artist = String(song.artist || '').split(/\s*\/\s*|\s*,\s*|\s*&\s*/)[0] || '';
-  return [song.name || song.title || '', artist].filter(Boolean).join(' ').trim();
-}
-async function findNeteaseLyricFallbackCandidate(song) {
-  var query = lyricNeteaseFallbackSearchQuery(song);
-  if (!query) return null;
-  var data = await apiJson('/api/search?keywords=' + encodeURIComponent(query) + '&limit=8', { timeoutMs: 4800 });
-  var list = data && (data.songs || data.result || []);
-  if (!Array.isArray(list) || !list.length) return null;
-  list = list.filter(function (candidate) {
-    return !(typeof sourceCandidateRejectReason === 'function' && sourceCandidateRejectReason(song, candidate, 'netease'));
-  });
-  if (!list.length) return null;
-  for (var i = 0; i < list.length; i++) {
-    if (typeof isSameTitleArtist === 'function' && isSameTitleArtist(song, list[i])) return list[i];
-  }
-  list = list.slice().sort(function (a, b) {
-    var sa = typeof scoreSongSearchResult === 'function' ? scoreSongSearchResult(a, query, 0) : 0;
-    var sb = typeof scoreSongSearchResult === 'function' ? scoreSongSearchResult(b, query, 0) : 0;
-    if (a && a.playable === false) sa -= 20;
-    if (b && b.playable === false) sb -= 20;
-    return sb - sa;
-  });
-  var best = list[0];
-  var bestScore = typeof scoreSongSearchResult === 'function' ? scoreSongSearchResult(best, query, 0) : 0;
-  return best && best.id && bestScore >= 28 ? best : null;
-}
-function mergeNeteaseFallbackTranslationsIntoCurrent(song, token, payload, cacheKey) {
-  if (!payload || !payload.lines || !payload.lines.length) return false;
-  if (token !== trackSwitchToken) return false;
-  var currentSong = typeof currentLyricSong === 'function' ? currentLyricSong() : null;
-  if (lyricTranslationFallbackKey(currentSong) !== cacheKey) return false;
-  if (originalLyricsState && originalLyricsState.translationLines && originalLyricsState.translationLines.length) return false;
-  var mergedLines = attachLyricTranslations(originalLyricsState.lines || [], payload.lines);
-  var attached = mergedLines.some(function (line) { return line && line.translation; });
-  if (!attached) return false;
-  setOriginalLyricsState(
-    mergedLines,
-    originalLyricsState.hasNativeKaraoke,
-    originalLyricsState.timingSource,
-    payload.lines,
-    'netease-fallback+' + (payload.source || 'tlyric')
-  );
-  applyPreferredLyricsForCurrent(true);
-  return true;
-}
-async function fetchNeteaseLyricTranslationFallback(song, token, cacheKey) {
-  if (!song || token !== trackSwitchToken) return false;
-  var cached = lyricTranslationFallbackCache[cacheKey];
-  if (cached) return mergeNeteaseFallbackTranslationsIntoCurrent(song, token, cached, cacheKey);
-  try {
-    var candidate = await findNeteaseLyricFallbackCandidate(song);
-    if (token !== trackSwitchToken || !candidate || !candidate.id) return false;
-    var response = await apiJson('/api/lyric?id=' + encodeURIComponent(candidate.id), { timeoutMs: 5200 });
-    if (token !== trackSwitchToken) return false;
-    var translationPayload = buildLyricTranslationPayload(response || {});
-    if (!translationPayload.lines.length) {
-      lyricTranslationFallbackMissCache[cacheKey] = Date.now();
-      return false;
-    }
-    cached = {
-      lines: cloneLyricLines(translationPayload.lines),
-      source: translationPayload.source,
-      candidateId: candidate.id,
-      cachedAt: Date.now()
-    };
-    lyricTranslationFallbackCache[cacheKey] = cached;
-    return mergeNeteaseFallbackTranslationsIntoCurrent(song, token, cached, cacheKey);
-  } catch (err) {
-    lyricTranslationFallbackMissCache[cacheKey] = Date.now();
-    console.warn('[LyricTranslationFallback]', err);
-    return false;
-  }
-}
-function scheduleNeteaseLyricTranslationFallback(song, token, state) {
-  if (!shouldFetchNeteaseLyricTranslationFallback(song, state)) return;
-  var cacheKey = lyricTranslationFallbackKey(song);
-  var cached = lyricTranslationFallbackCache[cacheKey];
-  if (cached) {
-    setTimeout(function () { mergeNeteaseFallbackTranslationsIntoCurrent(song, token, cached, cacheKey); }, 0);
-    return;
-  }
-  var start = function () {
-    if (token === trackSwitchToken) fetchNeteaseLyricTranslationFallback(song, token, cacheKey);
-  };
-  setTimeout(function () {
-    if (window.requestIdleCallback) requestIdleCallback(start, { timeout: 1800 });
-    else start();
-  }, 420);
 }
 function lyricFallbackTextForSong(song) {
   song = song || {};
@@ -273,11 +204,22 @@ function withLyricFallbackForSong(song, lines) {
 function parseLyricResponseToOriginalState(song, response) {
   response = response || {};
   var nativeLines = parseYrcText(response.yrc || '');
+  var wordSource = 'yrc';
+  if (!nativeLines.some(function (line) { return line.words && line.words.length; })) {
+    // lx 逐字歌词（lx-source/lyric 的 lxlyric 字段）在无 yrc 原生逐字时顶上，
+    // 形态同上游 index.html:32115 parseLxWordLyricText → timingSource='lx-word'。
+    var lxWordLines = parseLxWordLyricText(response.lxlyric || '');
+    if (lxWordLines.some(function (line) { return line.words && line.words.length; })) {
+      nativeLines = lxWordLines;
+      wordSource = 'lx';
+    }
+  }
   var lrcLines = parseLyricText(response.lyric || '');
   var translationPayload = buildLyricTranslationPayload(response);
   var translationLines = translationPayload.lines;
   var hasNativeKaraoke = nativeLines.some(function (line) { return line.words && line.words.length; });
-  var timingSource = hasNativeKaraoke ? 'yrc-word' : (nativeLines.length ? 'yrc-line' : (lrcLines.length ? 'lrc-line' : 'fallback'));
+  var timingSource = hasNativeKaraoke ? (wordSource === 'lx' ? 'lx-word' : 'yrc-word') :
+    (nativeLines.length ? (wordSource === 'lx' ? 'lx-line' : 'yrc-line') : (lrcLines.length ? 'lrc-line' : 'fallback'));
   var primaryLines = nativeLines.length ? nativeLines : lrcLines;
   var lines = withLyricFallbackForSong(song, attachLyricTranslations(primaryLines, translationLines));
   if (lines.length && lines[0].fallback) timingSource = 'fallback';
@@ -293,7 +235,7 @@ function parseLyricResponseToOriginalState(song, response) {
 }
 function shouldRetryStartupLyricFetch(song, token, attempt) {
   if (!song || token !== trackSwitchToken || (attempt || 0) >= 3) return false;
-  if (song.type === 'local' || song.source === 'local' || song.localKey || song.type === 'podcast') return false;
+  if (song.type === 'local' || song.source === 'local' || song.localKey) return false;
   return !!(startupAutoplayPreference || restoredLastPlaybackSnapshot || pendingPlaybackResumeAt > 0);
 }
 function scheduleStartupLyricFetchRetry(song, token, attempt) {
@@ -346,7 +288,17 @@ async function fetchLyric(songOrId, token, attempt) {
         return;
       }
     }
-    var r = await apiJson(lyricEndpointForSong(song || songOrId));
+    // 无 lx 源映射（汽水/Spotify/本地/lx 自定义源）：不发网络，直接落「暂无歌词」标题兜底。
+    var lxSourceName = lxLyricSourceForSong(song || songOrId);
+    if (!lxSourceName) {
+      if (token !== trackSwitchToken) return;
+      cancelPendingTrackFallbackLyrics();
+      setOriginalLyricsState(withLyricFallbackForSong(song || currentLyricSong(), []), false, 'fallback', [], 'none');
+      applyPreferredLyricsForCurrent(true);
+      return;
+    }
+    var r = await fetchLxLyricPayload(song || songOrId);
+    if (!r) return;
     var state = applyFetchedLyricResponse(song, token, r);
     if (!state) return;
     if (!state.usableLyric && shouldRetryStartupLyricFetch(song, token, attempt)) scheduleStartupLyricFetchRetry(song, token, attempt);
@@ -601,6 +553,47 @@ function attachLyricTranslations(primaryLines, translationLines) {
     }
   });
   return primary;
+}
+// 上游 index.html:35946 parseLxWordLyricText 移植：LX 逐字歌词
+// `[MM:SS.mm]<词起始ms,词时长ms>文本` 行式协议。与上游的差异：lx 会在词间重复插入
+// `[MM:SS.mm]` 行内时间戳，它属于时间标记而非歌词文本，必须剥掉后再拼接，
+// 否则 fullText 会被污染（'He[00:02.60]llo' 而非 'Hello'）。
+function parseLxWordLyricText(text) {
+  var lines = [];
+  String(text || '').split(/\r?\n/).forEach(function (row) {
+    var head = row.match(/^\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\](.*)$/);
+    if (!head) return;
+    var lineTime = lyricTagTimeToSeconds(head[1], head[2], head[3]);
+    var body = head[4] || '';
+    var words = [], fullText = '', reg = /<(\d+),(\d+)>([^<]*)/g, match;
+    while ((match = reg.exec(body))) {
+      var wordText = String(match[3] || '').replace(/\[[^\]]*\]/g, '');
+      if (!wordText) continue;
+      var c0 = fullText.length;
+      fullText += wordText;
+      words.push({
+        text: wordText,
+        t: lineTime + (parseInt(match[1], 10) || 0) / 1000,
+        d: Math.max(0.04, (parseInt(match[2], 10) || 0) / 1000),
+        c0: c0,
+        c1: fullText.length,
+        source: 'lx-karaoke'
+      });
+    }
+    if (!words.length) return;
+    fullText = fullText.trim();
+    if (!fullText) return;
+    var lastWord = words[words.length - 1];
+    lines.push({
+      t: lineTime,
+      text: fullText,
+      words: words,
+      duration: Math.max(0.45, lastWord.t + lastWord.d - lineTime),
+      charCount: Math.max(1, fullText.length),
+      source: 'lx-karaoke'
+    });
+  });
+  return finalizeLyricLineDurations(lines);
 }
 function parseYrcText(text) {
   var lines = [];

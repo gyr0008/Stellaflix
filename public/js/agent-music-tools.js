@@ -418,26 +418,22 @@
             // 第二阶段查询失败时，继续走原 NO_MATCH 路径，不向用户抛技术错。
             if (!Array.isArray(resultFailures)) resultFailures = [];
           }
-          // 第三阶段 fallback：跨平台（QQ/酷狗）搜索。netease cloudsearch 因版权常无热门
-          // 歌手（周杰伦/陈奕迅等）的原版，但 QQ/酷狗 有正版。并行搜两个平台，按相同严格
-          // 歌手过滤筛候选，任一非空则替换 scored；任一失败或都空仍走 NO_MATCH。
+          // 第三阶段 fallback：跨平台（QQ→tx / 酷狗→kg）搜索。网易云正版常缺热门歌手
+          // （周杰伦/陈奕迅等）的原版，QQ/酷狗 有正版。批 T15.5b：改指 lx 聚合搜索单请求
+          // 双源（官方 QQ/酷狗搜索消费点退役，删除归 T16），
+          // 按相同严格歌手过滤筛候选，非空则替换 scored；失败或仍空则走 NO_MATCH。
           if (!scored.length) {
             try {
               var crossTimeBudget = Math.max(8000, Number(options.timeoutMs) || 18000);
-              var crossResults = await Promise.all([
-                apiJson('/api/qq/search?keywords=' + encodeURIComponent(title) +
-                  '&limit=' + fetchLimit + '&t=' + Date.now(),
-                  { timeoutMs: crossTimeBudget })
-                  .then(function (r) { return r; }).catch(function () { return null; }),
-                apiJson('/api/kugou/search?keywords=' + encodeURIComponent(title) +
-                  '&limit=' + fetchLimit + '&t=' + Date.now(),
-                  { timeoutMs: crossTimeBudget })
-                  .then(function (r) { return r; }).catch(function () { return null; })
-              ]);
-              var crossSongs = [];
-              crossResults.forEach(function (r) {
-                if (r && Array.isArray(r.songs)) crossSongs = crossSongs.concat(r.songs);
-              });
+              var crossResult = await apiJson(
+                '/api/lx-source/search?q=' + encodeURIComponent(title) +
+                '&limit=' + fetchLimit +
+                '&sources=' + encodeURIComponent('tx,kg') +
+                '&t=' + Date.now(),
+                { timeoutMs: crossTimeBudget }
+              );
+              if (crossResult && Array.isArray(crossResult.failures)) resultFailures = crossResult.failures;
+              var crossSongs = crossResult && Array.isArray(crossResult.songs) ? crossResult.songs : [];
               if (crossSongs.length) {
                 var crossScored = crossSongs.map(function (song, index) {
                   return {
@@ -771,12 +767,14 @@
         return toolError('QUALITY_PANEL_FAILED', error && error.message ? error.message : '音质面板打开失败');
       }
     }
+    // T12：音质的内部键统一为 LX 五档（master/flac24bit/flac/320k/128k），
+    // 旧词/别名保留为输入兼容，映射进新词汇表。
     var aliases = {
-      '128k': 'standard', 'standard': 'standard', 'normal': 'standard',
-      '320k': 'exhigh', 'exhigh': 'exhigh', 'high': 'exhigh', 'hq': 'exhigh',
-      'flac': 'lossless', 'lossless': 'lossless', 'sq': 'lossless',
-      'hires': 'hires', 'hi-res': 'hires', 'highres': 'hires',
-      'master': 'jymaster', 'jymaster': 'jymaster', 'svip': 'jymaster'
+      '128k': '128k', 'standard': '128k', 'normal': '128k', 'std': '128k',
+      '320k': '320k', 'exhigh': '320k', 'high': '320k', 'hq': '320k',
+      'flac': 'flac', 'lossless': 'flac', 'sq': 'flac',
+      'flac24bit': 'flac24bit', 'hires': 'flac24bit', 'hi-res': 'flac24bit', 'highres': 'flac24bit',
+      'master': 'master', 'jymaster': 'master', 'svip': 'master'
     };
     quality = aliases[quality] || '';
     if (!quality) return toolError('QUALITY_INVALID', '音质只支持标准、320k、无损、Hi-Res 或超清母带');

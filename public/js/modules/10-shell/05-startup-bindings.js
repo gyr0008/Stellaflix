@@ -39,22 +39,12 @@ if (fx.floatLayer) createFloatLayer();
 if (fx.particleLyrics) createLyricsParticles();
 if (fx.backCover) createBackCoverLayer();
 initIdleGuideCanvas();
-var startupLoginStatusPromise = Promise.all([refreshLoginStatus(), refreshQQLoginStatus({ forceVip: true, reason: 'startup' }), refreshKugouLoginStatus(), refreshQishuiLoginStatus(), refreshSpotifyLoginStatus(), persistedLocalLibraryRestorePromise]);
-startQQLoginStatusAutoRefresh();
-startKugouLoginStatusAutoRefresh();
-startQishuiLoginStatusAutoRefresh();
-startSpotifyLoginStatusAutoRefresh();
-if (startupLoginStatusPromise && startupLoginStatusPromise.then) {
-  startupLoginStatusPromise.then(function () {
-    if (hasAnyPlatformLogin()) {
-      refreshUserPlaylists(true);
-      loadHomeDiscover(true);
-    }
+var startupRestorePromise = Promise.all([persistedLocalLibraryRestorePromise]);
+if (startupRestorePromise && startupRestorePromise.then) {
+  startupRestorePromise.then(function () {
     if (restoredPlaybackAtStartup) queueStartupAutoplayAfterHomeReveal('login-status');
     if (document.body.classList.contains('splash-active')) return;
-    var homeShown = updateEmptyHomeVisibility({ forceLoad: hasAnyPlatformLogin() });
-    if (!hasAnyPlatformLogin()) maybeRunStartupLoginGuide('status');
-    else if (!homeShown) maybeRunStartupLoginGuide('status');
+    updateEmptyHomeVisibility({ forceLoad: true });
   }, function () {
     if (restoredPlaybackAtStartup) queueStartupAutoplayAfterHomeReveal('login-status');
   });
@@ -87,6 +77,8 @@ if (!restoredPlaybackAtStartup) {
 safeRenderQueuePanel('startup-restore');
 updateCustomCoverButton();
 updateCustomLyricControls();
+// 批 T15.5b：红心改本地桩后不再有在线拉取，启动时从 localStorage 回填一次再刷按钮。
+restoreLocalLikedSongs();
 updateLikeButtons();
 setTimeout(initUpdatePreview, 9000);
 window.addEventListener('beforeunload', function () {

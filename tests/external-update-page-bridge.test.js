@@ -38,9 +38,9 @@ test('local update installer and update-cache bridges are absent', () => {
   assert.doesNotMatch(bridgeText, /openUpdateInstaller/);
   assert.doesNotMatch(mainText, /getUpdateDownloadDir/);
   assert.doesNotMatch(mainText, /STELLAFLIX_UPDATE_DIR/);
-  // Anchor on the update IPC handler body rather than the whole file: shell.openPath
-  // is legitimately used by the custom-source script directory bridge, so a
-  // file-wide regex reports a false positive.
+  // Anchor on the update IPC handler body rather than the whole file: other desktop
+  // bridges may legitimately use shell.openPath (file-wide regex reports a false positive;
+  // 原 custom-source 脚本目录桥已随批 T14 退役，锚定写法保留作防御惯例)。
   const updateHandler = ipcHandlerBody(mainText, 'stellaflix-open-update-page');
   assert.match(updateHandler, /shell\.openExternal\(/);
   assert.doesNotMatch(updateHandler, /shell\.openPath\(/);

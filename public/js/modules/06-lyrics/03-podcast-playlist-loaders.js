@@ -1,93 +1,5 @@
-var podcastListEl = document.getElementById('podcast-list');
-if (podcastListEl) {
-  podcastListEl.addEventListener('click', function (e) {
-    if (e.target && e.target.closest && e.target.closest('[data-podcast-back]')) {
-      renderMyPodcastCollections({ animate: true });
-      return;
-    }
-    var radioCard = e.target && e.target.closest ? e.target.closest('[data-podcast-radio-id]') : null;
-    if (radioCard) {
-      loadPodcastRadioIntoQueue(radioCard.getAttribute('data-podcast-radio-id'), true, radioCard.getAttribute('data-podcast-title') || '');
-      return;
-    }
-    var card = e.target && e.target.closest ? e.target.closest('[data-podcast-key]') : null;
-    if (!card) return;
-    openMyPodcastCollection(card.getAttribute('data-podcast-key'), card.getAttribute('data-podcast-title') || '');
-  });
-}
-function renderMyPodcastRadioItems(key, title, items) {
-  var $pod = document.getElementById('podcast-list');
-  if (!$pod) return;
-  if (!items.length) {
-    $pod.innerHTML = '<div class="podcast-inline-head"><div class="pl-section-label">' + escHtml(title || '我的播客') + '</div><button class="fx-mini-btn ghost" data-podcast-back="1" style="height:24px;padding:0 9px;font-size:10.5px">返回</button></div>' +
-      '<div style="text-align:center;padding:14px 0;color:rgba(255,255,255,.28);font-size:11.5px">暂无内容</div>';
-    return;
-  }
-  $pod.innerHTML = '<div class="podcast-inline-head"><div class="pl-section-label">' + escHtml(title || '我的播客') + '</div><button class="fx-mini-btn ghost" data-podcast-back="1" style="height:24px;padding:0 9px;font-size:10.5px">返回</button></div>' +
-    items.map(function (r) {
-      var thumb = r.cover ? coverUrlWithSize(r.cover, 88) : '';
-      var imgTag = thumb ? '<img src="' + thumb + '" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0.2">' : '<div style="width:44px;height:44px;border-radius:8px;background:rgba(0,245,212,.07);flex-shrink:0"></div>';
-      return '<div class="pl-card podcast-card podcast-child" data-podcast-radio-id="' + escHtml(String(r.id || r.radioId || '')) + '" data-podcast-title="' + escHtml(r.name || '') + '">' +
-        imgTag +
-        '<div style="flex:1;min-width:0"><div class="pl-name">' + escHtml(r.name || '') + '</div><div class="pl-sub">' + escHtml((r.djName || r.artist || 'Podcast') + (r.programCount ? (' · ' + r.programCount + ' 集') : '')) + '</div></div>' +
-        '</div>';
-    }).join('');
-  animateVisiblePanelList($pod, '.pl-card', document.getElementById('playlist-panel'));
-}
-async function openMyPodcastCollection(key, title) {
-  if (!key) return;
-  showLoading();
-  try {
-    var r = await apiJson('/api/podcast/my/items?key=' + encodeURIComponent(key) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE);
-    if (r && r.loggedIn === false) { showLoginModal(); return; }
-    var items = r.items || [];
-    myPodcastItems[key] = items;
-    if (!items.length) {
-      showToast('暂无内容: ' + (title || key));
-      renderMyPodcastRadioItems(key, title, []);
-      return;
-    }
-    if (r.itemType === 'voice' || (items[0] && items[0].type === 'podcast')) {
-      playQueue = items.map(cloneSong);
-      currentIdx = 0;
-      safeRenderQueuePanel('podcast-collection-voice');
-      safeSwitchPlaylistTab('queue', 'podcast-collection-voice');
-      safeShelfRebuild('podcast-collection-voice', true);
-      forcePlaybackControlsInteractive();
-      await playQueueAt(0);
-      showToast('载入: ' + (title || '喜欢的声音'));
-      return;
-    }
-    renderMyPodcastRadioItems(key, title, items);
-  } catch (e) {
-    console.warn(e);
-    showToast('播客加载失败');
-  } finally {
-    hideLoading();
-  }
-}
-async function loadPodcastRadioIntoQueue(id, autoplay, title) {
-  if (!id) return;
-  showLoading();
-  try {
-    var r = await apiJson('/api/podcast/programs?id=' + encodeURIComponent(id) + '&limit=' + PLAYLIST_LAZY_BATCH_SIZE);
-    if (r.error) { showToast('播客加载失败: ' + r.error); return; }
-    if (!r.programs || !r.programs.length) { showToast('播客暂无可播放节目'); return; }
-    playQueue = r.programs.map(cloneSong);
-    currentIdx = 0;
-    safeRenderQueuePanel('podcast-radio');
-    safeSwitchPlaylistTab('queue', 'podcast-radio');
-    safeShelfRebuild('podcast-radio', true);
-    forcePlaybackControlsInteractive();
-    if (autoplay) await playQueueAt(0);
-    showToast('载入: ' + (title || '播客'));
-  } catch (e) {
-    console.warn(e);
-    showToast('播客加载失败');
-  } finally {
-    hideLoading();
-  }
-}
+// 批 T16c：播客收藏/播客电台入队整簇退役（服务端播客路由同批落 404 REMOVED）。
+// 本文件保留的是歌单队列分页主体（qq/kugou/qishui/spotify/网易云），非播客消费方。
 function playlistQueueSource(id) {
   var raw = String(id || '');
   if (raw.indexOf('qq:') === 0) return { provider: 'qq', id: raw.slice(3), requestId: raw };
@@ -105,6 +17,17 @@ function playlistQueuePageSize(provider, initial) {
 }
 function playlistQueuePageUrl(source, offset, limit) {
   return playlistTracksEndpoint(source.provider, source.id, { offset: Math.max(0, offset || 0), limit: Math.max(1, limit || PLAYLIST_QUEUE_INITIAL_BATCH_SIZE) });
+}
+// 批 T15.5b：歌单入队分页同样经 playlistTracksPage——qq/kugou/qishui/spotify 走 lx 导入族
+// 切片，网易云 cookie 路由继续用上面的 playlistQueuePageUrl 构 URL（不得把平台 ID
+// 拼进 /api/playlist/tracks，那是官方四路退役后剩下的网易云专用路由）。
+var PLAYLIST_QUEUE_IMPORT_PROVIDERS = ['qq', 'kugou', 'qishui', 'spotify'];
+function playlistQueuePage(source, offset, limit) {
+  var size = Math.max(1, Number(limit) || PLAYLIST_QUEUE_INITIAL_BATCH_SIZE);
+  if (PLAYLIST_QUEUE_IMPORT_PROVIDERS.indexOf(source.provider) >= 0) {
+    return playlistTracksPage(source.provider, source.id, offset, { timeoutMs: 16000 }, size);
+  }
+  return apiJson(playlistQueuePageUrl(source, offset, size), { timeoutMs: 16000 });
 }
 function cancelPlaylistQueueHydration(reason) {
   var previous = queueHydrationState;
@@ -142,7 +65,7 @@ async function hydratePlaylistQueueNextPage(reason) {
   var limit = playlistQueuePageSize(state.provider, false);
   state.loading = true;
   state.pausedForBuffer = false;
-  state.promise = apiJson(playlistQueuePageUrl(source, offset, limit), { timeoutMs: 16000 }).then(function (r) {
+  state.promise = playlistQueuePage(source, offset, limit).then(function (r) {
     if (!playlistQueueHydrationValid(state, token)) return false;
     var rawTracks = r && r.tracks || [];
     if (r && r.error && !rawTracks.length) throw new Error(r.message || r.error);
@@ -222,7 +145,7 @@ async function loadPlaylistIntoQueueById(id, autoplay, title, opts) {
   var seedTracks = Array.isArray(opts.seedTracks) && opts.seedTracks.length ? opts.seedTracks.map(cloneSong) : [];
   try {
     if (!seedTracks.length) {
-      r = await apiJson(playlistQueuePageUrl(source, 0, playlistQueuePageSize(source.provider, true)), { timeoutMs: 16000 });
+      r = await playlistQueuePage(source, 0, playlistQueuePageSize(source.provider, true));
       seedTracks = (r && r.tracks || []).map(cloneSong);
     } else {
       r = {

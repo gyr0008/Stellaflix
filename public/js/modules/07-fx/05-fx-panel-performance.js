@@ -372,8 +372,6 @@ function updateFxInputs() {
   if (wallpaperModeToggle) wallpaperModeToggle.classList.toggle('on', fx.wallpaperMode);
   var coverWallpaperToggle = document.getElementById('t-coverWallpaper');
   if (coverWallpaperToggle) coverWallpaperToggle.classList.toggle('on', fx.coverWallpaper);
-  var shelfPodcastsToggle = document.getElementById('t-shelfShowPodcasts');
-  if (shelfPodcastsToggle) shelfPodcastsToggle.classList.toggle('on', fx.shelfShowPodcasts !== false);
   var shelfMergeToggle = document.getElementById('t-shelfMergeCollections');
   if (shelfMergeToggle) shelfMergeToggle.classList.toggle('on', fx.shelfMergeCollections === true);
   var liveBackgroundKeepToggle = document.getElementById('t-liveBackgroundKeep');

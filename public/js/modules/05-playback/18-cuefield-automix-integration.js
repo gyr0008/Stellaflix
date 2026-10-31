@@ -101,8 +101,9 @@ async function cuefieldLyricTextForSong(song, current) {
   if (typeof readPersistentLyricCache !== 'function') return '';
   try {
     var payload = await readPersistentLyricCache(song);
-    if (!payload && typeof lyricEndpointForSong === 'function') {
-      payload = await apiJson(lyricEndpointForSong(song), { timeoutMs: 4200 });
+    if (!payload && typeof fetchLxLyricPayload === 'function') {
+      // 批 T15.5b：歌词取词统一走 /api/lx-source/lyric（旧 lyricEndpointForSong 五路官方分派已退役）。
+      payload = await fetchLxLyricPayload(song, { timeoutMs: 4200 });
       if (payload && typeof writePersistentLyricCache === 'function') writePersistentLyricCache(song, payload);
     }
     if (!payload) return '';

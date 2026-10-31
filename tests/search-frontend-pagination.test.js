@@ -108,7 +108,7 @@ test('legacy search histories migrate into one list shared by every tab', () => 
   ], `
     var SEARCH_HISTORY_STORE_KEY = 'stellaflix-search-history';
     var SEARCH_HISTORY_STORE_VERSION = 3;
-    var SEARCH_HISTORY_MODES = ['song', 'netease', 'qq', 'kugou', 'qishui', 'spotify', 'podcast'];
+    var SEARCH_HISTORY_MODES = ['song', 'netease', 'qq', 'kugou', 'qishui', 'spotify'];
   `, `
     this.readSearchHistory = readSearchHistory;
     this.writeSearchHistory = writeSearchHistory;
@@ -121,7 +121,7 @@ test('legacy search histories migrate into one list shared by every tab', () => 
   let stored = JSON.parse(values.get('stellaflix-search-history'));
   assert.equal(stored.version, 3);
   assert.deepEqual(stored.items, ['稻香', '晴天', '夜曲']);
-  assert.deepEqual(Array.from(sandbox.readSearchHistory('podcast')), stored.items);
+  assert.deepEqual(Array.from(sandbox.readSearchHistory('kugou')), stored.items);
 
   values.set('stellaflix-search-history', JSON.stringify({
     version: 2,
@@ -129,13 +129,12 @@ test('legacy search histories migrate into one list shared by every tab', () => 
       song: ['晴天', '夜曲'],
       netease: ['海阔天空'],
       qq: ['夜曲', '稻香'],
-      podcast: ['故事 FM'],
     },
   }));
-  assert.deepEqual(Array.from(sandbox.readSearchHistory('spotify')), ['晴天', '夜曲', '海阔天空', '稻香', '故事 FM']);
-  sandbox.rememberSearchQuery('一路向北', 'podcast');
+  assert.deepEqual(Array.from(sandbox.readSearchHistory('spotify')), ['晴天', '夜曲', '海阔天空', '稻香']);
+  sandbox.rememberSearchQuery('一路向北', 'qq');
   stored = JSON.parse(values.get('stellaflix-search-history'));
-  assert.deepEqual(stored.items, ['一路向北', '晴天', '夜曲', '海阔天空', '稻香', '故事 FM']);
+  assert.deepEqual(stored.items, ['一路向北', '晴天', '夜曲', '海阔天空', '稻香']);
 
   sandbox.writeSearchHistory([], 'qq');
   assert.deepEqual(JSON.parse(values.get('stellaflix-search-history')).items, []);
@@ -146,33 +145,27 @@ test('history rendering and replay keep the currently selected tab', () => {
   const renderSource = namedFunctionSource(searchSource, 'renderSearchHistory');
   const replaySource = namedFunctionSource(searchSource, 'runSearchHistory');
   const modeSource = namedFunctionSource(searchSource, 'setSearchMode');
-  const podcastSource = namedFunctionSource(searchSource, 'doPodcastSearch');
 
   assert.doesNotMatch(renderSource, /isMusicSearchMode/);
   assert.doesNotMatch(renderSource, /data-history-mode/);
   assert.doesNotMatch(replaySource, /searchMode\s*=/);
-  assert.match(modeSource, /else if \(!renderSearchHistory\(\)\) loadPodcastHot\(\)/);
-  assert.match(podcastSource, /rememberSearchQuery\(q\)/);
+  // 批 T16c：播客 tab 整条下线——setSearchMode 不再有 loadPodcastHot 分支，
+  // doPodcastSearch 符号从 07-search 整簇消失。
+  assert.doesNotMatch(modeSource, /loadPodcastHot/);
+  assert.doesNotMatch(searchSource, /doPodcastSearch|loadPodcastHot/);
 });
 
-test('catalogue search readiness is separate from login state', () => {
-  const statuses = {
-    qishui: { loggedIn: false, searchReady: true, publicCatalog: true },
-    spotify: { loggedIn: false, searchReady: true },
-    spotifyOff: { loggedIn: false, searchReady: false },
-  };
-  const sandbox = {
-    searchProviderStatus(provider) {
-      return provider === 'spotify-off' ? statuses.spotifyOff : (statuses[provider] || {});
-    },
-  };
-  vm.runInNewContext(`${namedFunctionSource(searchSource, 'searchProviderCanSearch')}\nthis.canSearch = searchProviderCanSearch;`, sandbox);
-  assert.equal(sandbox.canSearch('qishui'), true);
-  assert.equal(sandbox.canSearch('spotify'), true);
-  assert.equal(sandbox.canSearch('spotify-off'), false);
-  assert.equal(sandbox.canSearch('netease'), true);
-  assert.equal(sandbox.canSearch('qq'), true);
-  assert.equal(sandbox.canSearch('kugou'), true);
+test('T15: 官方五平台 fan-out 死代码簇必须已整删', () => {
+  for (const dead of ['MUSIC_SEARCH_PROVIDER_ORDER', 'searchProviderStatus', 'searchProviderIsLoggedIn',
+    'searchProviderCanSearch', 'searchModeProvider', 'activeSearchProvidersForMode',
+    'searchProviderLoginNotice', 'searchProviderUrl', 'mergeSongSearchResults',
+    'searchProviderPagesHaveMore', 'searchIntentPrefersQQ', 'LX_SEARCH_SOURCE_ORDER']) {
+    assert.doesNotMatch(searchSource, new RegExp(dead), `T15：07-search.js 不得再残留 ${dead}`);
+  }
+  const fallbackSource = fs.readFileSync(
+    path.join(appRoot, 'public', 'js', 'modules', '05-playback', '11-provider-fallback.js'), 'utf8');
+  assert.doesNotMatch(fallbackSource, /SOURCE_FALLBACK_SEARCH_TIMEOUT_MS/,
+    'T15：11-provider-fallback 不得再残留 SOURCE_FALLBACK_SEARCH_TIMEOUT_MS');
 });
 
 test('ranking favors exact originals while preserving explicitly requested versions', () => {
@@ -204,25 +197,19 @@ test('ranking favors exact originals while preserving explicitly requested versi
   assert.notEqual(sandbox.key(original), sandbox.key(live), 'studio and live editions must not collapse');
 });
 
-test('search pagination carries provider offsets and ignores stale sessions', () => {
-  const providerUrl = namedFunctionSource(searchSource, 'searchProviderUrl');
-  const sandbox = { encodeURIComponent };
-  vm.runInNewContext(`${providerUrl}\nthis.url = searchProviderUrl;`, sandbox);
-  assert.match(sandbox.url('qq', '晴天', 12, 24), /limit=12&offset=24$/);
-  assert.match(sandbox.url('spotify', 'Muse', 10, 30), /limit=10&offset=30$/);
-
-  assert.match(searchSource, /fetchMusicSearchResults\(q, mode, previousPages\)/);
-  assert.match(searchSource, /value\.nextOffset/);
-  assert.match(searchSource, /value\.hasMore/);
+test('search pagination is lx-aggregate only and ignores stale sessions', () => {
+  // T15（拆除批）：provider offset 分页（逐源 URL 构造 + 五路并池）随官方 fan-out 整删，
+  // 原 vm 单测删除；previousPages 形参一并摘除（T11 起被忽略的死参数）。
+  assert.doesNotMatch(searchSource, /previousPages/, 'fetchMusicSearchResults 不得再收 previousPages');
+  assert.match(searchSource, /fetchMusicSearchResults\(q, mode\)/);
+  assert.match(searchSource, /\/api\/lx-source\/search/);
+  assert.match(searchSource, /hasMore:\s*false/);
   assert.match(searchSource, /new IntersectionObserver/);
   assert.match(searchSource, /MUSIC_SEARCH_INITIAL_VISIBLE\s*=\s*18/);
   assert.match(searchSource, /loadNextMusicSearchPage\(expectedKey\)/);
   assert.match(searchSource, /requestSeq\s*!==\s*searchRequestSeq/);
   assert.match(searchSource, /searchMode\s*!==\s*mode/);
 
-  const mergeSource = namedFunctionSource(searchSource, 'mergeSongSearchResults');
-  assert.doesNotMatch(mergeSource, /sourceSwitchSongHasBlockedArtist/,
-    'source-switch blacklist must not remove ordinary search results');
   const scoreSource = namedFunctionSource(searchSource, 'scoreSongSearchResult');
   assert.doesNotMatch(scoreSource, /provider\s*===|searchIntentPrefersQQ/,
     'ordinary relevance must not contain platform-specific score boosts');

@@ -266,11 +266,78 @@ function playlistTracksEndpoint(provider, id, params) {
       query += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
     });
   }
-  if (provider === 'qq') return '/api/qq/playlist/tracks?' + query;
-  if (provider === 'kugou') return '/api/kugou/playlist/tracks?' + query;
-  if (provider === 'qishui') return '/api/qishui/playlist/tracks?' + query;
-  if (provider === 'spotify') return '/api/spotify/playlist/tracks?' + query;
+  // 批 T15.5b：qq/kugou/qishui/spotify 四路官方 */playlist/tracks 的消费点退役
+  // （改走下方 playlistTracksPage → lx 导入族）；此处仅剩网易云 cookie 路由本体，随 T16 处置。
   return '/api/playlist/tracks?' + query;
+}
+
+var PLAYLIST_DETAIL_IMPORT_LX_SOURCE = { qq: 'tx', kugou: 'kg', qishui: 'qs', spotify: 'sp' };
+var playlistDetailImportCache = { key: '', tracks: null };
+// 修复轮1（评审 Important-1）：lx 导入源冷导入 = 一次 POST /api/platform-playlist/import 取全表，
+// playlistTracksPage 对无 signal 路径用 90000ms 导入预算；面板 initial 若挂 12000ms AbortController
+// 会把这条全表导入砍到 12s → 大歌单首屏必被腰斩。故对导入源沿用同一导入级预算（90000ms），
+// 非导入源（网易云 cookie 路由）仍保持原 12000ms。
+var PLAYLIST_DETAIL_IMPORT_ABORT_MS = 90000;
+var PLAYLIST_DETAIL_PAGE_ABORT_MS = 12000;
+
+function playlistDetailPageFromFullTracks(tracks, offset, limit) {
+  var all = Array.isArray(tracks) ? tracks : [];
+  var size = Math.max(1, Number(limit) || PLAYLIST_DETAIL_BATCH_SIZE);
+  var from = Math.max(0, Number(offset) || 0);
+  var page = all.slice(from, from + size);
+  var next = from + page.length;
+  return { tracks: page, nextOffset: next, total: all.length, hasMore: next < all.length };
+}
+
+function playlistDetailImportedTrack(song) {
+  song = song || {};
+  var view = Object.assign({}, song, {
+    name: song.name || song.title || '',
+    artist: song.artist || song.singer || '',
+    singer: song.singer || song.artist || '',
+    album: song.album || song.albumName || '',
+    albumName: song.albumName || song.album || '',
+    cover: song.cover || song.pic || song.img || song.picUrl || ''
+  });
+  view.picUrl = view.picUrl || view.cover || '';
+  if (!view.duration && view.interval) {
+    var parts = String(view.interval).split(':').map(Number);
+    view.duration = parts.length === 2 ? (parts[0] * 60 + parts[1]) : (Number(view.interval) || 0);
+  }
+  view.duration = Number(view.duration) || 0;
+  return view;
+}
+
+// 批 T15.5b：平台歌单曲目读取统一走 lx 导入族 POST /api/platform-playlist/import
+// （T15.5a §6 衔接：source + id 即导入参数），一次取全量后按调用方页宽切片分页；
+// 返回体沿用官方曲目路由的 {tracks,nextOffset,total,hasMore,playlist} 契约，
+// 消费方无需分支。网易云/本地仍走原 cookie 路由。
+async function playlistTracksPage(provider, id, offset, options, limit) {
+  provider = normalizePlaylistProvider(provider);
+  offset = Math.max(0, Number(offset) || 0);
+  limit = Math.max(1, Number(limit) || PLAYLIST_DETAIL_BATCH_SIZE);
+  var importSource = PLAYLIST_DETAIL_IMPORT_LX_SOURCE[provider];
+  if (!importSource) {
+    return await apiJson(playlistTracksEndpoint(provider, id, { limit: limit, offset: offset }), options);
+  }
+  var key = provider + '|' + id;
+  if (!playlistDetailImportCache.tracks || playlistDetailImportCache.key !== key) {
+    var requestOptions = Object.assign({}, options || {});
+    requestOptions.method = 'POST';
+    requestOptions.headers = { 'Content-Type': 'application/json' };
+    requestOptions.body = JSON.stringify({ input: String(id), source: importSource });
+    if (!requestOptions.signal) requestOptions.timeoutMs = 90000;
+    var imported = await apiJson('/api/platform-playlist/import', requestOptions);
+    var playlist = imported && imported.playlist ? imported.playlist : null;
+    var songs = playlist && Array.isArray(playlist.songs) ? playlist.songs : [];
+    var tracks = songs.map(playlistDetailImportedTrack);
+    // 只缓存成功的全量曲目：空结果（导入失败/空歌单）不落缓存，避免一次抖动后永远读到空列表。
+    if (!tracks.length) throw new Error('PLAYLIST_IMPORT_EMPTY');
+    playlistDetailImportCache = { key: key, tracks: tracks };
+  }
+  var page = playlistDetailPageFromFullTracks(playlistDetailImportCache.tracks, offset, limit);
+  page.playlist = { trackCount: page.total };
+  return page;
 }
 function playlistPanelDetailHtml(pl, provider, detailWindow) {
   provider = normalizePlaylistProvider(provider);
@@ -282,10 +349,7 @@ function playlistPanelDetailHtml(pl, provider, detailWindow) {
   var img = cover ? '<img class="pl-detail-cover" src="' + escHtml(cover) + '" alt="" decoding="async" onerror="this.style.opacity=0.2">' : '<div class="pl-detail-cover"></div>';
   var expectedTotal = Math.max(tracks.length, Number(playlistPanelDetailState.total) || Number(pl.trackCount) || 0);
   var rows = playlistPanelDetailRowsHtml(detailWindow);
-  var canUncollect = !!(pl && pl.subscribed && !pl.virtual && (provider === 'netease' || provider === 'qishui' || provider === 'spotify'));
-  var collectionButton = canUncollect
-    ? '<button class="fx-mini-btn ghost pl-detail-top-btn" type="button" data-pl-detail-collection="0">取消收藏</button>'
-    : '';
+  var collectionButton = '';
   return '<div class="pl-inline-detail" data-pl-detail="' + escHtml(key) + '" style="height:' + playlistPanelDetailShellHeight() + 'px">' +
     '<div class="pl-detail-sticky">' +
     '<div class="pl-detail-head">' + img + '<div style="flex:1;min-width:0"><div class="pl-detail-title">' + escHtml(pl.name || '歌单详情') + '</div><div class="pl-detail-sub">' + escHtml((expectedTotal || tracks.length || 0) + ' 首 · ' + (pl.creator || playlistProviderName(provider))) + '</div></div><div class="pl-detail-count">' + (loading && !tracks.length ? '载入中' : (tracks.length + (expectedTotal > tracks.length ? '/' + expectedTotal : ''))) + '</div></div>' +
@@ -383,13 +447,15 @@ async function loadMorePlaylistPanelDetailTracks(reason) {
   }
   var offset = reason === 'initial' ? 0 : Math.max(0, Number(st.nextOffset) || st.tracks.length);
   var token = st.token;
+  // 修复轮1（评审 Important-1）：导入源冷导入用导入级预算，非导入源维持 12s（详见常量注释）。
+  var abortBudgetMs = PLAYLIST_DETAIL_IMPORT_LX_SOURCE[provider] ? PLAYLIST_DETAIL_IMPORT_ABORT_MS : PLAYLIST_DETAIL_PAGE_ABORT_MS;
   var controller = window.AbortController ? new AbortController() : null;
-  var timer = controller ? setTimeout(function () { controller.abort(); }, 12000) : 0;
+  var timer = controller ? setTimeout(function () { controller.abort(); }, abortBudgetMs) : 0;
   st.controller = controller;
   st.loadingMore = reason !== 'initial';
   if (st.loadingMore) renderPlaylistPanelDetailRows();
   try {
-    var r = await apiJson(playlistTracksEndpoint(provider, pid, { limit: PLAYLIST_DETAIL_BATCH_SIZE, offset: offset }), controller ? { signal: controller.signal } : { timeoutMs: 12000 });
+    var r = await playlistTracksPage(provider, pid, offset, controller ? { signal: controller.signal } : { timeoutMs: abortBudgetMs });
     if (playlistPanelDetailState.token !== token || playlistPanelDetailState.key !== st.key) return false;
     var rawTracks = r && r.tracks || [];
     if (r && r.error && !rawTracks.length) throw new Error(r.message || r.error);
@@ -419,13 +485,29 @@ async function loadMorePlaylistPanelDetailTracks(reason) {
     }
     return added > 0;
   } catch (e) {
-    if (playlistPanelDetailState.token !== token || (e && e.name === 'AbortError')) return false;
+    if (playlistPanelDetailState.token !== token) return false;
+    if (e && e.name === 'AbortError') {
+      // 修复轮1（评审 Important-1）：中止此前直接 return，不复位 loading → 面板卡在「载入中」。
+      // cancelPlaylistPanelDetailRequest 会先把 state.controller 置空再 abort，据此区分两类中止：
+      // 外部取消（用户切走/收起）保持静默；本模块预算超时须复位载入态并写失败文案，
+      // 否则空曲目走 playlistPanelNoticeHtml('', false) 渲染成空白，把腰斩谎报成空歌单。
+      var externallyCancelled = playlistPanelDetailState.controller !== controller;
+      st.loading = false;
+      st.loadingMore = false;
+      st.hasMore = false;
+      if (externallyCancelled) return false;
+      st.error = 'PLAYLIST_DETAIL_PAGE_TIMEOUT';
+      st.message = st.tracks.length ? '后续歌曲载入超时，重新打开歌单可继续加载' : '歌单详情加载超时，请稍后重试';
+      if (reason === 'initial') renderPlaylistPanelDetailState();
+      else renderPlaylistPanelDetailRows();
+      return false;
+    }
     console.warn('[PlaylistPanelDetailPage]', pid, reason, e);
     st.loading = false;
     st.loadingMore = false;
     st.hasMore = false;
     st.error = 'PLAYLIST_DETAIL_PAGE_FAILED';
-    st.message = st.tracks.length ? '后续歌曲载入失败，可继续滚动重试' : '歌单详情加载失败，请稍后重试';
+    st.message = st.tracks.length ? '后续歌曲载入失败，重新打开歌单可继续加载' : '歌单详情加载失败，请稍后重试';
     if (reason === 'initial') renderPlaylistPanelDetailState();
     else renderPlaylistPanelDetailRows();
     return false;
@@ -474,47 +556,6 @@ function playPlaylistPanelDetail() {
     return;
   }
   loadPlaylistIntoQueueById(playlistPanelProviderId(provider, pid), true, st.playlist && st.playlist.name || '');
-}
-async function togglePlaylistPanelCollection(collected) {
-  var state = playlistPanelDetailState;
-  if (!state || !state.key || !state.playlist) return;
-  var parts = state.key.split(':');
-  var provider = normalizePlaylistProvider(parts[0]);
-  var id = parts.slice(1).join(':');
-  var endpoint = provider === 'netease'
-    ? '/api/playlist/subscribe'
-    : (provider === 'qishui'
-      ? '/api/qishui/playlist/collect'
-      : (provider === 'spotify' ? '/api/spotify/playlist/collect' : ''));
-  if (!endpoint) {
-    showToast(playlistProviderName(provider) + '暂不支持写回歌单收藏');
-    return;
-  }
-  try {
-    var result = await apiJson(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: id,
-        playlistId: id,
-        subscribed: !!collected,
-        collected: !!collected,
-        spotifyUri: state.playlist.spotifyUri || '',
-      })
-    });
-    if (!result || result.error || result.success === false) throw new Error(result && (result.message || result.error) || 'PLAYLIST_COLLECTION_FAILED');
-    showToast(collected ? '歌单已收藏' : '已取消收藏歌单');
-    cancelPlaylistPanelDetailRequest();
-    playlistPanelDetailState.key = '';
-    playlistPanelDetailState.tracks = [];
-    playlistPanelDetailState.playlist = null;
-    await refreshUserPlaylists(true);
-    renderPlaylistPanelDetailState();
-  } catch (err) {
-    showToast(/SCOPE|PERMISSION/i.test(String(err && err.message || ''))
-      ? '请重新授权后再修改歌单收藏'
-      : '歌单收藏操作失败');
-  }
 }
 function playPlaylistPanelDetailTrack(index) {
   var tracks = playlistPanelDetailState.tracks || [];
@@ -619,22 +660,6 @@ function playlistPanelOffsetIndex(offsets, value) {
   }
   return Math.max(0, Math.min(offsets.length - 2, lo));
 }
-function playlistCatalogFooterHtml() {
-  var state = playlistCatalogSyncState || {};
-  var providerStates = state.providers || {};
-  var totals = Object.keys(providerStates).reduce(function (acc, key) {
-    var item = providerStates[key] || {};
-    acc.loaded += Number(item.loaded) || 0;
-    acc.total += Math.max(Number(item.total) || 0, Number(item.loaded) || 0);
-    if (item.hasMore || item.loading) acc.pending = true;
-    return acc;
-  }, { loaded: 0, total: 0, pending: !!state.loading });
-  if (!totals.pending && !state.error) return '';
-  var label = state.error
-    ? ('部分歌单载入失败 · 已显示 ' + userPlaylists.length + ' 个')
-    : ('正在后台载入歌单 · ' + totals.loaded + (totals.total ? '/' + totals.total : ''));
-  return '<div class="playlist-catalog-status"><span class="queue-hydration-spinner spinning"></span><span>' + label + '</span></div>';
-}
 function schedulePlaylistPanelVirtualRender() {
   if (playlistPanelVirtualCache.raf) return;
   playlistPanelVirtualCache.raf = requestAnimationFrame(function () {
@@ -664,9 +689,7 @@ function renderUserPlaylistsList(opts) {
   var $pl = document.getElementById('pl-list');
   var seq = ++playlistRenderSeq;
   if (!userPlaylists.length) {
-    $pl.innerHTML = playlistCatalogSyncState && playlistCatalogSyncState.loading
-      ? miniQueueSkeleton() + playlistCatalogFooterHtml()
-      : '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
+    $pl.innerHTML = '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
     return;
   }
   var panel = document.getElementById('playlist-panel');
@@ -704,36 +727,13 @@ function renderUserPlaylistsList(opts) {
       html += playlistPanelDetailHtml(entry.pl, entry.provider, { scrollTop: detailRowScrollTop, viewport: viewport });
     }
   }
-  html += '<div class="playlist-virtual-spacer" aria-hidden="true" style="height:' + Math.round(bottomHeight) + 'px"></div>' + playlistCatalogFooterHtml();
+  html += '<div class="playlist-virtual-spacer" aria-hidden="true" style="height:' + Math.round(bottomHeight) + 'px"></div>';
   $pl.innerHTML = html;
   if (panel && opts.preserveScroll) panel.scrollTop = keepTop;
   bindPlaylistPanelDetailScroller();
-  if (typeof requestNextPlaylistCatalogPage === 'function' && end >= cache.entries.length - 8) requestNextPlaylistCatalogPage('panel-near-end');
   if (opts.animate && seq === playlistRenderSeq) animateVisiblePanelList($pl, '.pl-card', document.getElementById('playlist-panel'));
 }
-function renderMyPodcastCollections(opts) {
-  opts = opts || {};
-  var $pod = document.getElementById('podcast-list');
-  if (!$pod) return;
-  if (!loginStatus.loggedIn) {
-    $pod.innerHTML = '<div style="text-align:center;padding:14px 0;color:rgba(255,255,255,.28);font-size:11.5px">登录后显示我的播客</div>';
-    return;
-  }
-  var items = myPodcastCollections || [];
-  if (!items.length) {
-    $pod.innerHTML = '<div style="text-align:center;padding:14px 0;color:rgba(255,255,255,.28);font-size:11.5px">暂无播客数据</div>';
-    return;
-  }
-  $pod.innerHTML = items.map(function (pc) {
-    var thumb = pc.cover ? coverUrlWithSize(pc.cover, 88) : '';
-    var imgTag = thumb ? '<img src="' + thumb + '" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0.2">' : '<div style="width:44px;height:44px;border-radius:8px;background:rgba(0,245,212,.07);flex-shrink:0"></div>';
-    return '<div class="pl-card podcast-card" data-podcast-key="' + escHtml(pc.key || '') + '" data-podcast-title="' + escHtml(pc.title || '') + '">' +
-      imgTag +
-      '<div style="flex:1;min-width:0"><div class="pl-name">' + escHtml(pc.title || '') + '</div><div class="pl-sub">' + (pc.count || 0) + ' 项 · ' + escHtml(pc.sub || '') + '</div></div>' +
-      '</div>';
-  }).join('');
-  if (opts.animate) animateVisiblePanelList($pod, '.pl-card', document.getElementById('playlist-panel'));
-}
+// 批 T16c：「我的收藏播客」渲染簇整簇退役（播客收藏 tab 与 pane 已从 DOM 摘除）。
 document.getElementById('pl-list').addEventListener('click', function (e) {
   var loadMore = e.target && e.target.closest ? e.target.closest('[data-pl-load-more]') : null;
   if (loadMore) {
@@ -761,13 +761,6 @@ document.getElementById('pl-list').addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
     playPlaylistPanelDetail();
-    return;
-  }
-  var collection = e.target && e.target.closest ? e.target.closest('[data-pl-detail-collection]') : null;
-  if (collection) {
-    e.preventDefault();
-    e.stopPropagation();
-    togglePlaylistPanelCollection(collection.getAttribute('data-pl-detail-collection') === '1');
     return;
   }
   var artist = e.target && e.target.closest ? e.target.closest('[data-pl-detail-artist]') : null;

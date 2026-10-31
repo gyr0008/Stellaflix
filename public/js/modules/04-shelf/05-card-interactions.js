@@ -87,7 +87,6 @@ renderer.domElement.addEventListener('click', function (e) {
       if (rowHit) {
         if (cl.pulseRow) cl.pulseRow(rowHit.row, 0.72);
         var selectedRow = Math.abs(rowHit.row.index - cl.getCenterIdx()) < 0.5;
-        var rowIsPodcastRadio = !!(rowHit.row.song && rowHit.row.song.type === 'podcast-radio');
         var hitLikeButton = rowHit.uv && rowHit.uv.x > 0.61 && rowHit.uv.x < 0.68 && rowHit.uv.y > 0.20 && rowHit.uv.y < 0.82;
         var hitCollectButton = rowHit.uv && rowHit.uv.x >= 0.68 && rowHit.uv.x < 0.75 && rowHit.uv.y > 0.20 && rowHit.uv.y < 0.82;
         var hitNextButton = rowHit.uv && rowHit.uv.x >= 0.75 && rowHit.uv.x < 0.82 && rowHit.uv.y > 0.20 && rowHit.uv.y < 0.82;
@@ -98,13 +97,13 @@ renderer.domElement.addEventListener('click', function (e) {
         hitNextButton = hitNextButton || screenAction === 'next';
         hitPlayButton = hitPlayButton || screenAction === 'play';
         // 详情页支持直接点歌曲播放；红心/收藏按钮仍然保留原动作。
-        if (selectedRow && !rowIsPodcastRadio && hitLikeButton) {
+        if (selectedRow && hitLikeButton) {
           toggleLikeDetailSong(rowHit.row.song);
-        } else if (selectedRow && !rowIsPodcastRadio && hitCollectButton) {
+        } else if (selectedRow && hitCollectButton) {
           collectDetailSong(rowHit.row.song);
-        } else if (selectedRow && !rowIsPodcastRadio && hitNextButton) {
+        } else if (selectedRow && hitNextButton) {
           queueDetailSongNext(rowHit.row.song);
-        } else if ((rowHit.row.song && rowHit.row.song.id) || rowIsPodcastRadio || (selectedRow && hitPlayButton)) {
+        } else if ((rowHit.row.song && rowHit.row.song.id) || (selectedRow && hitPlayButton)) {
           cl.playRow(rowHit.row);
         } else {
           // 滚到这行
@@ -158,7 +157,7 @@ renderer.domElement.addEventListener('contextmenu', function (e) {
     var rc = raycasterFromPointerEvent(e);
     var cl = shelfManager.getContentList && shelfManager.getContentList();
     var rowHit = cl && cl.raycastRows ? cl.raycastRows(rc) : null;
-    if (rowHit && rowHit.row && rowHit.row.song && rowHit.row.song.id && rowHit.row.song.type !== 'podcast-radio') {
+    if (rowHit && rowHit.row && rowHit.row.song && rowHit.row.song.id) {
       if (cl.pulseRow) cl.pulseRow(rowHit.row, 0.88);
       queueDetailSongNext(rowHit.row.song);
       return;

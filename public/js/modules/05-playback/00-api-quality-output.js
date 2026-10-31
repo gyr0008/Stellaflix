@@ -35,14 +35,18 @@ async function apiJson(url, opts) {
 if (typeof window !== 'undefined') { window.apiJson = apiJson; }
 else if (typeof globalThis !== 'undefined') { globalThis.apiJson = apiJson; }
 function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+// T12（移植批）：音质词汇统一 LX 五档——normalizePlaybackQuality 输出 lx 协议词
+// （master/flac24bit/flac/320k/128k，上游 index.html:31807-31822 lxSourceQualityCandidates
+// 候选表即这组协议词）；旧词 jymaster/hires/lossless/exhigh/standard 及别名只作输入兼容，
+// 旧 localStorage 值经此词汇表迁移。默认档沿用上游 hires 档语义（第 4 档）→ LX flac24bit。
 function normalizePlaybackQuality(value) {
   value = String(value || '').toLowerCase();
-  if (value === 'jymaster' || value === 'master' || value === 'svip') return 'jymaster';
-  if (value === 'hires' || value === 'hi-res' || value === 'highres' || value === 'highest') return 'hires';
-  if (value === 'lossless' || value === 'flac' || value === 'sq') return 'lossless';
-  if (value === 'exhigh' || value === 'high' || value === '320k' || value === 'hq') return 'exhigh';
-  if (value === 'standard' || value === 'normal' || value === 'std') return 'standard';
-  return 'hires';
+  if (value === 'master' || value === 'jymaster' || value === 'svip') return 'master';
+  if (value === 'flac24bit' || value === 'hires' || value === 'hi-res' || value === 'highres' || value === 'highest') return 'flac24bit';
+  if (value === 'flac' || value === 'lossless' || value === 'sq') return 'flac';
+  if (value === '320k' || value === 'exhigh' || value === 'high' || value === 'hq') return '320k';
+  if (value === '128k' || value === 'standard' || value === 'normal' || value === 'std') return '128k';
+  return 'flac24bit';
 }
 function normalizePlaybackProvider(provider) {
   if (provider === 'qq') return 'qq';
@@ -52,11 +56,10 @@ function normalizePlaybackProvider(provider) {
   if (provider === 'lx-custom-source' || provider === 'custom-source' || provider === 'custom') return 'lx-custom-source';
   return 'netease';
 }
+// T12：provider 不再裁剪可选档（脚本源是唯一在线 URL 供方，能力差异由服务端降级链 +
+// probeWarning 自动兜底），旧 qq jymaster→hires 钳制随 VIP 门槛一并退役。
 function normalizePlaybackQualityForProvider(value, provider) {
-  provider = normalizePlaybackProvider(provider);
-  var q = normalizePlaybackQuality(value);
-  if (provider === 'qq' && q === 'jymaster') return 'hires';
-  return q;
+  return normalizePlaybackQuality(value);
 }
 function playbackQualityOptions(provider) {
   provider = normalizePlaybackProvider(provider);
@@ -107,11 +110,13 @@ function localQualityProviderForSong(song, fallbackProvider) {
 function localFileQualityOptionHtml(active) {
   return '<button class="quality-option local-file' + (active ? ' active' : '') + '" data-quality="local" title="播放本机文件，无需联网" onclick="setPlaybackQuality(\'local\')"><span>本地文件</span><small>优先 · 本机音质</small></button>';
 }
-function playbackQualityOptionsHtml(provider, runtimeCapQuality, canUseSvip, displayQuality) {
+// T12：档位渲染退役 VIP 锁定（上游 index.html:23228 updatePlaybackQualityUi 语义——
+// 不再按 cookie 置灰，档位一律可点，能力不足由在线音源自动降级 + pill 提示兜底）。
+// runtimeCap（同曲运行上限）保留：官方兼容路径（11-provider-fallback）仍在写 cap。
+function playbackQualityOptionsHtml(provider, runtimeCapQuality) {
   return playbackQualityOptions(provider).map(function (item) {
     var capLocked = playbackQualityAboveCap(item.key, provider, runtimeCapQuality);
-    var locked = !!(item.svip && !canUseSvip) || capLocked;
-    return '<button class="quality-option' + (item.svip ? ' svip-only' : '') + (capLocked ? ' cap-locked' : '') + (locked ? ' locked' : '') + '" data-quality="' + item.key + '" data-svip="' + (item.svip ? '1' : '0') + '" ' + (locked ? 'disabled ' : '') + 'onclick="setPlaybackQuality(\'' + item.key + '\')"><span>' + escHtml(item.title) + '</span><small>' + escHtml(capLocked ? ('当前最高 ' + playbackQualityLabel(runtimeCapQuality, provider)) : item.sub) + '</small></button>';
+    return '<button class="quality-option' + (capLocked ? ' cap-locked' : '') + '" data-quality="' + item.key + '" ' + (capLocked ? 'disabled ' : '') + 'onclick="setPlaybackQuality(\'' + item.key + '\')"><span>' + escHtml(item.title) + '</span><small>' + escHtml(capLocked ? ('当前最高 ' + playbackQualityLabel(runtimeCapQuality, provider)) : item.sub) + '</small></button>';
   }).join('');
 }
 function switchLocalQualityPlaybackTo(targetQuality) {
@@ -126,6 +131,9 @@ function switchLocalQualityPlaybackTo(targetQuality) {
   function replay(qualityOverride) {
     var opts = { qualitySwitch: true, resumeAt: resumeAt, preserveHomeState: true };
     if (qualityOverride) opts.qualityOverride = qualityOverride;
+    // T10 裁决5：本地↔在线重载同走 qualitySwitch 闸门，顺带作废该曲客户端解析缓存。
+    var switchSong = playQueue[idx];
+    if (switchSong && typeof invalidateLxResolvedAudioCache === 'function') invalidateLxResolvedAudioCache(switchSong);
     return Promise.resolve(playQueueAt(idx, opts));
   }
   closePanel();
@@ -186,25 +194,25 @@ function playbackQualityLabel(value, provider) {
   if (provider === 'spotify') return 'Spotify 匹配源';
   if (provider === 'qishui') return '汽水音质';
   if (provider === 'qq') {
-    if (value === 'hires') return 'Hi-Res FLAC';
-    if (value === 'lossless') return '无损 FLAC';
-    if (value === 'exhigh') return '320k MP3';
-    if (value === 'standard') return '128k MP3';
-    return '无损 FLAC';
+    if (value === 'master') return '超清母带';
+    if (value === 'flac24bit') return 'Hi-Res FLAC';
+    if (value === 'flac') return '无损 FLAC';
+    if (value === '320k') return '320k MP3';
+    return '128k MP3';
   }
   if (provider === 'kugou') {
-    if (value === 'hires') return '酷狗 Hi-Res';
-    if (value === 'lossless') return '酷狗无损';
-    if (value === 'exhigh') return '酷狗 320k';
-    if (value === 'standard') return '酷狗 128k';
-    return '酷狗无损';
+    if (value === 'master') return '超清母带';
+    if (value === 'flac24bit') return '酷狗 Hi-Res';
+    if (value === 'flac') return '酷狗无损';
+    if (value === '320k') return '酷狗 320k';
+    return '酷狗 128k';
   }
-  if (value === 'jymaster') return '超清母带';
-  if (value === 'hires') return '高清臻音';
-  if (value === 'lossless') return '无损';
-  if (value === 'exhigh') return '极高';
-  if (value === 'standard') return '标准';
-  return '高清臻音';
+  if (value === 'master') return '超清母带';
+  if (value === 'flac24bit') return 'Hi-Res FLAC';
+  if (value === 'flac') return '无损';
+  if (value === '320k') return '极高';
+  if (value === '128k') return '标准';
+  return 'Hi-Res FLAC';
 }
 function playbackQualityShortLabel(value, provider) {
   provider = normalizePlaybackProvider(provider || currentPlaybackQualityProvider());
@@ -212,33 +220,33 @@ function playbackQualityShortLabel(value, provider) {
   if (provider === 'spotify') return 'SP';
   if (provider === 'qishui') return 'QS';
   if (provider === 'qq') {
-    if (value === 'hires') return 'QQ Hires';
-    if (value === 'lossless') return 'QQ SQ';
-    if (value === 'exhigh') return 'QQ 320';
-    if (value === 'standard') return 'QQ 128';
-    return 'QQ SQ';
+    if (value === 'master') return 'QQ Master';
+    if (value === 'flac24bit') return 'QQ Hi-Res';
+    if (value === 'flac') return 'QQ FLAC';
+    if (value === '320k') return 'QQ 320';
+    return 'QQ 128';
   }
   if (provider === 'kugou') {
-    if (value === 'hires') return 'KG Hires';
-    if (value === 'lossless') return 'KG SQ';
-    if (value === 'exhigh') return 'KG 320';
-    if (value === 'standard') return 'KG 128';
-    return 'KG SQ';
+    if (value === 'master') return 'KG Master';
+    if (value === 'flac24bit') return 'KG Hi-Res';
+    if (value === 'flac') return 'KG FLAC';
+    if (value === '320k') return 'KG 320';
+    return 'KG 128';
   }
-  if (value === 'jymaster') return '母带';
-  if (value === 'hires') return '臻音';
-  if (value === 'lossless') return 'SQ';
-  if (value === 'exhigh') return 'HQ';
-  if (value === 'standard') return 'STD';
-  return '臻音';
+  if (value === 'master') return '母带';
+  if (value === 'flac24bit') return 'Hi-Res';
+  if (value === 'flac') return 'FLAC';
+  if (value === '320k') return '320K';
+  if (value === '128k') return '128K';
+  return 'Hi-Res';
 }
 function playbackQualityRank(value, provider) {
   value = normalizePlaybackQualityForProvider(value, provider);
-  if (value === 'jymaster') return 5;
-  if (value === 'hires') return 4;
-  if (value === 'lossless') return 3;
-  if (value === 'exhigh') return 2;
-  if (value === 'standard') return 1;
+  if (value === 'master') return 5;
+  if (value === 'flac24bit') return 4;
+  if (value === 'flac') return 3;
+  if (value === '320k') return 2;
+  if (value === '128k') return 1;
   return 4;
 }
 function playbackQualityWasDowngraded(requested, resolved, provider) {
@@ -305,6 +313,8 @@ function playbackResolvedQualityText(data, provider) {
   return br ? (label + ' · ' + br) : label;
 }
 function readPlaybackQualityPreference() {
+  // T12：旧持久化档位词（jymaster/hires/lossless/exhigh/standard）经 normalizePlaybackQuality
+  // 词汇表迁移到 LX 五档，不炸档；新值直通。
   var fallback = {
     netease: PLAYBACK_QUALITY_DEFAULTS.netease,
     qq: PLAYBACK_QUALITY_DEFAULTS.qq,
@@ -330,9 +340,9 @@ function readPlaybackQualityPreference() {
     return {
       netease: normalizePlaybackQualityForProvider(parsed.netease || fallback.netease, 'netease'),
       qq: normalizePlaybackQualityForProvider(parsed.qq || fallback.qq, 'qq'),
-      kugou: normalizePlaybackQualityForProvider(parsed.kugou || fallback.kugou || 'lossless', 'kugou'),
-      qishui: normalizePlaybackQualityForProvider(parsed.qishui || fallback.qishui || 'standard', 'qishui'),
-      spotify: normalizePlaybackQualityForProvider(parsed.spotify || fallback.spotify || 'standard', 'spotify')
+      kugou: normalizePlaybackQualityForProvider(parsed.kugou || fallback.kugou || 'flac', 'kugou'),
+      qishui: normalizePlaybackQualityForProvider(parsed.qishui || fallback.qishui || '128k', 'qishui'),
+      spotify: normalizePlaybackQualityForProvider(parsed.spotify || fallback.spotify || '128k', 'spotify')
     };
   } catch (e) {
     return fallback;
@@ -354,15 +364,17 @@ function updatePlaybackQualityUi() {
   var label = document.getElementById('quality-btn-label');
   var btn = document.getElementById('quality-btn');
   var list = document.getElementById('quality-option-list');
-  var canUseSvip = provider === 'netease' && hasProviderSvip('netease', loginStatus);
-  var displayQuality = provider === 'netease' && effectiveQuality === 'jymaster' && !canUseSvip ? 'hires' : effectiveQuality;
+  // T12：VIP 门槛退役后展示档 = 生效档（旧 jymaster×无SVIP → hires 的显示钳制删除）；
+  // probeWarning 驱动降级提示（上游 index.html:23228「在线音源按平台能力自动降级」）。
+  var displayQuality = effectiveQuality;
+  var probeDowngrade = !!(currentSong && currentSong.lxProbeWarning);
   if (label) label.textContent = localFileActive ? '本地' : playbackQualityShortLabel(displayQuality, provider);
   var qualityProviderTitle = provider === 'spotify' ? 'Spotify 匹配源: ' : (provider === 'qishui' ? '汽水音质: ' : (provider === 'qq' ? 'QQ 音质: ' : (provider === 'kugou' ? '酷狗音质: ' : '网易云音质: ')));
   if (btn) btn.title = qualityProviderTitle + playbackQualityLabel(displayQuality, provider) +
-    (provider === 'netease' && currentQuality === 'jymaster' && !canUseSvip ? ' · 超清母带需网易云 SVIP' : '');
+    (probeDowngrade ? '（在线音源按平台能力自动降级）' : '');
   if (btn && runtimeCapQuality) btn.title += ' | 当前歌曲最高: ' + playbackQualityLabel(runtimeCapQuality, provider);
   if (list) {
-    var optionsHtml = playbackQualityOptionsHtml(provider, runtimeCapQuality, canUseSvip, displayQuality);
+    var optionsHtml = playbackQualityOptionsHtml(provider, runtimeCapQuality);
     if (localOriginMode) optionsHtml = localFileQualityOptionHtml(localFileActive) + optionsHtml;
     list.innerHTML = optionsHtml;
   }
@@ -370,13 +382,12 @@ function updatePlaybackQualityUi() {
     if (option.dataset && option.dataset.quality === 'local') return;
     var q = normalizePlaybackQualityForProvider(option.dataset.quality, provider);
     var capLocked = playbackQualityAboveCap(q, provider, runtimeCapQuality);
-    var locked = (option.dataset.svip === '1' && !canUseSvip) || capLocked;
     option.classList.toggle('active', q === displayQuality);
-    option.classList.toggle('locked', locked);
+    option.classList.toggle('locked', capLocked);
     option.classList.toggle('cap-locked', capLocked);
-    option.disabled = locked;
+    option.disabled = capLocked;
     if (capLocked) option.title = '当前歌曲最高: ' + playbackQualityLabel(runtimeCapQuality, provider);
-    option.title = locked ? '需要网易云 SVIP 账号' : playbackQualityLabel(q, provider);
+    else option.title = playbackQualityLabel(q, provider);
   });
   if (runtimeCapQuality) {
     document.querySelectorAll('.quality-option.cap-locked').forEach(function (option) {
@@ -402,11 +413,8 @@ function setPlaybackQuality(value) {
     updatePlaybackQualityUi();
     return;
   }
-  if (provider === 'netease' && next === 'jymaster' && !hasProviderSvip('netease', loginStatus)) {
-    showToast(hasPlatformLogin('netease') ? '超清母带需要网易云 SVIP' : '登录网易云 SVIP 后可用超清母带');
-    if (!hasPlatformLogin('netease')) openProviderLogin('netease');
-    return;
-  }
+  // T12：provider-VIP/SVIP 门槛退役——脚本源供 URL 后 cookie 权限判定失去意义，
+  // VIP 曲目由服务端降级链解析实际可得档位并以 probeWarning 提示（上游 :23228 语义）。
   setProviderPlaybackQuality(provider, next);
   updatePlaybackQualityUi();
   var wrap = document.getElementById('quality-control');
@@ -418,11 +426,16 @@ function canReloadCurrentTrackForQuality() {
   if (!audio || !audio.src || audio.paused || audio.ended) return false;
   var song = playQueue[currentIdx];
   if (!song || song.type === 'local' || song.source === 'local') return false;
-  return songProviderKey(song) === 'netease' || songProviderKey(song) === 'qq' || songProviderKey(song) === 'kugou';
+  // T12：provider 白名单（netease/qq/kugou）退役——脚本源是唯一在线 URL 供方，
+  // 任意在线曲目都可按音质重载（本地文件短路仍由 switchLocalQualityPlaybackTo 承接）。
+  return true;
 }
 function applyPlaybackQualityToCurrentTrack(nextQuality, provider) {
   var song = currentIdx >= 0 && currentIdx < playQueue.length ? playQueue[currentIdx] : null;
   provider = normalizePlaybackProvider(provider || songProviderKey(song));
+  // T10 裁决5：音质切换 = 该曲已解析地址一律作废（13-playback-start-audio.js 的
+  // lxResolvedAudioCache 90s 客户端镜像按曲清，防旧音质/旧音源陈旧地址拖住新请求）。
+  if (song && typeof invalidateLxResolvedAudioCache === 'function') invalidateLxResolvedAudioCache(song);
   var label = playbackQualityLabel(nextQuality || getProviderPlaybackQuality(provider), provider);
   if (!canReloadCurrentTrackForQuality()) {
     showToast('音质偏好: ' + label + ' · 下次播放生效');

@@ -482,11 +482,12 @@
   function audioQualityRequestFromCommand(message) {
     var text = String(message || '');
     var quality = '';
-    if (/(?:超清母带|母带|jymaster|master)/i.test(text)) quality = 'jymaster';
-    else if (/(?:hi[\s-]?res|高清臻音|臻音)/i.test(text)) quality = 'hires';
-    else if (/(?:无损|flac|\bSQ\b)/i.test(text)) quality = 'lossless';
-    else if (/(?:320\s*k|极高|\bHQ\b)/i.test(text)) quality = 'exhigh';
-    else if (/(?:128\s*k|标准音质|普通音质)/i.test(text)) quality = 'standard';
+    // T12：语音/命令解析产出的音质值统一为 LX 五档内部键。
+    if (/(?:超清母带|母带|jymaster|master)/i.test(text)) quality = 'master';
+    else if (/(?:hi[\s-]?res|高清臻音|臻音|flac24bit)/i.test(text)) quality = 'flac24bit';
+    else if (/(?:无损|flac|\bSQ\b)/i.test(text)) quality = 'flac';
+    else if (/(?:320\s*k|极高|\bHQ\b)/i.test(text)) quality = '320k';
+    else if (/(?:128\s*k|标准音质|普通音质)/i.test(text)) quality = '128k';
     return quality ? { action: 'set', quality: quality } : { action: 'open' };
   }
 

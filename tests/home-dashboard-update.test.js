@@ -133,7 +133,10 @@ test('discovery song playback uses the existing Stellaflix queue path', () => {
 });
 
 test('homepage update does not import LX-only data paths', () => {
-  for (const forbidden of ['/api/daily-hot', '/api/lx-source/search', 'heartbeatPlaylist', 'lxMirror']) {
+  // '/api/daily-hot' 于 10-26 排行榜归一后从禁列移除：它不再是 LX 专有路径，而是本仓第一方
+  // 共享切片（daily-hot-api.js 1:1 移植上游 + server.js 路由），主人裁定「留 main 版」，
+  // 03a 平台推荐卡与 04b 排行榜弹窗同为它的消费方。其余三项仍是 LX/Mineradio 专有标识。
+  for (const forbidden of ['/api/lx-source/search', 'heartbeatPlaylist', 'lxMirror']) {
     assert.equal(
       dashboardScript.includes(forbidden),
       false,

@@ -68,40 +68,7 @@ var lastStrongDrop = 0;           // 用于 burst 预设的强 drop 时刻
 
 var lyricsLines = [], lyricsTranslationLines = [], lyricsVisible = false, lyricsHasNativeKaraoke = false, lyricsTimingSource = 'none', lyricsTranslationSource = 'none';
 var playlist = [], playQueue = [], currentIdx = -1, playing = false, playToggleBusy = false;
-var searchMode = 'song', podcastResults = [], podcastPrograms = [], podcastCurrentRadio = null;
-var loginStatus = { loggedIn: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP' };
-var qqLoginStatus = { provider: 'qq', loggedIn: false, preview: false, nickname: 'QQ 音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false };
-var kugouLoginStatus = { provider: 'kugou', loggedIn: false, preview: false, nickname: '酷狗音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, playbackKeyReady: false };
-var qishuiLoginStatus = { provider: 'qishui', loggedIn: false, configured: false, preview: false, nickname: '汽水音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, playbackKeyReady: false, playbackMode: 'recommend-match' };
-var qqLoginAutoRefreshTimer = null;
-var qqLoginStatusLastForcedAt = 0;
-var kugouLoginAutoRefreshTimer = null;
-var qishuiLoginAutoRefreshTimer = null;
-var spotifyLoginStatus = { provider: 'spotify', loggedIn: false, configured: false, oauthConfigured: false, oauthMissing: [], preview: false, nickname: 'Spotify', userId: '', avatar: '', product: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, playbackKeyReady: false, playbackMode: 'recommend-match' };
-var spotifyLoginAutoRefreshTimer = null;
-var qqLoginWasLoggedIn = false;
-var kugouLoginWasLoggedIn = false;
-var qishuiLoginWasLoggedIn = false;
-var spotifyLoginWasLoggedIn = false;
-var loginProvider = 'netease';
-var activeAccountProvider = 'netease';
-var dualAccountMode = false;
-var qqCookieBusy = false;
-var kugouCookieBusy = false;
-var qishuiTokenBusy = false;
-var qishuiOAuthBusy = false;
-var spotifyConfigBusy = false;
-var spotifyOAuthBusy = false;
-var neteaseWebLoginBusy = false;
-var qqWebLoginBusy = false;
-var kugouWebLoginBusy = false;
-var neteaseManualCookieOpen = false;
-var qqManualCookieOpen = false;
-var kugouManualCookieOpen = false;
-var qishuiManualCookieOpen = false;
-var loginStatusChecked = false, loginStatusCheckFailed = false;
-var qrPollTimer = null, qrKey = null;
-var qishuiQrPollBusy = false, qishuiQrPollGeneration = 0;
+var searchMode = 'all';
 var volumeTween = null, trackSwitchToken = 0;
 var audioFadeTimer = null, audioElementFadeFrame = 0, audioFadeSerial = 0;
 var playbackResumeRecovery = { serial: 0, pending: false, lastAttemptAt: 0, lastReason: '', pausedAt: 0, pausedSongKey: '', pausedSrc: '', pausedPosition: 0, timerIds: [] };
@@ -117,7 +84,7 @@ var AUDIO_FADE_IN_MS = audioFadePreference.fadeInMs;
 var AUDIO_FADE_OUT_MS = audioFadePreference.fadeOutMs;
 var AUDIO_SILENCE_GAIN = 0.0001;
 var audioFadeEnvelope = 1;
-var userPlaylists = [], neteasePlaylists = [], qqPlaylists = [], kugouPlaylists = [], qishuiPlaylists = [], spotifyPlaylists = [], myPodcastCollections = [], myPodcastItems = {}, playlistCoverCache = {};
+var userPlaylists = [], playlistCoverCache = {};
 var queueHydrationState = {
   token: 0,
   active: false,
@@ -158,40 +125,40 @@ var AUDIO_INPUT_BRIDGE_STORE_KEY = 'stellaflix-audio-input-bridge-v1';
 var PROVIDER_VIP_AUDIT_STORE_KEY = 'stellaflix-provider-vip-audit-v1';
 var QQ_PLAYBACK_VIP_EVIDENCE_STORE_KEY = 'stellaflix-qq-playback-vip-evidence-v1';
 var LOGIN_COOKIE_EXPORT_STORE_KEY = 'stellaflix-login-cookie-export-v1';
-var PLAYBACK_QUALITY_DEFAULTS = { netease: 'hires', qq: 'lossless', kugou: 'lossless', qishui: 'standard', spotify: 'standard', 'lx-custom-source': 'hires' };
-var PLAYBACK_QUALITY_OPTIONS = {
-  netease: [
-    { key: 'jymaster', title: '超清母带', sub: 'SVIP / 最高规格', svip: true },
-    { key: 'hires', title: '高清臻音', sub: '默认 / 细节优先' },
-    { key: 'lossless', title: '无损 SQ', sub: 'FLAC 优先' },
-    { key: 'exhigh', title: '极高 HQ', sub: '320kbps' },
-    { key: 'standard', title: '标准', sub: '128kbps' }
-  ],
-  qq: [
-    { key: 'hires', title: 'Hi-Res FLAC', sub: 'QQ 高解析 / 优先尝试' },
-    { key: 'lossless', title: '无损 FLAC', sub: 'QQ SQ / 稳定优先' },
-    { key: 'exhigh', title: '320k MP3', sub: 'QQ 高品质' },
-    { key: 'standard', title: '128k MP3', sub: '兼容优先' }
-  ],
-  kugou: [
-    { key: 'hires', title: 'Hi-Res / 臻品', sub: '酷狗高解析 / 优先尝试' },
-    { key: 'lossless', title: '无损 FLAC', sub: '酷狗 SQ / 稳定优先' },
-    { key: 'exhigh', title: '320k MP3', sub: '酷狗高品质' },
-    { key: 'standard', title: '128k MP3', sub: '兼容优先' }
-  ],
-  qishui: [
-    { key: 'standard', title: '汽水匹配源', sub: 'QS 推荐 / 播放自动换源' }
-  ],
-  spotify: [
-    { key: 'standard', title: 'Spotify 匹配源', sub: 'SP 搜索 / 播放自动换源' }
-  ],
-  'lx-custom-source': [
-    { key: 'hires', title: '自定义音源推荐', sub: '按照脚本支持规格尝试，脚本侧会自行退化' },
-    { key: 'lossless', title: '无损 FLAC', sub: '优先无损' },
-    { key: 'exhigh', title: '极高 HQ', sub: '320kbps' },
-    { key: 'standard', title: '标准', sub: '128kbps' }
-  ]
-};
+// T14（拆除批）：旧桌面 custom-source 偏好键一次性迁移——读旧键→无操作→删键，
+// 防真机残留（14-custom-source-integration.js 与 desktop/custom-source/ 已退役，
+// 新链使用 lx-source-* 服务端存储，前端无对应键；刻意保留读取动作以完成清桩）。
+var LEGACY_CUSTOM_SOURCE_STORE_KEY = 'stellaflix-custom-source-v1';
+(function migrateLegacyCustomSourceStoreKey() {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    var legacyValue = localStorage.getItem(LEGACY_CUSTOM_SOURCE_STORE_KEY);
+    if (legacyValue === null) return;
+    localStorage.removeItem(LEGACY_CUSTOM_SOURCE_STORE_KEY);
+  } catch (_) { /* 隐私模式/存储禁用时静默跳过 */ }
+})();
+// T12（移植批）：播放音质词汇统一为 LX 协议五档——内部键直接使用 lx 脚本源音质词
+// （master/flac24bit/flac/320k/128k，上游 index.html:31807-31822 lxSourceQualityCandidates
+// 的候选词表），旧词 jymaster/hires/lossless/exhigh/standard 仅作持久化/入口别名，
+// 经 normalizePlaybackQuality 词汇表迁移。脚本源是在线播放 URL 唯一供方：
+// 档位不再按平台 cookie/VIP 锁定（svip 标志退役），VIP 曲目由服务端降级链 +
+// probeWarning 自动降档提示（「在线音源按平台能力自动降级」）。
+var LX_PLAYBACK_QUALITY_TIERS = ['master', 'flac24bit', 'flac', '320k', '128k'];
+var PLAYBACK_QUALITY_DEFAULTS = { netease: 'flac24bit', qq: 'flac', kugou: 'flac', qishui: '128k', spotify: '128k', 'lx-custom-source': 'flac24bit' };
+var LX_PLAYBACK_QUALITY_OPTION_LIST = [
+  { key: 'master', title: '超清母带', sub: 'Master / 最高规格' },
+  { key: 'flac24bit', title: 'Hi-Res FLAC', sub: '24bit FLAC 优先' },
+  { key: 'flac', title: '无损', sub: 'FLAC 无损' },
+  { key: '320k', title: '极高', sub: '320kbps' },
+  { key: '128k', title: '标准', sub: '128kbps' }
+];
+// 各 provider 共享同一 LX 五档表（词汇统一后 provider 只影响展示前缀，不再影响可选档）。
+var PLAYBACK_QUALITY_OPTIONS = (function () {
+  var providers = ['netease', 'qq', 'kugou', 'qishui', 'spotify', 'lx-custom-source'];
+  var map = {};
+  providers.forEach(function (provider) { map[provider] = LX_PLAYBACK_QUALITY_OPTION_LIST; });
+  return map;
+})();
 var UPLOAD_TIP_STORE_KEY = 'stellaflix-upload-tip-seen';
 var DIY_MODE_STORE_KEY = 'stellaflix-diy-player-mode-v1';
 var PLAYLIST_PANEL_PIN_STORE_KEY = 'stellaflix-playlist-panel-pinned-v1';
@@ -280,7 +247,7 @@ var uploadTipTimer = null, uploadTipAttempts = 0;
 var emptyHomeActive = false;
 var homeForcedOpen = false;
 var homeSuppressed = false;
-var homeDiscoverState = { loading: false, loaded: false, loggedIn: false, mode: 'starter', songs: [], playlists: [], podcasts: [], error: '', updatedAt: 0 };
+var homeDiscoverState = { loading: false, loaded: false, loggedIn: false, mode: 'starter', songs: [], playlists: [], error: '', updatedAt: 0 };
 var homeDiscoverToken = 0;
 var homeVisualPresetActive = false;
 var homeVisualPrevPreset = 0;

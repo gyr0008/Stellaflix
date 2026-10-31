@@ -44,7 +44,6 @@ function shouldShowIdleGuide() {
   if (document.body.classList.contains('splash-active')) return false;
   if (immersiveMode) return false;
   if (playing) return false;
-  if (loginGuideAnimating) return false;
   if (document.querySelector('.modal-mask.show')) return false;
   if (uniforms && uniforms.uHasCover && uniforms.uHasCover.value > 0.5) return false;
   return true;

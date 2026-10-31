@@ -137,20 +137,13 @@ function updateEmptyHomeVisibility(opts) {
   else deactivateHomeWallpaperPreview(false);
   if (show) {
     setPeek(document.getElementById('search-area'), true, 'search');
+    homeDiscoverState.loading = false;
+    homeDiscoverState.loaded = true;
+    homeDiscoverState.loggedIn = false;
+    homeDiscoverState.mode = 'starter';
+    homeDiscoverState.songs = [];
+    homeDiscoverState.playlists = [];
     renderHomeDiscover();
-    if (!hasAnyPlatformLogin()) {
-      homeDiscoverState.loading = false;
-      homeDiscoverState.loaded = true;
-      homeDiscoverState.loggedIn = false;
-      homeDiscoverState.mode = 'starter';
-      homeDiscoverState.songs = [];
-      homeDiscoverState.playlists = [];
-      homeDiscoverState.podcasts = [];
-      renderHomeDiscover();
-    } else {
-      renderHomeDiscover();
-      scheduleVisualApply(function () { loadHomeDiscover(!!opts.forceLoad); }, 220, 1200);
-    }
   }
   return show;
 }
@@ -160,7 +153,6 @@ function runHomeSearch(query, mode) {
   setHomeControlsLocked(false);
   updateEmptyHomeVisibility();
   if (mode) setSearchMode(mode);
-  else if (searchMode === 'podcast') setSearchMode('song');
   var q = String(query || '').trim();
   var area = document.getElementById('search-area');
   if (area) setPeek(area, true, 'search');
@@ -169,12 +161,7 @@ function runHomeSearch(query, mode) {
     $input.focus();
   }
   if (q) doSearch(q);
-  else if (searchMode === 'podcast') loadPodcastHot();
   else renderSearchHistory();
-}
-function skipLoginAndFocusSearch() {
-  closeLoginModal();
-  setTimeout(function () { runHomeSearch(''); }, 180);
 }
 function openHomeLocalImport() {
   homeForcedOpen = false;
@@ -194,10 +181,8 @@ async function playHomeDaily() {
   homeForcedOpen = false;
   homeSuppressed = false;
   setHomeControlsLocked(false);
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    showLoginModal({ source: 'home-daily' });
-    return;
-  }
+  // 批 T16b：未登录门槛摘除（登录弹窗 DOM 已随 16a 离场，调用入口只剩空转=死点击）；
+  // 无登录态时由本函数既有兜底接管：推荐池为空 → runHomeSearch('每日推荐')。
   await waitForHomeDiscoverIdle();
   if (!homeDiscoverState.loaded || (!homeDiscoverState.songs.length && !homeDiscoverState.loading)) {
     await loadHomeDiscover(true);
@@ -217,10 +202,6 @@ async function playHomePrivateRadio() {
   homeForcedOpen = false;
   homeSuppressed = false;
   setHomeControlsLocked(false);
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    showLoginModal({ source: 'home-private' });
-    return;
-  }
   await waitForHomeDiscoverIdle();
   if (!homeDiscoverState.loaded || ((!homeDiscoverState.playlists.length && !homeDiscoverState.songs.length) && !homeDiscoverState.loading)) {
     await loadHomeDiscover(true);
@@ -262,10 +243,6 @@ function openHomePlaylist(index) {
   homeForcedOpen = false;
   homeSuppressed = false;
   setHomeControlsLocked(false);
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    runHomeSearch('');
-    return;
-  }
   openPlaylistPanelTab('playlists', true);
   var item = homeDiscoverState.playlists[index];
   if (!item || !item.id) {
@@ -274,31 +251,8 @@ function openHomePlaylist(index) {
   }
   loadPlaylistIntoQueueById(item.id, true, item.name || '');
 }
-function openHomePodcast(index) {
-  homeForcedOpen = false;
-  homeSuppressed = false;
-  setHomeControlsLocked(false);
-  openPlaylistPanelTab('podcasts', true);
-  var item = homeDiscoverState.podcasts[index];
-  if (!item || !item.id) {
-    setSearchMode('podcast');
-    loadPodcastHot();
-    return;
-  }
-  loadPodcastRadioIntoQueue(item.id, true, item.name || '');
-}
-function openHomeThirdCard() {
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    openHomeLocalImport();
-    return;
-  }
-  openHomePodcast(0);
-}
 function openHomeLibrary() {
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    showLoginModal({ source: 'home-library' });
-    return;
-  }
+  // 批 T16b：「片库」消费的是本地/歌单面板，与平台登录无关，未登录直接进面板。
   homeSuppressed = false;
   setHomeControlsLocked(false);
   openPlaylistPanelTab('playlists', true);
@@ -462,8 +416,6 @@ function isHomeBlankDismissClick(e) {
       if (SFV.sourcePicker && SFV.sourcePicker.isOpen && SFV.sourcePicker.isOpen()) return false;
       if (SFV.SearchFilter && SFV.SearchFilter.isOpen && SFV.SearchFilter.isOpen()) return false;
     }
-    var csOverlay = document.getElementById('custom-source-modal-overlay');
-    if (csOverlay && csOverlay.getAttribute('data-open') === '1') return false;
     if (document.querySelector('.sfv-bgm-modal-overlay')) return false;
   } catch (err) { /* 守卫失败不阻断空白关闭 */ }
   var target = e.target;
@@ -506,8 +458,6 @@ function isHomeBlankDismissClick(e) {
     '.sfv-picker',
     '.sfv-picker-modal-backdrop',
     '.sfv-picker-captcha-backdrop',
-    '.custom-source-modal-overlay',
-    '.custom-source-modal',
     '.sf-filter-layer',
     '.sf-filter-scrim',
     '.sf-filter-sheet'

@@ -1,0 +1,23 @@
+{
+  "data": {
+    "resources": [
+      {
+        "baseInfo": {
+          "simpleSongData": {
+            "id": "952700",
+            "name": "芸测试曲",
+            "ar": [{ "name": "芸歌手" }],
+            "al": {
+              "id": 777,
+              "name": "芸专辑",
+              "picUrl": "https://p3.music.126.net/cover.jpg"
+            },
+            "dt": 192000
+          }
+        }
+      },
+      { "baseInfo": null },
+      { "baseInfo": { "simpleSongData": null } }
+    ]
+  }
+}

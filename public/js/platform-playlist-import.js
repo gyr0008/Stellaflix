@@ -9,7 +9,7 @@
  * 存储: 复用 03b-local-playlist-store.js（window.localPlaylistStore），
  *       导入歌单打 platformImportKey 标记，重复导入 = 按 key 替换曲目。
  * 播放: 导入曲目统一 type:'lx-online'，走 playLxMirrorSong →
- *       custom-source 聚合解析（按歌名+歌手跨源匹配），与 AI 搜索播放同链路。
+ *       lx-source 聚合解析（按歌名+歌手跨源匹配），与 AI 搜索播放同链路。
  */
 (function (global) {
   'use strict';
@@ -380,7 +380,7 @@
           interval: song.interval || 0,
           albumName: song.albumName || '',
           picUrl: song.picUrl || '',
-          // 与平台导入一致：lx-online 让曲目走 custom-source 聚合解析可播
+          // 与平台导入一致：lx-online 让曲目走 lx-source 聚合解析可播
           type: 'lx-online',
         };
       }),
@@ -516,8 +516,9 @@
   }
 
   function openLxSourceImport() {
-    if (typeof global.openCustomSourceModal === 'function') {
-      global.openCustomSourceModal();
+    // T14：旧 openCustomSourceModal 已随 desktop/custom-source 载体退役，改指新面板。
+    if (global.lxSourceManager && typeof global.lxSourceManager.open === 'function') {
+      global.lxSourceManager.open();
       return { ok: true };
     }
     return { ok: false, error: 'SOURCE_MANAGER_NOT_READY', message: '音源管理器尚未初始化' };

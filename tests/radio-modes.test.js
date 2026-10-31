@@ -291,6 +291,15 @@ test('radio modes play path builds queue and calls playQueueAt', async () => {
         ],
       };
     },
+    // 批1 T15.5b 起 buildRadioModeSongs 经 07-search 的 fetchLxSearchResults 出网（跨模块全局，
+    // 真实页由 loader 提供）。本套件只验电台成队链路，故按该函数契约（{songs, failures}）
+    // 打桩并断言其确实经 lx 聚合路径出网；改道契约本身由 tests/lx-reroute-batch1.test.js 钉桩。
+    fetchLxSearchResults: async function (query, options) {
+      assert.ok(String(query || '').length > 0, 'fetchLxSearchResults 应收到非空查询词');
+      assert.ok(options && options.sources, '电台应显式指定 lx 源集（批1 契约）');
+      const r = await sandbox.apiJson('/api/lx-source/search?q=' + encodeURIComponent(query));
+      return { songs: r.songs || [], failures: r.failures || [] };
+    },
     playQueue: [],
     currentIdx: -1,
     playQueueAt: async function (idx, opts) {
@@ -314,4 +323,62 @@ test('radio modes play path builds queue and calls playQueueAt', async () => {
   assert.ok(playQueueAtCalled, 'playQueueAt should be called');
   assert.ok(capturedQueue && capturedQueue.length > 0, 'queue should be populated');
   assert.ok(capturedQueue.every((song) => song.radioModeId === 'sleep'), 'all queued songs should have radioModeId sleep');
+});
+
+// 修复轮1（评审 Important-2）：电台「全源失败」不得谎称「没有找到可播放的歌曲」。
+// server.js:8083 ok = songs>0 || failures==0 → 全源失败是 502 + 非空 failures[]，
+// fetchLxSearchResults 正常透传 {songs:[], failures:[...]}。playRadioMode 空队列时须据此
+// 呈现音源不可用文案。
+test('radio play path distinguishes all-source-failure from zero-hit', async () => {
+  const dom = new JSDOM(`<!DOCTYPE html><html><body>
+    <div id="home-radio-modes-mask" class="modal-mask" aria-hidden="true">
+      <div class="home-radio-modes-modal">
+        <div class="home-radio-modes-tabs"><button data-radio-category="all">全部</button></div>
+        <div id="radio-mode-grid" class="radio-mode-grid"></div>
+      </div>
+    </div>
+  </body></html>`, { url: 'http://localhost/' });
+  const window = dom.window;
+  const document = window.document;
+
+  const toasts = [];
+  const sandbox = {
+    console,
+    document,
+    window,
+    setTimeout: window.setTimeout,
+    setInterval: window.setInterval,
+    clearTimeout: window.clearTimeout,
+    localStorage: { getItem() { return null; }, setItem() {} },
+    showToast: (m) => toasts.push(String(m)),
+    homeDashboardLocalSongs: () => [],
+    homeListenSummary: () => ({}),
+    simpleSearchNorm: (t) => String(t || '').toLowerCase().replace(/[\s·・,，。.!！?？'"“”‘’|\-_/]+/g, ''),
+    cloneSong: (s) => Object.assign({}, s),
+    queueItemKey: (s) => (s && s.id) || '',
+    escHtml: (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+    apiJson: async () => ({ songs: [] }),
+    // lx 全源失败体：songs 空 + failures 非空。
+    fetchLxSearchResults: async () => ({
+      songs: [],
+      failures: [{ source: 'kw', error: 'HTTP_503' }, { source: 'kg', code: 'SOURCE_COOLDOWN' }],
+    }),
+    playQueue: [],
+    currentIdx: -1,
+    playQueueAt: async () => { throw new Error('全源失败不应进入播放'); },
+    safeRenderQueuePanel() {},
+    forcePlaybackControlsInteractive() {},
+  };
+
+  vm.createContext(sandbox);
+  vm.runInContext(radioModesScript, sandbox);
+
+  await sandbox.playRadioMode('sleep');
+
+  const failureToast = toasts.find((t) => /音源|暂不可用|获取失败/.test(t));
+  assert.ok(failureToast, '全源失败必须呈现音源不可用文案，实际 toast: ' + JSON.stringify(toasts));
+  assert.ok(
+    !toasts.some((t) => /没有找到可播放的歌曲/.test(t)),
+    '全源失败不得再谎称「没有找到可播放的歌曲」: ' + JSON.stringify(toasts),
+  );
 });

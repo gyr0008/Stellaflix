@@ -1,0 +1,21 @@
+{
+  "TOTAL": "2",
+  "abslist": [
+    {
+      "MUSICRID": "MUSIC_345678",
+      "SONGNAME": "蜗测试曲",
+      "ARTIST": "蜗歌手",
+      "ALBUM": "蜗专辑",
+      "DURATION": 185,
+      "picUrl": "12/34/5678.jpg"
+    },
+    {
+      "MUSICRID": "MUSIC_999000",
+      "SONGNAME": "网络覆盖",
+      "ARTIST": "某歌手",
+      "ALBUM": "",
+      "DURATION": 60,
+      "picUrl": "https://dl.kuwo.cn/star/albumcover/300/9/99/999.jpg"
+    }
+  ]
+}

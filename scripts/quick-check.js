@@ -48,8 +48,6 @@ function jsCheckFiles() {
     if (file.endsWith('.js')) files.push(file);
   });
   addIfExists(path.join(appRoot, 'server.js'));
-  addIfExists(path.join(appRoot, 'qq-vip-api.js'));
-  addIfExists(path.join(appRoot, 'dj-analyzer.js'));
   walk(path.join(appRoot, 'cuefield')).forEach(file => {
     if (file.endsWith('.js')) files.push(file);
   });
@@ -135,55 +133,6 @@ function runWallpaperEngineIdleDisposeRegressionCheck() {
   process.stdout.write(result.stdout || '');
 }
 
-function runQQVipEntitlementRegressionCheck() {
-  logStep('QQ/Kugou provider entitlement regression');
-  const testFiles = [
-    path.join(appRoot, 'tests', 'qq-vip-entitlement.test.js'),
-    path.join(appRoot, 'tests', 'kugou-vip-hardening.test.js'),
-    path.join(appRoot, 'tests', 'provider-entitlement-boundary.test.js'),
-  ];
-  const result = spawnSync(process.execPath, ['--test'].concat(testFiles), {
-    cwd: appRoot,
-    encoding: 'utf8'
-  });
-  if (result.status !== 0) {
-    process.stdout.write(result.stdout || '');
-    process.stderr.write(result.stderr || '');
-    fail('QQ/Kugou provider entitlement regression failed');
-  }
-  process.stdout.write(result.stdout || '');
-}
-
-function runSpotifyApiResilienceRegressionCheck() {
-  logStep('Spotify API resilience regression');
-  const testFile = path.join(appRoot, 'tests', 'spotify-api-resilience.test.js');
-  const result = spawnSync(process.execPath, [testFile], {
-    cwd: appRoot,
-    encoding: 'utf8'
-  });
-  if (result.status !== 0) {
-    process.stdout.write(result.stdout || '');
-    process.stderr.write(result.stderr || '');
-    fail(`Spotify API resilience regression failed: ${rel(testFile)}`);
-  }
-  process.stdout.write(result.stdout || '');
-}
-
-function runPlatformAccountSyncGuardCheck() {
-  logStep('Platform account action and listen-sync guard');
-  const testFile = path.join(appRoot, 'tests', 'platform-account-sync-guard.test.js');
-  const result = spawnSync(process.execPath, [testFile], {
-    cwd: appRoot,
-    encoding: 'utf8'
-  });
-  if (result.status !== 0) {
-    process.stdout.write(result.stdout || '');
-    process.stderr.write(result.stderr || '');
-    fail(`platform account/listen-sync guard failed: ${rel(testFile)}`);
-  }
-  process.stdout.write(result.stdout || '');
-}
-
 function runHomeDailyRecommendationRegressionCheck() {
   logStep('Complete daily recommendation data and bounded rendering regression');
   const testFiles = [
@@ -198,26 +147,6 @@ function runHomeDailyRecommendationRegressionCheck() {
     process.stdout.write(result.stdout || '');
     process.stderr.write(result.stderr || '');
     fail('complete daily recommendation regression failed');
-  }
-  process.stdout.write(result.stdout || '');
-}
-
-function runQishuiProviderDistributionRegressionCheck() {
-  logStep('Qishui provider distribution, entitlement, and signed Passport QR regression');
-  const testFiles = [
-    path.join(appRoot, 'tests', 'qishui-provider-distribution.test.js'),
-    path.join(appRoot, 'tests', 'qishui-passport-qr-login.test.js'),
-    path.join(appRoot, 'tests', 'qishui-entitlement-cache.test.js'),
-    path.join(appRoot, 'tests', 'qishui-tier-rights.test.js'),
-  ];
-  const result = spawnSync(process.execPath, ['--test'].concat(testFiles), {
-    cwd: appRoot,
-    encoding: 'utf8'
-  });
-  if (result.status !== 0) {
-    process.stdout.write(result.stdout || '');
-    process.stderr.write(result.stderr || '');
-    fail('Qishui provider distribution/entitlement/QR regression failed');
   }
   process.stdout.write(result.stdout || '');
 }
@@ -243,7 +172,6 @@ function scanForbiddenMarkers() {
     path.join(appRoot, 'public', 'js'),
     path.join(appRoot, 'desktop'),
     path.join(appRoot, 'server.js'),
-    path.join(appRoot, 'dj-analyzer.js'),
     path.join(appRoot, 'cuefield')
   ];
   const files = [];
@@ -1412,10 +1340,13 @@ function checkLyricTranslationCompletenessGuard() {
   if (!/isLyricCreditLineText/.test(lyricText) || !/orderedPrimaryIndexes/.test(lyricText)) {
     fail('frontend lyric parser must skip singer/credit lines when attaching translated lyrics');
   }
-  if (!/function scheduleNeteaseLyricTranslationFallback/.test(lyricText) || !/function findNeteaseLyricFallbackCandidate/.test(lyricText) || !/songProviderKey\(song\) === 'netease'/.test(lyricText) || !/requestIdleCallback/.test(lyricText) || !/mergeInlineLyricResponseForSong/.test(lyricText)) {
-    fail('non-Netease providers must asynchronously reuse the Netease translation merge path without blocking primary lyric paint');
+  if (!/function lxLyricSourceForSong/.test(lyricText) || !/\/api\/lx-source\/lyric/.test(lyricText) || !/function mergeInlineLyricResponseForSong/.test(lyricText)) {
+    fail('T15.5b: lyrics must resolve through the lx-source lyric route (POST /api/lx-source/lyric)');
   }
-  console.log('[OK] Netease tlyric/ytlrc translation merge is guarded.');
+  if (/function scheduleNeteaseLyricTranslationFallback|function findNeteaseLyricFallbackCandidate|sourceCandidateRejectReason\(song, candidate, 'netease'\)/.test(lyricText)) {
+    fail('T15.5b: the cross-provider Netease translation-fallback family must stay retired (lx is the only lyric supplier)');
+  }
+  console.log('[OK] Lyric pipeline is guarded: lx-source lyric route live, Netease fallback family retired.');
 }
 
 function checkLyricVerticalFloatToggleGuard() {
@@ -1446,300 +1377,6 @@ function checkLyricVerticalFloatToggleGuard() {
   console.log('[OK] Lyric vertical float toggle is wired through UI, persistence, archive, and render layers.');
 }
 
-function checkQishuiProviderGuard() {
-  logStep('Qishui provider guard');
-  const qishuiText = fs.readFileSync(path.join(appRoot, 'qishui-api.js'), 'utf8');
-  const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
-  const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
-  const coreStoreText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '00-state', '00-core-stores.js'), 'utf8');
-  const playlistShellText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '01-playlist-panel-shell.js'), 'utf8');
-  const playlistDetailText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '02-playlist-detail.js'), 'utf8');
-  const playlistLoadText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '03-podcast-playlist-loaders.js'), 'utf8');
-  const shelfCoreText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '04-shelf', '01-manager-core.js'), 'utf8');
-  const shelfContentText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '04-shelf', '03-content-list-manager.js'), 'utf8');
-  const homeText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '03-home-discover-weather.js'), 'utf8');
-  const qishuiLoginText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '03-login-modal-flows.js'), 'utf8');
-  const qishuiStatusText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '02-login-status.js'), 'utf8');
-  const accountLogoutText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '04-user-modal-logout.js'), 'utf8');
-  const desktopMainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
-  const desktopPreloadText = fs.readFileSync(path.join(appRoot, 'desktop', 'preload.js'), 'utf8');
-  const qishuiPassportText = fs.readFileSync(path.join(appRoot, 'qishui-auth-v6.js'), 'utf8');
-  const qishuiQrBridgeText = fs.readFileSync(path.join(appRoot, 'qishui-qr-login.js'), 'utf8');
-  const indexText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
-  if (!/QISHUI_PUBLIC_SEARCH_URL/.test(qishuiText) || !/api-vehicle\.volcengine\.com\/v2\/search\/type/.test(qishuiText) || !/function handleQishuiPublicSearch/.test(qishuiText)) {
-    fail('Qishui must keep a public search fallback so the provider is usable before OAuth credentials are bundled');
-  }
-  if (!/QISHUI_PUBLIC_CONTENTS_URL/.test(qishuiText) || !/api-vehicle\.volcengine\.com\/v2\/custom\/contents/.test(qishuiText) || !/function fetchQishuiPublicDetail/.test(qishuiText)) {
-    fail('Qishui lyric/detail fallback must stay available for public search results');
-  }
-  if (/vsaa\.cn|QISHUI_VIP_PROXY|music\.qishui\.vip/.test(qishuiText)) {
-    fail('Qishui playback must not depend on third-party VIP/proxy endpoints');
-  }
-  if (!/search: tokenConfigured \|\| webSession \|\| QISHUI_PUBLIC_ENABLED/.test(qishuiText) || !/loggedIn: webSession/.test(qishuiText) || !/请使用抖音 App 扫描 Stellaflix 中的汽水官方二维码/.test(qishuiText)) {
-    fail('Qishui status must keep public catalogue readiness separate from an authenticated Passport Web session');
-  }
-  const oldQishuiCredentialPrompt = new RegExp('当前版本还没有内置' + '抖音开放平台应用凭证');
-  if (!/function qishuiPublicSearchReady/.test(qishuiLoginText) || !/function openQishuiPublicSearch/.test(qishuiLoginText) || !/refreshBtn\.onclick = isQishui \? openQishuiWebLogin :/.test(qishuiLoginText) || oldQishuiCredentialPrompt.test(qishuiLoginText)) {
-    fail('Qishui login modal must retain public search separately from official Passport QR authentication');
-  }
-  if (!/searchReady/.test(qishuiStatusText) || !/capabilities\.search/.test(qishuiStatusText)) {
-    fail('Qishui frontend status must expose public search readiness separately from OAuth login');
-  }
-  if (!/require\('\.\/qishui-qr-login'\)/.test(serverText) || !/\/api\/qishui\/login\/qrcode/.test(serverText) || !/\/api\/qishui\/login\/check/.test(serverText) || /pn === '\/api\/qishui\/login\/(?:token|cookie)'/.test(serverText)) {
-    fail('Qishui login server must expose only the signed Passport QR create/check boundary');
-  }
-  if (!/persist:stellaflix-qishui-auth-v6/.test(qishuiPassportText) || !/a_bogus/.test(qishuiPassportText) || !/check_qrconnect/.test(qishuiPassportText) || !/secondVerify/.test(qishuiPassportText) || !/createQishuiQrLoginBridge/.test(qishuiQrBridgeText)) {
-    fail('Qishui Passport QR must retain the isolated signing runtime, a_bogus validation, polling, persistence, and MFA bridge');
-  }
-  if (!/pollQishuiQr/.test(qishuiLoginText) || !/请使用抖音 App 扫码并确认登录/.test(qishuiLoginText) || /读取本机汽水|本机会话|Token 导入|submitQishuiTokenLogin|openQishuiMusicLogin/.test(qishuiLoginText)) {
-    fail('Qishui login UI must use only the official in-panel QR flow');
-  }
-  if (/ipcMain\.handle\('qishui-music-open-login'/.test(desktopMainText) || /openQishuiMusicLogin/.test(desktopPreloadText) || !/await qishuiQrLogin\.clear\(\)/.test(desktopMainText)) {
-    fail('Qishui desktop bridge must remove the old login-window IPC and await Passport partition cleanup');
-  }
-  if (!/汽水音乐已扫码登录/.test(accountLogoutText) || !/按账号权益播放/.test(accountLogoutText) || /本机汽水会话|OpenAPI token/.test(accountLogoutText)) {
-    fail('Qishui account status must describe the official QR session without exposing legacy import modes');
-  }
-  if (!/官方扫码 \/ 抖音确认/.test(indexText) || /本地会话 \/ PC 客户端/.test(indexText)) {
-    fail('Qishui login node must identify the official QR flow');
-  }
-  if (!/\/luna\/pc\/me/.test(qishuiText) || !/\/luna\/pc\/user\/playlist/.test(qishuiText) || !/\/luna\/pc\/playlist\/detail/.test(qishuiText) || !/function qishuiPcAppParams/.test(qishuiText) || !/pcApp: true/.test(qishuiText) || !/count: Math\.min\(100/.test(qishuiText) || /\/luna\/pc\/playlist\/detail[\s\S]{0,260}cnt:/.test(qishuiText)) {
-    fail('Qishui playlist sync must use PC app APIs with user playlist, count/next_cursor, and LunaPC headers');
-  }
-  if (!/function qishuiImageUrl/.test(qishuiText) || !/~c5_375x375\.jpg/.test(qishuiText) || !/~c5_300x300\.jpg/.test(qishuiText) || !/directPlayable: true/.test(qishuiText)) {
-    fail('Qishui playlist tracks must build full urls+uri covers and mark PC-session tracks as directly playable');
-  }
-  if (!/\/luna\/pc\/track_v2/.test(qishuiText) || !/function fetchQishuiPcTrackV2/.test(qishuiText) || !/function resolveQishuiDownloadInfo/.test(qishuiText) || !/play_info_list/.test(qishuiText) || !/url_player_info/.test(qishuiText) || !/video_model/.test(qishuiText)) {
-    fail('Qishui playback must resolve PC track_v2 audio from play_info_list, url_player_info, or video_model');
-  }
-  const qishuiSongRouteStart = serverText.indexOf("if (pn === '/api/qishui/song/url')");
-  const qishuiSongRouteEnd = serverText.indexOf("if (pn === '/api/qishui/lyric')", qishuiSongRouteStart);
-  const qishuiSongRouteText = serverText.slice(qishuiSongRouteStart, qishuiSongRouteEnd);
-  if (qishuiSongRouteStart < 0 || qishuiSongRouteEnd <= qishuiSongRouteStart ||
-      !/handleQishuiSongUrl\(\{/.test(qishuiSongRouteText) ||
-      !/quality: url\.searchParams\.get\('quality'\)/.test(qishuiSongRouteText) ||
-      !/\}, qishuiCookie\)/.test(qishuiSongRouteText)) {
-    fail('server.js must pass the saved Qishui cookie into /api/qishui/song/url');
-  }
-  if (!/TrackDecryptor/.test(serverText) || !/qishui-audio-decryptor/.test(serverText) || !/function getQishuiDecryptedAudio/.test(serverText) || !/audioUrl\.includes\('#auth='\)/.test(serverText) || !/sendAudioBuffer/.test(serverText)) {
-    fail('Qishui encrypted #auth audio must be decrypted by /api/audio with Range support');
-  }
-  if (!/function handleQishuiUserPlaylists/.test(qishuiText) || !/function handleQishuiPlaylistTracks/.test(qishuiText) || !/QISHUI_VIRTUAL_FEED_PLAYLIST_ID/.test(qishuiText) || !/userPlaylists: configured/.test(qishuiText)) {
-    fail('Qishui must expose a login-backed virtual playlist for the normal playlist/shelf pipeline');
-  }
-  const webLibraryStart = qishuiText.indexOf('async function fetchQishuiWebLibrary');
-  const webLibraryEnd = qishuiText.indexOf('\nasync function handleQishuiStatus', webLibraryStart);
-  const webLibraryText = qishuiText.slice(webLibraryStart, webLibraryEnd);
-  if (webLibraryStart < 0 || webLibraryEnd <= webLibraryStart || !/if \(\/created\|collection\|collect\/i\.test\(label\)\)/.test(webLibraryText) || !/extractQishuiPlaylistCards\(json\)/.test(webLibraryText)) {
-    fail('Qishui library sync must only extract playlist cards from created/collection responses, never profile or recent-track payloads');
-  }
-  if (!/async function handleQishuiSearch\(keywords, limit, cookieText, offset\)/.test(qishuiText) || !/handleQishuiStatus\(cookieText\)/.test(qishuiText) || !/qishuiCookieFingerprint\(cookieText\)/.test(qishuiText) || !/handleQishuiSearch\(kw, limit, qishuiCookie, offset\)/.test(serverText)) {
-    fail('Qishui search status and cache keys must use the saved web-session cookie');
-  }
-  if (!/function fetchQishuiWebLibraryFeedFallback/.test(qishuiText) || !/qishui-web-library-fallback/.test(qishuiText) || !/fetchQishuiWebPlaylistTracks\(pl\.id/.test(qishuiText)) {
-    fail('Qishui web feed must fall back to liked/recent/playlist detail when the upstream feed endpoint returns 404');
-  }
-  if (!/function handleQishuiStatus/.test(qishuiText) || !/my_info/.test(qishuiText) || !/profileReady/.test(qishuiText) || !/handleQishuiStatus\(qishuiCookie\)/.test(serverText)) {
-    fail('Qishui status must read the real PC account profile from /luna/pc/me my_info');
-  }
-  if (!/likedCard\.trackCount/.test(qishuiText) || !/likedCard\.cover/.test(qishuiText) || !/profile\.nickname/.test(qishuiText)) {
-    fail('Qishui liked playlist must keep the real liked-card cover/count and account creator while deferring detail loading');
-  }
-  if (!/\/api\/qishui\/user\/playlists/.test(serverText) || !/\/api\/qishui\/playlist\/tracks/.test(serverText)) {
-    fail('server.js must route Qishui user playlists and playlist track detail endpoints');
-  }
-  if (!/qishuiPlaylists/.test(coreStoreText) || !/if \(provider === 'qishui'\) return '\/api\/qishui\/user\/playlists'/.test(playlistShellText) || !/neteasePlaylists\.concat\(qqPlaylists, kugouPlaylists, qishuiPlaylists, spotifyPlaylists\)/.test(playlistShellText)) {
-    fail('playlist panel refresh must merge Qishui playlists with the other providers');
-  }
-  if (!/normalizePlaylistProvider/.test(playlistDetailText) || !/\/api\/qishui\/playlist\/tracks/.test(playlistDetailText) || !/qishui:' \+ id/.test(playlistDetailText) || !/汽水音乐歌单/.test(playlistDetailText)) {
-    fail('playlist panel detail must open and play Qishui playlists via the Qishui endpoint');
-  }
-  if (!/function playlistQueueSource/.test(playlistLoadText) || !/raw\.indexOf\('qishui:'\)/.test(playlistLoadText) || !/playlistTracksEndpoint\(source\.provider/.test(playlistLoadText)) {
-    fail('whole-playlist queue loading must support qishui: playlist ids');
-  }
-  if (!/provider === 'qishui'/.test(shelfCoreText) || !/qishui:'/.test(shelfCoreText) || !/\/api\/qishui\/playlist\/tracks/.test(shelfContentText)) {
-    fail('3D shelf must display and drill into Qishui playlists through the Qishui endpoint');
-  }
-  if (!/网易云 \/ QQ \/ 酷狗 \/ 汽水/.test(homeText) || !/hasAnyPlatformLogin\(\)/.test(homeText) || /网易云 \/ QQ 音乐/.test(homeText)) {
-    fail('Home discover must acknowledge Qishui/Kugou login playlists instead of only Netease/QQ');
-  }
-  if (!/lyric-glow-enable-btn/.test(indexText) || !/lyric-glow-beat-btn/.test(indexText)) {
-    fail('Lyric glow back-layer controls must stay visible in the lyric appearance panel');
-  }
-  console.log('[OK] Qishui search/lyric fallback stays usable without third-party playback proxy.');
-}
-
-async function checkSpotifyProviderGuard() {
-  logStep('Spotify provider guard');
-  const spotifyPath = path.join(appRoot, 'spotify-api.js');
-  if (!fs.existsSync(spotifyPath)) fail('spotify-api.js must exist as a backend-only Spotify Web API bridge');
-  const spotifyText = fs.readFileSync(spotifyPath, 'utf8');
-  const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
-  const indexText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
-  const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
-  const coreStoreText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '00-state', '00-core-stores.js'), 'utf8');
-  const qualityText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '00-api-quality-output.js'), 'utf8');
-  const searchText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '07-search.js'), 'utf8');
-  const playbackText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '13-playback-start-audio.js'), 'utf8');
-  const fallbackText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '11-provider-fallback.js'), 'utf8');
-  const lyricText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '00-lyrics-fetch-parse.js'), 'utf8');
-  const playlistShellText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '01-playlist-panel-shell.js'), 'utf8');
-  const playlistDetailText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '02-playlist-detail.js'), 'utf8');
-  const playlistLoadText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '03-podcast-playlist-loaders.js'), 'utf8');
-  const shelfCoreText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '04-shelf', '01-manager-core.js'), 'utf8');
-  const shelfContentText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '04-shelf', '03-content-list-manager.js'), 'utf8');
-  const loginStatusText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '02-login-status.js'), 'utf8');
-  const loginFlowText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '03-login-modal-flows.js'), 'utf8');
-  const userModalText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '04-user-modal-logout.js'), 'utf8');
-  const desktopMainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
-  const desktopPreloadText = fs.readFileSync(path.join(appRoot, 'desktop', 'preload.js'), 'utf8');
-  const queueText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '09-queue-snapshot-autoplay.js'), 'utf8');
-  const packageText = fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8');
-  const internalBuilderText = fs.readFileSync(path.join(appRoot, 'electron-builder.internal-beta.json'), 'utf8');
-  const gitignoreText = fs.readFileSync(path.join(appRoot, '.gitignore'), 'utf8');
-  if (!/SPOTIFY_SEARCH_LIMIT_MAX\s*=\s*10/.test(spotifyText) || !/client_credentials/.test(spotifyText) || !/SPOTIFY_CLIENT_ID/.test(spotifyText) || !/SPOTIFY_CLIENT_SECRET/.test(spotifyText) || !/cleanPath/.test(spotifyText)) {
-    fail('Spotify bridge must use backend client credentials and keep the official search limit guard');
-  }
-  if (!/playbackMode:\s*'recommend-match'/.test(spotifyText) || !/provider_limited/.test(spotifyText) || !/handleSpotifySongUrl/.test(spotifyText) || !/handleSpotifyLyric/.test(spotifyText)) {
-    fail('Spotify must stay a metadata/search match source, not a fake direct audio provider');
-  }
-  if (!/require\('\.\/spotify-api'\)/.test(serverText) || !/\/api\/spotify\/status/.test(serverText) || !/\/api\/spotify\/config/.test(serverText) || !/\/api\/spotify\/search/.test(serverText) || !/\/api\/spotify\/song\/url/.test(serverText) || !/\/api\/spotify\/lyric/.test(serverText)) {
-    fail('server.js must route Spotify status/search/song-url/lyric through the backend bridge');
-  }
-  if (!/search-mode-spotify/.test(indexText) || !/tag-source\.spotify/.test(cssText) || !/spotify-source/.test(cssText)) {
-    fail('Spotify search tab and source badges must be visible in the UI');
-  }
-  if (!/PLAYBACK_QUALITY_DEFAULTS[\s\S]*spotify:\s*'standard'/.test(coreStoreText) || !/spotify:\s*\[[\s\S]*Spotify/.test(coreStoreText)) {
-    fail('Spotify must be represented as a standard match-source quality option');
-  }
-  if (!/provider === 'spotify'/.test(qualityText) || !/Spotify/.test(qualityText) || !/return 'SP'/.test(qualityText)) {
-    fail('playback quality UI must label Spotify as a match source');
-  }
-  if (!/search-mode-spotify/.test(searchText) || !/songProviderKey\(song\)[\s\S]*spotify/.test(searchText) || !/\/api\/spotify\/search/.test(searchText) || !/mergeSongSearchResults\(neteaseSongs, qqSongs, kugouSongs, qishuiSongs, spotifySongs/.test(searchText)) {
-    fail('frontend search must include Spotify in tabs, source tags, provider search, and All merge');
-  }
-  if (!/\/api\/spotify\/song\/url/.test(playbackText) || !/isSpotifyPlayback/.test(playbackText) || !/provider_limited/.test(fallbackText)) {
-    fail('Spotify playback must flow through provider_limited auto source fallback');
-  }
-  if (!/\/api\/spotify\/lyric/.test(lyricText)) {
-    fail('Spotify lyric endpoint must return a safe empty lyric response for the shared lyric pipeline');
-  }
-  if (!/spotifyId/.test(queueText) || !/spotifyUri/.test(queueText) || !/spotifyUrl/.test(queueText)) {
-    fail('Spotify queue snapshots must preserve provider ids and uri fields');
-  }
-  if (!/getSpotifyOAuthConfig/.test(spotifyText) || !/saveSpotifyConfig/.test(spotifyText) || !/buildSpotifyOAuthAuthorizeUrl/.test(spotifyText) || !/exchangeSpotifyOAuthCode/.test(spotifyText) || !/handleSpotifyStatus/.test(spotifyText) || !/handleSpotifyUserPlaylists/.test(spotifyText) || !/handleSpotifyPlaylistTracks/.test(spotifyText)) {
-    fail('Spotify bridge must expose OAuth status plus playlist and liked-track handlers');
-  }
-  if (!/user-library-read/.test(spotifyText) || !/playlist-read-private/.test(spotifyText) || !/SPOTIFY_LIKED_PLAYLIST_ID/.test(spotifyText) || !/\/me\/tracks/.test(spotifyText) || !/\/me\/playlists/.test(spotifyText) || !/\/me/.test(spotifyText)) {
-    fail('Spotify OAuth must request profile, private playlists, and Liked Songs scopes/endpoints');
-  }
-  if (!/Number\(item\.items && item\.items\.total\) \|\| Number\(item\.tracks && item\.tracks\.total\)/.test(spotifyText) || !/\/playlists\/['"]? \+ encodeURIComponent\(playlistId\) \+ ['"]?\/items/.test(spotifyText) || !/entry && \(entry\.item \|\| entry\.track\)/.test(spotifyText) || !/item\.type !== 'track'/.test(spotifyText) || !/Math\.min\(SPOTIFY_PLAYLIST_PAGE_LIMIT, Number\(opts\.limit\)/.test(spotifyText) || !/SPOTIFY_PLAYLIST_ITEMS_RESTRICTED/.test(spotifyText) || !/SPOTIFY_PLAYLIST_SCOPE_REQUIRED/.test(spotifyText)) {
-    fail('Spotify playlist sync must use the 2026 /items response, keep legacy item compatibility, cap pages at 50, and explain owner/collaborator restrictions');
-  }
-  if (/spotifyUserGet\('\/playlists\/' \+ encodeURIComponent\(playlistId\) \+ '\/tracks'/.test(spotifyText)) {
-    fail('Spotify playlist detail must not call the removed /playlists/{id}/tracks endpoint');
-  }
-  const mapPlaylistStart = spotifyText.indexOf('function mapSpotifyPlaylist');
-  const mapPlaylistEnd = spotifyText.indexOf('\nasync function buildSpotifyLikedPlaylistCard', mapPlaylistStart);
-  const mapPlaylistSandbox = {
-    normalizeText: value => String(value || '').trim(),
-    spotifyImage: images => Array.isArray(images) && images[0] && images[0].url || '',
-    Number,
-  };
-  vm.runInNewContext(spotifyText.slice(mapPlaylistStart, mapPlaylistEnd), mapPlaylistSandbox, { filename: 'spotify-playlist-map.js' });
-  const mappedPlaylist = mapPlaylistSandbox.mapSpotifyPlaylist({
-    id: 'owned-playlist',
-    name: 'Owned',
-    owner: { id: 'listener' },
-    items: { total: 321 },
-    tracks: { total: 0 },
-  }, { id: 'listener' });
-  if (!mappedPlaylist || mappedPlaylist.trackCount !== 321 || mappedPlaylist.subscribed) {
-    fail('Spotify playlist cards must read items.total and preserve owned-playlist classification');
-  }
-  const detailStart = spotifyText.indexOf('async function handleSpotifyPlaylistTracks');
-  const detailEnd = spotifyText.indexOf('\nasync function handleSpotifyAlbumDetail', detailStart);
-  let requestedPath = '';
-  let requestedParams = null;
-  let responseItem = { item: { id: 'new-track', name: 'New Track' } };
-  const detailSandbox = {
-    normalizeText: value => String(value || '').trim(),
-    handleSpotifyStatus: async () => ({ loggedIn: true, market: 'US' }),
-    spotifyUserGet: async (requestPath, params) => {
-      requestedPath = requestPath;
-      requestedParams = params;
-      return { items: [responseItem], total: 1, next: null };
-    },
-    mapSpotifyTrack: track => track ? { id: track.id, name: track.name } : null,
-    spotifyErrorDetails: error => ({ error: error && error.message || 'FAILED', message: '' }),
-    readStoredSpotifyToken: () => ({ scope: 'playlist-read-private playlist-read-collaborative' }),
-    normalizeScopes: value => String(value || '').split(/\s+/).filter(Boolean),
-    SPOTIFY_PLAYLIST_PAGE_LIMIT: 50,
-    SPOTIFY_LIKED_PLAYLIST_ID: 'spotify-liked',
-    DEFAULT_SPOTIFY_MARKET: 'US',
-    Math,
-    Number,
-    Object,
-    encodeURIComponent,
-  };
-  vm.runInNewContext(spotifyText.slice(detailStart, detailEnd), detailSandbox, { filename: 'spotify-playlist-items.js' });
-  let detail = await detailSandbox.handleSpotifyPlaylistTracks('owned-playlist', { limit: 96, offset: 0 });
-  if (requestedPath !== '/playlists/owned-playlist/items' || !requestedParams || requestedParams.limit !== 50 || !detail.tracks[0] || detail.tracks[0].id !== 'new-track') {
-    fail('Spotify playlist detail must request /items with a 50-row page and map entry.item');
-  }
-  responseItem = { track: { id: 'legacy-track', name: 'Legacy Track' } };
-  detail = await detailSandbox.handleSpotifyPlaylistTracks('legacy-playlist', { limit: 1, offset: 0 });
-  if (!detail.tracks[0] || detail.tracks[0].id !== 'legacy-track') {
-    fail('Spotify playlist detail must retain compatibility with legacy entry.track payloads');
-  }
-  if (!/\/api\/spotify\/logout/.test(serverText) || !/\/api\/spotify\/user\/playlists/.test(serverText) || !/\/api\/spotify\/playlist\/tracks/.test(serverText)) {
-    fail('server.js must route Spotify logout, user playlists, and playlist track detail endpoints');
-  }
-  if (!/SPOTIFY_LOGIN_PARTITION/.test(desktopMainText) || !/openSpotifyMusicLoginWindow/.test(desktopMainText) || !/spotify-music-open-login/.test(desktopMainText) || !/SPOTIFY_TOKEN_FILE/.test(desktopMainText) || !/127\.0\.0\.1:43879\/callback/.test(spotifyText + desktopMainText)) {
-    fail('desktop main must provide a local Spotify OAuth callback/login bridge and userData token storage');
-  }
-  if (!/openSpotifyMusicLogin/.test(desktopPreloadText) || !/clearSpotifyMusicLogin/.test(desktopPreloadText)) {
-    fail('desktop preload must expose Spotify login and clear-login IPC bridges');
-  }
-  if (!/login-provider-spotify/.test(indexText) || !/user-provider-spotify/.test(indexText) || !/account-add-spotify/.test(indexText) || !/account-source-dot\.spotify/.test(cssText) || !/account-provider-chip\.spotify/.test(cssText)) {
-    fail('Spotify login and account tabs must be visible in the UI');
-  }
-  if (!/spotifyLoginStatus/.test(coreStoreText) || !/spotifyPlaylists/.test(coreStoreText) || !/refreshSpotifyLoginStatus/.test(loginStatusText) || !/openSpotifyWebLogin/.test(loginFlowText) || !/clearSpotifyMusicLogin/.test(userModalText)) {
-    fail('frontend account state must include Spotify status, OAuth flow, playlists, and logout');
-  }
-  if (!/tokenFileExists/.test(spotifyText) || !/credentialsFileExists/.test(spotifyText) || !/localConfigMissing/.test(spotifyText) || !/fs\.existsSync/.test(spotifyText)) {
-    fail('Spotify status must distinguish configured paths from real local token/credential files');
-  }
-  if (!/localConfigMissing/.test(loginStatusText) || !/tokenFileExists/.test(loginStatusText) || !/credentialsFileExists/.test(loginStatusText) || !/submitSpotifyConfigLogin/.test(loginFlowText) || !/\/api\/spotify\/config/.test(loginFlowText) || !/粘贴 Spotify Client ID/.test(loginFlowText) || !/保存并授权/.test(loginFlowText)) {
-    fail('Spotify frontend status must surface missing local OAuth config/token and provide simple Client ID save + OAuth flow');
-  }
-  if (!/SPOTIFY_DEVELOPER_DASHBOARD_URL/.test(loginFlowText) || !/openSpotifyDeveloperDashboard/.test(loginFlowText) || !/copySpotifyRedirectUri/.test(loginFlowText) || !/Spotify 玩家接入三步/.test(loginFlowText) || !/不用填 Client Secret/.test(loginFlowText) || !/spotify-guide-panel/.test(cssText)) {
-    fail('Spotify player onboarding must stay as a short three-step guide with dashboard and redirect-copy actions');
-  }
-  if (!/loginRefreshRequestSeq/.test(loginFlowText) || !/isLoginRefreshCurrent/.test(loginFlowText)) {
-    fail('login modal provider switching must guard stale async status and QR writes');
-  }
-  if (!/\/api\/spotify\/user\/playlists/.test(playlistShellText) || !/spotifyPlaylists/.test(playlistShellText) || !/\/api\/spotify\/playlist\/tracks/.test(playlistDetailText) || !/spotify:' \+ id/.test(playlistDetailText) || !/Spotify 歌单/.test(playlistDetailText)) {
-    fail('playlist panel must merge and open Spotify playlists');
-  }
-  if (!/spotifyErrorDetails/.test(spotifyText) || !/playlistPanelNoticeHtml/.test(playlistDetailText) || !/playlistCardPriority/.test(playlistDetailText) || !/spotify-liked/.test(playlistDetailText) || !/prioritizePlaylistGroupItems/.test(playlistDetailText) || !/showToast\(r && \(r\.message \|\| r\.error\) \|\| '歌单为空'\)/.test(playlistLoadText)) {
-    fail('Spotify playlists must keep liked songs visible and surface API errors instead of pretending details are empty');
-  }
-  if (!/function playlistQueueSource/.test(playlistLoadText) || !/raw\.indexOf\('spotify:'\)/.test(playlistLoadText) || !/playlistTracksEndpoint\(source\.provider/.test(playlistLoadText)) {
-    fail('whole-playlist queue loading must support spotify: playlist ids');
-  }
-  if (!/provider === 'spotify'/.test(shelfCoreText) || !/spotify:/.test(shelfCoreText) || !/\/api\/spotify\/playlist\/tracks/.test(shelfContentText)) {
-    fail('3D shelf must display and drill into Spotify playlists through the Spotify endpoint');
-  }
-  if (!/"\*-api\.js"/.test(packageText) || !/"\*-api\.js"/.test(internalBuilderText)) {
-    fail('official and internal-beta package file lists must include root provider API modules');
-  }
-  if (!/\.spotify-credentials\.json/.test(gitignoreText) || !/spotify-credentials\.json/.test(gitignoreText) || !/\.spotify-token\.json/.test(gitignoreText) || !/spotify-token\.json/.test(gitignoreText)) {
-    fail('Spotify local credential files must stay ignored by git');
-  }
-  console.log('[OK] Spotify Web API match source is guarded across backend, UI, playback fallback, lyrics, and packaging.');
-}
-
 function checkPlaybackControlBadgesGuard() {
   logStep('Playback control source/VIP badge guard');
   const indexText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
@@ -1754,8 +1391,6 @@ function checkPlaybackControlBadgesGuard() {
   const beatPrefetchText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '03-beat', '00-tempo-worker-cache-prefetch.js'), 'utf8');
   const coreStoreText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '00-state', '00-core-stores.js'), 'utf8');
   const glassText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '15-control-glass-animations.js'), 'utf8');
-  const loginStatusText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '02-login-status.js'), 'utf8');
-  const accountUtilsText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '01-login-modal-utils.js'), 'utf8');
   const sourceSwitcherGlassOk =
     /\.control-source-switcher::before/.test(cssText) &&
     /html\.control-glass-svg-ok\s+\.control-source-switcher\s*\{[\s\S]{0,180}var\(--saved-panel-glass-filter\)/.test(cssText);
@@ -1768,8 +1403,10 @@ function checkPlaybackControlBadgesGuard() {
     /function sourceCandidateRejectReason/.test(searchText) &&
     /function findControlSourceMatchResult/.test(searchText) &&
     /function controlSourceIssueLabel/.test(searchText) &&
-    /sourceCandidateRejectReason\(song, list\[i\], target\)/.test(fallbackText) &&
-    /sourceCandidateRejectReason\(song, candidate, 'netease'\)/.test(lyricFetchText);
+    /sourceCandidateRejectReason\(reference, view, target\)/.test(fallbackText) &&
+    // T15.5b：歌词跨源兜底链（含其黑名单判定）随 lx 歌词改道退役——歌词侧不再自行换源，
+    // 负向钉桩防「把官方换源链又接回歌词」。
+    !/sourceCandidateRejectReason\(song, candidate, 'netease'\)/.test(lyricFetchText);
   if (!/control-title-text/.test(indexText) || !/control-title-badges/.test(indexText)) {
     fail('bottom player title must reserve inline spans for source and VIP badges');
   }
@@ -1831,15 +1468,7 @@ function checkPlaybackControlBadgesGuard() {
     /account-x/.test(glassText) &&
     /rgb\(128,128,128\)/.test(glassText) &&
     /controlGlassState\.accountPillKey[\s\S]{0,360}generateAccountPillGlassDisplacementMap\(width, height, radius\)/.test(glassText);
-  const accountPillVerticalStackOk =
-    /account-pill-stack/.test(loginStatusText) &&
-    /#top-right\.account-pill-stack[\s\S]{0,100}align-items:\s*flex-start/.test(cssText) &&
-    /#user-btn\.multi-account\.external-account-pills[\s\S]{0,220}flex-direction:\s*column[\s\S]{0,160}align-items:\s*flex-end/.test(cssText) &&
-    /#user-btn\.multi-account\.external-account-pills \.top-account-pill[\s\S]{0,120}width:\s*190px/.test(cssText) &&
-    /#user-btn\.multi-account\.external-account-pills \.top-account-name[\s\S]{0,120}max-width:\s*118px/.test(cssText) &&
-    /e\.clientY\s*<\s*rect\.top\s*\+\s*rect\.height\s*\/\s*2/.test(accountUtilsText) &&
-    !/e\.clientX\s*<\s*rect\.left\s*\+\s*rect\.width\s*\/\s*2/.test(accountUtilsText);
-  if (!/stellaflix-account-pill-glass-filter/.test(indexText) || !/account-pill-glass-map/.test(indexText) || !/url\(#stellaflix-account-pill-glass-filter\)/.test(cssText) || !/overflow:\s*hidden/.test(cssText) || !accountPillGlassSurfaceOk || accountPillDirectSvgFilter || !accountContainerGlassDisabledOk || !accountPillSimpleRefractionOk || !accountPillDedicatedMapOk || !accountPillVerticalStackOk || !/function updateAccountPillGlassDisplacementMap/.test(glassText) || !/accountPillKey/.test(glassText) || !/querySelectorAll\('\.top-account-pill'\)/.test(glassText) || !/requestAnimationFrame\(updateAccountPillGlassDisplacementMap\)/.test(loginStatusText)) {
+  if (!/stellaflix-account-pill-glass-filter/.test(indexText) || !/account-pill-glass-map/.test(indexText) || !/url\(#stellaflix-account-pill-glass-filter\)/.test(cssText) || !/overflow:\s*hidden/.test(cssText) || !accountPillGlassSurfaceOk || accountPillDirectSvgFilter || !accountContainerGlassDisabledOk || !accountPillSimpleRefractionOk || !accountPillDedicatedMapOk || !/function updateAccountPillGlassDisplacementMap/.test(glassText) || !/accountPillKey/.test(glassText) || !/querySelectorAll\('\.top-account-pill'\)/.test(glassText)) {
     fail('top account VIP capsules must use a dedicated glass map/filter and refresh it after account rendering');
   }
   console.log('[OK] Bottom player title shows source and VIP badges without stretching the control bar.');
@@ -1855,8 +1484,32 @@ async function checkProviderFallbackTerminalStateGuard() {
   if (!/function sourceFallbackProviderReady/.test(fallbackText) || !/status\.playbackKeyReady === true/.test(fallbackText) || !/function alternatePlaybackProviders/.test(fallbackText) || /if \(provider === 'netease'\) return 'qq'/.test(fallbackText)) {
     fail('automatic fallback must only select logged-in direct providers with complete playback authorization');
   }
-  if (!/SOURCE_FALLBACK_SEARCH_TIMEOUT_MS\s*=\s*6500/.test(fallbackText) || !/apiJson\(url, \{ timeoutMs: SOURCE_FALLBACK_SEARCH_TIMEOUT_MS \}\)/.test(fallbackText) || !/SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS\s*=\s*20000/.test(fallbackText) || !/function awaitSourceFallbackBudget/.test(fallbackText) || (playbackText.match(/timeoutMs:\s*9000/g) || []).length < 6 || (playbackText.match(/timeoutMs:\s*14000/g) || []).length < 2 || (playbackText.match(/timeoutMs:\s*15000/g) || []).length < 2) {
-    fail('fallback search, normal source resolution, and gapless source resolution must all be time-bounded');
+  function apiJsonCallExpressionAt(text, start) {
+    let depth = 0, quote = '', escaped = false;
+    for (let i = start + 7; i < text.length; i++) {
+      const c = text[i];
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (c === '\\') escaped = true;
+        else if (c === quote) quote = '';
+        continue;
+      }
+      if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+      if (c === '(') depth += 1;
+      else if (c === ')') {
+        depth -= 1;
+        if (!depth) return text.slice(start, i + 1);
+      }
+    }
+    return null;
+  }
+  let unboundedApiJsonCalls = 0;
+  for (let callAt = playbackText.indexOf('apiJson('); callAt >= 0; callAt = playbackText.indexOf('apiJson(', callAt + 8)) {
+    const callExpr = apiJsonCallExpressionAt(playbackText, callAt);
+    if (!callExpr || !/timeoutMs:/.test(callExpr)) unboundedApiJsonCalls += 1;
+  }
+  if (!/LX_SOURCE_SEARCH_TIMEOUT_MS\s*=\s*22000/.test(fallbackText) || !/apiJson\(url, \{ timeoutMs: LX_SOURCE_SEARCH_TIMEOUT_MS \}\)/.test(fallbackText) || !/SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS\s*=\s*20000/.test(fallbackText) || !/function awaitSourceFallbackBudget/.test(fallbackText) || unboundedApiJsonCalls !== 0 || (playbackText.match(/timeoutMs:\s*15000/g) || []).length < 1) {
+    fail('fallback search, normal source resolution, and gapless source resolution must all be time-bounded (T15.5b: lx 预算取代官方 6500ms 档)');
   }
   if (!/alternateData[\s\S]{0,220}!alternateData\.url[\s\S]{0,320}playQueue\[idx\] = committedCandidate/.test(fallbackText) || !/fallbackStarted === true[\s\S]{0,180}已自动切换音源/.test(fallbackText) || !/function restoreSourceFallbackQueueItem/.test(fallbackText)) {
     fail('fallback candidates must be URL-probed before provisional commit and only announce success after audible playback');
@@ -1870,186 +1523,18 @@ async function checkProviderFallbackTerminalStateGuard() {
   if (!/AUDIO_PLAY_REQUEST_TIMEOUT_MS\s*=\s*9000/.test(controlsText) || !/function awaitMediaPlayWithTimeout/.test(controlsText) || (controlsText.match(/awaitMediaPlayWithTimeout\(/g) || []).length < 5 || !/function playbackMediaMatchesCurrentQueueItem/.test(controlsText)) {
     fail('media.play promises must be time-bounded and manual resume must reject stale audio ownership');
   }
-  if (!/function probePlaybackAudioUrl/.test(serverText) || !/AUDIO_URL_PROBE_BYTES\s*=\s*8192/.test(serverText) || !/function audioProbeMagic/.test(serverText) || !/audioProxyHeadersFor\(audioUrl, 'bytes=0-'/.test(serverText) || !/&& !!magic/.test(serverText) || !/function probeQQAudioUrl/.test(serverText) || !/probe\.ok/.test(serverText) || !/function readStreamChunkWithTimeout/.test(serverText) || !/fetchWithTimeout\(audioUrl, \{ headers: hdr \}, 9000\)/.test(serverText)) {
-    fail('provider URL resolution and the audio proxy must verify real upstream bytes with bounded connection and stream waits');
-  }
-  const magicStart = serverText.indexOf('function audioProbeMagic');
-  const magicEnd = serverText.indexOf('async function probePlaybackAudioUrl', magicStart);
-  const magicSandbox = { Buffer };
-  vm.runInNewContext(serverText.slice(magicStart, magicEnd), magicSandbox, { filename: 'audio-probe-magic.js' });
-  if (magicSandbox.audioProbeMagic(Buffer.from('ID3\u0004\u0000\u0000', 'binary')) !== 'mp3-id3' || magicSandbox.audioProbeMagic(Buffer.from('fLaC0000', 'ascii')) !== 'flac' || magicSandbox.audioProbeMagic(Buffer.alloc(1024, 0x41)) !== '') {
-    fail('audio byte probe must accept known media headers and reject MIME-only garbage bytes');
-  }
-  const neteaseMatchNoticePos = playbackText.indexOf('data.sourceMatch && !song.neteaseSourceMatchNotified');
-  const networkPlaybackFailurePos = playbackText.lastIndexOf('if (!playbackStarted)');
-  const serverBudget = Number((serverText.match(/NETEASE_SONG_URL_TOTAL_BUDGET_MS\s*=\s*(\d+)/) || [])[1] || 0);
-  const playbackBudget = 14000;
-  if (
-    !/function neteasePlaybackMatchQuery/.test(playbackText)
-    || (playbackText.match(/neteasePlaybackMatchQuery\(song\)/g) || []).length < 2
-    || !/song\.resolvedNeteaseId\s*=/.test(playbackText)
-    || !/data && data\.sourceMatch/.test(playbackText)
-    || neteaseMatchNoticePos < 0
-    || neteaseMatchNoticePos < networkPlaybackFailurePos
-    || !/async function retryNeteaseSourceMatchPlayback/.test(playbackText)
-    || !/excludeIds: triedIds, skipDirect: true/.test(playbackText)
-    || !/matchedPlaybackFallback = await tryAutoPlaybackFallback/.test(playbackText)
-    || !/neteasePlaybackMatchQuery\(song\)/.test(beatPrefetchText)
-    || !/timeoutMs:\s*14000/.test(beatPrefetchText)
-    || !/async function findNeteaseSameTrackCandidates/.test(serverText)
-    || !/cloudsearch\(\{ keywords: query, type: 1, limit: 16, cookie: userCookie \}\)/.test(serverText)
-    || !/song_detail\(\{ ids: \[\.\.\.new Set\(detailIds\)\]\.join\(','\), cookie: userCookie \}\)/.test(serverText)
-    || !/sourceVersions\.join\('\|'\) !== candidateVersions\.join\('\|'\)/.test(serverText)
-    || !/function neteaseSourceMatchArtistSetEqual/.test(serverText)
-    || !/function mergeNeteaseSourceMatchSong/.test(serverText)
-    || !/fingerprintMatches/.test(serverText)
-    || !/async function resolveNeteaseSameTrackPlayback/.test(serverText)
-    || !/source: 'netease-same-track'/.test(serverText)
-    || !/netease_same_recording/.test(serverText)
-    || !/netease_official_alternate/.test(serverText)
-    || !/netease_same_track_metadata/.test(serverText)
-    || !/noCopyrightRcmd/.test(serverText)
-    || !/sourceMatchTriedIds/.test(serverText)
-    || !/getPlaybackLoginInfo/.test(serverText)
-    || serverBudget <= 0
-    || serverBudget + 800 >= playbackBudget
-    || !/handleSongUrl\(sid, loginInfo, quality, matchHints\)/.test(serverText)
-  ) {
-    fail('Netease unavailable tracks must exhaust bounded same-track candidates while preserving the original queue item');
-  }
-  const matchQueryStart = playbackText.indexOf('function neteasePlaybackMatchQuery');
-  const matchQueryEnd = playbackText.indexOf('function clearNeteaseSourceMatchMetadata', matchQueryStart);
-  const matchQuerySandbox = { Array, String, encodeURIComponent };
-  vm.runInNewContext(playbackText.slice(matchQueryStart, matchQueryEnd), matchQuerySandbox, { filename: 'netease-playback-match-query.js' });
-  const querySong = { id: 'song-1', name: 'Fossils', artist: 'acloudyskye' };
-  const noOptsQuery = new URLSearchParams(matchQuerySandbox.neteasePlaybackMatchQuery(querySong).replace(/^&/, ''));
-  const arrayOptsQuery = new URLSearchParams(matchQuerySandbox.neteasePlaybackMatchQuery(querySong, { excludeIds: ['candidate-a', 'candidate-b'] }).replace(/^&/, ''));
-  const stringOptsQuery = new URLSearchParams(matchQuerySandbox.neteasePlaybackMatchQuery(querySong, { excludeIds: 'candidate-c,candidate-d' }).replace(/^&/, ''));
-  const sparseQuery = new URLSearchParams(matchQuerySandbox.neteasePlaybackMatchQuery({ id: 'sparse-song' }).replace(/^&/, ''));
-  if (
-    noOptsQuery.get('excludeIds') !== ''
-    || arrayOptsQuery.get('excludeIds') !== 'candidate-a,candidate-b'
-    || stringOptsQuery.get('excludeIds') !== 'candidate-c,candidate-d'
-    || sparseQuery.get('artist') !== ''
-    || sparseQuery.get('artistIds') !== ''
-    || sparseQuery.get('artistNames') !== ''
-    || sparseQuery.get('excludeIds') !== ''
-  ) {
-    fail('Netease playback match query must safely normalize missing, array, and string excludeIds values');
+  if (!/function readStreamChunkWithTimeout/.test(serverText) || !/function audioProxyHeadersFor/.test(serverText) || !/audioProxyHeadersFor\(audioUrl, range\)/.test(serverText) || !/readStreamChunkWithTimeout\(reader,/.test(serverText)) {
+    fail('the audio proxy must keep bounded upstream connection and stream reads');
   }
   if (/apis\.netstart\.cn|\/simi\/song|simi_song/.test([serverText, playbackText, fallbackText].join('\n'))) {
     fail('production playback must not depend on the public documentation host or use unrelated Netease recommendation results');
   }
-  const handleSongUrlStart = serverText.indexOf('async function handleSongUrl');
-  const handleSongUrlEnd = serverText.indexOf('\n}', handleSongUrlStart);
-  const handleSongUrlText = serverText.slice(handleSongUrlStart, handleSongUrlEnd);
-  const directResolvePos = handleSongUrlText.indexOf('resolveNeteaseDirectSongUrl');
-  const directReturnPos = handleSongUrlText.indexOf('if (direct && direct.url && !direct.trial) return direct');
-  const sameTrackResolvePos = handleSongUrlText.indexOf('resolveNeteaseSameTrackPlayback');
-  if (directResolvePos < 0 || directReturnPos <= directResolvePos || sameTrackResolvePos <= directReturnPos) {
-    fail('Netease direct playback must return before same-track search, and same-track search must finish before cross-provider fallback');
+  // 批 T18：官方直链取址与站内同曲匹配整条退役——钉桩防「把官方链又接回来」。
+  if (/handleSongUrl|resolveNeteaseDirectSongUrl|neteasePlaybackMatchQuery|retryNeteaseSourceMatchPlayback/.test(serverText + playbackText)
+    || /neteasePlaybackMatchQuery\(song\)/.test(beatPrefetchText)
+    || !/fetchBeatPrefetchAudioUrl\(song\)/.test(beatPrefetchText)) {
+    fail('official direct-link and Netease same-track playback must stay retired; beat prefetch must resolve through the lx audio URL helper');
   }
-  const matcherStart = serverText.indexOf('function neteaseSourceMatchText');
-  const matcherEnd = serverText.indexOf('function neteaseSourceMatchCacheKey', matcherStart);
-  if (matcherStart < 0 || matcherEnd <= matcherStart) fail('Netease same-recording matcher source is incomplete');
-  const matcherSandbox = {};
-  vm.runInNewContext(serverText.slice(matcherStart, matcherEnd), matcherSandbox, { filename: 'netease-source-match-helpers.js' });
-  const matchSource = {
-    id: 441102546,
-    name: 'I Was King',
-    dt: 238826,
-    ar: [{ id: 20878, name: 'ONE OK ROCK' }],
-    h: { br: 320000, size: 9555636, sr: 44100 },
-    m: { br: 192000, size: 5733399, sr: 44100 },
-    l: { br: 128000, size: 3822280, sr: 44100 },
-  };
-  const exactDuplicate = {
-    id: 1931495429,
-    name: 'I Was King',
-    dt: 238826,
-    ar: [{ id: 20878, name: 'ONE OK ROCK' }],
-    h: { br: 320000, size: 9555636, sr: 44100 },
-    m: { br: 192000, size: 5733399, sr: 44100 },
-    l: { br: 128000, size: 3822280, sr: 44100 },
-    __privilege: { pl: 320000, plLevel: 'exhigh' },
-  };
-  const liveVersion = Object.assign({}, exactDuplicate, { id: 9991, name: 'I Was King (Live)' });
-  const wrongArtist = Object.assign({}, exactDuplicate, { id: 9992, ar: [{ id: 1, name: 'Someone Else' }] });
-  const collaborationSource = { id: 2001, name: 'Same Song', dt: 200000, ar: [{ id: 11, name: 'A' }, { id: 12, name: 'B' }] };
-  const partialCollaboration = { id: 2002, name: 'Same Song', dt: 200180, ar: [{ id: 11, name: 'A' }, { id: 13, name: 'C' }] };
-  const taylorSource = { id: 3001, name: 'Love Story', dt: 235000, ar: [{ id: 44266, name: 'Taylor Swift' }] };
-  const taylorVersion = { id: 3002, name: "Love Story (Taylor's Version)", dt: 235200, ar: [{ id: 44266, name: 'Taylor Swift' }] };
-  const metadataReencode = { id: 3003, name: 'Love Story', dt: 235213, ar: [{ id: 44266, name: 'Taylor Swift' }] };
-  const popMix = { id: 3004, name: 'Love Story (Pop Mix)', dt: 235400, ar: [{ id: 44266, name: 'Taylor Swift' }] };
-  const officialAlternate = { id: 3005, name: 'Love Story', dt: 236067, ar: [{ id: 44266, name: 'Taylor Swift' }], __officialSourceMatch: true };
-  const unofficialLongDrift = Object.assign({}, officialAlternate, { id: 3006, __officialSourceMatch: false });
-  if (
-    matcherSandbox.neteaseSourceMatchFingerprintCount(matchSource, exactDuplicate) < 3
-    || matcherSandbox.neteaseSourceMatchCandidateScore(matchSource, exactDuplicate) <= 0
-    || matcherSandbox.neteaseSourceMatchCandidateScore(matchSource, liveVersion) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(matchSource, wrongArtist) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(collaborationSource, partialCollaboration) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, taylorVersion) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, metadataReencode) <= 0
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, popMix) !== -1
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, officialAlternate) <= 0
-    || matcherSandbox.neteaseSourceMatchCandidateScore(taylorSource, unofficialLongDrift) !== -1
-  ) {
-    fail('Netease matching must accept exact/re-encoded tracks and reject live, re-recorded, wrong-artist, or partial-collaboration candidates');
-  }
-  const mergeStart = serverText.indexOf('function neteaseSourceMatchHintArtists');
-  const mergeEnd = serverText.indexOf('async function findNeteaseSameTrackCandidates', mergeStart);
-  vm.runInNewContext(serverText.slice(mergeStart, mergeEnd), matcherSandbox, { filename: 'netease-source-match-merge.js' });
-  const mergedGraySong = matcherSandbox.mergeNeteaseSourceMatchSong(
-    { id: 4001, name: '', ar: [], al: {}, dt: 238826 },
-    { id: 4001, name: 'I Was King', ar: [{ id: 20878, name: 'ONE OK ROCK' }], al: { name: 'Ambitions' }, dt: 238826 },
-    { artistIds: '20878', artistNames: 'ONE OK ROCK', album: 'Ambitions' }
-  );
-  if (mergedGraySong.name !== 'I Was King' || !mergedGraySong.ar.length || mergedGraySong.ar[0].id !== 20878 || mergedGraySong.al.name !== 'Ambitions') {
-    fail('gray Netease song details must be hydrated from search results and frontend metadata');
-  }
-  const applyStart = playbackText.indexOf('function clearNeteaseSourceMatchMetadata');
-  const applyEnd = playbackText.indexOf('function neteaseSourceMatchTriedIds', applyStart);
-  const applySandbox = { Number };
-  vm.runInNewContext(playbackText.slice(applyStart, applyEnd), applySandbox, { filename: 'netease-source-match-metadata.js' });
-  const originalQueueSong = { provider: 'netease', id: 'original-1', name: 'Original', artist: 'Artist', album: 'Album', cover: 'cover.jpg' };
-  const originalIdentity = JSON.stringify(originalQueueSong);
-  applySandbox.applyNeteaseSourceMatchMetadata(originalQueueSong, { sourceMatch: true, resolvedNeteaseId: 'playable-2', source: 'netease-same-track', matchKind: 'netease_same_recording', matchedSong: { album: 'Other Release' } });
-  if (originalQueueSong.id !== 'original-1' || originalQueueSong.provider !== 'netease' || originalQueueSong.name !== 'Original' || originalQueueSong.artist !== 'Artist' || originalQueueSong.album !== 'Album' || originalQueueSong.cover !== 'cover.jpg' || originalQueueSong.resolvedNeteaseId !== 'playable-2' || originalIdentity === JSON.stringify(originalQueueSong)) {
-    fail('Netease source-match metadata must annotate playback without replacing original queue identity, cover, lyrics context, or album');
-  }
-  const retryStart = playbackText.indexOf('function neteaseSourceMatchTriedIds');
-  const retryEnd = playbackText.indexOf('async function resolveAlbumGaplessPlaybackData', retryStart);
-  const retrySandbox = {
-    Array,
-    Object,
-    Math,
-    Number,
-    String,
-    console,
-    encodeURIComponent,
-    trackSwitchToken: 7,
-    neteasePlaybackMatchQuery(song, opts) {
-      retrySandbox.matchQuery = { song, opts };
-      return '&excludeIds=' + encodeURIComponent((opts.excludeIds || []).join(',')) + '&skipDirect=1';
-    },
-    async apiJson(url) {
-      retrySandbox.retryUrl = url;
-      return { sourceMatch: true, url: 'https://candidate-b.invalid/audio', resolvedNeteaseId: 'candidate-b', sourceMatchTriedIds: ['candidate-a', 'candidate-b'] };
-    },
-    async playQueueAt(idx, opts) {
-      retrySandbox.trackSwitchToken += 1;
-      retrySandbox.retryPlayback = { idx, opts };
-      return true;
-    },
-  };
-  vm.runInNewContext(playbackText.slice(retryStart, retryEnd), retrySandbox, { filename: 'netease-source-match-retry.js' });
-  const retrySong = { provider: 'netease', id: 'original-1', name: 'Original', artist: 'Artist' };
-  const retryResult = await retrySandbox.retryNeteaseSourceMatchPlayback(retrySong, { sourceMatch: true, resolvedNeteaseId: 'candidate-a', sourceMatchTriedIds: ['candidate-a'] }, 0, 7, {}, 'standard');
-  if (retryResult !== true || retrySong.id !== 'original-1' || !retrySandbox.matchQuery || retrySandbox.matchQuery.opts.excludeIds[0] !== 'candidate-a' || !retrySandbox.matchQuery.opts.skipDirect || !retrySandbox.retryPlayback || retrySandbox.retryPlayback.opts.preResolvedPlaybackData.resolvedNeteaseId !== 'candidate-b') {
-    fail('failed browser decode must exclude the first Netease candidate, retry the next candidate, and keep the original queue identity');
-  }
-
   const status = {
     netease: { loggedIn: true },
     qq: { loggedIn: false, playbackKeyReady: false },
@@ -2228,9 +1713,7 @@ function checkSearchGlassEntranceGuard() {
     /SEARCH_HISTORY_STORE_VERSION\s*=\s*3/.test(searchText) &&
     /return \{ version: SEARCH_HISTORY_STORE_VERSION, items: \[\] \}/.test(searchText) &&
     /function readSearchHistory\(\)\s*\{[\s\S]{0,120}\.items\.slice\(\)/.test(searchText) &&
-    /function runSearchHistory\(q\)/.test(searchText) &&
-    /function doPodcastSearch\(q\)[\s\S]{0,700}rememberSearchQuery\(q\)/.test(searchText) &&
-    /if \(!renderSearchHistory\(\) && searchMode === 'podcast'\) loadPodcastHot\(\)/.test(searchText) &&
+    searchText.includes('function runSearchHistory(q)') &&
     !/data-history-mode/.test(searchText);
   const searchBoxFilterText = (indexText.match(/<filter id="stellaflix-search-box-glass-filter"[\s\S]*?<\/filter>/) || [''])[0];
   const searchPillFilterText = (indexText.match(/<filter id="stellaflix-search-pill-glass-filter"[\s\S]*?<\/filter>/) || [''])[0];
@@ -2304,7 +1787,7 @@ function checkSearchGlassEntranceGuard() {
     /if \(!searchGlassReady\)\s*\{[\s\S]*?scheduleSearchPeekAfterGlassReady\(el\)[\s\S]*?return;[\s\S]*?\}/.test(peekText) &&
     /\(saOn \|\| isSearchPeekRevealPending\(\)\) && !emptyHomeActive/.test(peekText);
   if (!searchHistorySharedAcrossTabsOk) {
-    fail('search history must stay shared across All, provider, and Podcast tabs');
+    fail('search history must stay shared across the All and provider tabs');
   }
   if (!searchPillDirectSvg || !searchAreaKeepsGlassComposited || !searchBoxUsesSavedRgbGlassSurface || !searchTabsRailStaysTransparent || !searchHistoryFrostedSurfaceOk || !searchResultsFrostedSurfaceOk || !searchProviderCapabilityFilterOk || !searchFusionRankingOk || !searchBoxFilterMatchesSavedRgbGlass || !searchPillSvgOk || !searchGlassUsesSavedRgbMapOk || !searchGlassPrewarmOk || !setPeekPreparesBeforeShow) {
     fail('search glass must use the saved RGB SVG surface and reveal only by opacity/transform');
@@ -2312,182 +1795,11 @@ function checkSearchGlassEntranceGuard() {
   console.log('[OK] Search glass uses the saved RGB SVG surface and is composited before the search panel appears.');
 }
 
-function checkProviderEntitlementBoundaryGuard() {
-  logStep('Provider entitlement boundary guard');
-  const kugouText = fs.readFileSync(path.join(appRoot, 'kugou-api.js'), 'utf8');
-  const qishuiText = fs.readFileSync(path.join(appRoot, 'qishui-api.js'), 'utf8');
-  const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
-  const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
-  const loginText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '02-login-status.js'), 'utf8');
-  const userModalText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '04-user-modal-logout.js'), 'utf8');
-  const playbackText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '13-playback-start-audio.js'), 'utf8');
-  if (/rememberKugouPlaybackVipEvidence|mergeKugouPlaybackVipEvidence|premium-quality-playback|member-track-playback/.test(kugouText)) {
-    fail('Kugou playback success must never be promoted into account membership evidence');
-  }
-  if (!/function normalizeKugouVipPayloadV2/.test(kugouText) ||
-      /\/vip\|member\|music_pack\//.test(kugouText) ||
-      /const vipText = Object\.keys/.test(kugouText) ||
-      !/const apiMembershipKnown = apiStates\.length > 0/.test(kugouText) ||
-      !/membershipVerified:\s*apiMembershipKnown/.test(kugouText) ||
-      !/const isWebRolePayload = membershipOrigin === 'kugou-web-roleinfo'/.test(kugouText) ||
-      !/const freshMembershipSource = isWebRolePayload \? 'kugou-web-roleinfo' : 'kugou-vip-api'/.test(kugouText) ||
-      !/membershipSource:\s*apiMembershipKnown[\s\S]*?freshMembershipSource[\s\S]*?'kugou-cookie-hint'/.test(kugouText)) {
-    fail('Kugou membership must come from account-scoped API entitlement records; cookies may only provide a non-authoritative hint');
-  }
-  if (!/function kugouPlaybackCacheScope/.test(kugouText) ||
-      !/kugouPlaybackCacheScope\(auth, membership\)/.test(kugouText) ||
-      !/function kugouVipCacheKey/.test(kugouText) ||
-      !/crypto\.createHash\('sha256'\)\.update\(identity\)\.digest\('hex'\)/.test(kugouText) ||
-      !/rights\.canPlaySvipTracks[\s\S]{0,180}rights\.canPlayVipTracks[\s\S]{0,180}rights\.canPlayMusicPackageTracks/.test(kugouText)) {
-    fail('Kugou membership and URL resolution caches must be isolated by the full account identity and verified entitlement tier');
-  }
-  if (!/kugouPlaybackParamsRequireVip\(params\)/.test(kugouText) ||
-      !/const canAttemptMemberTrack = membershipRights\.canPlayVipTracks[\s\S]{0,100}membershipRights\.canPlayMusicPackageTracks/.test(kugouText) ||
-      !/memberTrack && !canAttemptMemberTrack/.test(kugouText) ||
-      !/function kugouMembershipRights/.test(kugouText) ||
-      !/function kugouEffectiveQuality/.test(kugouText) ||
-      !/if \(!rights\.canPlayVipTracks\) return 'standard'/.test(kugouText)) {
-    fail('Kugou member tracks and premium qualities must be denied or downgraded for ordinary accounts');
-  }
-  if (!/api\/kugou\/song\/url/.test(serverText) || !/api\/qishui\/song\/url/.test(serverText) ||
-      !/onlyVipPlayable/.test(serverText) || !/privilege/.test(serverText) || !/fee/.test(serverText) ||
-      !/qqPlaybackEvidenceQuery\(song\) \+ qualityParam/.test(playbackText)) {
-    fail('Kugou and Qishui playback requests must carry track entitlement hints through the server boundary');
-  }
-  if (!/function qishuiMembershipFromData/.test(qishuiText) ||
-      !/function qishuiTrackRequiresVip/.test(qishuiText) ||
-      !/function qishuiStreamRequiredTier/.test(qishuiText) ||
-      !/function qishuiRequiredTierAllowed/.test(qishuiText) ||
-      !/QISHUI_TRACK_SVIP_KEYS/.test(qishuiText) ||
-      !/function qishuiApplyMembershipObservation/.test(qishuiText) ||
-      !/membership_unknown/.test(qishuiText) ||
-      !/vip_required/.test(qishuiText)) {
-    fail('Qishui must strictly separate account membership from track-level VIP/SVIP restrictions and retain only bounded official evidence');
-  }
-  if (!/verifiedMembership/.test(loginText) ||
-      !/membershipSource === 'kugou-vip-api'/.test(loginText) ||
-      !/applyKugouPlaybackStatusEvidence\(data\)/.test(playbackText)) {
-    fail('Kugou playback responses may update badges only when they carry verified membership API state');
-  }
-  if (!/\.kugou-vip-evidence\.json/.test(mainText) || !/unlink/.test(mainText)) {
-    fail('Startup migration must delete deprecated persisted Kugou playback evidence for existing users');
-  }
-  if (!/kgVipLevel === 'svip'/.test(userModalText) || !/酷狗 SVIP 会员/.test(userModalText)) {
-    fail('Kugou account modal must distinguish SVIP from normal VIP');
-  }
-  console.log('[OK] Provider account membership and per-track playback entitlement remain separated.');
-}
-
-function checkQQVipStatusSyncGuard() {
-  logStep('QQ VIP status refresh guard');
-  const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
-  const vipModuleText = fs.readFileSync(path.join(appRoot, 'qq-vip-api.js'), 'utf8');
-  const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
-  const preloadText = fs.readFileSync(path.join(appRoot, 'desktop', 'preload.js'), 'utf8');
-  const loginStatusText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '02-login-status.js'), 'utf8');
-  const loginFlowText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '03-login-modal-flows.js'), 'utf8');
-  const accountUtilsText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '01-login-modal-utils.js'), 'utf8');
-  const userModalText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '04-user-modal-logout.js'), 'utf8');
-  const playbackText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '13-playback-start-audio.js'), 'utf8');
-  const startupText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '10-shell', '05-startup-bindings.js'), 'utf8');
-  const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
-
-  if (!/function fetchQQVipStatus/.test(serverText) || !/SRFVipQuery_V2/.test(serverText) || !/QQ_VIP_INFO_CACHE_TTL_MS/.test(serverText) || !/forceVip/.test(serverText) || !/vipCheckedAt/.test(serverText)) {
-    fail('QQ login status must include an explicit forceable VIP probe instead of relying only on profile fields');
-  }
-  if (!/function refreshQQConfiguredCookieStore/.test(serverText) || /function getQQLoginInfo[\s\S]{0,220}refreshConfiguredCookieStores\(true\)/.test(serverText)) {
-    fail('QQ force refresh must only reload QQ cookies and must not refresh Qishui/Kugou/Netease stores');
-  }
-  if (!/function normalizeQQVipPayload/.test(serverText) || !/qqVipObjectLooksExpired/.test(serverText) || !/vipProbeAvailable/.test(serverText) ||
-      !/decision:\s*'unknown'/.test(vipModuleText) || !/resolveQQVipFromProbes/.test(vipModuleText)) {
-    fail('QQ VIP status must normalize active, expired, VIP, and SVIP signals before exposing badges');
-  }
-  if (!/Promise\.allSettled\(probes\.map/.test(vipModuleText) ||
-      !/qqVipSessionCacheKey/.test(serverText) ||
-      /qqVipInfoCache\.get\(uin\)/.test(serverText)) {
-    fail('QQ VIP probes must all settle and cache results by the current account session fingerprint');
-  }
-  if (/vipEvidence:\s*playbackVipEvidence/.test(serverText) || /member-track-playback/.test(serverText) ||
-      !/function qqPlaybackShowsMemberAccess[\s\S]{0,260}return false;/.test(loginStatusText)) {
-    fail('QQ song hints and successful playback must not be promoted into persistent account VIP evidence');
-  }
-  if (!/function refreshQQVipStatusNow/.test(loginStatusText) || !/function qqLoginNeedsAuthorizationRefresh/.test(loginStatusText) || !/function qqMembershipNeedsSync/.test(loginStatusText) || !/forceVip=1/.test(loginStatusText) || !/window\.addEventListener\('focus'/.test(loginStatusText) || !/visibilitychange/.test(loginStatusText)) {
-    fail('QQ frontend must force VIP refresh on manual refresh and foreground return');
-  }
-  if (!/membershipKnown !== true/.test(loginStatusText) ||
-      !/Object\.assign\(\{\}, qqLoginStatus,[\s\S]{0,180}membershipStale:\s*true/.test(loginStatusText) ||
-      /mergeQQPlaybackVipEvidence\(Object\.assign/.test(loginStatusText)) {
-    fail('QQ frontend must keep last-known-good membership on transient failures and show unknown membership as pending');
-  }
-  if (!/openQQMusicLoginWindow\(owner, options\)/.test(mainText) ||
-      !/const initialCookie = await readQQLoginCookieHeader\(cookieSession\);[\s\S]{0,220}qqCookieHasPlaybackLogin\(initialCookie\)[\s\S]{0,260}options\.forceReauth/.test(mainText) ||
-      !/options\.forceReauth[\s\S]{0,180}clearStorageData/.test(mainText) ||
-      !/openQQMusicLogin:\s*\(options\)/.test(preloadText) ||
-      !/forceReauth:\s*!!\(qqLoginStatus && qqLoginStatus\.authorizationIncomplete && qqLoginStatus\.playbackKeyReady === false\)/.test(loginFlowText) ||
-      /forceReauth:\s*!!\(qqLoginStatus && qqLoginStatus\.loggedIn\)/.test(loginFlowText)) {
-    fail('QQ reauthorization must only clear an explicitly incomplete playback session, never every logged-in session');
-  }
-  if (!/function isTrustedQQLoginUrl/.test(mainText) ||
-      !/action:\s*'allow'[\s\S]{0,500}partition:\s*QQ_LOGIN_PARTITION/.test(mainText) ||
-      !/playbackFinalizePending[\s\S]{0,700}setTimeout\(resolveDelay,\s*450\)/.test(mainText) ||
-      !/const showLoginWindow = \(\) =>[\s\S]{0,260}loginWindow\.show\(\)/.test(mainText) ||
-      !/showWatchdog = setTimeout\(showLoginWindow,\s*2500\)/.test(mainText) ||
-      !/const loadQQOfficialLoginEntry = async \(\) =>[\s\S]{0,700}cookieSession\.clearCache\(\)[\s\S]{0,420}QQ_LOGIN_FALLBACK_URL/.test(mainText) ||
-      /loginWindow\.loadURL\('https:\/\/y\.qq\.com\/n\/ryqq\/player'\)/.test(mainText) ||
-      !/function qqLoginCompletionFromCookie[\s\S]{0,500}QQ_PLAYBACK_AUTH_INCOMPLETE/.test(mainText) ||
-      !/resolve\(qqLoginCompletionFromCookie\(cookie\)\)/.test(mainText)) {
-    fail('QQ OAuth must stay in its official window, keep trusted popups on one partition, and reject web-only partial sessions');
-  }
-  if (!/async function fetchQQVipStatus[\s\S]{0,220}const musicKey = qqCookiePlaybackKey\(cookieObj\)/.test(serverText) ||
-      !/async function handleQQSongUrl[\s\S]{0,500}const playbackKey = qqCookiePlaybackKey\(cookieObj\);\s*const musicKey = playbackKey;/.test(serverText) ||
-      !/if \(!qqCookieUin\(obj\) \|\| !qqCookiePlaybackKey\(obj\)\)/.test(serverText) ||
-      !/function qqCookieUin[\s\S]{0,180}!!obj\.wxopenid[\s\S]{0,180}obj\.wxuin/.test(serverText)) {
-    fail('QQ VIP and vkey requests must use a strict QQ Music playback key and must not persist p_skey-only sessions');
-  }
-  if (!/cookieIsExpired/.test(mainText) || !/qqLoginCookieCandidateScore/.test(mainText) ||
-      !/QQ_VKEY_REQUEST_TIMEOUT_MS = 6000/.test(serverText) ||
-      !/QQ_AUDIO_PROBE_TOTAL_MS = 6200/.test(serverText) ||
-      (playbackText.match(/timeoutMs: 15000/g) || []).length < 2) {
-    fail('QQ cookie selection and end-to-end playback timeout budgets must be deterministic and aligned');
-  }
-  if (!/providerVipAuditSameUser/.test(loginStatusText) || !/已同步/.test(loginStatusText)) {
-    fail('provider VIP audit must detect normal-to-VIP sync as well as VIP loss');
-  }
-  if (!/qqLoginStatusText/.test(loginFlowText) || !/qqNeedsMembershipSync/.test(loginFlowText) || !/同步会员/.test(loginFlowText) || !/重新打开官方窗口同步会员/.test(loginFlowText) ||
-      !/qqNeedsAuthRefresh \? openQQWebLogin : \(qqLoginStatus\.loggedIn \? refreshQr : openQQWebLogin\)/.test(loginFlowText) ||
-      /qqNeedsAuthRefresh \|\| qqNeedsMembershipSync/.test(loginFlowText)) {
-    fail('QQ login panel must reauthorize only missing playback credentials and use the forceVip status probe for membership sync');
-  }
-  if (!/pendingQQSync/.test(accountUtilsText) || !/待同步/.test(accountUtilsText) || !/\.top-account-vip\.pending/.test(cssText)) {
-    fail('QQ top account badge must show pending sync instead of ordinary account when membership auth is stale');
-  }
-  if (!/refreshQQLoginStatus\(\{ forceVip: true, reason: 'startup' \}\)/.test(startupText)) {
-    fail('startup must force a QQ VIP status recheck so renewed memberships sync immediately');
-  }
-  if (!/QQ SVIP 会员/.test(userModalText) || !/QQ 会员待同步/.test(userModalText) || !/refreshQQVipStatusNow\('account-modal'\)/.test(userModalText)) {
-    fail('account modal must distinguish QQ SVIP and refresh QQ membership when opened');
-  }
-  console.log('[OK] QQ membership status can be force-refreshed after renewals.');
-}
-
 async function checkProviderAuthCookiePathGuard() {
-  logStep('Provider auth cookie path guard');
+  logStep('Local server startup path guard');
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
   const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
-  const qqLoginText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '03-login-modal-flows.js'), 'utf8');
-  const accountUtilsText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '01-login-modal-utils.js'), 'utf8');
-  const playlistLoadText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '03-podcast-playlist-loaders.js'), 'utf8');
-  const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
 
-  if (!/function getCookieFile\(\)/.test(serverText) || !/function getQQCookieFile\(\)/.test(serverText) || !/function getKugouCookieFile\(\)/.test(serverText) || !/function getQishuiCookieFile\(\)/.test(serverText)) {
-    fail('provider cookie files must be resolved lazily after Electron sets userData env paths');
-  }
-  if (/const\s+(COOKIE_FILE|QQ_COOKIE_FILE|KUGOU_COOKIE_FILE|QISHUI_COOKIE_FILE)\s*=\s*process\.env\./.test(serverText)) {
-    fail('server.js must not capture provider cookie env paths in startup constants');
-  }
-  if (!/configuredCookieStores/.test(serverText) || !/refreshConfiguredCookieStores\(false\)/.test(serverText) || !/saveConfiguredCookieStore/.test(serverText)) {
-    fail('server.js must refresh and save provider cookie stores through the configured userData paths');
-  }
   if (!/function ensureLocalServerStarted\(\)/.test(mainText) || !/function configureLocalServerEnvironment\(port\)/.test(mainText) || !/delete require\.cache\[require\.resolve\(serverModulePath\)\]/.test(mainText)) {
     fail('Electron main must configure auth storage env paths before requiring server.js');
   }
@@ -2538,151 +1850,7 @@ async function checkProviderAuthCookiePathGuard() {
   if (singleInstanceBranch < 0 || mainText.slice(0, singleInstanceBranch).includes(startupStateCall) || !mainText.slice(singleInstanceBranch).includes(startupStateCall)) {
     fail('Secondary instances must quit before they can overwrite the primary startup-state.json');
   }
-  if (!/function qqLoginCompletionFromCookie[\s\S]{0,420}partial:\s*true[\s\S]{0,160}QQ_PLAYBACK_AUTH_INCOMPLETE/.test(mainText) ||
-      !/resolve\(qqLoginCompletionFromCookie\(cookie\)\)/.test(mainText) ||
-      /partial:\s*true,\s*cookie/.test(mainText)) {
-    fail('QQ login must report a web-only session as incomplete without returning its cookie for persistence');
-  }
-  if (/resolve\(neteaseCookieHasLogin\(cookie\)[\s\S]{0,140}!qqCookieHasPlaybackLogin/.test(mainText)) {
-    fail('Netease login must not reuse QQ playback authorization checks');
-  }
-  if (!/if \(!qqPlaybackReady\)/.test(qqLoginText) || !/播放授权未完成/.test(qqLoginText)) {
-    fail('QQ frontend login flow must not close as a full success when playback authorization is incomplete');
-  }
-  if (!/Buffer\.from\(raw,\s*'hex'\)\.toString\('utf8'\)/.test(serverText) || !/QQ_LIKED_PLAYLIST_ID/.test(serverText) || !/fetchQQLikedPlaylistPage/.test(serverText) || !/music\.srfDissInfo\.DissInfo/.test(serverText) || !/method: 'CgiGetDiss'/.test(serverText) || !/song_begin: offset/.test(serverText) || !/song_num: limit/.test(serverText) || !/rawTracks\.map\(mapQQPlaylistTrack\)/.test(serverText) || !/songlist_size/.test(serverText) || !/const upstreamTotal/.test(serverText) || !/firstTrack && firstTrack\.cover/.test(serverText) || !/getCachedQQLikedPlaylistCover/.test(serverText) || !/handleQQLikedPlaylistTracks/.test(serverText) || !/QQ_LIKED_AUTH_MESSAGE/.test(serverText)) {
-    fail('QQ profile hex nicknames and the CgiGetDiss liked-playlist paging/first-cover flow must stay supported');
-  }
-  if (/fcg_musiclist_getmyfav|fetchQQLikedPlaylistMap/.test(serverText)) {
-    fail('QQ liked playlist must not regress to the retired fcg_musiclist_getmyfav endpoint or N+1 song-detail map');
-  }
-  if (!/created\.concat\(collected\)\.filter\(pl => !isQQFavoritePlaylist\(pl\)\)/.test(serverText) || !/base\.unshift\(likedCard\)/.test(serverText)) {
-    fail('QQ user playlists must replace any raw liked card with the enriched first-track-cover card');
-  }
-  const favoriteStart = serverText.indexOf('function isQQLikedPlaylistId');
-  const favoriteEnd = serverText.indexOf('\nfunction isQzoneBackgroundPlaylist', favoriteStart);
-  const favoriteSandbox = { QQ_LIKED_PLAYLIST_ID: 'liked', QQ_LIKED_DIRID: 201, String, Number };
-  vm.runInNewContext(serverText.slice(favoriteStart, favoriteEnd), favoriteSandbox, { filename: 'qq-liked-recognition.js' });
-  if (!favoriteSandbox.isQQFavoritePlaylist({ id: 'ordinary', dirid: 201, name: 'anything' }) || !favoriteSandbox.isQQFavoritePlaylist({ id: 'ordinary', dirid: 0, name: '我的喜欢' }) || favoriteSandbox.isQQFavoritePlaylist({ id: 'rock', dirid: 99, name: '我喜欢的摇滚' })) {
-    fail('QQ liked-card recognition must accept the official dirid/exact name without deleting ordinary user playlists that merely contain liked wording');
-  }
-  const likedPageStart = serverText.indexOf('async function fetchQQLikedPlaylistPage');
-  const likedPageEnd = serverText.indexOf('\nfunction buildQQLikedPlaylistCard', likedPageStart);
-  let qqPayload = null;
-  let qqResponse = {
-    req_0: {
-      code: 0,
-      data: {
-        songlist: [
-          { id: 'first', name: 'First', cover: 'album-cover' },
-          { id: 'unavailable', name: '', mid: '' },
-          { id: 'second', name: 'Second' },
-        ],
-        songlist_size: 3,
-        total_song_num: 457,
-        hasmore: 1,
-        dirinfo: { dir_name: 'liked' },
-      },
-    },
-  };
-  const likedPageSandbox = {
-    QQ_LIKED_DIRID: 201,
-    qqMusicRequest: async payload => {
-      qqPayload = payload;
-      return qqResponse;
-    },
-    mapQQPlaylistTrack: track => track,
-    Math,
-    Number,
-    parseInt,
-    Error,
-  };
-  vm.runInNewContext(serverText.slice(likedPageStart, likedPageEnd), likedPageSandbox, { filename: 'qq-liked-page.js' });
-  const likedPage = await likedPageSandbox.fetchQQLikedPlaylistPage({ limit: 48, offset: 96 });
-  if (!qqPayload || qqPayload.req_0.module !== 'music.srfDissInfo.DissInfo' || qqPayload.req_0.method !== 'CgiGetDiss' || qqPayload.req_0.param.dirid !== 201 || qqPayload.req_0.param.song_begin !== 96 || qqPayload.req_0.param.song_num !== 48 || likedPage.total !== 457 || likedPage.tracks.length !== 2 || likedPage.pageSpan !== 3 || likedPage.nextOffset !== 99 || !likedPage.hasMore) {
-    fail('QQ liked playlist must preserve exact CgiGetDiss paging and total/next-offset semantics');
-  }
-  qqResponse = { code: 0 };
-  let missingBlockRejected = false;
-  try {
-    await likedPageSandbox.fetchQQLikedPlaylistPage({ limit: 48, offset: 0 });
-  } catch (error) {
-    missingBlockRejected = error && error.code === 'QQ_LIKED_SYNC_FAILED';
-  }
-  qqResponse = { code: 0, req_0: { code: 10004, data: { code: -100008 } } };
-  let authFailureClassified = false;
-  try {
-    await likedPageSandbox.fetchQQLikedPlaylistPage({ limit: 48, offset: 0 });
-  } catch (error) {
-    authFailureClassified = error && error.code === 'QQ_LIKED_REQUIRES_PLAYBACK_LOGIN';
-  }
-  if (!missingBlockRejected || !authFailureClassified) {
-    fail('QQ liked sync must reject incomplete musicu responses and classify expired playback authorization explicitly');
-  }
-  qqResponse = {
-    req_0: {
-      code: 0,
-      data: { songlist: [], songlist_size: 0, total_song_num: 457, hasmore: 0 },
-    },
-  };
-  const beyondEndPage = await likedPageSandbox.fetchQQLikedPlaylistPage({ limit: 48, offset: 480 });
-  if (beyondEndPage.total !== 457 || beyondEndPage.nextOffset !== 480 || beyondEndPage.hasMore) {
-    fail('QQ liked sync must preserve upstream total on an empty beyond-end page');
-  }
-  const likedCardStart = serverText.indexOf('function buildQQLikedPlaylistCard');
-  const likedCardEnd = serverText.indexOf('\nasync function getQQLikedPlaylistCard', likedCardStart);
-  const likedCoverCacheStart = serverText.indexOf('const qqLikedPlaylistCoverByUser');
-  const likedCoverCacheEnd = serverText.indexOf('\nfunction isQQLikedPlaylistId', likedCoverCacheStart);
-  const likedCardSandbox = {
-    QQ_LIKED_PLAYLIST_ID: 'qq-liked',
-    QQ_LIKED_DIRID: 201,
-    QQ_LIKED_PLAYLIST_NAME: 'Liked',
-    QQ_LIKED_PLAYLIST_COVER: 'fallback-cover',
-    Map,
-    String,
-    Math,
-    Number,
-  };
-  vm.runInNewContext(serverText.slice(likedCoverCacheStart, likedCoverCacheEnd) + '\n' + serverText.slice(likedCardStart, likedCardEnd), likedCardSandbox, { filename: 'qq-liked-card.js' });
-  const likedInfo = { userId: 'listener-1', nickname: 'Listener' };
-  const firstPageForCard = { tracks: [{ id: 'first', name: 'First', cover: 'album-cover' }], total: 457, offset: 0 };
-  const likedCard = likedCardSandbox.buildQQLikedPlaylistCard(likedInfo, firstPageForCard, '');
-  const secondPageCard = likedCardSandbox.buildQQLikedPlaylistCard(likedInfo, { tracks: [{ id: 'page-49', name: 'Page 49', cover: 'page-2-cover' }], total: 457, offset: 48 }, '');
-  const emptiedCard = likedCardSandbox.buildQQLikedPlaylistCard(likedInfo, { tracks: [], total: 0, offset: 0 }, '');
-  if (!likedCard || likedCard.cover !== 'album-cover' || likedCard.trackCount !== 457 || secondPageCard.cover !== 'album-cover' || emptiedCard.cover !== 'fallback-cover') {
-    fail('QQ liked playlist card must keep the first album cover stable across pages and clear it when the playlist becomes empty');
-  }
-  if (!/var liked = isLikedPlaylistContext\(id, title, r && r\.playlist\)/.test(playlistLoadText) || !/if \(liked\) markSongsLiked\(playQueue, true\)/.test(playlistLoadText) || !/if \(state\.liked\) markSongsLiked\(pageTracks, true\)/.test(playlistLoadText)) {
-    fail('QQ/Spotify virtual liked playlists must mark loaded queue tracks as liked');
-  }
-  if (!/data-login-provider-sort/.test(qqLoginText) || !/login-provider-sort-handle/.test(qqLoginText) || !/closest\('\[data-login-provider-sort\]'\)/.test(qqLoginText) || !/closest\('\.flow-port\.out'\)/.test(qqLoginText)) {
-    fail('login workflow must split provider sorting onto a left drag handle and keep wiring on the right flow port');
-  }
-  const loginProviderExternalSwitchOk =
-    /function handleLoginProviderExternalSwitchEvent\(e,\s*provider\)/.test(qqLoginText) &&
-    /externalSwitch\.setAttribute\('role',\s*'switch'\)/.test(qqLoginText) &&
-    /externalSwitch\.setAttribute\('aria-checked'/.test(qqLoginText) &&
-    /login-provider-external-label">展示/.test(qqLoginText) &&
-    /externalSwitch\.addEventListener\('click'[\s\S]{0,180}handleLoginProviderExternalSwitchEvent/.test(qqLoginText) &&
-    !/function selectLoginProviderNode\(provider\)\s*\{[\s\S]{0,260}toggleAccountProviderExternal\(provider\)/.test(qqLoginText) &&
-    /\.login-provider-external-switch\s*\{[\s\S]{0,220}width:\s*56px[\s\S]{0,360}pointer-events:\s*auto/.test(cssText) &&
-    /\.login-provider-external-label\s*\{/.test(cssText) &&
-    /button\.external-on \.login-provider-external-switch i\s*\{[\s\S]{0,80}left:\s*38px/.test(cssText);
-  if (!loginProviderExternalSwitchOk) {
-    fail('login provider capsules must show a real on/off switch for external top-pill visibility');
-  }
-  if (/Math\.abs\(dy\)\s*>\s*Math\.abs\(dx\)[\s\S]{0,80}\?\s*'sort'\s*:\s*'wire'/.test(qqLoginText) || /mode\s*===\s*'wire'/.test(qqLoginText)) {
-    fail('login workflow must not guess sort vs wire from drag direction');
-  }
-  if (!/function scheduleLoginWorkflowEdges/.test(qqLoginText) || !/scheduleLoginWorkflowEdges\('open'\)/.test(qqLoginText) || !/scheduleLoginWorkflowEdges\('node-ui'\)/.test(qqLoginText) || !/scheduleLoginWorkflowEdges\('resize'\)/.test(qqLoginText)) {
-    fail('login workflow edges must be rescheduled after modal open, UI layout changes, and resize to avoid offset lines');
-  }
-  if (!/function captureAccountProviderRects/.test(accountUtilsText) || !/function animateAccountProviderReorder/.test(accountUtilsText) || !/provider-reorder-moving/.test(accountUtilsText) || !/return order\.filter\(function \(provider\) \{ return selected\.indexOf\(provider\) >= 0; \}\);/.test(accountUtilsText)) {
-    fail('provider capsule order must use FLIP animation and external pills must follow the explicit highlighted list');
-  }
-  if (!/\.login-provider-sort-handle/.test(cssText) || !/grid-template-columns:\s*18px\s+35px\s+minmax\(0,\s*1fr\)\s+auto/.test(cssText) || !/\.top-account-pill\.provider-reorder-moving/.test(cssText)) {
-    fail('provider capsule sorting must expose a left drag handle and animated reorder styles');
-  }
-  console.log('[OK] Provider auth cookies stay on userData paths and QQ partial login is explicit.');
+  console.log('[OK] Local server startup paths stay deterministic and browser windows fail loudly.');
 }
 
 function checkPlaybackResumeRecoveryGuard() {
@@ -2724,7 +1892,6 @@ function checkAudioOutputWorkflowPanelGuard() {
   const indexText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
   const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
   const qualityText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '00-api-quality-output.js'), 'utf8');
-  const modalUtilsText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '01-login-modal-utils.js'), 'utf8');
   if (!/id="audio-output-workflow-modal"/.test(indexText) || !/id="audio-output-workflow-body"/.test(indexText) || !/openAudioOutputWorkflowPanel\(\)/.test(indexText)) {
     fail('audio output workflow must have a dedicated derivative modal entry instead of only the compact settings panel');
   }
@@ -2733,9 +1900,6 @@ function checkAudioOutputWorkflowPanelGuard() {
   }
   if (!/audio-output-workflow-modal/.test(cssText) || !/audio-output-workflow-modal \.audio-route-graph[\s\S]{0,320}grid-template-areas: "source board" "status board"/.test(cssText) || !/audio-route-board/.test(cssText) || !/route-board-badges/.test(cssText) || !/route-lane-state/.test(cssText) || !/audio-source-meter/.test(cssText) || !/audio-route-node\.pending/.test(cssText) || !/audio-route-node\.warning/.test(cssText) || !/audio-output-workflow-modal \.workflow-link-layer[\s\S]{0,120}display: none/.test(cssText) || !/audio-output-summary-card/.test(cssText)) {
     fail('audio output workflow modal must expose a Loopback-style patch bay board instead of a three-column device table');
-  }
-  if (!/\['audio-output-workflow-modal', closeAudioOutputWorkflowPanel\]/.test(modalUtilsText)) {
-    fail('audio output workflow modal must close through the shared backdrop modal handler');
   }
   console.log('[OK] Audio output workflow opens as a dedicated wiring panel and leaves settings compact.');
 }
@@ -2874,7 +2038,6 @@ function checkAlbumDetailGaplessGuard() {
   const controlsText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '14-player-controls.js'), 'utf8');
   const snapshotText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '09-queue-snapshot-autoplay.js'), 'utf8');
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
-  const spotifyText = fs.readFileSync(path.join(appRoot, 'spotify-api.js'), 'utf8');
   if (!/thumb-cover[\s\S]{0,180}openTrackDetailModal\('album'\)/.test(htmlText) || !/control-cover[\s\S]{0,260}openTrackDetailModal\('album'\)/.test(htmlText)) {
     fail('album detail must be reachable from both current cover entry points');
   }
@@ -2887,11 +2050,8 @@ function checkAlbumDetailGaplessGuard() {
   if (!/setAlbumGaplessPlaybackContext\(detailAlbumGaplessEnabled, detailAlbumContext/.test(detailText) || !/__albumGaplessKey/.test(detailText) || !/detailAlbumGaplessEnabled\s*=\s*true/.test(detailText)) {
     fail('album detail playback must tag album queues and pass the gapless context into playback');
   }
-  if (!/handleNeteaseAlbumDetail/.test(serverText) || !/pn === '\/api\/album\/detail'/.test(serverText) || !/handleQQAlbumDetail/.test(serverText) || !/pn === '\/api\/qq\/album\/detail'/.test(serverText) || !/pn === '\/api\/spotify\/album\/detail'/.test(serverText)) {
-    fail('server.js must expose Netease, QQ, and Spotify album detail endpoints');
-  }
-  if (!/async function handleSpotifyAlbumDetail/.test(spotifyText) || !/\/albums\/' \+ encodeURIComponent\(id\)/.test(spotifyText)) {
-    fail('Spotify bridge must expose album detail tracks as metadata source');
+  if (!/handleNeteaseAlbumDetail/.test(serverText) || !/pn === '\/api\/album\/detail'/.test(serverText)) {
+    fail('server.js must expose the kept Netease album detail endpoint');
   }
   if (!/albumGaplessState/.test(coreStoreText) || !/defaultEnabled:\s*true/.test(coreStoreText) || !/function albumGaplessDefaultEnabledForContext/.test(playbackText) || !/function setAlbumGaplessPlaybackContext/.test(playbackText) || !/function scheduleAlbumGaplessPreloadForCurrent/.test(playbackText) || !/function resolveAlbumGaplessPlaybackData/.test(playbackText) || !/albumGaplessHandoff/.test(playbackText) || !/playAlbumGaplessNextOnEnded/.test(playbackText)) {
     fail('album gapless playback must keep explicit state, preheat next audio, and use a sequential on-ended fallback');
@@ -2957,14 +2117,6 @@ function checkInternalBetaPackagingGuard() {
   if (stellaflix.runtimeName !== 'Stellaflix_Beat' || update.disabled !== true || update.provider !== 'none') {
     fail('internal beta runtime name and update-disable metadata must stay isolated');
   }
-  const requiredRuntimeFiles = ['qishui-audio-decryptor/**/*'];
-  const packageBuildFiles = pkg.build && Array.isArray(pkg.build.files) ? pkg.build.files : [];
-  const betaBuildFiles = Array.isArray(beta.files) ? beta.files : [];
-  requiredRuntimeFiles.forEach((entry) => {
-    if (!packageBuildFiles.includes(entry) || !betaBuildFiles.includes(entry)) {
-      fail(`electron-builder files must include runtime dependency ${entry}`);
-    }
-  });
   if (!beta.nsis || beta.nsis.include !== 'build/installer-internal-beta.nsh' || !/Stellaflix_Beat-v\$\{version\}-灰度内测版/.test(beta.nsis.artifactName || '')) {
     fail('internal beta NSIS config must use the beta wrapper and beta artifact name');
   }
@@ -2981,9 +2133,6 @@ function checkInternalBetaPackagingGuard() {
     fail('desktop runtime must read beta name/AppUserModelID from package metadata');
   }
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
-  if (!/qishui-audio-decryptor\/track-decryptor/.test(serverText)) {
-    fail('server qishui decryptor dependency must stay covered by package files');
-  }
   if (!/local\.disabled === true/.test(serverText) || !/provider === 'none'/.test(serverText)) {
     fail('server update config must support disabled internal beta update metadata');
   }
@@ -5099,7 +4248,6 @@ async function checkLargePlaylistVirtualizationGuard() {
   const loaderText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '03-podcast-playlist-loaders.js'), 'utf8');
   const shelfText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '04-shelf', '01-manager-core.js'), 'utf8');
   const shelfContentText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '04-shelf', '03-content-list-manager.js'), 'utf8');
-  const qishuiText = fs.readFileSync(path.join(appRoot, 'qishui-api.js'), 'utf8');
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
   const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
 
@@ -5108,9 +4256,6 @@ async function checkLargePlaylistVirtualizationGuard() {
   }
   if (!/neteasePlaylistTrackIndexCache/.test(serverText) || !/fetchNeteasePlaylistTrackIndex/.test(serverText) || !/NETEASE_TRACK_STREAM_PAGE_SIZE/.test(serverText)) {
     fail('Netease large-playlist pages must reuse one bounded track-id index instead of reparsing the whole playlist per page');
-  }
-  if (/targetCount\s*=\s*Math\.min\(240/.test(qishuiText) || !/qishuiWebPlaylistCursorCache/.test(qishuiText)) {
-    fail('Qishui playlist pagination must not stop at 240 and must reuse cursor state');
   }
   if (!/function rebindShelfCard/.test(shelfText) || !/function rebindContentRow/.test(shelfContentText)) {
     fail('3D shelf cards and detail rows must reuse their GPU-backed objects');
@@ -5403,10 +4548,6 @@ async function main() {
   runPlaybackSourceFallbackTransactionCheck();
   runLocalMusicLibraryRegressionCheck();
   runWallpaperEngineIdleDisposeRegressionCheck();
-  runQQVipEntitlementRegressionCheck();
-  runQishuiProviderDistributionRegressionCheck();
-  runSpotifyApiResilienceRegressionCheck();
-  runPlatformAccountSyncGuardCheck();
   runHomeDailyRecommendationRegressionCheck();
   parseCombinedIndexModules();
   scanForbiddenMarkers();
@@ -5424,13 +4565,9 @@ async function main() {
   checkExternalUpdatePageBridgeGuard();
   checkLyricTranslationCompletenessGuard();
   checkLyricVerticalFloatToggleGuard();
-  checkQishuiProviderGuard();
-  await checkSpotifyProviderGuard();
   checkPlaybackControlBadgesGuard();
   await checkProviderFallbackTerminalStateGuard();
   checkSearchGlassEntranceGuard();
-  checkProviderEntitlementBoundaryGuard();
-  checkQQVipStatusSyncGuard();
   await checkProviderAuthCookiePathGuard();
   checkPlaybackResumeRecoveryGuard();
   checkAudioOutputWorkflowPanelGuard();

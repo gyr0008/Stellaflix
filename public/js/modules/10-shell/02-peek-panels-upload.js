@@ -156,15 +156,13 @@ function maybeShowUploadTipOnce() {
     setTimeout(maybeShowUploadTipOnce, 1800);
     return;
   }
-  if (document.body.classList.contains('splash-active') || loginGuideAnimating) {
+  if (document.body.classList.contains('splash-active')) {
     setTimeout(maybeShowUploadTipOnce, 900);
     return;
   }
-  var loginModal = document.getElementById('login-modal');
   var userModal = document.getElementById('user-modal');
   var coverModal = document.getElementById('cover-crop-modal');
-  var hasModal = (loginModal && loginModal.classList.contains('show')) ||
-    (userModal && userModal.classList.contains('show')) ||
+  var hasModal = (userModal && userModal.classList.contains('show')) ||
     (coverModal && coverModal.classList.contains('show'));
   if (hasModal) {
     uploadTipAttempts++;

@@ -63,15 +63,16 @@ test('世界页：.desktop-drag-region 整块摘除（44px 吞点击横带消失
   assert.match(b, /display:\s*none\s*!important/);
 });
 
-test('世界页：更新 / 第三方音源 / DIY 三个入口不弹出', () => {
+test('世界页：更新 / DIY 两个功能入口不弹出', () => {
   // 选择器必须逐条写全限定：CSS 分组选择器不是相对的，`A B,#C` 会让 #C 全局命中
   const b = block(SCOPE + '\\s+#desktop-titlebar\\s+#diy-mode-btn');
   assert.ok(b, '必须有功能入口的世界页隐藏规则');
   assert.match(b, /display:\s*none\s*!important/);
-  ['#update-entry', '#custom-source-btn', '#diy-mode-btn'].forEach((id) => {
+  // T14：#custom-source-btn 已随旧载体删除，此处只验存活的两入口
+  ['#update-entry', '#diy-mode-btn'].forEach((id) => {
     assert.ok(
       css.includes(SCOPE.replace(/\\/g, '') + ' #desktop-titlebar ' + id),
-      '三个入口必须各自带 sfv-world-page 全限定选择器，缺：' + id
+      '两个入口必须各自带 sfv-world-page 全限定选择器，缺：' + id
     );
   });
 });

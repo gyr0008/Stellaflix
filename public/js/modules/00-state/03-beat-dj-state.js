@@ -97,14 +97,10 @@ var djMode = {
   lastBeatAt: -10
 };
 
-function isPodcastSong(song) {
-  return !!(song && song.type === 'podcast');
-}
-
 function djSongKey(song) {
   if (!song) return '';
   if (song.localKey) return 'local:' + song.localKey;
-  return 'podcast:' + (song.programId || song.id || song.name || '');
+  return 'dj:' + (song.id || song.name || '');
 }
 
 function resetDjModeMeter() {

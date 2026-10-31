@@ -22,11 +22,6 @@ try {
   // playQueueAt 同为 async 声明不泄漏；agent-adapter.js / agent-music-tools.js 是独立
   // <script>（AI 助手委托主播放通道），只能经 window 拿到它。
   if (typeof playQueueAt === 'function') window.playQueueAt = playQueueAt;
-  if (typeof showLoginModal === 'function') window.showLoginModal = showLoginModal;
-  if (typeof submitQQCookieLogin === 'function') window.submitQQCookieLogin = submitQQCookieLogin;
-  if (typeof confirmCookieExportPrompt === 'function') window.confirmCookieExportPrompt = confirmCookieExportPrompt;
-  if (typeof logoutActiveAccount === 'function') window.logoutActiveAccount = logoutActiveAccount;
-  if (typeof logoutAllAccountsAndResetEasterEgg === 'function') window.logoutAllAccountsAndResetEasterEgg = logoutAllAccountsAndResetEasterEgg;
   if (typeof startUpdatePreviewDownload === 'function') window.startUpdatePreviewDownload = startUpdatePreviewDownload;
   if (typeof refreshUserPlaylists === 'function') window.refreshUserPlaylists = refreshUserPlaylists;
   if (typeof refreshAudioOutputDevices === 'function') window.refreshAudioOutputDevices = refreshAudioOutputDevices;

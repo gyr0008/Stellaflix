@@ -24,7 +24,7 @@
   - [ ] `https://gh.llkk.cc/`
   - [ ] `https://ghfast.top/`
   - [ ] `https://gh-proxy.com/`
-- [ ] 本地冒烟：启动 / 播放 / 登录不回归
+- [ ] 本地冒烟：启动 / 播放 / 音源脚本解析不回归
 - [ ] （可选）`npm run build:win:dir` 快速验包，再正式出 NSIS
 
 ```bash
@@ -107,7 +107,7 @@ Invoke-WebRequest -Uri "https://gh-proxy.com/https://github.com/gyr0008/Stellafl
 - [ ] 下载完成 → 按钮变为 **「立即安装并重启」**
 - [ ] 安装 → 应用退出 → NSIS 静默装完 → **自动启动新版**
 - [ ] 新版关于页/版本号正确
-- [ ] 播放、登录态、本地曲库未损坏
+- [ ] 播放、音源脚本与激活源、本地曲库未损坏
 
 失败路径：
 

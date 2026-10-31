@@ -139,17 +139,34 @@ test('platform recommendation entry uses real feeds and does not synthesize radi
   assert.doesNotMatch(openCharts, /runHomeSearch|今日热歌/);
   const neteaseLoader = namedFunctionSource(dashboardScript, 'loadHomePlatformNeteaseRecommendations');
   assert.match(neteaseLoader, /loadHomeDiscover\s*\(/);
-  assert.match(neteaseLoader, /\/api\/podcast\/hot/);
+  // 批 T16c：播客整条下线，网易云推荐卡不再拉 /api/podcast/hot。
+  assert.doesNotMatch(dashboardScript, /\/api\/podcast/);
+  // 批 T15.5b（改道批2）：平台推荐卡内容源改指 lx cookie-less 榜单路由
+  // （platform-charts 出目录 + daily-hot?platform=&chart= 出内容，T15.5a §6），
+  // 官方 /api/qishui/feed、/api/kugou/recommendations、/api/spotify/recommendations 消费点退役。
+  const codeOnly = (text) => text.split('\n').filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
+  const executableDashboardScript = codeOnly(dashboardScript);
   const feedConfig = namedFunctionSource(dashboardScript, 'homePlatformRecommendationFeedConfig');
-  assert.match(feedConfig, /\/api\/qishui\/feed/);
-  assert.match(feedConfig, /\/api\/kugou\/recommendations/);
-  assert.match(feedConfig, /\/api\/spotify\/recommendations/);
+  assert.match(feedConfig, /lxPlatform:\s*'tx'/);
+  assert.match(feedConfig, /lxPlatform:\s*'kg'/);
+  for (const retired of ['/api/qishui/feed', '/api/kugou/recommendations', '/api/spotify/recommendations']) {
+    assert.equal(executableDashboardScript.includes(retired), false, `${retired} 的前端消费点须退役`);
+  }
   assert.doesNotMatch(feedConfig, /\/api\/qq\/|search/);
-  assert.match(namedFunctionSource(dashboardScript, 'loadHomePlatformFeedRecommendations'), /apiJson\s*\(\s*config\.endpoint/);
-  assert.match(namedFunctionSource(dashboardScript, 'loadHomePlatformFeedRecommendations'), /feedState\.fallback/);
-  assert.match(namedFunctionSource(dashboardScript, 'loadHomePlatformFeedRecommendations'), /feedState\.mode/);
-  assert.match(namedFunctionSource(dashboardScript, 'renderHomePlatformRecommendations'), /liked-affinity/);
-  assert.match(namedFunctionSource(dashboardScript, 'renderHomePlatformRecommendations'), /personal-top/);
+  const feedLoader = namedFunctionSource(dashboardScript, 'loadHomePlatformFeedRecommendations');
+  // 排行榜归一（10-26 主人裁定「留 main 版」）：lx-source 前缀下的日榜/平台榜重复实现退役，
+  // 推荐卡改指 main 侧 1:1 上游切片的第一方端点（daily-hot-api.js + server.js 的
+  // GET /api/daily-hot?limit&source&refresh&chart 与 GET /api/platform-charts?source）。
+  assert.match(feedLoader, /apiJson\('\/api\/platform-charts\?source='/);
+  assert.match(feedLoader, /apiJson\('\/api\/daily-hot\?source='/);
+  assert.match(feedLoader, /song\.cover = song\.pic \|\| song\.picUrl/);
+  assert.match(feedLoader, /feedState\.fallback/);
+  assert.match(feedLoader, /feedState\.mode/);
+  assert.doesNotMatch(feedLoader, /apiJson\s*\(\s*config\.endpoint/);
+  const renderFeed = namedFunctionSource(dashboardScript, 'renderHomePlatformRecommendations');
+  assert.match(renderFeed, /homePlatformRecommendationChartChipsHtml\(source, feedState\)/);
+  assert.match(renderFeed, /chartUnavailable/);
+  assert.doesNotMatch(renderFeed, /liked-affinity|personal-top/);
   // 2026-09 升级：网易云每日推荐走虚拟滚动（只渲染视窗附近歌曲，大列表低开销）
   assert.match(dashboardScript, /function renderHomePlatformDailyWindow\(force\) \{/);
   assert.match(dashboardScript, /仅渲染视窗附近歌曲/);

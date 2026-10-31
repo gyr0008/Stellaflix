@@ -4,7 +4,6 @@ function queueItemKey(song) {
   if (song.provider === 'spotify' || song.source === 'spotify' || song.type === 'spotify' || song.spotifyId || song.spotifyUri) return 'spotify:' + (song.spotifyId || song.id || song.spotifyUri || song.uri || (song.name + '|' + song.artist));
   if (song.provider === 'qq' || song.source === 'qq' || song.type === 'qq') return 'qq:' + (song.mid || song.songmid || song.id || (song.name + '|' + song.artist));
   if (song.provider === 'kugou' || song.source === 'kugou' || song.type === 'kugou' || song.hash || song.audioHash) return 'kugou:' + (song.hash || song.fileHash || song.audioHash || song.id || (song.name + '|' + song.artist));
-  if (song.type === 'podcast' && song.programId) return 'podcast:' + song.programId;
   if (song.localKey) return 'local:' + song.localKey;
   if (song.id != null && song.id !== '') return 'song:' + song.id;
   return String(song.name || '') + '|' + String(song.artist || '');
@@ -17,7 +16,7 @@ function playbackRestoreSongSnapshot(song) {
     'spotifyId', 'spotifyUri', 'spotifyUrl', 'uri', 'albumUri',
     'hash', 'fileHash', 'audioHash', 'albumId', 'album_id', 'albumMid', 'albummid', 'albumAudioId', 'album_audio_id', 'mixSongId', 'hqHash', 'sqHash', 'resHash',
     'name', 'title', 'artist', 'album', 'cover', 'duration', 'durationMs', 'dt', 'fee',
-    'playable', 'playbackMode', 'recommendationSource', 'programId', 'radioId', 'radioName', 'localKey', 'localFileId'
+    'playable', 'playbackMode', 'recommendationSource', 'localKey', 'localFileId'
   ].forEach(function (key) {
     if (song[key] != null && song[key] !== '') snap[key] = song[key];
   });
@@ -150,7 +149,6 @@ function handleStartupAutoplayUnavailable(reason) {
   startupAutoplayJobId += 1;
   startupAutoplayAttemptCount = 0;
   startupAutoplayHomeFallbackTried = false;
-  if ((reason === 'local-missing' || reason === 'queue-empty') && tryStartupAutoplayHomeFallback(startupAutoplayJobId)) return;
   restoreHomeAfterStartupAutoplayFallback();
 }
 function startupAutoplayUnavailableReason() {
@@ -183,45 +181,6 @@ function scheduleStartupAutoplayRetry(jobId, reason, delay) {
   }, delay == null ? startupAutoplayRetryDelay(startupAutoplayAttemptCount) : delay);
   return true;
 }
-function tryStartupAutoplayHomeFallback(jobId) {
-  if (startupAutoplayHomeFallbackTried) return false;
-  if (!hasAnyPlatformLogin()) return false;
-  startupAutoplayHomeFallbackTried = true;
-  Promise.resolve().then(async function () {
-    try {
-      await waitForHomeDiscoverIdle(1800);
-      if (!homeDiscoverState.loaded || (!homeDiscoverState.songs.length && !homeDiscoverState.loading)) {
-        await loadHomeDiscover(true);
-      }
-      if (jobId !== startupAutoplayJobId || !startupAutoplayPreference || isStartupAutoplayPlaying()) return;
-      if (!homeDiscoverState.songs.length) {
-        restoreHomeAfterStartupAutoplayFallback();
-        return;
-      }
-      playQueue = homeDiscoverState.songs.map(cloneSong);
-      currentIdx = 0;
-      currentLocalSong = null;
-      pendingPlaybackResumeAt = 0;
-      startupRestoreHomePending = false;
-      startupAutoplayAttemptCount = 0;
-      safeRenderQueuePanel('startup-autoplay-home-fallback', { scrollCurrent: miniQueueOpen });
-      safeShelfRebuild('startup-autoplay-home-fallback', true);
-      forcePlaybackControlsInteractive();
-      await playQueueAt(0, { manual: false, startupAutoplay: true });
-      setTimeout(function () {
-        if (jobId !== startupAutoplayJobId || !startupAutoplayPreference) return;
-        if (isStartupAutoplayPlaying()) finishStartupAutoplayJob(true);
-        else scheduleStartupAutoplayRetry(jobId, 'home-fallback-retry', 420);
-      }, 360);
-    } catch (e) {
-      console.warn('[StartupAutoplayHomeFallback]', e);
-      if (jobId === startupAutoplayJobId && startupAutoplayPreference && !isStartupAutoplayPlaying()) {
-        restoreHomeAfterStartupAutoplayFallback();
-      }
-    }
-  });
-  return true;
-}
 function finishStartupAutoplayJob(success) {
   clearStartupAutoplayRetryTimer();
   if (success) {
@@ -229,7 +188,6 @@ function finishStartupAutoplayJob(success) {
     forcePlaybackControlsInteractive();
     return;
   }
-  if (tryStartupAutoplayHomeFallback(startupAutoplayJobId)) return;
   restoreHomeAfterStartupAutoplayFallback();
 }
 function runStartupAutoplayAttempt(jobId, reason) {

@@ -1,46 +1,6 @@
-function schedulePodcastDjAnalysis(songKey, audioUrl, token, durationSec) {
-  cancelDjBeatAnalysisTimer();
-  if (!songKey || !audioUrl) return;
-  djBeatAnalysisTimer = setTimeout(function waitForDjStart() {
-    djBeatAnalysisTimer = null;
-    if (token !== djBeatMapToken || !djMode.active || djMode.songKey !== songKey || djBeatMapCache[songKey]) return;
-    var startAnalysis = function () {
-      if (token !== djBeatMapToken || !djMode.active || djMode.songKey !== songKey || djBeatMapCache[songKey]) return;
-      if (djBeatMapBusy) {
-        djBeatAnalysisTimer = setTimeout(waitForDjStart, 900);
-        return;
-      }
-      if (/^https?:\/\//i.test(audioUrl || '') && (durationSec <= 0 || durationSec > 3300)) {
-        analyzePodcastDjIntroBeats(audioUrl, token, durationSec).then(function (map) {
-          if (token !== djBeatMapToken || !map) return;
-          smoothPodcastDjIntroHandoff(songKey, map, token);
-        }).catch(function (err) {
-          console.warn('podcast DJ intro beat analysis failed:', err);
-        });
-      }
-      analyzePodcastDjBeats(audioUrl, token, durationSec).then(function (map) {
-        if (token !== djBeatMapToken || !map) return;
-        smoothPodcastDjMapHandoff(songKey, map, token);
-      }).catch(function (err) {
-        console.warn('podcast DJ beat analysis failed:', err);
-        hideBeatChip();
-      });
-    };
-    scheduleAnalysisTask(startAnalysis, 900);
-  }, 900);
-}
-
-async function analyzePodcastDjIntroBeats(audioUrl, token, durationSec) {
-  if (!/^https?:\/\//i.test(audioUrl || '')) return null;
-  if (token !== djBeatMapToken || !djMode.active) return null;
-  var introResp = await fetch('/api/podcast/dj-beatmap?url=' + encodeURIComponent(audioUrl) + '&duration=' + encodeURIComponent(durationSec || 0) + '&intro=180');
-  if (token !== djBeatMapToken || !djMode.active) return null;
-  var introData = await introResp.json().catch(function () { return null; });
-  if (introResp.ok && introData && introData.ok && introData.map && introData.map.cameraBeats && introData.map.cameraBeats.length >= 4) {
-    return introData.map;
-  }
-  return null;
-}
+// 批 T16c：播客起播链的独立锁拍调度与开头抢先锁拍/回接函数随播客整条下线；
+// 本文件保留的是本地歌 DJ 离线锁拍主体
+// （analyzePodcastDjBeats/buildPodcastDjLowOnlyBeatMap/applyPodcastDjProfileFromMap）。
 
 async function buildPodcastDjLowOnlyBeatMap(buffer, token) {
   if (!buffer) return null;
@@ -418,17 +378,6 @@ async function analyzePodcastDjBeats(audioUrl, token, durationSec) {
     await yieldToIdle(520);
     if (token !== djBeatMapToken || !djMode.active) { hideBeatChip(); return null; }
     durationSec = Math.max(0, Number(durationSec) || 0);
-    var preferServerAnalysis = /^https?:\/\//i.test(audioUrl || '') && (durationSec <= 0 || durationSec > 3300);
-    if (preferServerAnalysis) {
-      showBeatChip('DJ 长播客后端锁拍...');
-      var serverResp = await fetch('/api/podcast/dj-beatmap?url=' + encodeURIComponent(audioUrl) + '&duration=' + encodeURIComponent(durationSec));
-      if (token !== djBeatMapToken || !djMode.active) { hideBeatChip(); return null; }
-      var serverData = await serverResp.json().catch(function () { return null; });
-      if (serverResp.ok && serverData && serverData.ok && serverData.map) return serverData.map;
-      console.warn('podcast DJ server analysis failed:', serverData && serverData.error);
-      hideBeatChip();
-      if (durationSec <= 0 || durationSec > 3300) return null;
-    }
     var fetchAudioUrl = /^https?:\/\//i.test(audioUrl || '') ? ('/api/audio?url=' + encodeURIComponent(audioUrl)) : audioUrl;
     var resp = await fetch(fetchAudioUrl);
     if (token !== djBeatMapToken || !djMode.active) { hideBeatChip(); return null; }
@@ -780,35 +729,3 @@ function applyPodcastDjProfileFromMap(map) {
   cinemaTrackProfile.target = target;
   cinemaTrackProfile.scale += (target - cinemaTrackProfile.scale) * 0.34;
 }
-
-function smoothPodcastDjMapHandoff(songKey, map, token) {
-  if (!map) return;
-  showBeatChip('DJ 锁拍完成…');
-  var apply = function () {
-    if (token !== djBeatMapToken || !djMode.active || djMode.songKey !== songKey) return;
-    djBeatMapCache[songKey] = map;
-    currentDjBeatMap = map;
-    applyPodcastDjProfileFromMap(map);
-    syncPodcastDjMapCursor(audio ? audio.currentTime : 0, true);
-    notifyDesktopLyricsBeatMapReady();
-    hideBeatChip();
-    showToast('DJ 离线锁拍完成: ' + (map.visualBeatCount || 0) + ' 个主拍');
-  };
-  scheduleVisualApply(apply, 260, 360);
-}
-
-function smoothPodcastDjIntroHandoff(songKey, map, token) {
-  if (!map || !map.partial) return;
-  if (currentDjBeatMap && !currentDjBeatMap.partial) return;
-  var apply = function () {
-    if (token !== djBeatMapToken || !djMode.active || djMode.songKey !== songKey) return;
-    if (currentDjBeatMap && !currentDjBeatMap.partial) return;
-    currentDjBeatMap = map;
-    applyPodcastDjProfileFromMap(map);
-    syncPodcastDjMapCursor(audio ? audio.currentTime : 0, true);
-    notifyDesktopLyricsBeatMapReady();
-    showBeatChip('DJ 开头已锁拍，全曲继续分析…');
-  };
-  scheduleVisualApply(apply, 0, 240);
-}
-

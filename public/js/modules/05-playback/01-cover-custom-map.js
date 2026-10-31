@@ -186,7 +186,6 @@ function songCustomCoverKey(song) {
   if (song.provider === 'qishui' || song.source === 'qishui' || song.type === 'qishui') return 'qishui:' + (song.id || song.providerSongId || (song.name + '|' + song.artist));
   if (song.provider === 'kugou' || song.source === 'kugou' || song.type === 'kugou' || song.hash || song.audioHash) return 'kugou:' + (song.hash || song.fileHash || song.audioHash || song.id || (song.name + '|' + song.artist));
   if (song.localKey) return 'local:' + song.localKey;
-  if (song.type === 'podcast' && song.programId) return 'podcast:' + song.programId;
   if (song.id != null && song.id !== '') return 'id:' + song.id;
   var title = String(song.name || song.title || '').trim();
   var artist = String(song.artist || '').trim();

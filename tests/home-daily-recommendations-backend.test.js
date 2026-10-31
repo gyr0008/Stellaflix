@@ -4,7 +4,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 
 const source = fs.readFileSync(path.resolve(__dirname, '..', 'server.js'), 'utf8');
 
@@ -37,40 +36,20 @@ function namedFunctionSource(text, name) {
   return '';
 }
 
-test('daily recommendation mapper preserves every valid upstream song in order', () => {
-  const mapperSource = namedFunctionSource(source, 'mapDailyRecommendationSongs');
-  assert.ok(mapperSource, 'expected mapDailyRecommendationSongs()');
-  const mapper = vm.runInNewContext(`(${mapperSource})`, {
-    mapSongRecord(song) {
-      return song && song.valid === false ? null : {
-        id: song && song.id,
-        name: song && song.name,
-      };
-    },
-  });
-  const upstream = Array.from({ length: 37 }, (_, index) => ({
-    id: String(index + 1),
-    name: `daily-${index + 1}`,
-  }));
-  const mapped = mapper(upstream);
-  assert.equal(mapped.length, 37);
-  assert.deepEqual(
-    Array.from(mapped, song => String(song.id)),
-    upstream.map(song => song.id),
-  );
-});
-
-test('discover home returns the complete mapped daily list without a fixed song cap', () => {
+// 批 T16d：登录态退役后首页发现只回 starter 空壳，日推 mapper 与平台请求一并清零。
+test('discover home 登录态退役后只回 starter 空壳，不再做日推映射或平台请求', () => {
   const discoverSource = namedFunctionSource(source, 'handleDiscoverHome');
   assert.ok(discoverSource, 'expected handleDiscoverHome()');
-  assert.match(discoverSource, /dailySongs\s*=\s*mapDailyRecommendationSongs\(raw\)/);
-  assert.doesNotMatch(discoverSource, /dailySongs[\s\S]{0,300}\.slice\s*\(\s*0\s*,\s*(?:8|12)\s*\)/);
-  assert.match(discoverSource, /dailySongTotal:\s*dailySongs\.length/);
-  assert.match(discoverSource, /dailySongsComplete:\s*true/);
+  assert.match(discoverSource, /loggedIn:\s*false/);
+  assert.match(discoverSource, /dailySongs:\s*\[\]/);
+  assert.match(discoverSource, /mode:\s*'starter'/);
+  assert.doesNotMatch(discoverSource, /mapDailyRecommendationSongs|daily_songs|recommend\/songs|cookie/i);
+  assert.equal(namedFunctionSource(source, 'mapDailyRecommendationSongs'), '', '日推 mapper 应随登录态退役删除');
 });
 
 test('discover home does not request or return recommended podcasts', () => {
   const discoverSource = namedFunctionSource(source, 'handleDiscoverHome');
   assert.doesNotMatch(discoverSource, /\bdj_hot\s*\(/);
-  assert.match(discoverSource, /podcasts:\s*\[\]/);
+  // 批 T16c：播客整条下线——payload 连 podcasts 字段一并摘除（此前只钉「恒为空数组」）。
+  assert.doesNotMatch(discoverSource, /podcasts/);
 });
