@@ -805,6 +805,72 @@ function createLocalLibraryStore(options) {
   }
 
   /**
+   * 读取资产记录 extra JSON 中的单个字段（缺失/破损都返回 undefined）。
+   * 供 writeAssetRecord 在轻量写入时保留渲染层未随本次带上的叠加字段。
+   * @param {string} songKey 曲库缓存键。
+   * @param {string} field extra 字段名。
+   * @returns {*} 字段值或 undefined。
+   */
+  function readAssetExtraField(songKey, field) {
+    const statement = prepare('SELECT extra FROM assets WHERE song_key=?');
+    if (!statement) return undefined;
+    const row = statement.get(songKey);
+    if (!row || row.extra == null) return undefined;
+    try {
+      const parsed = JSON.parse(row.extra);
+      if (parsed && typeof parsed === 'object' && Object.prototype.hasOwnProperty.call(parsed, field)) {
+        return parsed[field];
+      }
+    } catch (_e) { /* 破损 extra 按缺省处理 */ }
+    return undefined;
+  }
+
+  /**
+   * 把字段合并进资产记录的 extra JSON，只动 extra 列。
+   * ReplayGain 这类「解析一次、随取随用」的叠加值走这条通道：零 DDL，也不必为它整行重建封面 BLOB。
+   * @param {string} songKey 曲库缓存键。
+   * @param {object} fields 要合并进 extra 的字段表。
+   * @returns {object} 写入结果。
+   */
+  function mergeAssetExtraFields(songKey, fields) {
+    const key = toText(songKey);
+    if (!key) return { ok: false, error: 'LOCAL_LIBRARY_DB_KEY_REQUIRED' };
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields) || !Object.keys(fields).length) {
+      return { ok: false, error: 'LOCAL_LIBRARY_DB_FIELDS_REQUIRED' };
+    }
+    if (!ensureOpen()) return { ok: false, error: openError || 'SQLITE_UNAVAILABLE' };
+    const merged = {};
+    const lookup = prepare('SELECT extra FROM assets WHERE song_key=?');
+    if (lookup) {
+      const row = lookup.get(key);
+      if (row && row.extra != null) {
+        try {
+          const parsed = JSON.parse(row.extra);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) Object.assign(merged, parsed);
+        } catch (_e) { /* 破损 extra 直接以本次字段重建 */ }
+      }
+    }
+    Object.assign(merged, fields);
+    let payload = '';
+    try {
+      payload = JSON.stringify(merged);
+    } catch (_e) {
+      return { ok: false, error: 'LOCAL_LIBRARY_DB_EXTRA_UNSERIALIZABLE' };
+    }
+    const done = inTransaction(() => {
+      const update = prepare('UPDATE assets SET extra=? WHERE song_key=?');
+      if (!update) return null;
+      if (update.run(payload, key).changes > 0) return true;
+      const insert = prepare('INSERT INTO assets (song_key, extra, saved_at) VALUES (?, ?, ?)');
+      if (!insert) return null;
+      insert.run(key, payload, Date.now());
+      return true;
+    });
+    if (!done) return { ok: false, error: openError || 'LOCAL_LIBRARY_DB_ASSET_FAILED' };
+    return { ok: true };
+  }
+
+  /**
    * 写入封面缓存记录。封面以 BLOB 落盘，不再按 base64 文本存，磁盘占用少三分之一。
    * @param {object} record 渲染层资产缓存记录。
    * @returns {object} 写入结果。
@@ -813,6 +879,12 @@ function createLocalLibraryStore(options) {
     const songKey = record ? toText(record.id) : '';
     if (!songKey) return { ok: false, error: 'LOCAL_LIBRARY_DB_KEY_REQUIRED' };
     if (!ensureOpen()) return { ok: false, error: openError || 'SQLITE_UNAVAILABLE' };
+    // extra 列每次写入都整体重建：封面快照不带 ReplayGain，
+    // 若不先捞回已落盘的增益，一次轻量封面写就把解析结果抹了（同 localLyricTranslations 的教训）。
+    if (record.localReplayGain === undefined) {
+      const preserved = readAssetExtraField(songKey, 'localReplayGain');
+      if (preserved !== undefined) record.localReplayGain = preserved;
+    }
     const cover = splitCoverDataUrl(record.localCoverThumbDataUrl);
     const params = [songKey];
     for (const column of ASSET_COLUMNS) params.push(columnValue(column.kind, record[column.field]));
@@ -1304,6 +1376,7 @@ function createLocalLibraryStore(options) {
     clearRoot: clearRoot,
     readAssetRecords: readAssetRecords,
     writeAssetRecord: writeAssetRecord,
+    mergeAssetExtraFields: mergeAssetExtraFields,
     readLyricRecords: readLyricRecords,
     restoreLyricRecords: restoreLyricRecords,
     writeLyricRecord: writeLyricRecord,

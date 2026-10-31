@@ -261,8 +261,14 @@ var FX_CONSOLE_LAYOUT = [
         fxConsoleItem('t-startupFastSkip', '秒启动跳过启动页', '快速启动'),
         fxConsoleItem('startup-resume-mode-seg', '恢复播放位置', '按上次进度 重播整首')
       ] },
-      { key: 'output', title: '播放输出', hint: '音频输出设备和路由面板', items: [
-        fxConsoleItem('audio-output-panel', '播放输出设备', '声卡 耳机 扬声器 路由', false)
+      { key: 'output', title: '播放输出', hint: '音频输出设备、路由与音量均衡', items: [
+        fxConsoleItem('audio-output-panel', '播放输出设备', '声卡 耳机 扬声器 路由', false),
+        fxConsoleItem('t-replayGain', '音量归一化', 'ReplayGain 响度 均衡 音量平衡'),
+        fxConsoleItem('t-replayGainClipGuard', '防削波', '峰值 爆音 封顶 ReplayGain'),
+        fxConsoleItem('replaygain-mode-seg', '均衡基准', '整轨 整专辑 album track ReplayGain'),
+        fxConsoleItem('rg-preamp', '预增益 Preamp', 'ReplayGain 音量 提升 衰减 dB'),
+        fxConsoleItem('replaygain-hint', '音量均衡说明', '当前实际增益 ReplayGain', false),
+        fxConsoleItem('replaygain-support-hint', '支持格式说明', 'FLAC MP3 APE DSF 标签 ReplayGain', false)
       ] },
       { key: 'performance', title: '性能与后台', hint: '画质档位、后台渲染和直播保持', items: [
         fxConsoleItem('performance-quality-seg', '画质档位', '低配 中 高 超高 渲染质量'),

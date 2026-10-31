@@ -860,6 +860,7 @@ async function playLocalQueueSong(song, idx, token, firstVisualPlay, opts, resum
     audio.pause();
   }
   resetPlaybackAudioGraphForSourceSwitch('local-track-switch');
+  prepareReplayGainForSong(song, token);
   audio.autoplay = true;
   audio.preload = 'auto';
   bindPlaybackProgressEvents(audio);
@@ -1033,6 +1034,7 @@ async function playQueueAt(idx, opts) {
     safePlaybackStep('dj-mode', function () { setDjModeActive(podcastDjMode, song); });
     safePlaybackStep('visual-switch', switchPlaybackVisualToEmily);
     currentLocalSong = null;
+    prepareReplayGainForSong(null, token);
     safePlaybackStep('cover-button', updateCustomCoverButton);
     safePlaybackStep('like-buttons', function () { updateLikeButtons(song); });
     safePlaybackStep('like-status', function () { syncLikeStatusForSong(song); });

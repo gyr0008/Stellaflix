@@ -1,9 +1,9 @@
 // ============================================================
 function audioGraphHealthy() {
-  return !!(audio && audioReady && audioCtx && audioCtx.state !== 'closed' && source && audioSourceMedia === audio && analyser && beatAnalyser && (gainNode || analysisSinkNode));
+  return !!(audio && audioReady && audioCtx && audioCtx.state !== 'closed' && source && audioSourceMedia === audio && analyser && replayGainNode && beatAnalyser && gainNode);
 }
 function disconnectAudioGraphNodes(keepSource) {
-  [source, analyser, beatAnalyser, gainNode, analysisSinkNode].forEach(function (node) {
+  [source, analyser, beatAnalyser, gainNode, replayGainNode].forEach(function (node) {
     if (!node) return;
     try { node.disconnect(); } catch (e) { }
   });
@@ -14,8 +14,12 @@ function disconnectAudioGraphNodes(keepSource) {
   analyser = null;
   beatAnalyser = null;
   gainNode = null;
-  analysisSinkNode = null;
+  replayGainNode = null;
   audioReady = false;
+  // 图形不再出声，就必须把出声权立刻还给 <audio>，否则下一次建图失败会留下一个永久静音的哑巴播放器。
+  if (audio) {
+    try { audio.muted = false; } catch (e) { }
+  }
 }
 function restoreMediaTimeWhenReady(media, seconds) {
   seconds = Math.max(0, Number(seconds) || 0);
@@ -90,17 +94,19 @@ function resetPlaybackAudioGraphForSourceSwitch(reason) {
     && preparedGraph.analyser
     && preparedGraph.beatAnalyser
     && preparedGraph.gainNode
+    && preparedGraph.replayGainNode
   ) {
     audioCtx = preparedGraph.context;
     source = preparedGraph.source;
     analyser = preparedGraph.analyser;
     beatAnalyser = preparedGraph.beatAnalyser;
     gainNode = preparedGraph.gainNode;
-    analysisSinkNode = null;
+    replayGainNode = preparedGraph.replayGainNode;
     audioSourceMedia = audio;
     audio.__stellaflixMediaSourceBound = true;
     preparedGraph.adopted = true;
     audioReady = true;
+    setReplayGainNodeGain(replayGainActive.linear, true);
   }
 }
 function initAudio() {
@@ -111,7 +117,6 @@ function initAudio() {
   if (audioCtx && audioCtx.state === 'closed') replaceAudioElementForGraphRecovery('closed-context');
   if (!audioCtx || audioCtx.state === 'closed') audioCtx = new AudioContextCtor();
   var keepSource = !!(source && audioSourceMedia === audio && source.context === audioCtx && audioCtx.state !== 'closed');
-  var sourceUsesCapture = !!(keepSource && source.__stellaflixUsesCapture);
   disconnectAudioGraphNodes(keepSource);
   if (!source) {
     var forceCapture = !!audio.__stellaflixForceCaptureSource;
@@ -169,27 +174,22 @@ function initAudio() {
     // This is a lifetime marker, not the type of the current graph source.
     // Never reset it merely because the active fallback happens to be capture.
     if (mediaSource) audio.__stellaflixMediaSourceBound = true;
-    sourceUsesCapture = !mediaSource;
   }
   analyser = audioCtx.createAnalyser();
   beatAnalyser = audioCtx.createAnalyser();
-  gainNode = sourceUsesCapture ? null : audioCtx.createGain();
-  analysisSinkNode = sourceUsesCapture ? audioCtx.createGain() : null;
-  if (analysisSinkNode) analysisSinkNode.gain.value = 0;
+  gainNode = audioCtx.createGain();
+  replayGainNode = audioCtx.createGain();
   analyser.fftSize = FFT_SIZE;
   analyser.smoothingTimeConstant = 0.58;
   beatAnalyser.fftSize = BEAT_FFT_SIZE;
   beatAnalyser.smoothingTimeConstant = 0.10;
   source.connect(analyser);
   source.connect(beatAnalyser);
-  if (gainNode) {
-    analyser.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-  } else if (analysisSinkNode) {
-    analyser.connect(analysisSinkNode);
-    analysisSinkNode.connect(audioCtx.destination);
-  }
+  analyser.connect(replayGainNode);
+  replayGainNode.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
   applyVolumeToAudio();
+  setReplayGainNodeGain(replayGainActive.linear, true);
   frequencyData.fill(0);
   beatFrequencyData.fill(0);
   beatTimeDomainData.fill(128);
@@ -405,12 +405,19 @@ function normalizeAudioFadeTarget(value) {
   value = clampRange(Number(value) || 0, 0, 1);
   return value <= 0.001 ? audioSilentFloor() : value;
 }
+// captureStream 支路的音轨不受 <audio>.muted/.volume 影响（Chromium 实证），所以这条支路把主元素静音、
+// 由图形独占出声；音量律随之不同：图形吃全量，不再与元素各承担 sqrt。
+function audioGraphRunsOutput() {
+  return !!(gainNode && audioCtx && source && audioSourceMedia === audio && source.__stellaflixUsesCapture);
+}
 function writeAudioOutputGain(value) {
   value = normalizeAudioFadeTarget(value);
   audioFadeEnvelope = targetVolume > 0.001 ? clampRange(value / targetVolume, 0, 1) : (value > 0.001 ? 1 : 0);
-  var branchValue = (gainNode && audioCtx) ? Math.sqrt(value) : value;
+  var elementOwnsOutput = !gainNode || !audioCtx;
+  var muteElement = !elementOwnsOutput && audioGraphRunsOutput();
+  var branchValue = elementOwnsOutput || muteElement ? value : Math.sqrt(value);
   if (audio) {
-    audio.muted = false;
+    audio.muted = muteElement;
     audio.volume = branchValue;
   }
   if (gainNode && audioCtx) {

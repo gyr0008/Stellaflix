@@ -125,6 +125,7 @@
     'js/modules/05-playback/19-outer-poster-bridge.js',
     'js/modules/05-playback/20-local-library-db-bridge.js',
     'js/modules/05-playback/21-local-special-liked.js',
+    'js/modules/05-playback/22-replay-gain.js',
     'js/modules/06-lyrics/00-lyrics-fetch-parse.js',
     'js/modules/06-lyrics/01-playlist-panel-shell.js',
     'js/modules/06-lyrics/02-playlist-detail.js',

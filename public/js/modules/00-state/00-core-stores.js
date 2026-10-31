@@ -51,7 +51,7 @@
 // ============================================================
 //  Global State
 // ============================================================
-var audio = null, audioCtx = null, source = null, audioSourceMedia = null, analyser = null, beatAnalyser = null, gainNode = null, analysisSinkNode = null, audioReady = false;
+var audio = null, audioCtx = null, source = null, audioSourceMedia = null, analyser = null, beatAnalyser = null, gainNode = null, replayGainNode = null, audioReady = false;
 var uiSfxCtx = null, lastShelfSelectSfxAt = 0;
 var FFT_SIZE = 2048;
 var frequencyData = new Uint8Array(FFT_SIZE / 2);

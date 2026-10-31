@@ -945,8 +945,7 @@ function syncAudioOutputMirrors(reason) {
       mirror = new Audio();
       mirror.crossOrigin = 'anonymous';
       mirror.preload = 'auto';
-      mirror.muted = !!audio.muted;
-      mirror.volume = audio.volume;
+      mirror.volume = currentAudioOutputGain();
       mirror.playbackRate = audio.playbackRate || 1;
       audioOutputMirrorElements[id] = mirror;
     }
@@ -964,7 +963,7 @@ function syncAudioOutputMirrors(reason) {
     if ((mirror.currentSrc || mirror.src || '') !== src) {
       try { mirror.src = src; mirror.load(); } catch (e) { }
     }
-    try { mirror.muted = !!audio.muted; mirror.volume = audio.volume; mirror.playbackRate = audio.playbackRate || 1; } catch (e) { }
+    try { mirror.volume = currentAudioOutputGain(); mirror.playbackRate = audio.playbackRate || 1; } catch (e) { }
     try {
       if (isFinite(audio.currentTime) && Math.abs((mirror.currentTime || 0) - audio.currentTime) > 0.22) {
         mirror.currentTime = audio.currentTime;

@@ -219,7 +219,7 @@ function claimCuefieldPreparedAudioForPlayback(media) {
 function disposeCuefieldPreparedAudioGraph(media) {
   var graph = media && media.__stellaflixPreparedAudioGraph;
   if (!graph || graph.adopted) return;
-  [graph.source, graph.analyser, graph.beatAnalyser, graph.gainNode].forEach(function (node) {
+  [graph.source, graph.analyser, graph.beatAnalyser, graph.gainNode, graph.replayGainNode].forEach(function (node) {
     try { if (node) node.disconnect(); } catch (_) { }
   });
   try { delete media.__stellaflixPreparedAudioGraph; } catch (_) { }
@@ -385,7 +385,7 @@ function cuefieldCreatePreparedAudioGraph(media) {
   try {
     if ((!audioCtx || audioCtx.state === 'closed') && typeof initAudio === 'function') initAudio();
     if (!audioCtx || audioCtx.state === 'closed' || !audioCtx.createMediaElementSource) return null;
-    graph = { context: audioCtx, source: null, analyser: null, beatAnalyser: null, gainNode: null, adopted: false };
+    graph = { context: audioCtx, source: null, analyser: null, beatAnalyser: null, gainNode: null, replayGainNode: null, adopted: false };
     graph.source = audioCtx.createMediaElementSource(media);
     // A media element cannot be safely returned to direct-output mode after a
     // MediaElementSource has been created for it. Mark it immediately so a
@@ -394,6 +394,7 @@ function cuefieldCreatePreparedAudioGraph(media) {
     graph.analyser = audioCtx.createAnalyser();
     graph.beatAnalyser = audioCtx.createAnalyser();
     graph.gainNode = audioCtx.createGain();
+    graph.replayGainNode = audioCtx.createGain();
     graph.analyser.fftSize = typeof FFT_SIZE !== 'undefined' ? FFT_SIZE : 2048;
     graph.analyser.smoothingTimeConstant = 0.58;
     graph.beatAnalyser.fftSize = typeof BEAT_FFT_SIZE !== 'undefined' ? BEAT_FFT_SIZE : 1024;
@@ -401,13 +402,14 @@ function cuefieldCreatePreparedAudioGraph(media) {
     graph.gainNode.gain.value = 0;
     graph.source.connect(graph.analyser);
     graph.source.connect(graph.beatAnalyser);
-    graph.analyser.connect(graph.gainNode);
+    graph.analyser.connect(graph.replayGainNode);
+    graph.replayGainNode.connect(graph.gainNode);
     graph.gainNode.connect(audioCtx.destination);
     media.__stellaflixPreparedAudioGraph = graph;
     return graph;
   } catch (error) {
     if (graph) {
-      [graph.source, graph.analyser, graph.beatAnalyser, graph.gainNode].forEach(function (node) {
+      [graph.source, graph.analyser, graph.beatAnalyser, graph.gainNode, graph.replayGainNode].forEach(function (node) {
         try { if (node) node.disconnect(); } catch (_) { }
       });
     }

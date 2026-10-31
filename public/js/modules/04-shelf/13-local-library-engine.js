@@ -79,6 +79,8 @@ async function hydrateLocalLibraryRoot(folderPath) {
         var mk = songs[mi].localKey;
         var asset = assetMap[mk];
         if (asset && asset.localCoverThumbDataUrl && !songs[mi].localCoverDataUrl) songs[mi].localCoverDataUrl = asset.localCoverThumbDataUrl;
+        // 持久化的 ReplayGain 随封面一起回灌：重启后不必再解析一遍标签就能直接施加增益。
+        if (asset && asset.localReplayGain && typeof asset.localReplayGain === 'object' && !songs[mi].localReplayGain) songs[mi].localReplayGain = asset.localReplayGain;
         var lyricRec = lyricMap[mk];
         if (lyricRec && lyricRec.localLyricText && !songs[mi].localLyricText) songs[mi].localLyricText = lyricRec.localLyricText;
       }
@@ -255,6 +257,19 @@ async function coverSourceToDataUrl(blob) {
 }
 
 /**
+ * 把解析到的 ReplayGain 落到资产记录的 extra JSON 列（参照库 app.js:9299 同构，零 DDL）。
+ * 只在解析到时写：无标签曲目不落负标记，与参照库「缺省时不占用缓存体积」的口径一致。
+ * @param {object} song 曲目。
+ * @returns {Promise<void>}
+ */
+async function persistLocalReplayGainAsset(song) {
+  if (!song || !song.localKey || !song.localReplayGain || typeof song.localReplayGain !== 'object') return;
+  try {
+    await callLocalLibraryDb('mergeLocalLibraryDbAssetExtra', song.localKey, { localReplayGain: song.localReplayGain });
+  } catch (_e) { /* 落库失败不阻断播放 */ }
+}
+
+/**
  * 单曲解析结果落库（批4-C1b）：标签经 saveIndexRecords 回写 files 索引行；封面/歌词经 assets/lyrics 表。
  * @param {string} folderPath 曲库根。
  * @param {object} song 曲目。
@@ -288,6 +303,7 @@ async function persistLocalTrackMetadata(folderPath, song) {
     updatedAt: Date.now(),
   };
   try { await callLocalLibraryDb('saveLocalLibraryDbIndexRecords', folderPath, [record]); } catch (_e) { /* 索引回写失败不阻断 */ }
+  await persistLocalReplayGainAsset(song);
   if (song.localCoverDataUrl && song.localCoverDataUrl.indexOf('data:') === 0) {
     try {
       await callLocalLibraryDb('writeLocalLibraryDbAssets', [{

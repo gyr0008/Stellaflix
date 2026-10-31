@@ -5848,6 +5848,12 @@ ipcMain.handle('stellaflix-local-library-db-write-assets', async (event, records
   });
 });
 
+ipcMain.handle('stellaflix-local-library-db-merge-asset-extra', async (event, songKey, fields) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  if (!songKey) return { ok: false, error: 'LOCAL_LIBRARY_DB_KEY_EMPTY' };
+  return withLocalLibraryStore((store) => store.mergeAssetExtraFields(String(songKey), fields && typeof fields === 'object' ? fields : null));
+});
+
 ipcMain.handle('stellaflix-local-library-db-read-lyrics', async (event, keys) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   return withLocalLibraryStore((store) => store.readLyricRecords(Array.isArray(keys) ? keys : []));

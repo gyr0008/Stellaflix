@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   clearLocalLibraryDbRoot: (folderPath) => ipcRenderer.invoke('stellaflix-local-library-db-clear', folderPath),
   readLocalLibraryDbAssets: (keys) => ipcRenderer.invoke('stellaflix-local-library-db-read-assets', keys),
   writeLocalLibraryDbAssets: (records) => ipcRenderer.invoke('stellaflix-local-library-db-write-assets', records),
+  mergeLocalLibraryDbAssetExtra: (key, fields) => ipcRenderer.invoke('stellaflix-local-library-db-merge-asset-extra', key, fields),
   readLocalLibraryDbLyrics: (keys) => ipcRenderer.invoke('stellaflix-local-library-db-read-lyrics', keys),
   writeLocalLibraryDbLyrics: (records) => ipcRenderer.invoke('stellaflix-local-library-db-write-lyrics', records),
   restoreLocalLibraryDbLyrics: (entries) => ipcRenderer.invoke('stellaflix-local-library-db-restore-lyrics', entries),
