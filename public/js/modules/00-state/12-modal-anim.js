@@ -8,9 +8,10 @@
 //    共 19 处无守卫直调，另有 06-lyrics/01-playlist-panel-shell.js:440 顶层直调遮罩绑定）。
 // 本模块只承载 ②，保证退役后音乐侧弹窗仍能开合并能点遮罩关闭。
 //
-// 注意：bindModalBackdropClose 的配对表剔除了 login-modal / user-modal 两项
-// （对应关闭函数已随 T16d 整族不存在，保留会立刻 ReferenceError）。
+// 注意：login-modal 一项已随退役消失（对应关闭函数不存在，保留会立刻 ReferenceError）；
+// user-modal 保留，它现在是 16a「本地档案」弹窗，关闭函数见下方 closeUserModal。
 // ============================================================
+function closeUserModal() { closeGsapModal(document.getElementById('user-modal')); }
 function openGsapModal(mask) {
   if (!mask) return;
   var panel = mask.querySelector('.modal');
@@ -69,7 +70,8 @@ function bindModalBackdropClose() {
     ['track-detail-modal', closeTrackDetailModal],
     ['audio-output-workflow-modal', closeAudioOutputWorkflowPanel],
     ['custom-lyric-modal', closeCustomLyricModal],
-    ['update-modal', closeUpdatePanel]
+    ['update-modal', closeUpdatePanel],
+    ['user-modal', closeUserModal]   // 16a「本地档案」弹窗（沿用原 id）
   ].forEach(function (pair) {
     var mask = document.getElementById(pair[0]);
     var close = pair[1];
