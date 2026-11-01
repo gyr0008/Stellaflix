@@ -96,6 +96,7 @@
     'js/modules/04-shelf/12-local-cache-bridge.js',
     'js/modules/04-shelf/13-local-library-engine.js',
     'js/modules/04-shelf/14-mlib-seam.js',
+    'js/modules/04-shelf/15-mlib-detail-modal.js',
     'js/modules/05-playback/00-api-quality-output.js',
     'js/modules/05-playback/01-cover-custom-map.js',
     'js/modules/05-playback/02-listen-stats.js',

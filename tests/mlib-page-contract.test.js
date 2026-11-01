@@ -68,8 +68,10 @@ test('列数变量命名空间收编（--stella-mlib-cols，旧名归零）', ()
   assert.ok(css.includes('--stella-mlib-cols'), '必须改用 --stella-mlib-cols');
   assert.match(css, /var\(--stella-mlib-cols,\s*5\)/, 'grid-template-columns 的 var() 默认值必须改名');
   assert.ok(!css.includes('--mlib-cols'), '旧名 --mlib-cols 不得再出现（含 var() 默认值与 @container 定义）');
-  // 四条 @container + 三条轴规则 = 7 处赋值；var() 消费点单列在上面的正则里。
-  assert.equal((css.match(/--stella-mlib-cols:/g) || []).length, 7, '列数赋值必须恰为 7 处');
+  // 8 处赋值 = 轴默认 3（歌单/专辑/艺人）+ @1080 艺人 1 + @860 艺人/歌单 2 + @620 三轴共用 1 + @380 三轴共用 1。
+  // 批C-2（10-26）把 1080/860 两档按轴分开写：裸 #mlib-grid 的选择器特异度压不过轴默认值，
+  // 老写法（4 条共用 @container + 3 条轴默认）里的容器查询实测从不生效，所以计数从 7 变 8，不是漂移。
+  assert.equal((css.match(/--stella-mlib-cols:/g) || []).length, 8, '列数赋值必须恰为 8 处（3 轴默认 + 5 处降级声明）');
 });
 
 // ② 删死样式：.stella-mlib-skeleton 无生产者，整条删除；@keyframes stella-mlib-shimmer 保留。

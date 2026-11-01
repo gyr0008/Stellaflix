@@ -178,6 +178,19 @@ test('getDetail：entity 与扁平字段同时在场 → 以 entity 为准，绝
   assert.equal(r.entity.sub, '来自 entity', '扁平 artist 不得覆盖 entity.sub');
 });
 
+test('getDetail：扁平详情封面透传 → entity.cover＝引擎 cover 原文（详情头大封面取这一字段）', async () => {
+  const tracks = [track({ id: 't1', cover: 'track-cover' })];
+  const read = boot({ getAlbumDetail: async () => ({ id: 'AL1', title: 'A', cover: 'album-cover', tracks, rev: 1 }) });
+  const r = await read.getDetail('albums', 'AL1');
+  assert.equal(r.entity.cover, 'album-cover', '扁平 res.cover 即实体封面，绝不拿首轨封面顶替');
+});
+
+test('getDetail：扁平详情无 cover → entity.cover 为空串（页面据此退回占位底色）', async () => {
+  const read = boot({ getArtistDetail: async () => ({ id: 'AR1', title: '周杰伦', tracks: [track({ cover: 'c' })], rev: 1 }) });
+  const r = await read.getDetail('artists', 'AR1');
+  assert.equal(r.entity.cover, '', '缺 cover 键＝空串；不从 tracks 反推，也不造 null 之外的形状');
+});
+
 test('getDetail：既无 entity 也无任何实体字段 → entity 仍为 null，不凭空造', async () => {
   const read = boot({ getAlbumDetail: async () => ({ tracks: [track()] }) });
   const r = await read.getDetail('albums', 'AL1');

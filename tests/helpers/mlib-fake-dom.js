@@ -72,7 +72,12 @@ function makeNode(tag) {
     parent: null,
     attributes: Object.create(null),
     listeners: Object.create(null),
-    style: { setProperty(name, value) { this[name] = value; } },
+    // 批D Task 3：补 removeProperty（setProperty 的镜像）。主题变量类断言要在 boot 侧
+    // （helpers/mlib-detail-boot.js 的 f.themeWrites）成对记账，这里先把机制面补齐。
+    style: {
+      setProperty(name, value) { this[name] = value; },
+      removeProperty(name) { delete this[name]; },
+    },
     _text: '',
     _innerHTML: '',
     hidden: false,
@@ -282,6 +287,10 @@ function buildNode(doc, spec) {
 /**
  * #mlib-* 页面壳的节点描述（与 public/index.html 的 #music-library 骨架逐一对应）。
  * 资料库系列测试的 boot 默认挂这个；后续任务需要额外入口节点时用 { ...SHELL, extra: {...} } 自取。
+ * 批D Task 3：第二段＝#mlib-detail-modal 弹窗静态壳，与 index.html:357-399 逐字对应，
+ * 且与 #music-library 同层（遮罩不在滚动容器里）；id 面、data-mlib-modal-* / aria-busy / hidden
+ * 属性面全挂上（Task 5 的选择器判据只读这些）。innerHTML 不解析的既有口径下，凡要被断言的
+ * 结构一律节点描述（createElement），不用 html: 静态片段。
  */
 const SHELL = [
   {
@@ -303,6 +312,68 @@ const SHELL = [
               { tag: 'button', id: 'mlib-detail-back', text: '返回' },
               { id: 'mlib-detail-head' },
               { id: 'mlib-detail-tracks' },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    tag: 'div', id: 'mlib-detail-modal', class: 'modal-mask',
+    attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'mlib-detail-modal-heading' },
+    children: [
+      {
+        tag: 'div', class: 'modal stella-mlib-modal', children: [
+          {
+            tag: 'div', id: 'mlib-detail-modal-scroll', class: 'stella-mlib-modal-scroll', children: [
+              {
+                tag: 'div', class: 'stella-mlib-modal-info', children: [
+                  {
+                    tag: 'div', class: 'stella-mlib-modal-cover-wrap', children: [
+                      { tag: 'div', id: 'mlib-detail-modal-cover', class: 'stella-mlib-modal-cover', attrs: { 'aria-hidden': 'true' } },
+                    ],
+                  },
+                  {
+                    tag: 'div', class: 'stella-mlib-modal-meta', children: [
+                      { tag: 'div', id: 'mlib-detail-modal-kicker', class: 'stella-mlib-modal-kicker' },
+                      { tag: 'h2', id: 'mlib-detail-modal-heading', class: 'stella-mlib-detail-title', text: '详情' },
+                      { tag: 'div', id: 'mlib-detail-modal-artist', class: 'stella-mlib-modal-artist' },
+                      { tag: 'p', id: 'mlib-detail-modal-desc', class: 'stella-mlib-modal-desc', attrs: { hidden: '' } },
+                      {
+                        tag: 'button', id: 'mlib-detail-modal-desc-toggle', class: 'stella-mlib-modal-desc-toggle',
+                        attrs: { type: 'button', hidden: '', 'data-mlib-modal-desc-toggle': '' }, text: '展开简介',
+                      },
+                      { tag: 'div', id: 'mlib-detail-modal-facts', class: 'stella-mlib-modal-facts' },
+                      {
+                        tag: 'div', class: 'stella-mlib-modal-actions', children: [
+                          {
+                            tag: 'button', id: 'mlib-detail-modal-play', class: 'stella-mlib-modal-play',
+                            attrs: { type: 'button', 'data-mlib-modal-play': '' }, children: [
+                              { tag: 'svg', attrs: { 'aria-hidden': 'true' } },
+                              { tag: 'span', id: 'mlib-detail-modal-play-label', text: '播放' },
+                            ],
+                          },
+                          {
+                            tag: 'button', id: 'mlib-detail-modal-shuffle', class: 'stella-mlib-shuffle-btn',
+                            attrs: { type: 'button', 'data-mlib-modal-shuffle': '', title: '随机播放', 'aria-label': '随机播放' },
+                            children: [{ tag: 'svg', attrs: { 'aria-hidden': 'true' } }],
+                          },
+                        ],
+                      },
+                      {
+                        tag: 'div', id: 'mlib-detail-modal-status', class: 'stella-mlib-modal-status',
+                        attrs: { role: 'status', 'aria-live': 'polite', hidden: '' },
+                      },
+                    ],
+                  },
+                ],
+              },
+              { tag: 'div', id: 'mlib-detail-modal-tracks', class: 'stella-mlib-modal-tracks', attrs: { 'aria-busy': 'false' } },
+            ],
+          },
+          {
+            tag: 'div', class: 'stella-mlib-modal-foot', children: [
+              { tag: 'button', class: 'modal-btn', attrs: { type: 'button', 'data-mlib-modal-close': '' }, text: '关闭' },
             ],
           },
         ],

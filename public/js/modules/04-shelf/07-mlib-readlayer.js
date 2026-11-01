@@ -190,13 +190,15 @@
 
   // 批4 引擎的详情方法返回扁平形状（14-mlib-seam.js: getAlbumDetail → {id,title,artist,cover,tracks,rev}），
   // 而 spec §3 契约是 {entity, tracks}。兼容只落在这一处：读层是缝的唯一消费方，页面层继续只认 entity。
-  // 字段口径取页面实际消费的四个（08 renderDetailHead：title / sub / count / meta.releaseYear），不多造。
+  // 字段口径取页面实际消费的五个（08 renderDetailHead：title / sub / count / meta.releaseYear / cover），不多造。
+  // cover 只认引擎给 res.cover：艺人轴详情给的是首轨专辑封面，页面按轴另判（头像层绝不吃它）。
   function entityFromFlatDetail(res, tracks) {
     if (typeof res.title !== 'string' && typeof res.id !== 'string') return null; // 无实体字段＝不凭空造实体
     var first = tracks[0] || {};
     return {
       title: String(res.title == null ? '' : res.title),
       sub: String(res.artist == null ? '' : res.artist), // 艺人轴引擎不给 artist → 留空，不拿别的字段凑
+      cover: String(res.cover == null ? '' : res.cover),
       count: tracks.length,
       meta: { releaseYear: Number(first.releaseYear) || 0 },
     };
