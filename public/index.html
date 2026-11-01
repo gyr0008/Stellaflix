@@ -351,6 +351,53 @@
       </div>
     </section>
 
+    <!-- 本地音乐资料库·专辑/歌单详情弹窗（批D）。形态与度量 1:1 参照库 index.html:2008-2085。
+         复用全站弹窗基座 .modal-mask/.modal（css/index.css:7746）：GSAP 生命周期按 .modal 找面板。
+         单弹窗承载两轴：一次只开一个详情，取色变量在 show() 里先清，不存在参照库那种互相覆盖。 -->
+    <div id="mlib-detail-modal" class="modal-mask" role="dialog" aria-modal="true"
+      aria-labelledby="mlib-detail-modal-heading">
+      <div class="modal stella-mlib-modal">
+        <div class="stella-mlib-modal-scroll" id="mlib-detail-modal-scroll">
+          <div class="stella-mlib-modal-info">
+            <div class="stella-mlib-modal-cover-wrap">
+              <div class="stella-mlib-modal-cover" id="mlib-detail-modal-cover" aria-hidden="true"></div>
+            </div>
+            <div class="stella-mlib-modal-meta">
+              <div class="stella-mlib-modal-kicker" id="mlib-detail-modal-kicker"></div>
+              <h2 class="stella-mlib-detail-title" id="mlib-detail-modal-heading">详情</h2>
+              <div class="stella-mlib-modal-artist" id="mlib-detail-modal-artist"></div>
+              <p class="stella-mlib-modal-desc" id="mlib-detail-modal-desc" hidden></p>
+              <button class="stella-mlib-modal-desc-toggle" id="mlib-detail-modal-desc-toggle" type="button" hidden
+                data-mlib-modal-desc-toggle>展开简介</button>
+              <div class="stella-mlib-modal-facts" id="mlib-detail-modal-facts"></div>
+              <div class="stella-mlib-modal-actions">
+                <button class="stella-mlib-modal-play" id="mlib-detail-modal-play" type="button" data-mlib-modal-play>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5.5v13l10.5-6.5z" /></svg>
+                  <span id="mlib-detail-modal-play-label">播放</span>
+                </button>
+                <!-- 随机钮只在歌单出现（参照库不放进展窗）；专辑轴由 CSS 隐藏。 -->
+                <button class="stella-mlib-shuffle-btn" id="mlib-detail-modal-shuffle" type="button"
+                  data-mlib-modal-shuffle title="随机播放" aria-label="随机播放">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 7h3.5c2 0 3.5 1.2 5 3s3 5 5 5H20" />
+                    <path d="M17.5 12.5 20 15l-2.5 2.5" />
+                    <path d="M3 17h3.5c2 0 3.5-1.2 5-3s3-5 5-5H20" />
+                    <path d="M17.5 9.5 20 7l-2.5-2.5" />
+                  </svg>
+                </button>
+              </div>
+              <div class="stella-mlib-modal-status" id="mlib-detail-modal-status" role="status" aria-live="polite" hidden></div>
+            </div>
+          </div>
+          <div class="stella-mlib-modal-tracks" id="mlib-detail-modal-tracks" aria-busy="false"></div>
+        </div>
+        <div class="stella-mlib-modal-foot">
+          <button class="modal-btn" type="button" data-mlib-modal-close>关闭</button>
+        </div>
+      </div>
+    </div>
+
     <div id="home-platform-recommend-mask" class="modal-mask sfv-glass-modal" role="dialog" aria-modal="true" aria-hidden="true"
       aria-labelledby="home-platform-recommend-title">
       <div class="modal home-platform-recommend-modal">

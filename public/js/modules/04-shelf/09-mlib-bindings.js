@@ -4,7 +4,8 @@
 // ESC 两级（capture 抢在 10-shell 既有冒泡链之前；资料库未开时完全不拦截）
 // + 激活键 Enter/Space（F2：同一条 keydown、同一套优先级判定，焦点在真 button 上让位给原生激活）。
 // 外加状态盒动作钮（data-mlib-action=import/retry）、播放意图与二级详情入口/返回钮（Task 8 C1/I1）
-// 都走同一条 document 点击委托（F2：恰一枚）。
+// 都走同一条 document 点击委托（F2：恰一枚）；批D 起弹窗 chrome（关闭/遮罩/整单播放/随机/展开简介）
+// 也只加这条委托里的分支，不新增任何监听。
 // 渲染与数据归 08-mlib-page.js（stellaMlibPage，fake 可桩）；本层只解析「点的是哪张卡/哪条轨的播放」，
 // 可播判定与 track→song 入队映射都在页面层，绑定层不碰队列、不判本地/在线。
 // 首页让位由 CSS 拥有（body.mlib-active 分支已置首页 opacity/pointer-events），
@@ -100,6 +101,11 @@
 
   window.mlibClose = function () {
     seq += 1;
+    // 批D：关库前先把详情（含弹窗）复位，否则 mask 的 .show 浮在首页上。
+    // 位置必须**先于** p.close()：close() 会 clearGrid() 清掉网格 payload，而 closeDetail() 里的
+    // detailPayload.clear() 与 repaintDirtyGrid() 还要读现挂的轴类；顺序倒了就是「详情清理读到空网格」。
+    // ESC 那一级本来就调 closeDetail（见上面的键盘分派），这里不重复挂。
+    ensureDetailClosed();
     var my = seq;
     var b = bodyEl();
     var active = !!(b && b.classList.contains('mlib-active'));
@@ -236,6 +242,60 @@
     return false;
   }
 
+  // ---------- 弹窗 chrome（批D）：关闭 / 遮罩 / 整单播放 / 随机 / 展开简介 ----------
+  // 仍是同一条 document click 委托：本模块从 04-shelf 起就是资料库事件面的唯一属主，
+  // 参照库那侧 inline onclick + 各自 wrap addEventListener（07-album-detail.js:809-853）不照搬。
+  var MODAL_MASK_SELECTOR = '#mlib-detail-modal';
+  var MODAL_CLOSE_SELECTOR = '[data-mlib-modal-close]';
+  var MODAL_PLAY_SELECTOR = '[data-mlib-modal-play]';
+  var MODAL_SHUFFLE_SELECTOR = '[data-mlib-modal-shuffle]';
+  var MODAL_DESC_SELECTOR = '[data-mlib-modal-desc-toggle]';
+  // 随机入口在参照库只长在 playlists 那条窗上（albums 窗压根没有这颗钮，07-album-detail.js:1049+）；
+  // 本仓一窗承载两轴，隐藏交给 CSS（music-library.css:696
+  // `body.mlib-axis-albums #mlib-detail-modal .stella-mlib-shuffle-btn{display:none}`）。
+  // 代码闸读**同一条 body 轴类**：与 CSS 同源、可 grep，且不在本模块引入轴名字面量
+  //（09 的轴名唯一映射源仍是 data-mlib-axis，见 mlib-bindings-contract ① 的源码守卫）。
+  var MODAL_SHUFFLE_HIDDEN_AXIS_CLASS = 'mlib-axis-albums';
+
+  function detailModal() {
+    var m = window.stellaMlibDetailModal;
+    return (m && typeof m.toggleDesc === 'function' && typeof m.isBusy === 'function') ? m : null;
+  }
+
+  // 整单播放拿的是「当前详情实体」，不是卡上的 data-mlib-id：弹窗底下的网格虽仍在（遮罩半透），
+  // 但实体真相源只有页面层的 detailEntity（currentDetail()），属性面再塞一份就是第二个真相源。
+  function currentDetailId() {
+    var p = page();
+    if (!p || typeof p.currentDetail !== 'function') return '';
+    var d = p.currentDetail();
+    return d && d.id != null ? String(d.id) : '';
+  }
+
+  function runModalChrome(t) {
+    if (!hasBodyClass('mlib-detail-open')) return false;   // 真相源闸：详情没开一律静默
+    var m = detailModal();
+    if (t.closest(MODAL_DESC_SELECTOR)) { if (m) m.toggleDesc(); return true; }
+    // 遮罩自身命中才算「点空白关闭」；窗口内任何子孙都走 closest 找不到 mask（el.matches 才判自身）
+    if (t.closest(MODAL_CLOSE_SELECTOR) || (typeof t.matches === 'function' && t.matches(MODAL_MASK_SELECTOR))) {
+      callPageAction('closeDetail', []);
+      return true;
+    }
+    if (t.closest(MODAL_PLAY_SELECTOR)) {
+      if (m && m.isBusy()) return true;                    // 参照库 743：进行中不重复入队
+      var id = currentDetailId();
+      if (id) callPageAction('playEntity', [currentAxis(), id]);
+      return true;
+    }
+    if (t.closest(MODAL_SHUFFLE_SELECTOR)) {
+      if (hasBodyClass(MODAL_SHUFFLE_HIDDEN_AXIS_CLASS)) return true; // albums 轴不放随机：命中也算已识别，但不发意图
+      if (m && m.isBusy()) return true;
+      var pid = currentDetailId();
+      if (pid) callPageAction('playEntityShuffled', [currentAxis(), pid]);
+      return true;
+    }
+    return false;
+  }
+
   // ---------- 返回钮（C1）：#mlib-detail-back → closeDetail。仍是同一条 click 委托，不新增监听 ----------
   // 用**专用 id 选择器**而非 [data-mlib-action] 词汇：data-mlib-action 的 token 由读层 getStateCopy 给
   //（import/retry＝状态盒动作，与「返回」这种壳层 chrome 是两套词汇）；把返回塞进那套词汇就得让读层多吐一个
@@ -259,6 +319,9 @@
     // 再判播放/详情意图（同一条委托的第三个分支）：排在 video-home-collapsed 之前——资料库已展开时
     // 封面/曲目行在画面正中央，那个类收起的是首页卡，与资料库内的播放钮/详情入口不同源，不该把它一起吃掉。
     if (runPlayIntent(t)) return;
+    // 批D：弹窗 chrome（关闭/遮罩/整单/随机/简介）——排在播放之后、返回钮之前：
+    // 弹窗里的曲目行已被 TRACK_ROW_SELECTOR 那条分支吃掉，chrome 钮不得和行/卡抢顺序。
+    if (runModalChrome(t)) return;
     // 返回钮（二级详情→网格）：详情视图里的 chrome，命中即 closeDetail；不在详情里＝无操作但仍算已识别。
     if (runDetailBack(t)) return;
     // 影视态专属 Home 收起（body.video-home-collapsed，index.css 此时本就隐藏首页）：

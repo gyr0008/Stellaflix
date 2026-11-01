@@ -3,46 +3,16 @@
 //       详情头部（eyebrow/detail-title/head-meta）、曲目行（只带 data-mlib-track-id、数据进 __mlibDetailPayloadForTests）、
 //       文本转义、matched:false 行播放钮 disabled+title=unplayableHint()、详情状态盒（error 缝 message 透传 / engine-missing / 空轨）、
 //       滚动进入前记录 + 返回恢复、关详情后在途渲染丢弃、is-openable 卡可点入口。
+// 批D（10-26）分流后：全屏详情归艺人轴，本文件里「铺 #mlib-detail-tracks / 钉顶 / 恢复滚动 / 头部」的用例一律改艺人轴驱动；
+//       弹窗轴覆盖在 tests/mlib-detail-modal-render.test.js（同一共用 boot）；专辑头形态保留一条「弹窗层缺席＝降级全屏」用例。
+//       共用 bootDetail 已抽到 tests/helpers/mlib-detail-boot.js（仓里唯一一份，本文件 require 它，不留第二份）。
 // 运行：node --test tests/mlib-page-detail.test.js
 'use strict';
 
 const test = require('node:test');
 const assert = require('node:assert');            // 宽松断言：vm 跨 realm 下 deepStrictEqual 会误报（仓内约定）
-const fs = require('node:fs');
-const path = require('node:path');
-const { createFakeDom, fire, SHELL } = require('./helpers/mlib-fake-dom');
-
-const DIR = path.join(__dirname, '..', 'public', 'js', 'modules', '04-shelf');
-const READ_SRC = fs.readFileSync(path.join(DIR, '07-mlib-readlayer.js'), 'utf8');
-const PAGE_SRC = fs.readFileSync(path.join(DIR, '08-mlib-page.js'), 'utf8');
-
-// boot：真读层 + 真页面；把 getDetail 换成固定返回（页面只见契约形状），
-// 传 detail 则驱动详情，可选 axisData 让网格先渲染出卡（用于 is-openable / 滚动恢复断言）。
-function bootDetail(opts) {
-  const options = opts || {};
-  const fake = createFakeDom({ hover: options.hover, mount: options.mount || SHELL });
-  const { win, doc } = fake;
-  win.loadScript(READ_SRC, '07-mlib-readlayer.js');
-  if (options.axisData) {
-    win.stellaMlibRead.getAxisData = async () => options.axisData;
-  }
-  fake.detailCalls = [];
-  win.stellaMlibRead.getDetail = async function (axis, id) {
-    fake.detailCalls.push({ axis, id });
-    return typeof options.detail === 'function' ? await options.detail(axis, id) : options.detail;
-  };
-  win.loadScript(PAGE_SRC, '08-mlib-page.js');
-  fake.read = win.stellaMlibRead;
-  fake.scroll = () => doc.getElementById('music-library-scroll');
-  fake.grid = () => doc.getElementById('mlib-grid');
-  fake.gridView = () => doc.getElementById('mlib-view-grid');
-  fake.head = () => doc.getElementById('mlib-detail-head');
-  fake.tracks = () => doc.getElementById('mlib-detail-tracks');
-  fake.row = (id) => doc.querySelector('[data-mlib-track-id="' + id + '"]');
-  fake.rows = () => doc.querySelectorAll('.stella-mlib-track');
-  fake.card = (id) => doc.querySelector('[data-mlib-id="' + id + '"]');
-  return fake;
-}
+const { createFakeDom, SHELL } = require('./helpers/mlib-fake-dom');
+const { bootDetail, READ_SRC, PAGE_SRC } = require('./helpers/mlib-detail-boot');
 
 const entity = (o) => Object.assign({ id: 'AL1', title: '十一月的萧邦', sub: '周杰伦', cover: 'https://cdn/a.jpg', count: 3, playable: true, meta: { releaseYear: 2005 } }, o || {});
 const track = (o) => Object.assign({ id: 't1', name: '夜曲', artist: '周杰伦', album: '十一月的萧邦', cover: 'https://cdn/1.jpg', duration: 250, matched: true }, o || {});
@@ -51,7 +21,8 @@ const track = (o) => Object.assign({ id: 't1', name: '夜曲', artist: '周杰�
 
 test('openDetail：置 mlib-detail-open、网格视图 aria-hidden、详情头部三件套渲染', async () => {
   const { win, body, doc, head, gridView } = bootDetail({ detail: { entity: entity(), tracks: [track()], status: 'ok' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  // 批D：全屏详情归艺人轴（专辑/歌单走弹窗，分流覆盖在 mlib-detail-modal-render.test.js）。
+  await win.stellaMlibPage.openDetail('artists', 'AL1');
   assert.equal(body.classList.contains('mlib-detail-open'), true, 'body 类真相源须置 mlib-detail-open（Task 7 依赖）');
   assert.equal(gridView().getAttribute('aria-hidden'), 'true', '进详情须把网格视图对读屏隐藏');
   assert.equal(win.document.getElementById('mlib-view-detail') && true, true, '详情容器必须存在');
@@ -66,11 +37,55 @@ test('openDetail：置 mlib-detail-open、网格视图 aria-hidden、详情头�
   assert.equal(eyebrow.textContent, '周杰伦', 'eyebrow＝entity.sub（读层既有串，不新造文案）');
 });
 
+/* ---- 批C-3（10-26 主人拍板）：详情头大封面/头像 ----
+ * 参照库 06-music-library.js:822-831 + index.css:2969-3010 的 hero 几何：
+ * 图块 clamp(96px,11vw,148px)、gap clamp(18px,2.4vw,30px)、meta 侧 min-width:0。
+ * 轴别差异沿用本仓既有铁律：专辑/歌单＝方形封面（.stella-mlib-art），
+ * 艺人＝圆形头像（.stella-mlib-artist-art），**绝不拿 entity.cover（专辑封面）冒充头像**。
+ */
+
+test('openDetail：专辑轴在弹窗层缺席时降级全屏页——详情头出 hero，方形封面 img.src＝entity.cover', async () => {
+  const { win, head } = bootDetail({ detail: { entity: entity({ cover: 'https://cdn/big.jpg' }), tracks: [track()], status: 'ok' } });
+  // 批D 降级闸：15 未导出弹窗面＝detailModalLayer() 缺席 → detailForm('albums') 自动回 'page'，绝不抛错。
+  // （弹窗轴的信息区形态由 Task 4 的真 renderInfo 负责；这里保住「降级不白屏、方形封面链同源」这条产品承诺。）
+  delete win.stellaMlibDetailModal;
+  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  const hero = head().querySelector('.stella-mlib-hero');
+  assert.ok(hero, '详情头必须有 hero 容器（参照库同一结构）');
+  const art = hero.querySelector('.stella-mlib-hero-art');
+  assert.ok(art, 'hero 必须有图块');
+  assert.equal(art.matches('.stella-mlib-artist-art'), false, '专辑轴图块不是圆形头像层');
+  const img = art.querySelector('img');
+  assert.ok(img, '有封面 URL 才出 img');
+  assert.equal(img.src, 'https://cdn/big.jpg', '封面走属性赋值，不经 HTML 字符串拼接');
+});
+
+test('openDetail：艺人详情头 hero 用圆形头像层，无 avatar 时首字母占位且不出 img', async () => {
+  const { win, head } = bootDetail({ detail: { entity: entity({ id: 'AR1', title: '陶喆', sub: '', cover: 'https://cdn/album.jpg', meta: {} }), tracks: [track()], status: 'ok' } });
+  await win.stellaMlibPage.openDetail('artists', 'AR1');
+  const hero = head().querySelector('.stella-mlib-hero');
+  const art = hero.querySelector('.stella-mlib-hero-art');
+  assert.equal(art.matches('.stella-mlib-artist-art'), true, '艺人轴图块必须是圆形头像层');
+  assert.equal(art.querySelector('img'), null, 'engine 不给头像 → 不出 img，绝不把专辑封面当头像贴上去');
+  assert.equal(art.children[0].textContent, '陶', '首字母占位沿用网格同一兜底链');
+});
+
+test('openDetail：弹窗层缺席降级全屏——entity 无封面 → hero 图块仍在（退回占位底色），文案照常渲染', async () => {
+  const { win, head } = bootDetail({ detail: { entity: entity({ cover: '' }), tracks: [track()], status: 'ok' } });
+  delete win.stellaMlibDetailModal; // 批D 降级闸（同上一条方形封面用例的口径）
+  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  const hero = head().querySelector('.stella-mlib-hero');
+  assert.ok(hero.querySelector('.stella-mlib-hero-art'), '无封面也要留图块位：版面不跳');
+  assert.equal(hero.querySelector('.stella-mlib-hero-art').querySelector('img'), null);
+  assert.equal(head().querySelector('.stella-mlib-detail-title').textContent, '十一月的萧邦', '文案不因缺图一起消失');
+});
+
 test('openDetail：曲目行渲染，行只带 data-mlib-track-id，完整数据进 __mlibDetailPayloadForTests', async () => {
   const tracks = [track({ id: 't1' }), track({ id: 't2', name: '发如雪' })];
-  const { win, doc, row, rows } = bootDetail({ detail: { entity: entity(), tracks, status: 'ok' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  const { win, doc, row, rows, tracks: pageTracks } = bootDetail({ detail: { entity: entity(), tracks, status: 'ok' } });
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：本文件只验全屏页轴的行流水线（弹窗宿主由 modal-render 用例守）
   assert.equal(rows().length, 2, '两条轨渲染两行');
+  assert.ok(pageTracks().querySelector('[data-mlib-track-id="t1"]'), '行必须落在页轴容器 #mlib-detail-tracks');
   const r1 = row('t1');
   assert.ok(r1, '按 data-mlib-track-id 必须能取回行');
   assert.equal(r1.classList.contains('stella-mlib-track'), true, '行挂 .stella-mlib-track');
@@ -91,7 +106,7 @@ test('openDetail：曲目行渲染，行只带 data-mlib-track-id，完整数据
 
 test('openDetail：曲目行为参照库 5 列（序号/曲名/艺人/时长/播放钮），无封面列', async () => {
   const { win, row } = bootDetail({ detail: { entity: entity(), tracks: [track({ duration: 250 })], status: 'ok' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：页轴行流水线（5 列口径两形态同源，宿主归 modal-render 用例）
   const r1 = row('t1');
   assert.equal(r1.children.length, 5, '参照库 .stella-mlib-track 为 5 列网格，行必须恰好 5 个子节点');
   assert.equal(r1.querySelector('.stella-mlib-track-no').textContent, '1', '序号从 1 起（照读层顺序，页面不重排）');
@@ -109,7 +124,7 @@ test('openDetail：曲目行为参照库 5 列（序号/曲名/艺人/时长/播
 test('openDetail：曲目文本注入防御（esc/textContent，绝不解析成标签）', async () => {
   const evil = '<img src=x onerror=alert(1)>';
   const { win, row } = bootDetail({ detail: { entity: entity({ title: evil }), tracks: [track({ name: evil, artist: evil })], status: 'ok' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：全屏详情（含头部注入防御）归艺人轴
   assert.equal(win.document.getElementById('mlib-detail-head').querySelector('.stella-mlib-detail-title').textContent, evil, '标题按原文进 textContent');
   const r1 = row('t1');
   assert.equal(r1.querySelector('.stella-mlib-track-name').textContent, evil, '曲名按原文，不被当标签');
@@ -118,7 +133,7 @@ test('openDetail：曲目文本注入防御（esc/textContent，绝不解析成�
 
 test('openDetail：详情曲目不渲染封面（参照库 5 列无封面，移植 CSS 也只给 5 列）', async () => {
   const { win, row } = bootDetail({ detail: { entity: entity(), tracks: [track({ id: 't1', cover: 'https://cdn/1.jpg' }), track({ id: 't2', cover: '' })], status: 'ok' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：页轴曲目（弹窗同一流水线）
   assert.equal(row('t1').querySelector('img'), null, '有 cover URL 也不画封面 img——参照库无封面列');
   assert.equal(row('t2').querySelector('img'), null);
   assert.equal(row('t1').querySelector('.stella-mlib-track-cover'), null, '不得有 .stella-mlib-track-cover 容器');
@@ -136,7 +151,7 @@ test('is-openable：三轴网格卡都标为可点开详情（详情入口实体
 test('进入详情前记录网格滚动、返回后恢复原值并移除 mlib-detail-open', async () => {
   const { win, body, scroll } = bootDetail({ detail: { entity: entity(), tracks: [track()], status: 'ok' } });
   scroll().scrollTop = 500;
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：钉顶/滚动恢复只属于全屏页轴＝艺人轴（弹窗轴「不该发生」的反证见 mlib-detail-modal-render）
   assert.equal(scroll().scrollTop, 0, '进入详情把滚动复位到顶（真实产品行为，也让恢复可被观测）');
   scroll().scrollTop = 300; // 用户在详情里滚了一段
   win.stellaMlibPage.closeDetail();
@@ -150,7 +165,7 @@ test('进入详情前记录网格滚动、返回后恢复原值并移除 mlib-de
 test('status=error：头部照常渲染 + 列表区状态盒，缝 message 逐字透传（非通用兜底）', async () => {
   const msg = '专辑索引损坏：ALBUM_CORRUPT(409)';
   const { win, head, tracks, rows } = bootDetail({ detail: { entity: entity(), tracks: [], status: 'error', message: msg } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：全屏详情（状态盒落 #mlib-detail-tracks）归艺人轴
   assert.equal(head().querySelector('.stella-mlib-detail-title').textContent, '十一月的萧邦', '详情失败头部仍照常');
   assert.equal(tracks().children.length, 1, '失败态列表区只放一个状态盒');
   const box = tracks().children[0];
@@ -165,7 +180,7 @@ test('status=error：头部照常渲染 + 列表区状态盒，缝 message 逐�
 
 test('status=engine-missing：头部存在（entity 为空不崩）+ 状态盒引擎未就绪文案、无按钮', async () => {
   const { win, head, tracks, read } = bootDetail({ detail: { entity: null, tracks: [], status: 'engine-missing' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：全屏详情状态盒归艺人轴
   assert.ok(head().querySelector('.stella-mlib-detail-title'), 'entity 为空时标题元素仍在（头部照常骨架）');
   assert.equal(head().querySelector('.stella-mlib-detail-title').textContent, '', '无 entity 不放文本');
   assert.equal(tracks().children.length, 1, '引擎未就绪同样用状态盒容器');
@@ -177,7 +192,7 @@ test('status=engine-missing：头部存在（entity 为空不崩）+ 状态盒�
 
 test('status=ok 但零轨：走轴为空文案（getStateCopy 非 null），无曲目行', async () => {
   const { win, tracks, rows } = bootDetail({ detail: { entity: entity(), tracks: [], status: 'ok' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：全屏详情状态盒归艺人轴
   assert.equal(rows().length, 0);
   assert.equal(tracks().children.length, 1, '空详情用一个状态盒容器而非空列表');
   assert.ok(tracks().querySelector('.stella-mlib-state-heading'), '状态盒有文案行');
@@ -187,7 +202,7 @@ test('status=ok 但零轨：走轴为空文案（getStateCopy 非 null），无�
 
 test('matched:false 行播放钮 disabled+title=unplayableHint()、行 aria-disabled；matched:true 行可用（惰性，无接线）', async () => {
   const { win, row, read } = bootDetail({ detail: { entity: entity(), tracks: [track({ id: 't1', matched: true }), track({ id: 't2', matched: false, name: '孤本' })], status: 'ok' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：页轴行可播性（弹窗行同一渲染函数）
   const on = row('t1').querySelector('.stella-mlib-track-more');
   const off = row('t2').querySelector('.stella-mlib-track-more');
   assert.ok(on, '行必须有 .stella-mlib-track-more 播放钮');
@@ -207,7 +222,7 @@ test('matched:false 行播放钮 disabled+title=unplayableHint()、行 aria-disa
 
 test('closeDetail 清空详情容器与 payload Map', async () => {
   const { win, tracks } = bootDetail({ detail: { entity: entity(), tracks: [track({ id: 't1' })], status: 'ok' } });
-  await win.stellaMlibPage.openDetail('albums', 'AL1');
+  await win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：页轴清场（#mlib-detail-head/tracks）归全屏页轴；弹窗轴清场由 modal 用例守
   assert.equal(win.__mlibDetailPayloadForTests.size, 1);
   win.stellaMlibPage.closeDetail();
   assert.equal(win.__mlibDetailPayloadForTests.size, 0, '离开详情 payload 不得残留');
@@ -218,7 +233,7 @@ test('在途详情被丢弃：closeDetail 后晚到的响应不得铺行/复活 
   let release;
   const pending = new Promise((r) => { release = r; });
   const { win, tracks, rows } = bootDetail({ detail: () => pending });
-  const inflight = win.stellaMlibPage.openDetail('albums', 'AL1');
+  const inflight = win.stellaMlibPage.openDetail('artists', 'AL1'); // 批D：页轴在途作废（弹窗轴同口径由 modal 用例第7条守）
   win.stellaMlibPage.closeDetail();          // 关详情：seq 递增，晚到响应应被丢
   release({ entity: entity(), tracks: [track({ id: 't_late' })], status: 'ok' });
   await inflight;

@@ -138,8 +138,13 @@ body.mlib-leaving #music-library {
   display: block
 }
 
+/* 内容列与参照库同宽：.mlib-section{max-width:1240px;margin:auto}（index.css:1853-1856）
+   —— 不收这一刀，宽窗口下网格铺满 1784px，专辑卡被撑到 338px（参照库实测 229px），
+   还会和页头/状态盒/详情头/曲目表的 1240 列错位。 */
 #mlib-grid-wrap {
-  container-type: inline-size
+  container-type: inline-size;
+  max-width: 1240px;
+  margin: 0 auto
 }
 
 /* 网格（对照 Apple Music 的资料库排列）：等宽封面 + 下方居中文案。
@@ -150,15 +155,37 @@ body.mlib-leaving #music-library {
   gap: clamp(16px, 1.8vw, 26px) clamp(14px, 1.6vw, 24px)
 }
 
-@container (max-width: 1080px) { #mlib-grid { --stella-mlib-cols: 4 } }
-@container (max-width: 860px) { #mlib-grid { --stella-mlib-cols: 3 } }
-@container (max-width: 620px) { #mlib-grid { --stella-mlib-cols: 2 } }
-@container (max-width: 380px) { #mlib-grid { --stella-mlib-cols: 1 } }
-
 /* 轴（板块）默认列数：艺人头像更小更密，取 6 列；歌单/专辑维持 5 列 */
 body.mlib-axis-playlists #mlib-grid { --stella-mlib-cols: 5 }
 body.mlib-axis-albums #mlib-grid { --stella-mlib-cols: 5 }
 body.mlib-axis-artists #mlib-grid { --stella-mlib-cols: 6 }
+
+/* 列数降级：必须写在轴默认值**之后**，且选择器带上同一个 body.mlib-axis- 前缀。
+   少了前缀就是 (1,0,0) 压不过 (1,1,1) 的轴默认值——实测 10-26：976/756 窗口仍停在 5/6 列，
+   卡片缩成 139/106px（艺人轴）。口径照参照库实测（index.css:3126-3138）：
+   艺人 6→4(≤1080)→3(≤860)、歌单 5→3(≤860)；专辑轴参照库恒 5 列，1:1 不擅自加降级。
+   620/380 两档是全轴共用的窄屏底线（参照库那套 @container 因「容器不能查询自身」从不生效，
+   这里包裹层才是真容器，故这两档由我们兑现它原本的意图）。 */
+@container (max-width: 1080px) {
+  body.mlib-axis-artists #mlib-grid { --stella-mlib-cols: 4 }
+}
+
+@container (max-width: 860px) {
+  body.mlib-axis-artists #mlib-grid { --stella-mlib-cols: 3 }
+  body.mlib-axis-playlists #mlib-grid { --stella-mlib-cols: 3 }
+}
+
+@container (max-width: 620px) {
+  body.mlib-axis-playlists #mlib-grid,
+  body.mlib-axis-albums #mlib-grid,
+  body.mlib-axis-artists #mlib-grid { --stella-mlib-cols: 2 }
+}
+
+@container (max-width: 380px) {
+  body.mlib-axis-playlists #mlib-grid,
+  body.mlib-axis-albums #mlib-grid,
+  body.mlib-axis-artists #mlib-grid { --stella-mlib-cols: 1 }
+}
 
 /* ---------- 卡片：不再"框"化，只承载封面与下方文字 ---------- */
 /* 封面 1:1；文字透明白底、水平居中。悬停靠封面抬升与主色辉光表达，不靠底色。 */
@@ -434,15 +461,14 @@ html.stella-mlib-has-hover .stella-mlib-artist-card:hover .stella-mlib-artist-ar
 }
 
 /* ---------- 详情页（二级视图，由 body.mlib-detail-open 切换显隐） ---------- */
+/* 批D（10-26）按轴分流：全屏详情只剩艺人轴——专辑/歌单走居中弹窗（文末「详情弹窗」段）。
+   #mlib-view-detail 的按轴闸（艺人铺、专辑/歌单不铺）与 #mlib-view-grid 在弹窗轴的
+   display:block 配套闸，一并写在文末弹窗段末尾（特异度 (1,2,1)＝1 id + 2 class + body 型选择器，压得住本区的泛轴旧闸）。 */
 #mlib-view-detail {
   display: none
 }
 
-body.mlib-detail-open #mlib-view-detail {
-  display: block
-}
-
-body.mlib-detail-open #mlib-view-grid {
+body.mlib-detail-open.mlib-axis-artists #mlib-view-grid {
   display: none
 }
 
@@ -452,6 +478,11 @@ body.mlib-detail-open #mlib-view-grid {
   align-items: center;
   gap: 6px;
   padding: 6px 12px 6px 8px;
+  /* 返回钮与下方 1240 列左缘对齐：参照库里它在 .mlib-artist-detail 内、而后者又包在
+     .mlib-section{max-width:1240;margin:auto}（参照 index.css:1853-1856/2938），所以天然落在列左缘。
+     我们这边 #mlib-view-detail 直接挂在滚动容器上、没有 1240 包裹层，所以用左外边距补同一个偏移量；
+     列宽小于 1240 时 max(0px,…) 兜住，回到滚动容器内边距处。 */
+  margin-left: max(0px, calc((100% - 1240px) / 2));
   margin-bottom: 18px;
   border: 1px solid rgba(255, 255, 255, .12);
   border-radius: 999px;
@@ -474,8 +505,43 @@ body.mlib-detail-open #mlib-view-grid {
 }
 
 /* 详情头部排版 */
+/* 列必须与网格同列：#mlib-grid-wrap 用 max-width:1240 + margin:0 auto（见上方网格段），
+   详情头/曲目表同宽却漏了 margin 自动——宽窗口下会左贴滚动容器内边距（2536 视口实测 L56 vs 网格 L648），
+   与页头/状态盒/网格整体错位。补 margin 自动后三者在同一列。 */
 #mlib-detail-head {
-  max-width: 1240px
+  max-width: 1240px;
+  margin: 0 auto
+}
+
+/* ---------- 详情头 hero（批C-3，10-26）：图块 + 文案并排 ----------
+   几何逐字照参照库 .mlib-artist-hero（index.css:2969-3010）：图块 clamp(96px,11vw,148px)、
+   gap clamp(18px,2.4vw,30px)、下边距 clamp(24px,3vw,38px)、文案侧 min-width:0（长标题才压得住）。
+   圆/方由挂载的既有层决定：艺人＝.stella-mlib-artist-art(50%)，专辑/歌单＝.stella-mlib-art(18px)。 */
+.stella-mlib-hero {
+  display: flex;
+  align-items: center;
+  gap: clamp(18px, 2.4vw, 30px);
+  margin-bottom: clamp(24px, 3vw, 38px)
+}
+
+.stella-mlib-hero-art {
+  flex: 0 0 auto;
+  width: clamp(96px, 11vw, 148px);
+  height: clamp(96px, 11vw, 148px);
+  background: rgba(255, 255, 255, .05);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .10)
+}
+
+.stella-mlib-hero-meta {
+  min-width: 0
+}
+
+/* 窄窗口：hero 收成竖排（参照库 index.css:3111-3114 同一做法） */
+@media (max-width: 860px) {
+  .stella-mlib-hero {
+    flex-direction: column;
+    align-items: flex-start
+  }
 }
 
 .stella-mlib-detail-title {
@@ -489,9 +555,191 @@ body.mlib-detail-open #mlib-view-grid {
   text-shadow: 0 10px 34px rgba(0, 0, 0, .5)
 }
 
+/* ---------- 详情弹窗（批D，10-26）：专辑/歌单轴的二级形态 ----------
+   形态依据＝参照库实态：专辑/歌单＝居中主题弹窗（index.css:2090-2578），艺人＝全屏 hero 页。
+   窗口/信息区/操作区/底栏的每一个数值都是那边逐字搬来的；.modal 基类（css/index.css:7746）
+   自带 380px/max-width/padding:32px/深色渐变，必须用 id 提升到更高特异度 + !important 才压得住
+   ——参照库 index.css:2112-2115 注释记录的正是这个坑（只写 .am-album-modal 时窗口被压成 380px 竖条）。 */
+#mlib-detail-modal {
+  --stella-mlib-theme-a: 30, 42, 52;
+  --stella-mlib-theme-light: 46, 62, 74;
+  --stella-mlib-theme-dark: 16, 23, 29;
+  --stella-mlib-theme-glow: 64, 104, 120
+}
+
+#mlib-detail-modal .modal.stella-mlib-modal {
+  position: relative;
+  width: min(1080px, calc(100vw - 56px)) !important;
+  max-width: min(1080px, calc(100vw - 56px)) !important;
+  max-height: min(88vh, 900px) !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 !important;
+  border-radius: 26px !important;
+  border: 1px solid transparent;
+  background: linear-gradient(168deg,
+      rgb(var(--stella-mlib-theme-light, 46, 62, 74)) 0%,
+      rgb(var(--stella-mlib-theme-a, 30, 42, 52)) 46%,
+      rgb(var(--stella-mlib-theme-dark, 16, 23, 29)) 100%) !important;
+  /* 面板深度（外投影/描边色）归 index.css 玻璃层令，本文件不与其争权重 */
+  text-align: left
+}
+
+#mlib-detail-modal .modal.stella-mlib-modal::before { /* 大面积铺色：两团高饱和柔光 */
+  content: '';
+  position: absolute;
+  inset: -12%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(78% 62% at 18% 6%, rgb(var(--stella-mlib-theme-glow, 64, 104, 120) / 95%), transparent 72%),
+    radial-gradient(70% 58% at 86% 92%, rgb(var(--stella-mlib-theme-a, 30, 42, 52) / 85%), transparent 74%);
+  filter: blur(44px) saturate(1.3);
+  opacity: 1
+}
+
+#mlib-detail-modal .modal.stella-mlib-modal::after { /* 只做可读性压暗：上轻下重 */
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .10) 0%, rgba(0, 0, 0, .26) 55%, rgba(0, 0, 0, .40) 100%);
+  backdrop-filter: blur(26px) saturate(1.15)
+}
+
+.stella-mlib-modal-scroll { /* 唯一滚动容器：底栏不随内容滚 */
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 26px 26px 8px;
+  scrollbar-width: none
+}
+
+.stella-mlib-modal-scroll::-webkit-scrollbar { width: 0 }
+
+.stella-mlib-modal-info { display: grid; grid-template-columns: minmax(200px, 268px) minmax(0, 1fr); gap: 26px; align-items: start }
+.stella-mlib-modal-cover-wrap { position: relative }
+
+.stella-mlib-modal-cover {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, .05);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .10)
+}
+
+.stella-mlib-modal-cover img { display: block; width: 100%; height: 100%; object-fit: cover }
+.stella-mlib-modal-meta { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px }
+.stella-mlib-modal-kicker { font-size: 10.5px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: rgba(255, 255, 255, .66) }
+.stella-mlib-modal-artist { font-size: 14px; color: rgba(255, 255, 255, .86) }
+
+.stella-mlib-modal-desc {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.62;
+  color: rgba(255, 255, 255, .66);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical
+}
+
+.stella-mlib-modal-desc.expanded { -webkit-line-clamp: unset; display: block; overflow: visible }
+.stella-mlib-modal-desc-toggle { margin-top: 2px; padding: 0; border: 0; background: none; color: color-mix(in srgb, var(--home-accent) 92%, transparent); font: 600 12px inherit; cursor: pointer } /* 参照库原值 rgba(0,245,212,.92)：青色字面量违禁（本文件头契约/mlib-page-contract:23），改走 --home-accent，alpha .92 不动 */
+.stella-mlib-modal-facts { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12px; color: rgba(255, 255, 255, .70) }
+.stella-mlib-modal-facts span { display: inline-flex; align-items: center; gap: 6px }
+.stella-mlib-modal-facts span + span::before { content: '·'; margin-right: 10px; color: rgba(255, 255, 255, .28) }
+.stella-mlib-modal-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px }
+
+.stella-mlib-modal-play {
+  margin-top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 44px;
+  padding: 0 22px 0 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .22);
+  background: rgba(255, 255, 255, .94);
+  color: #14161a;
+  font: 700 14px inherit;
+  cursor: pointer;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .3);
+  transition: background .18s, border-color .18s, transform .16s
+}
+
+.stella-mlib-modal-play svg { width: 18px; height: 18px; fill: currentColor }
+.stella-mlib-modal-play:hover:not(:disabled) { background: #fff; transform: translateY(-1px) }
+.stella-mlib-modal-play:disabled { opacity: .55; cursor: default }
+
+.stella-mlib-shuffle-btn { /* 浅色玻璃圆钮：主题色底上深色玻璃对比太弱，反相 */
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, .62);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .82);
+  color: #14161a;
+  cursor: pointer;
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .26), inset 0 1px 0 rgba(255, 255, 255, .9);
+  transition: background .18s, border-color .18s, box-shadow .18s, transform .16s
+}
+
+.stella-mlib-shuffle-btn svg { width: 19px; height: 19px }
+.stella-mlib-shuffle-btn:hover { background: rgba(255, 255, 255, .96); border-color: rgba(255, 255, 255, .85); transform: translateY(-1px) }
+.stella-mlib-shuffle-btn:active { transform: translateY(0) scale(.96) }
+.stella-mlib-shuffle-btn:focus-visible { outline: 2px solid rgba(20, 22, 26, .55); outline-offset: 2px }
+.stella-mlib-shuffle-btn:disabled { opacity: .55; cursor: default; transform: none }
+body.mlib-axis-albums #mlib-detail-modal .stella-mlib-shuffle-btn { display: none } /* 参照库：随机只在歌单 */
+.stella-mlib-modal-status { margin-top: 8px; font-size: 12px; line-height: 1.5; color: rgba(255, 255, 255, .6) }
+.stella-mlib-modal-status[data-tone="warn"] { color: rgba(255, 209, 138, .92) }
+.stella-mlib-modal-status[data-tone="ok"] { color: color-mix(in srgb, var(--home-accent) 92%, transparent) } /* 同上：青色字面量违禁，alpha .92 不动 */
+.stella-mlib-modal-tracks { margin-top: 26px }
+
+.stella-mlib-modal-skeleton {
+  height: 14px;
+  margin: 10px 0;
+  border-radius: 7px;
+  background: linear-gradient(100deg, rgba(255, 255, 255, .05) 20%, rgba(255, 255, 255, .10) 50%, rgba(255, 255, 255, .05) 80%);
+  background-size: 220% 100%;
+  animation: stella-mlib-shimmer 1.6s linear infinite
+}
+
+.stella-mlib-modal-foot {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 22px 16px;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  background: transparent
+}
+
+/* 关闭按钮皮肤归 index.css 玻璃层（.modal-btn 的 background/border-color 为 !important 令），本文件不与其争权重 */
+
+/* 弹窗轴：全屏详情视图不参与（只剩艺人轴铺） */
+body.mlib-detail-open.mlib-axis-artists #mlib-view-detail { display: block }
+body.mlib-detail-open.mlib-axis-albums #mlib-view-detail,
+body.mlib-detail-open.mlib-axis-playlists #mlib-view-detail { display: none }
+body.mlib-detail-open.mlib-axis-albums #mlib-view-grid,
+body.mlib-detail-open.mlib-axis-playlists #mlib-view-grid { display: block }
+
 /* ---------- 曲目列表：连续行 + 细分隔线，不是一歌一卡 ---------- */
 #mlib-detail-tracks {
-  margin-top: 26px;
+  margin: 26px auto 0;
   max-width: 1240px
 }
 

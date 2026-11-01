@@ -57,13 +57,13 @@ test('② 孤儿扫描跳过 *_1.js 副本', () => {
   assert.deepStrictEqual(orphans, ['js/modules/08-account/00-login-easter-egg.js']);
 });
 
-test('本仓库现场：modulePaths 全部存在且分段为 15 段/126 模块', () => {
+test('本仓库现场：modulePaths 全部存在且分段为 15 段/127 模块', () => {
   const paths = readModulePathsFromLoader();
   for (const p of paths) {
     assert.ok(fs.existsSync(path.join(APP_ROOT, 'public', p)), 'modulePaths 引用文件缺失: ' + p);
   }
   const runs = bundle.buildRuns(paths);
-  assert.strictEqual(paths.length, 126);
+  assert.strictEqual(paths.length, 127);
   assert.strictEqual(runs.length, 15);
 });
 

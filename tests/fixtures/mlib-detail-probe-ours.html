@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- 批D 弹窗形态取证：既量 music-library.css 的 .stella-mlib-modal 覆写，也要 index.css 的
+     .modal-mask/.modal 基座（display:flex + align/justify center = 「居中」这件事的唯一属主），
+     只挂 music-library.css 会把基座整个读空、量不到 @L 居中。 -->
+<link rel="stylesheet" href="../../public/css/index.css">
+<link rel="stylesheet" href="../../public/css/music-library.css">
+<style>html,body{margin:0;height:100%}</style>
+</head>
+<body class="mlib-active mlib-axis-albums mlib-detail-open">
+<!-- 弹窗轴：这一整棵全屏详情子树必须保持 display:none（#mlib-view-detail 只有艺人轴才铺）。
+     【证据口径 · evidence round 2 更正】本 fixture 在专辑/歌单轴量到 detailView=0x0，
+     属主是 music-library.css:467 的无条件 `#mlib-view-detail{display:none}` —— 这条 0x0
+     与「按轴闸」是否存在无关（去掉 :725-727 的闸也照读 0x0），它只防一件事：
+     有人把基座那条 display:none 改成范围过宽的 display:block。
+     「按轴闸真的生效 + 由 :725 那条艺人规则把它铺回来」这两点不由本行证明，
+     由带 #axis 切片的对照跑证明（见末尾脚本）：
+       #axis=artists            → detailView 非 0（:725 body.mlib-detail-open.mlib-axis-artists 生效）
+       #axis=artists&open=0     → detailView 回到 0x0（去掉 mlib-detail-open，:725 不再命中，回落 :467）
+     哨兵行仍留着：它让 detailView 一旦真的被铺出来就带内容、可被肉眼读出。 -->
+<section id="music-library">
+  <div id="music-library-scroll">
+    <div id="mlib-view-detail">
+      <div id="mlib-detail-head"><div class="stella-mlib-hero"><div class="stella-mlib-art stella-mlib-hero-art"></div></div></div>
+      <div id="mlib-detail-tracks"><div class="stella-mlib-track"><div class="stella-mlib-track-name">闸门哨兵行</div></div></div>
+    </div>
+  </div>
+</section>
+<!-- 弹窗本体：真实 index.html:357-398 的全子树 + 3 行曲目（行结构严格照 08 buildTrackRow：
+     div.stella-mlib-track > no/name/artist/dur + button.stella-mlib-track-more）。
+     .show = openGsapModal 开窗后落的类，本静态探针手工带上（含 mlib-detail-open，别漏）。
+     【evidence round 2】两颗钮的内层 SVG 已从 index.html:375（播放三角）与
+     :381-387（随机四段线）原样搬进来——`.stella-mlib-modal-play svg{18x18}`（:668）/
+     `.stella-mlib-shuffle-btn svg{19x19}`（:691）之前没内容可套，play 宽度只由文案+padding 决定，
+     属 fixture 私有度量；补上后 play 才与真实渲染同源。
+     仍刻意省掉的三颗节点 `#mlib-detail-modal-desc` / `-desc-toggle` / `-status`：
+     这三枚在生产 index.html:369/370/390 都带 `hidden`，不占布局，省掉对度量中性、claim 成立。
+     文案「播放专辑」= 运行时真值（15-mlib-detail-modal.js:183 stellaMlibModalPlayLabel
+     专辑档写死「播放专辑」），index.html:376 的静态「播放」只是 JS 起来前的初值。 -->
+<div id="mlib-detail-modal" class="modal-mask show" role="dialog" aria-modal="true"
+  aria-labelledby="mlib-detail-modal-heading" aria-hidden="false">
+  <div class="modal stella-mlib-modal">
+    <div class="stella-mlib-modal-scroll" id="mlib-detail-modal-scroll">
+      <div class="stella-mlib-modal-info">
+        <div class="stella-mlib-modal-cover-wrap">
+          <div class="stella-mlib-modal-cover" id="mlib-detail-modal-cover" aria-hidden="true"></div>
+        </div>
+        <div class="stella-mlib-modal-meta">
+          <div class="stella-mlib-modal-kicker" id="mlib-detail-modal-kicker">本地曲库 · 资料库专辑</div>
+          <h2 class="stella-mlib-detail-title" id="mlib-detail-modal-heading">六九乐章</h2>
+          <div class="stella-mlib-modal-artist" id="mlib-detail-modal-artist">陶喆</div>
+          <div class="stella-mlib-modal-facts" id="mlib-detail-modal-facts"><span>1969</span><span>3 首</span></div>
+          <div class="stella-mlib-modal-actions">
+            <button class="stella-mlib-modal-play" id="mlib-detail-modal-play" type="button" data-mlib-modal-play>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5.5v13l10.5-6.5z" /></svg>
+              <span id="mlib-detail-modal-play-label">播放专辑</span>
+            </button>
+            <button class="stella-mlib-shuffle-btn" id="mlib-detail-modal-shuffle" type="button"
+              data-mlib-modal-shuffle title="随机播放" aria-label="随机播放">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 7h3.5c2 0 3.5 1.2 5 3s3 5 5 5H20" />
+                <path d="M17.5 12.5 20 15l-2.5 2.5" />
+                <path d="M3 17h3.5c2 0 3.5-1.2 5-3s3-5 5-5H20" />
+                <path d="M17.5 9.5 20 7l-2.5-2.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="stella-mlib-modal-tracks" id="mlib-detail-modal-tracks" aria-busy="false">
+        <div class="stella-mlib-track" role="button" tabindex="0" data-mlib-track-id="t1"><div class="stella-mlib-track-no">1</div><div class="stella-mlib-track-name">暗恋</div><div class="stella-mlib-track-artist">陶喆</div><div class="stella-mlib-track-dur">4:59</div><button class="stella-mlib-track-more" type="button" aria-label="播放 暗恋"></button></div>
+        <div class="stella-mlib-track" role="button" tabindex="0" data-mlib-track-id="t2"><div class="stella-mlib-track-no">2</div><div class="stella-mlib-track-name">Today</div><div class="stella-mlib-track-artist">陶喆</div><div class="stella-mlib-track-dur">3:53</div><button class="stella-mlib-track-more" type="button" aria-label="播放 Today"></button></div>
+        <div class="stella-mlib-track" role="button" tabindex="0" data-mlib-track-id="t3"><div class="stella-mlib-track-no">3</div><div class="stella-mlib-track-name">沙滩</div><div class="stella-mlib-track-artist">陶喆</div><div class="stella-mlib-track-dur">4:05</div><button class="stella-mlib-track-more" type="button" aria-label="播放 沙滩"></button></div>
+      </div>
+    </div>
+    <div class="stella-mlib-modal-foot">
+      <button class="modal-btn" type="button" data-mlib-modal-close>关闭</button>
+    </div>
+  </div>
+</div>
+<div id="out"></div>
+<script>
+/* evidence round 2：同一枚 fixture 用 URL 哈希切轴/切闸，跑对照。
+   无哈希 = 默认专辑轴 + mlib-detail-open，与批D Task6 已录的三档行完全同构。
+     #axis=artists          艺人轴对照：证明 :725 那条规则确会把 #mlib-view-detail 铺回来
+     #axis=artists&open=0   负对照：摘掉 mlib-detail-open → :725 不命中 → 回落 :467 的 0x0
+     #axis=playlists        歌单轴对照：证明随机钮只在歌单轴可见（:696 只在专辑轴 display:none）
+   ⚠️ 已知坑：改写 body.className 时若漏掉 mlib-detail-open，detailView 会读到 0x0 假阳性。 */
+var CASE = (function () {
+  var c = { axis: 'albums', open: true };
+  var h = decodeURIComponent(String(location.hash || '').replace(/^#/, ''));
+  if (!h) return c;
+  h.split('&').forEach(function (kv) {
+    var p = kv.split('=');
+    if (p[0] === 'axis' && p[1]) c.axis = p[1];
+    if (p[0] === 'open') c.open = p[1] !== '0';
+  });
+  return c;
+})();
+document.body.className = 'mlib-active mlib-axis-' + CASE.axis + (CASE.open ? ' mlib-detail-open' : '');
+function r(s) { var n = document.querySelector(s); if (!n) return null; var b = n.getBoundingClientRect(); return Math.round(b.width) + 'x' + Math.round(b.height) + '@L' + Math.round(b.left); }
+document.getElementById('out').textContent = 'OURS vw=' + window.innerWidth +
+  ' case=' + CASE.axis + (CASE.open ? '+open' : '+no-open') +
+  ' modal=' + r('#mlib-detail-modal .modal.stella-mlib-modal') +
+  ' scroll=' + r('#mlib-detail-modal-scroll') +
+  ' cover=' + r('#mlib-detail-modal-cover') +
+  ' meta=' + r('.stella-mlib-modal-meta') +
+  ' tracks=' + r('#mlib-detail-modal-tracks') +
+  ' track=' + r('#mlib-detail-modal-tracks .stella-mlib-track') +
+  ' name=' + r('#mlib-detail-modal-tracks .stella-mlib-track-name') +
+  ' foot=' + r('.stella-mlib-modal-foot') +
+  ' play=' + r('#mlib-detail-modal-play') +
+  ' shuffle=' + r('#mlib-detail-modal-shuffle') +
+  ' detailView=' + r('#mlib-view-detail');
+</script>
+</body>
+</html>

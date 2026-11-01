@@ -29,8 +29,8 @@ function requestPlaylistCover(url, cb) {
   if (rec && rec.loading) { if (cb) rec.waiters.push(cb); return; }
   rec = playlistCoverCache[url] = { loaded: false, loading: true, waiters: cb ? [cb] : [], img: null, failed: false };
   var img = new Image();
-  // stellaflix-local:// 是独立特权 scheme（相对 http://127.0.0.1 页面即跨源），
-  // 不设 crossOrigin 会污染书架 canvas，THREE.CanvasTexture 上传抛 Tainted canvases
+  // 远程图源相对本页（127.0.0.1 主服务）是跨源，不设 crossOrigin 会污染书架 canvas，
+  // THREE.CanvasTexture 上传抛 Tainted canvases；本地媒体改走同源 /api/local-file 后此约束只对远程源有意义。
   if (!/^(data|blob):/i.test(url)) img.crossOrigin = 'anonymous';
   img.onload = function () {
     rec.loaded = true; rec.loading = false; rec.img = img;

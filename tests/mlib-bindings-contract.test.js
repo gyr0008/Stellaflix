@@ -232,7 +232,7 @@ test('关闭走 mlib-leaving：先置 leaving 类，420ms 后摘 active/leaving�
 
 /* -------------------------------------- ④b 让位复位单一属主（F3：260 不是契约，420 才是） */
 
-test('让位复位单一属主：真页面在场时 260ms 三类都还在，420ms 才由绑定层摘净', async () => {
+test('让位复位单一属主：真页面在场时 active/leaving 两类 260ms 后仍在（detail-open 已由 closeDetail 当场 0ms 复位），420ms 才由绑定层摘净', async () => {
   const fakeTimer = makeFakeTimer();
   const fake = createFakeDom({ hover: true, mount: mountCards(), globals: { __mlibTimer: fakeTimer.fn } });
   const { win, body } = fake;
@@ -247,7 +247,7 @@ test('让位复位单一属主：真页面在场时 260ms 三类都还在，420m
   await win.mlibOpenAxis('albums');
   assert.equal(body.classList.contains('mlib-active'), true);
   assert.equal(body.classList.contains('mlib-axis-albums'), true);
-  body.classList.add('mlib-detail-open'); // 详情也开着：关闭时三个类都该由同一枚 420 一并复位
+  body.classList.add('mlib-detail-open'); // 详情也开着：批D 起 detail-open 由 closeDetail 当场摘，只剩 active/leaving 两类归 420
 
   win.mlibClose();
   assert.equal(body.classList.contains('mlib-leaving'), true, '先置 leaving');
@@ -258,7 +258,10 @@ test('让位复位单一属主：真页面在场时 260ms 三类都还在，420m
   await delay(300);
   assert.equal(body.classList.contains('mlib-active'), true, '260ms 后 active 必须还在：让位复位归绑定层单一属主');
   assert.equal(body.classList.contains('mlib-leaving'), true, '260ms 后 leaving 必须还在（动画还没跑完）');
-  assert.equal(body.classList.contains('mlib-detail-open'), true, '260ms 后 detail-open 必须还在');
+  // 批D Task 5 改的是这一档的属主，不是 F3 的那一档：mlibClose 在 p.close() 之前先走
+  // ensureDetailClosed() → 页面 closeDetail()，详情（含弹窗的 .show）当场收，否则遮罩浮在首页上。
+  // 本条测的仍是 F3 的命门——active/leaving 的让位复位只有绑定层 420 那一枚属主（页面层没在 260 抢跑）。
+  assert.equal(body.classList.contains('mlib-detail-open'), false, '批D：关库当场经 closeDetail 复位详情，不等 420');
 
   assert.equal(fakeTimer.runAll(), 1, '只有一枚待跑 timer');
   assert.equal(body.classList.contains('mlib-active'), false, '420ms 到点才摘');

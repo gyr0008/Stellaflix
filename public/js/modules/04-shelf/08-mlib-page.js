@@ -31,7 +31,7 @@
   var playSeq = 0;     // 播放侧代数：**只代表用户动作**（切轴/关闭）——R 裁2：后台通知刷新不得作废用户已发出的播放
   var savedScrollTop = 0; // 进入二级详情前记录的网格滚动位置，返回时恢复（spec §2 滚动条）
   var renderedAxis = '';  // 本层上一次渲染的轴（关闭后 body 类被摘净时仍用它兜底脏补；不再是滚动闸）
-  var detailEntity = null; // 当前详情实体 { axis, id }：通知到来时才知道该重绘哪一份（R1）
+  var detailEntity = null; // 当前详情实体 { axis, id, form }：通知到来时才知道该重绘哪一份（R1），form 由批D 分流判定
   var gridDirty = false;   // 详情开着时来过通知＝底下那份网格脏了，等 closeDetail 恢复滚动后再补（R1 ②③）
 
   window.__mlibGridPayloadForTests = gridPayload;
@@ -83,9 +83,11 @@
 
   // 专辑/歌单封面：有 URL 才出 img（URL 走属性赋值，不进 HTML 字符串，从构造上就没有注入面）；
   // 无封面＝只有 .stella-mlib-art 的底色占位，绝不画「蓝盘」SVG（首页快卡那套路子不在这里用）。
-  function coverArt(card) {
+  // hero=true 只多挂一个 .stella-mlib-hero-art 尺寸类：详情头用大一号图块，取图与兜底链跟网格完全同源。
+  function coverArt(card, hero) {
     var art = el('div');
     art.classList.add('stella-mlib-art');
+    if (hero) art.classList.add('stella-mlib-hero-art');
     var url = String(card.cover || '').trim();
     if (!url) {
       art.classList.add('is-loaded'); // 占位没有图，微光不该空转
@@ -105,9 +107,11 @@
   }
 
   // 艺人头像三级兜底：代表图 → 名称首字母 → 音乐图标。**绝不用 card.cover（专辑封面）冒充**。
-  function artistArt(card) {
+  // hero=true 同上：只放大图块，兜底链与网格完全一致。
+  function artistArt(card, hero) {
     var art = el('div');
     art.classList.add('stella-mlib-artist-art');
+    if (hero) art.classList.add('stella-mlib-hero-art');
     var initial = artistInitial(card.title);
     var ph = el('span');
     ph.classList.add('stella-mlib-artist-initial');
@@ -424,9 +428,9 @@
     try { read.watchSeam(onSeamNotify); } catch (e) { /* 读层抛错也不拖累本页 */ }
   }
 
-  // ---------- 二级详情（Task 6）----------
+  // ---------- 二级详情（Task 6；批D 起按轴分流：弹窗轴/全屏页轴两条出口）----------
   // 只负责详情视图渲染 + 进入/返回滚动记录恢复 + body 类 mlib-detail-open（真相源，Task 7 依赖）。
-  // 返回钮点击、ESC、播放接线全部归 Task 7/8：本层不监听任何事件，只暴露 openDetail/closeDetail。
+  // 返回钮点击、ESC、播放接线全部归 Task 7/8：本层不监听任何事件，只暴露 openDetail/closeDetail（+ 批D 的 detailForm/currentDetail 判据面）。
 
   function scrollEl() { return byId('music-library-scroll'); }
 
@@ -435,11 +439,29 @@
     if (g) g.setAttribute('aria-hidden', hidden ? 'true' : 'false'); // 详情压住网格时对读屏隐藏，返回恢复
   }
 
-  function clearDetail() {
-    var head = byId('mlib-detail-head');
-    var tracks = byId('mlib-detail-tracks');
-    if (head) head.innerHTML = '';
-    if (tracks) tracks.innerHTML = '';
+  // 批D（10-26）：详情形态按轴分流（参照库实态＝专辑/歌单弹窗、艺人全屏页）。
+  // 判据只有这一处；09 的调用面（openDetail/closeDetail）与 body.mlib-detail-open 真相源都不动。
+  // 属主划分：行与状态盒永远由本层的 buildTrackRow/renderTracks/fillStateBox 产出（弹窗也一样），
+  // 15 只管窗口本体——一份行模板两处实现是本批最大回归风险，故禁止。
+  var MODAL_AXES = { albums: true, playlists: true };
+  function detailModalLayer() {
+    var m = window.stellaMlibDetailModal;
+    return (m && typeof m.renderInfo === 'function' && typeof m.tracksEl === 'function') ? m : null;
+  }
+  // 弹窗层缺席（15 未加载/未导出完整面）时自动降级 'page'，绝不抛错——本批中间态的兜底闸。
+  function detailForm(axis) { return (MODAL_AXES[axis] && detailModalLayer()) ? 'modal' : 'page'; }
+
+  // 行的落地容器：弹窗轴＝#mlib-detail-modal-tracks，全屏轴＝#mlib-detail-tracks
+  function tracksHost(form) {
+    if (form === 'modal') { var m = detailModalLayer(); return m ? m.tracksEl() : null; }
+    return byId('mlib-detail-tracks');
+  }
+
+  // 清场按轴取容器：弹窗轴只清弹窗那份行容器（全屏 head/tracks 与它互不残留），全屏轴清全屏两处；
+  // payload Map 两类容器共用同一份面（行永远由本层 buildTrackRow 造）。
+  function clearDetail(form) {
+    var hosts = form === 'modal' ? [tracksHost('modal')] : [byId('mlib-detail-tracks'), byId('mlib-detail-head')];
+    hosts.forEach(function (h) { if (h) h.innerHTML = ''; });
     detailPayload.clear();
   }
 
@@ -447,11 +469,21 @@
   // 曲目数带「首」量词是参照库自己的做法（07-album-detail.js:468/894 把 '<span>N 首</span>' 直接写在页面模块里），
   // 移植后该量词归页面所有（读层不产出详情曲目数的带单位串）；「首」不是读层状态文案表里的串，
   // 反硬编码源码守卫不拦它——是否集中归口交 Task 9 终审决定。除此之外不发明参照库没有的量词（如「分钟」）。
-  function renderDetailHead(entity) {
+  // 批C-3：图块与文案并排成 hero（参照库 index.css:2969-3010）；轴别决定圆方，艺人永不领封面。
+  function renderDetailHead(axis, entity) {
     var head = byId('mlib-detail-head');
     if (!head) return;
     head.innerHTML = '';
     var e = entity || {};
+
+    var hero = el('div');
+    hero.classList.add('stella-mlib-hero');
+    var artSrc = { cover: String(e.cover == null ? '' : e.cover), title: String(e.title == null ? '' : e.title), meta: e.meta || {} };
+    hero.appendChild(axis === 'artists' ? artistArt(artSrc, true) : coverArt(artSrc, true));
+
+    var box = el('div');
+    box.classList.add('stella-mlib-hero-meta');
+
     var eyebrow = el('div');
     eyebrow.classList.add('stella-mlib-eyebrow');
     eyebrow.textContent = String(e.sub == null ? '' : e.sub);
@@ -469,9 +501,11 @@
     meta.classList.add('stella-mlib-head-meta');
     meta.textContent = bits.join(' · '); // 分隔符是排版胶水，不含可本地化词
 
-    head.appendChild(eyebrow);
-    head.appendChild(title);
-    head.appendChild(meta);
+    box.appendChild(eyebrow);
+    box.appendChild(title);
+    box.appendChild(meta);
+    hero.appendChild(box);
+    head.appendChild(hero);
   }
 
   // 参照库（07-album-detail.js:493-505）的曲目行＝连续 5 列：序号 / 曲名 / 艺人次级 / 时长 / 播放动作。
@@ -519,8 +553,9 @@
     return row;
   }
 
-  function renderTracks(tracks, unplayableHint) {
-    var list = byId('mlib-detail-tracks');
+  // 批D：行永远在这里构建（唯一一份行模板），落点由 host 参数决定（tracksHost(form) 给出）。
+  function renderTracks(tracks, unplayableHint, host) {
+    var list = host;
     if (!list) return;
     var arr = Array.isArray(tracks) ? tracks.slice() : []; // 读层返回的是共享引用：只读本地副本
     var n = 0;
@@ -534,44 +569,56 @@
     });
   }
 
-  function renderDetail(axis, res) {
+  // 「铺内容」（批D 从 renderDetail 拆出）：两轴共用同一套行/状态盒流水线，只有落地容器不同。
+  // renderDetailHead 不在这里调用：弹窗轴信息区归 15 的 renderInfo；全屏轴由分派分支先铺头再进本函数，
+  // 所以这里只掏空行落地容器（骨架与上一份行一起抹）＋清 payload，绝不碰全屏 head（刚铺好的头不得被回抹）。
+  function renderDetailBody(axis, res, form) {
     var read = readLayer();
     if (!read) return; // 读层未就绪：详情容器保持清空，不猜状态
-    clearDetail();
-    renderDetailHead(res.entity);
+    var host = tracksHost(form);
+    if (!host) return; // 弹窗层中途消失（降级闸的另一半）：无处铺行也不抛
+    host.innerHTML = '';
+    detailPayload.clear();
     // getStateCopy 期望结果列表挂在 .cards：详情轨在 .tracks，须适配后再喂（Task 3 口径）。
     // message 一并带上——error 态要把缝 message 逐字透传，否则退化成通用「读取失败」。
     var copy = typeof read.getStateCopy === 'function'
       ? read.getStateCopy(axis, { status: res.status, cards: res.tracks, message: res.message })
       : null;
     if (copy === null) { // null＝正常有轨（ok 且列表非空），渲染曲目行
-      renderTracks(res.tracks, unplayableHintOf(read));
+      renderTracks(res.tracks, unplayableHintOf(read), host);
       return;
     }
-    var list = byId('mlib-detail-tracks');
-    if (!list) return;
     var box = el('div'); // 详情状态盒走网格同一 fillStateBox 助手；挂 .stella-mlib-state-box（该类已在 CSS 里有主，与 #mlib-state-box 共享三条状态盒规则）
     box.classList.add('stella-mlib-state-box');
-    list.appendChild(box);
+    host.appendChild(box);
     fillStateBox(box, axis, copy, res.status);
   }
 
   async function openDetail(axis, id) {
     var seq = ++requestSeq; // 复用网格同一序号：开详情即令在途网格/旧详情渲染作废
-    detailEntity = { axis: axis, id: id }; // R1：记住当前详情实体，通知来了才知道要重绘哪一份
-    var sc = scrollEl();
-    savedScrollTop = sc && typeof sc.scrollTop === 'number' ? sc.scrollTop : 0; // 进入前记录网格滚动
-    if (sc) {
-      sc.scrollTop = 0; // 新详情从头看；也让「返回恢复」成为可被观测的往返（否则 0→0 无从证明）
-      if (typeof requestAnimationFrame === 'function') {
-        // 真浏览器：显隐切换会触发重排，rAF 后二次钉顶防止旧值被随后恢复覆盖
-        requestAnimationFrame(function () { sc.scrollTop = 0; });
-      }
-    }
+    var form = detailForm(axis); // 批D 分流判据唯一入口（弹窗轴/全屏页轴两条出口）
+    var modal = form === 'modal' ? detailModalLayer() : null;
+    detailEntity = { axis: axis, id: id, form: form }; // R1：记住当前详情实体（含形态），通知来了才知道要重绘哪一份
     var body = document.body;
     if (body && body.classList) body.classList.add('mlib-detail-open'); // 真相源
-    setGridViewAria(true);
-    clearDetail(); // 同步清场：新详情到位前不残留上一份
+    setGridViewAria(form !== 'modal'); // 弹窗轴底下网格仍可见（遮罩半透），aria-hidden 不能压
+    if (form === 'modal') {
+      modal.show(axis);
+      clearDetail('modal'); // 只清弹窗那份 payload（上一张实体的行对象不得留着能被点）
+      modal.skeleton();     // 参照库 553-557：等数据时铺 3 条骨架（顺序不能倒，clearDetail 会连骨架一起抹）
+    } else {
+      // 「记录滚动 + 钉顶」只属于全屏页轴：弹窗轴连 savedScrollTop 都不写（参照库开弹窗不滚动底下的库页）
+      var sc = scrollEl();
+      savedScrollTop = sc && typeof sc.scrollTop === 'number' ? sc.scrollTop : 0; // 进入前记录网格滚动
+      if (sc) {
+        sc.scrollTop = 0; // 新详情从头看；也让「返回恢复」成为可被观测的往返（否则 0→0 无从证明）
+        if (typeof requestAnimationFrame === 'function') {
+          // 真浏览器：显隐切换会触发重排，rAF 后二次钉顶防止旧值被随后恢复覆盖
+          requestAnimationFrame(function () { sc.scrollTop = 0; });
+        }
+      }
+      clearDetail('page'); // 同步清场：新详情到位前不残留上一份
+    }
     var read = readLayer();
     if (!read || typeof read.getDetail !== 'function') return;
     var res;
@@ -581,7 +628,9 @@
       res = { entity: null, tracks: [], status: 'error', message: (e && e.message) || '' }; // 读层约定不抛；真抛按 error 兜底
     }
     if (seq !== requestSeq) return; // 晚到的旧详情/已被返回：不铺行、不复活 payload
-    renderDetail(axis, res || { entity: null, tracks: [], status: 'error' });
+    var out = res || { entity: null, tracks: [], status: 'error' }; // 读层给 undefined 也按 error 形状兜底（既有口径）
+    if (form === 'modal') { modal.renderInfo(axis, out); renderDetailBody(axis, out, 'modal'); }
+    else { renderDetailHead(axis, out.entity); renderDetailBody(axis, out, 'page'); }
   }
 
   // R1（终审回批第2轮）：详情开着时来了通知＝这份详情重新取数重绘（不是跳过、也不是留空白壳）。
@@ -591,11 +640,13 @@
   //   · **不钉顶**：详情正在屏幕上，重绘不该动 scrollTop。
   //   · **不重放 body 类/aria**：真相源已就位（mlib-detail-open 还挂着）。
   // requestSeq 照 bump：让更早的在途渲染（含开详情那一份晚到的响应）一并作废——探针①的空白就是这么来的。
-  // 失败/空列表由既有 renderDetail 的状态盒分支兑现（R1 ④：不得留空壳）。
+  // 失败/空列表由既有 renderDetailBody 的状态盒分支兑现（R1 ④：不得留空壳）。
+  // 批D：重绘走 detailEntity.form 的同一条分派（实体记的是什么形态就重绘什么形态）。
   async function refreshDetail() {
     var e = detailEntity;
     if (!e) return; // 没记住实体（例如详情类是别人手动点的）：不猜该重绘什么
     var seq = ++requestSeq;
+    var form = e.form || detailForm(e.axis);
     var read = readLayer();
     if (!read || typeof read.getDetail !== 'function') return;
     var res;
@@ -605,7 +656,15 @@
       res = { entity: null, tracks: [], status: 'error', message: (err && err.message) || '' };
     }
     if (seq !== requestSeq) return; // 又晚了：不铺行、不复活 payload
-    renderDetail(e.axis, res || { entity: null, tracks: [], status: 'error' });
+    var out = res || { entity: null, tracks: [], status: 'error' };
+    if (form === 'modal') {
+      var m = detailModalLayer();
+      if (m) m.renderInfo(e.axis, out); // 弹窗层中途缺席：跳过信息区、行落点由 renderDetailBody 的守卫兜住，不抛
+      renderDetailBody(e.axis, out, 'modal');
+    } else {
+      renderDetailHead(e.axis, out.entity);
+      renderDetailBody(e.axis, out, 'page');
+    }
   }
 
   // R1 ③：详情开着时网格被标脏，返回（滚动恢复之后）补一次当前轴重绘。
@@ -621,19 +680,26 @@
 
   function closeDetail() {
     requestSeq += 1; // 在途详情一并作废
+    var form = (detailEntity && detailEntity.form) || detailForm((detailEntity && detailEntity.axis) || '');
     detailEntity = null;
-    clearDetail();
+    clearDetail(form);
+    if (form === 'modal') { var m = detailModalLayer(); if (m) m.hide(); } // 弹窗轴收窗（参照库 783-794）；层已缺席＝静默
     var body = document.body;
     if (body && body.classList) body.classList.remove('mlib-detail-open');
     setGridViewAria(false);
     var sc = scrollEl();
-    if (sc) sc.scrollTop = savedScrollTop; // 恢复到进入详情前记录的网格位置
+    if (sc && form !== 'modal') sc.scrollTop = savedScrollTop; // 恢复到进入详情前记录的网格位置；弹窗轴从没动过滚动，谈不上恢复
     repaintDirtyGrid(); // 恢复完滚动才补脏网格（顺序就是 R1 ③ 要求的顺序）
+  }
+
+  // 批D：09 的整单钮/ESC 只认这两个判据面，不读 DOM 属性（形态真相源在页面层，事件层不设第二判据）。
+  function currentDetail() {
+    return detailEntity ? { axis: detailEntity.axis, id: detailEntity.id, form: detailEntity.form } : null;
   }
 
   // ---------- 播放接线（Task 8；C1/I1 修复轮）----------
   // 事件面不在本层：document 上唯一那枚 click 委托归 09-mlib-bindings.js（F2 单一属主）。
-  // 绑定层只解析「点了哪张卡/哪条轨的播放/哪个是详情入口」→ 调本层 playEntity/playTrack/openDetail/closeDetail；
+  // 绑定层只解析「点了哪张卡/哪条轨的播放/哪个是详情入口」→ 调本层 playEntity/playEntityShuffled/playTrack/openDetail/closeDetail；
   // payload 命中、「这行到底可不可播」的代码闸、以及 track→song 映射都归本层。
   // 队列入口只用既有全局 queueSong（05-playback/10-queue-actions.js:1：cloneSong→入队尾→safeRenderQueuePanel/shelf 重建），
   // 它回的就是这一项的插入索引；起播只用既有全局 playQueueAt（13-playback-start-audio.js:932），
@@ -737,23 +803,70 @@
   // 顺序照读层返回的 tracks 原样（本层绝不 sort/重排，spec §4），unmatched 在入队时被过滤。
   // 入队后立刻播首个新入队项（spec line 40「整封面可点即播」）。playSeq 代数以「入队」为界：
   // 晚到的详情响应在 playSeq 检查处就 return，因此**既不入队也不起播**——起播天然被同一作废口径盖住。
-  async function playEntity(axis, id) {
-    var card = gridCardById(id);
-    if (!card || !card.playable) return 0;
-    var read = readLayer();
-    if (!read || typeof read.getDetail !== 'function') return 0;
-    var seq = playSeq;
-    var res;
-    try {
-      res = await read.getDetail(axis, id);
-    } catch (e) {
-      return 0; // 读层约定不抛；真抛＝零入队
+  // 弹窗轴的整单播放把「进行中」显式打在窗口上（参照库 742-743 同一收口）。
+  // 全屏详情没有这两枚节点，modal 层缺席时 setBusy 分支整个跳过——所以判据用 detailForm，不看 DOM 存在性。
+  // R8（批D Task 5 修复轮·发现③）：playEntity 与 playEntityShuffled 此前把同一段逻辑逐字写了两遍，
+  // 七步守卫（busy 闸／card.playable 闸／读层缺席／playSeq 作废／catch→0／零入队状态行／finally 放钮）
+  // 各写了两遍 ⇒ 收拢为唯一核心 playTracks；shuffle 只是入参：多「本地副本上 Fisher-Yates」一步，
+  // 其余一字不差。公开面仍是 playEntity／playEntityShuffled 两枚薄封装（09 与全部测试的调用点不变）。
+  // tests/mlib-detail-modal-bindings.test.js 的两条随机用例 + mlib-page-playback 的整张用例就是这次折叠的
+  // 行为守卫（折叠前后同一份输出，含「读层 res.tracks 不被覆写」那条）。
+  async function playTracks(axis, id, shuffle) {
+    var modal = detailForm(axis) === 'modal' ? detailModalLayer() : null;
+    // 窗口代数（批D 终审 Important②）：一份窗先后承载不同实体，closeDetail 只 bump requestSeq。
+    // A 的在途响应回来时用户可能已把窗口重开成 B——入队/起播照旧（参照库语义：旧实体的乐该放完），
+    // 但 setBusy/setStatus 是「写窗口」，代数变了就必须丢，否则 B 播放中两颗整单钮被 A 放掉、
+    // A 的零入队文案写进 B 的状态行。
+    var genNow = modal && typeof modal.currentGen === 'function' ? modal.currentGen() : null;
+    function windowLive() {
+      return !modal || genNow == null || (typeof modal.currentGen === 'function' && modal.currentGen() === genNow);
     }
-    if (seq !== playSeq) return 0; // 在途期间用户切轴/关闭：晚到的响应一份都不入队、一步都不起播（通知刷新不在此列，R 裁2）
-    var enq = enqueueMatched(res && res.tracks);
-    if (enq.n > 0) startPlaybackAt(enq.firstIdx); // 追加到位后再播这一首（不 await、不看返回值）
-    return enq.n;
+    if (modal) modal.setBusy(true);                 // 进 await 前收钮：读层是异步的，连点会入队两份
+    try {
+      var read = readLayer();
+      var card = gridCardById(id);
+      // 卡快照说不可播＝零入队；但窗口钮的可点是按**详情**算的，网格脏（通知刷新被延后，
+      // 08:672-679）时两边会不一致 ⇒ 不许静默，走同一条状态行收口给话说（终审 Important③）。
+      if (!card || !card.playable) {
+        // modal 为空＝页轴全屏详情（没有状态行这张窗）：维持既有静默口径，只回 0。
+        if (modal && windowLive() && read && typeof read.unplayableHint === 'function') {
+          modal.setStatus(unplayableHintOf(read), 'warn');
+        }
+        return 0;
+      }
+      if (!read || typeof read.getDetail !== 'function') return 0;
+      var seqNow = playSeq;
+      var res;
+      try {
+        res = await read.getDetail(axis, id);
+      } catch (e) {
+        return 0; // 读层约定不抛；真抛＝零入队
+      }
+      if (seqNow !== playSeq) return 0; // 在途期间用户切轴/关闭：晚到的响应一份都不入队、一步都不起播（通知刷新不在此列，R 裁2）
+      var tracks = res && res.tracks;
+      if (shuffle) {
+        // spec §4「本层绝不 sort」约束的是**渲染**顺序；随机钮本来就是来改顺序的，不冲突。
+        var arr = Array.isArray(tracks) ? tracks.filter(Boolean) : [];   // 本地副本：不覆写读层那份共享数组
+        for (var i = arr.length - 1; i > 0; i -= 1) {                                      // 参照库 1078-1084 逐字
+          var j = Math.floor(Math.random() * (i + 1));
+          var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+        }
+        tracks = arr;
+      }
+      var enq = enqueueMatched(tracks);                                                    // unmatched 仍在这一步被过滤
+      if (enq.n > 0) startPlaybackAt(enq.firstIdx); // 追加到位后再播这一首（不 await、不看返回值）
+      else if (modal && windowLive()) modal.setStatus(unplayableHintOf(read), 'warn'); // 零入队必须给话说，文案取读层既有 hint
+      return enq.n;
+    } finally {
+      if (modal && windowLive()) modal.setBusy(false); // 成功/失败/作废三条路都要放钮；但只放「还是我的那扇窗」
+    }
   }
+
+  // 两枚薄封装＝既有公开面（09 的整单/随机分支与测试都调它们，调用点一字不动）。
+  // 打乱用参照库 1078-1084 的 Fisher-Yates 逐字（在核心里，仅 shuffle＝true 时跑）；
+  // 入队/起播仍走 enqueueMatched + startPlaybackAt 同一条链。
+  function playEntity(axis, id) { return playTracks(axis, id, false); }
+  function playEntityShuffled(axis, id) { return playTracks(axis, id, true); }
 
   // 单曲入队：用已渲染的那份 payload（不再打读层——行本来就在那儿），入队后立刻播该项，
   // 与整张/卡点击同一「追加即起播」口径（spec line 40 两模一致）。
@@ -767,6 +880,8 @@
 
   window.stellaMlibPage = Object.assign(window.stellaMlibPage || {}, {
     openAxis: openAxis, close: close, openDetail: openDetail, closeDetail: closeDetail,
-    playEntity: playEntity, playTrack: playTrack,
+    playEntity: playEntity, playTrack: playTrack, playEntityShuffled: playEntityShuffled,
+    // 批D 新增判据面：形态与当前详情实体（09 只读这两个，不读 DOM 属性）
+    detailForm: detailForm, currentDetail: currentDetail,
   });
 })();
