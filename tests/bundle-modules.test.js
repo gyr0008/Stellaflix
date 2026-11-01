@@ -59,16 +59,17 @@ test('② 孤儿扫描跳过 *_1.js 副本', () => {
 
 // 合流计数（11-01）：装载器取两侧并集后现场实算——主侧 126 减 6（14-custom-source-integration 随 T14、
 // 08-account 01~05 登录族随 T16d 退役）⇒ 122 条；再叠加 b1c582b 入库的
-// 04-shelf/15-mlib-detail-modal.js（+1）⇒ 123 条；分段按主侧布局 15 段
-//（08-account 段仍在，段内存的是分支新增的 07-local-profile.js）。
-// 历史：批 T13 111→113/15→17 段（基线双漂移，前者在计数断言即红）；16a +1→114；16d −5→109；11-01 合流 +1→123。
-test('本仓库现场：modulePaths 全部存在且分段为 15 段/123 模块', () => {
+// 04-shelf/15-mlib-detail-modal.js（+1）与合流补回的 00-state/12-modal-anim.js（+1）⇒ 124 条；
+// 分段按主侧布局 15 段（08-account 段仍在，段内存的是分支新增的 07-local-profile.js）。
+// 历史：批 T13 111→113/15→17 段（基线双漂移，前者在计数断言即红）；16a +1→114；16d −5→109；
+// 11-01 合流 +1→123，补回通用弹窗函数 +1→124。
+test('本仓库现场：modulePaths 全部存在且分段为 15 段/124 模块', () => {
   const paths = readModulePathsFromLoader();
   for (const p of paths) {
     assert.ok(fs.existsSync(path.join(APP_ROOT, 'public', p)), 'modulePaths 引用文件缺失: ' + p);
   }
   const runs = bundle.buildRuns(paths);
-  assert.strictEqual(paths.length, 123);
+  assert.strictEqual(paths.length, 124);
   assert.strictEqual(runs.length, 15);
 });
 

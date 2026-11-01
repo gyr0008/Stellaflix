@@ -46,6 +46,7 @@
     'js/modules/00-state/09-performance-probe.js',
     'js/modules/00-state/10-frame-scheduler.js',
     'js/modules/00-state/11-system-memory-controls.js',
+    'js/modules/00-state/12-modal-anim.js',
     'js/modules/01-scene/00-renderer-quality.js',
     'js/modules/01-scene/01-orbit-free-camera.js',
     'js/modules/01-scene/02-beat-camera-runtime.js',

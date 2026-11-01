@@ -179,7 +179,7 @@ test('R9：不可播实体扛得住 busy 往返——两颗整单钮始终 disab
 });
 
 test('show/hide 生命周期：show 先清主题再开窗、滚动置顶；hide 经 closeGsapModal 的 afterClose 清主题', () => {
-  const f = bootDetail({ axis: 'albums', realModal: true });   // realModal 会连 01-login-modal-utils.js 一起加载（沙箱无 gsap → style 兜底分支）
+  const f = bootDetail({ axis: 'albums', realModal: true });   // realModal 会连 00-state/12-modal-anim.js 一起加载（沙箱无 gsap → style 兜底分支）
   const mask = f.ids('#mlib-detail-modal');
   M(f).show('albums');
   assert.equal(mask.classList.contains('show'), true, 'openGsapModal 的产物就是 .show');

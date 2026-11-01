@@ -17,9 +17,12 @@ const SHELF_DIR = path.join(__dirname, '..', '..', 'public', 'js', 'modules', '0
 const READ_SRC = fs.readFileSync(path.join(SHELF_DIR, '07-mlib-readlayer.js'), 'utf8');
 const PAGE_SRC = fs.readFileSync(path.join(SHELF_DIR, '08-mlib-page.js'), 'utf8');
 const BIND_SRC = fs.readFileSync(path.join(SHELF_DIR, '09-mlib-bindings.js'), 'utf8');
-// realModal:true 的两段真模块（08-account 的弹窗开合工具＝沙箱无 gsap 时走 style 兜底；15＝Task 2 取色上半 + Task 4 弹窗下半）
-const LOGIN_MODAL_UTILS_SRC = fs.readFileSync(
-  path.join(__dirname, '..', '..', 'public', 'js', 'modules', '08-account', '01-login-modal-utils.js'), 'utf8');
+// realModal:true 的两段真模块（00-state/12-modal-anim.js＝通用弹窗开合工具，沙箱无 gsap 时走 style 兜底；
+// 15＝Task 2 取色上半 + Task 4 弹窗下半）。
+// 来源变更（11-01 合流）：原读 08-account/01-login-modal-utils.js，该文件随 T16d 登录族退役整份删除，
+// 其中与登录无关的 openGsapModal/closeGsapModal/bindModalBackdropClose 已搬入 00-state/12-modal-anim.js。
+const MODAL_ANIM_SRC = fs.readFileSync(
+  path.join(__dirname, '..', '..', 'public', 'js', 'modules', '00-state', '12-modal-anim.js'), 'utf8');
 const DETAIL_MODAL_SRC = fs.readFileSync(path.join(SHELF_DIR, '15-mlib-detail-modal.js'), 'utf8');
 
 // 默认详情返回（bootDetail 未显式给 detail 时用）：形状＝读层 getDetail 契约，一轨一实体。
@@ -103,7 +106,7 @@ function bootDetail(opts) {
   // realModal:true → 不装 spy，加载真模块两段（15 当前只有取色上半＝stellaMlibDetailModal 缺席，
   // 恰好驱动 08 的降级闸；Task 4 落地后这段自动变真弹窗层）
   if (options.realModal) {
-    win.loadScript(LOGIN_MODAL_UTILS_SRC, '01-login-modal-utils.js');
+    win.loadScript(MODAL_ANIM_SRC, '12-modal-anim.js');
     win.loadScript(DETAIL_MODAL_SRC, '15-mlib-detail-modal.js');
   } else {
     // 2. 默认装 spy 弹窗层覆盖真模块（Task 3 只验分流，不验渲染）

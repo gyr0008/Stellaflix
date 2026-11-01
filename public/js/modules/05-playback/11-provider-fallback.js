@@ -43,7 +43,7 @@ function playbackRestrictionMissingPlaybackKey(data) {
 function playbackRestrictionCategory(song, data) {
   var category = playbackRestrictionRawCategory(song, data);
   var provider = playbackLoginProvider(song);
-  var status = platformStatus(provider) || {};
+  var status = typeof platformStatus === 'function' ? (platformStatus(provider) || {}) : {};
   var mergedStatus = Object.assign({}, status, data || {}, data && data.restriction || {});
   var loggedIn = !!(status.loggedIn || data && data.loggedIn);
   var vipLevel = typeof providerVipLevel === 'function' ? providerVipLevel(provider, mergedStatus) : 'none';
@@ -69,7 +69,7 @@ function playbackRestrictionCategory(song, data) {
   return category || 'url_unavailable';
 }
 function playbackProviderMembershipText(provider, data) {
-  var status = platformStatus(provider) || {};
+  var status = typeof platformStatus === 'function' ? (platformStatus(provider) || {}) : {};
   var mergedStatus = Object.assign({}, status, data || {}, data && data.restriction || {});
   var level = typeof providerVipLevel === 'function' ? providerVipLevel(provider, mergedStatus) : 'none';
   if (level === 'svip') return 'SVIP';
@@ -92,7 +92,7 @@ function playbackRestrictionNotice(song, data) {
   var category = playbackRestrictionCategory(song, data);
   var provider = playbackProviderLabel(song);
   var providerKey = playbackLoginProvider(song);
-  var status = platformStatus(providerKey) || {};
+  var status = typeof platformStatus === 'function' ? (platformStatus(providerKey) || {}) : {};
   var loggedIn = !!(status.loggedIn || data.loggedIn);
   var membershipPending = !!(
     providerKey === 'qq'

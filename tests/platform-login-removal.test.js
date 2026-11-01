@@ -309,7 +309,7 @@ function readModulePathsFromLoader() {
   return [...m[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((x) => x[1]);
 }
 
-test('② bundle 现场计数在 bundle-modules.test.js 内同步重数（合流后 126-6=122 模块/15 段）', () => {
+test('② bundle 现场计数在 bundle-modules.test.js 内同步重数（合流后 126-6+2=124 模块/15 段）', () => {
   const bundleTest = read('tests/bundle-modules.test.js');
   const paths = readModulePathsFromLoader();
   const lenM = bundleTest.match(/assert\.strictEqual\(paths\.length, (\d+)\)/);
@@ -318,8 +318,10 @@ test('② bundle 现场计数在 bundle-modules.test.js 内同步重数（合流
   assert.equal(String(paths.length), lenM[1],
     'modulePaths 实数(' + paths.length + ')与钉桩(' + lenM[1] + ')必须一致——删后现场重数');
   // 合流（11-01）：主侧 126 减 6＝14-custom-source-integration（T14）+ 08-account 登录族 01~05（T16d）；
+  // 再叠加 b1c582b 入库的 04-shelf/15-mlib-detail-modal.js（+1）与补回的
+  // 00-state/12-modal-anim.js（+1）⇒ 124；
   // 段数按主侧重排后的装载器实算为 15（08-account 段仍在，段内是分支新增的 07-local-profile.js）。
-  assert.equal(paths.length, 122, '合流后 modulePaths 应为 122');
+  assert.equal(paths.length, 124, '合流后 modulePaths 应为 124');
   assert.equal(runM[1], '15', '分段数以合并树装载器实算为准');
 });
 
