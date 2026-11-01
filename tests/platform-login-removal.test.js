@@ -353,8 +353,10 @@ test('② 登录族死符号全仓零消费方', () => {
     'logoutActiveAccount', 'logoutAllAccountsAndResetEasterEgg', 'hasAnyPlatformLogin',
     'refreshQr', 'updateLoginProviderUi', 'maybeRunStartupLoginGuide', 'runLoginGuideParticles',
     'skipLoginAndFocusSearch'];
-  const skipDirs = ['node_modules', '.git', '.scratch', '.superpowers', 'bundles',
-    'visualizationOutputDirectory', 'dist', 'release', 'docs'];
+  // 排除面：依赖目录、构建产物、临时目录、并行 worktree（本仓库常有 10+ 个 .worktrees/*）
+  // 以及 *_1.js 历史快照副本（.gitignore 的 `*_1.*`，加载器从不引用）。
+  const skipDirs = ['node_modules', '.git', '.scratch', '_scratch', 'backups', '.superpowers', 'bundles',
+    'visualizationOutputDirectory', 'dist', 'release', 'docs', '.worktrees', 'outputs'];
   const offenders = [];
   const walk = (dir) => {
     for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -365,6 +367,7 @@ test('② 登录族死符号全仓零消费方', () => {
         continue;
       }
       if (!/\.(js|html)$/.test(f.name)) continue;
+      if (/_1\.(js|html)$/.test(f.name)) continue;   // *.{js,html} 的 *_1 副本＝历史快照
       if (f.name === 'platform-login-removal.test.js') continue;
       const src = fs.readFileSync(abs, 'utf8');
       for (const sym of deadSymbols) {
@@ -397,6 +400,7 @@ test('② 前端全仓不再出现退役端点字面量', () => {
       const rel = path.posix.join(dir, String(f).split(path.sep).join('/'));
       if (!/\.(js|html)$/.test(rel)) continue;
       if (rel.includes('/bundles/')) continue;
+      if (/_1\.(js|html)$/.test(rel)) continue;   // *_1 副本＝历史快照，不参与现行断言
       if (rel.includes('platform-login-removal.test.js')) continue;
       if (hit(rel)) offenders.push(rel);
     }
@@ -496,7 +500,8 @@ test('③ 退役平台文件的 require 残留全仓清零', () => {
   for (const f of fs.readdirSync(ROOT, { recursive: true })) {
     const rel = String(f).split(path.sep).join('/');
     if (!rel.endsWith('.js')) continue;
-    if (/node_modules|\.git\/|bundles\/|\.scratch\/|\.superpowers\/|dist\/|release\//.test(rel)) continue;
+    if (/(^|\/)(node_modules|\.git|bundles|\.scratch|_scratch|backups|\.superpowers|dist|release|\.worktrees)\//.test(rel)) continue;
+    if (/_1\.(js|html)$/.test(rel)) continue;   // *_1 副本＝历史快照（.gitignore `*_1.*`），从不被加载
     if (rel.endsWith('platform-login-removal.test.js')) continue;
     if (re.test(fs.readFileSync(path.join(ROOT, f), 'utf8'))) offenders.push(rel);
   }

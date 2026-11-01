@@ -112,6 +112,7 @@ function listModuleSources() {
     if (!fs.statSync(dir).isDirectory()) { out.push(path.posix.join(MODULE_ROOT, group)); continue; }
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.js')) continue;
+      if (/_1\.js$/.test(f)) continue;   // *_1.js＝历史快照副本（.gitignore `*_1.*`），加载器不引用
       out.push(path.posix.join(MODULE_ROOT, group, f));
     }
   }
