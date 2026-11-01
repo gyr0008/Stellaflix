@@ -279,10 +279,10 @@ Q2 = **A 存算先行**（先做存储层 + 本地红心按钮，列表入口推
 | 4 | **②两档清空历史弹窗未建**：store 的 `clearPlayStats('recent'|'all')` 已具备，主进程无 `-clear-play-stats`/`-read-stats`/`-trim` 通道，渲染层无模态与 `listen-history-clear` 随迁测试 | preload 仅 `restore-lyrics` 含 restore 字样 | 统计功能批 |
 | 5 | **③收藏读侧未闭环**：`setLocalLibraryDbFavorite` 写通道 + `21-local-special-liked.js` 双写已在，但读取仍以 localStorage 引用表为唯一权威，「清桶后从 SQLite 复活收藏」的回灌路径未接 | `21-local-special-liked.js:204` 注释自陈「只让清了 localStorage 之后还能捞回来」，捞的动作未写 | 批4/批5 |
 | 6 | **④统计随整机备份**未做（仍在「不搬清单」，待主人是否改向） | — | 待拍板 |
-| 7 | **旧 `stellaflix-local://` 协议层实态与注释不符**：`main.js:8098` 注释仍称「旧协议层仍在职责内兜底」，实际协议注册已随 `local-music-library.js` 删除而消失（main.js 无任何 `stellaflix-local://` 注册代码）。渲染层 `04-shelf/04-cover-api-helpers.js:32` 仍在为它写特判，`13-playback-start-audio.js:828` 仍在调已不存在的 `readLocalMusicLyric`（被 typeof 守卫挡住，属死分支） | grep 全仓无该 scheme 的生产方 | 批4 会话（注释需更正，死分支需清理） |
+| 7 | ~~旧 `stellaflix-local://` 协议层实态与注释不符~~ **10-31 本会话已清**：`main.js:8099` 那段空的 `try{…}catch` 与「旧协议层仍在职责内兜底」的假注释删除、就地改写为 `/api/local-file` 现状；`04-shelf/04-cover-api-helpers.js:32` 的特判注释同理更正（`crossOrigin` 那行本身仍对远程源有意义，保留）；`13-playback-start-audio.js` 里调已不存在的 `readLocalMusicLyric` 的死分支整段移除（typeof 守卫恒挡，无行为变化；全仓无测试 pin）。`node --check` + `npm run bundle` 15/126 + 全量回归通过 | grep 全仓无该 scheme 的生产方、`readLocalMusicLyric` 在 preload/main 无定义 | 已闭环 |
 | 8 | **顶层同名 helper 双份**：`normalizeLocalLibraryPathKey`/`localLibraryPathKeyFromSong` 在 `04-shelf/11` 与 `05-playback/20` 各一份（行为等价，20- 后加载胜出）。别家 `tests/local-library-registration-smoke.test.js` 明确 pin 为「良性重复」，而计划 §3.8 第 6 行把「去重」列在批4 待办里 —— 意图冲突，本会话不强推 | 见 §3.8 表第 6 行 | 批4 会话定去留 |
 | 9 | **`readFileAsDataUrl` 两份语义不同**：`04-shelf/10`（桌面 IPC 读 + 失败 resolve `''`）vs `07-fx/03`（纯 FileReader + 失败 reject `FONT_READ_FAILED`），加载顺序使 07-fx 胜出。当前仅字体上传调用它，标签层那份是死代码，暂无实害但语义相反属真隐患，改名或合并应由其主人做 | dup-scan 工装输出 | 待分派 |
-| 10 | **真机冒烟 8 项**未跑（选目录→扫描进度→APE/FLAC 各播一首→断网续播→改目录文件 watcher 自动同步→切在线音质→重启后库自恢复→影视态零回归）+ **全部改动未提交** | — | 主人 |
+| 10 | **真机冒烟 8 项**未跑（选目录→扫描进度→APE/FLAC 各播一首→断网续播→改目录文件 watcher 自动同步→切在线音质→重启后库自恢复→影视态零回归）；~~全部改动未提交~~ **10-31 已止血**：`fbfcd81` + `f6f4837` 提交并 push 至 `origin/main`。冒烟项已并入合并清单 `docs/superpowers/plans/2026-10-31-consolidated-real-machine-smoke.md` §A/§B（本批 10 + ReplayGain 5 项，含「先重启一次」前置） | `git log` + `git rev-parse HEAD origin/main` 同 SHA | 主人 |
 
 ### 3.10 拍板④/5B「ReplayGain 应用链」已落地（10-26 主人指令「先修 ReplayGain」，未提交）
 
@@ -330,6 +330,11 @@ Q2 = **A 存算先行**（先做存储层 + 本地红心按钮，列表入口推
 **回归**：`npm run bundle` 15 段 / 126 模块逐字节通过；`npm test` **269/269 全绿**（较上轮 +1 个测试文件）。
 
 **未覆盖**：真机「重启后首播即带增益」仍待主人冒烟 —— 测试用真实 SQLite 证明了落盘与读回，播放侧听感无法自动化。
+
+**10-31 补钉（把上面「未覆盖」的代码半边合上，仍待主人听感）**：新增两例，首跑即绿＝链路本就在码上通、此前无测试看守：
+① `tests/local-library-engine.test.js`「水合回灌资产 extra 里的 ReplayGain」—— 假 `readLocalLibraryDbAssets` 按引擎请求的键现场造记录，断言 `readAssetRecords` 的 extra 字段回到 `track.localReplayGain`，且请求键与曲目 `localKey` 逐字相等、同轮封面回灌生效（证明走的是资产记录而非旁路）。
+② `tests/replay-gain-normalization.test.js`「水合带回标签时首播即施加且不重读文件」—— 带 `localReplayGain` 的曲目 `prepare()` 后增益立即到 -6dB，`extractLocalMetadataTags` 调用数 0、`persisted` 0（与既有「缺标签才补齐」用例互为镜像）。
+同时核过 IPC 全链：preload `readLocalLibraryDbAssets` → `stellaflix-local-library-db-read-assets`（main.js:5833，可信发送方闸）→ `store.readAssetRecords` → `mergeExtraFields`（`record[key] === undefined` 才填，故非列的 `localReplayGain` 必被带入）。全量 **281/281**，bundle 15/127。
 
 ### 3.12 captureStream 兜底支路改「图形真出声」（10-26 主人拍板方案 B，未提交）
 
